@@ -1,0 +1,51 @@
+services:
+  ollama:
+    # image: ollama/ollama:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    container_name: ollama
+    working_dir: /app/backend
+    volumes:
+      - ollama:/root/.ollama
+    networks:
+      docker-net:
+    ports:
+      - "11434:11434"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Раскомментируйте блок ниже, если у вас есть GPU от NVIDIA и настроен Nvidia Container Toolkit
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    container_name: open-webui
+    working_dir: /app/backend
+    volumes:
+      - open-webui:/app/backend/data
+    networks:
+      docker-net:
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - ollama
+
+volumes:
+  ollama: {}
+  open-webui: {}
+
+networks:
+  docker-net:
+    external: true
