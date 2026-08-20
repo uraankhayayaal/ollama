@@ -1,9 +1,3 @@
-С поддержкой GPU (NVIDIA):
-```
-docker run -d --gpus=all -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
-```
-
-Только на CPU:
-```
-docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
-```
+# Начало работы:
+1. Запустить контейнеры `docker compose up`
+1. Загрузить модель `docker compose exec -it ollama ollama pull qwen3-coder:30b`

@@ -1,9 +1,6 @@
 services:
   ollama:
-    # image: ollama/ollama:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ollama/ollama:latest
     restart: unless-stopped
     container_name: ollama
     working_dir: /app/backend

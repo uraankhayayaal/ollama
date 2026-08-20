@@ -1,5 +1,5 @@
-# Загрузка модели qwen
-docker compose exec -it ollama ollama pull qwen3-coder:8b
+qwen3-8b:
+	docker compose exec -it ollama ollama pull qwen3:8b
 
-# Запуск модели qwen
-docker compose run -it ollama ollama run qwen3-coder
+qwen3-coder-30b:
+	docker compose exec -it ollama ollama pull qwen3-coder:30b
