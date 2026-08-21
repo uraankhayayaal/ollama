@@ -32,6 +32,8 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
+	llmModelName := os.Getenv("LLM")
+
 	if len(os.Args) < 2 {
 		log.Fatalf("Использование: go run codereviewer.go <ссылка_на_gitlab_mr>")
 	}
@@ -47,7 +49,7 @@ func main() {
 	// Инициализируем модель Qwen через локальный Ollama
 	// По умолчанию langchaingo стучится на http://localhost:11434
 	llm, err := ollama.New(
-		ollama.WithModel("qwen3-coder:30b"), // Укажите тег модели, которую вы скачали в Ollama
+		ollama.WithModel(llmModelName), // Укажите тег модели, которую вы скачали в Ollama
 	)
 	if err != nil {
 		log.Fatalf("Ошибка инициализации локального Ollama: %v", err)
