@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/joho/godotenv"
 	"github.com/tmc/langchaingo/agents"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"github.com/tmc/langchaingo/tools"
@@ -46,11 +47,19 @@ func (f FileWriterTool) Call(ctx context.Context, input string) (string, error) 
 func main() {
 	ctx := context.Background()
 
+	// Load the .env file
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	llmModelName := os.Getenv("LLM")
+
 	// 2. Подключаемся к Ollama внутри Docker.
 	// Если запускаете код на хосте (вне Docker), укажите адрес вашей Ollama: http://localhost:11434
 	llm, err := ollama.New(
 		ollama.WithServerURL("http://localhost:11434"),
-		ollama.WithModel("qwen3-coder:30b"),
+		ollama.WithModel(llmModelName),
 	)
 	if err != nil {
 		log.Fatalf("Ошибка инициализации Ollama: %v", err)
