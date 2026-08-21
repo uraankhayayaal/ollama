@@ -64,17 +64,6 @@ func main() {
 		{
 			Type: "function",
 			Function: &llms.FunctionDefinition{
-				Name:        "read_mr_diff",
-				Description: "Получить изменения (diff) кода в Merge Request из GitLab API",
-				Parameters: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: &llms.FunctionDefinition{
 				Name:        "post_review_comment",
 				Description: "Оставить комментарий к строке кода в Merge Request через GitLab API",
 				Parameters: map[string]any{
@@ -86,6 +75,7 @@ func main() {
 					},
 					"required": []string{"file_path", "line", "comment"},
 				},
+				Strict: true,
 			},
 		},
 		{
@@ -94,36 +84,37 @@ func main() {
 				Name:        "approve_mr",
 				Description: "Поставить апрув (approve) к Merge Request, если изменения не критичны и не ломают систему",
 				Parameters: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
+					"type": "object",
+					"properties": map[string]any{
+						"is_approved": map[string]any{"type": "bool", "description": "Флаг true - апрув"},
+					},
+					"required": []string{"is_approved"},
 				},
+				Strict: true,
 			},
 		},
 	}
 
-	forcedTool := llms.ToolChoice{
-		Type: "function",
-		Function: &llms.FunctionReference{
-			Name: "read_mr_diff",
-		},
-	}
-
 	// Формируем системный промпт для агента
-	systemPrompt := "Ты — опытный старший разработчик. Твоя задача — провести ревью изменений кода. " +
-		"Сначала вызови инструмент 'read_mr_diff' для получения изменений. Внимательно изучи diff. Если найдешь баги, проблемы безопасности или " +
-		"архитектурные дефекты, оставь точечные комментарии к конкретным строкам через 'post_review_comment'. " +
-		"Если критических багов и ломающих изменений нет (или все замечания носят характер мелких улучшений), обязательно вызови 'approve_mr'."
+	systemPrompt := "Ты — опытный ведущий разработчик. Твоя задача — провести ревью изменений кода. " +
+		"Сначала внимательно изучи diff. Если найдешь баги, проблемы безопасности или архитектурные дефекты, оставь комментарии к конкретным строкам, номер строки вычисли из входных данных, используя иннструмент 'post_review_comment'. " +
+		"Если критических багов и ломающих изменений нет (или все замечания носят характер мелких улучшений), обязательно вызови интсрумент 'approve_mr'. "
+
+	diff, err := getMRDiff(config)
 
 	messages := []llms.MessageContent{
 		llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt),
-		llms.TextParts(llms.ChatMessageTypeHuman, "Начни код-ревью для текущего Merge Request."),
+		llms.TextParts(llms.ChatMessageTypeHuman, "Начни код-ревью для текущего MR и выбери инструменты."),
+		llms.TextParts(llms.ChatMessageTypeHuman, diff),
 	}
 
 	fmt.Println("🚀 Инициализация локального ИИ-агента (Qwen)...")
 
 	// Главный цикл работы агента (LLM + Инструменты)
 	for {
-		resp, err := llm.GenerateContent(ctx, messages, llms.WithTools(tools), llms.WithToolChoice(forcedTool))
+		fmt.Println("Цикл обработки...")
+
+		resp, err := llm.GenerateContent(ctx, messages, llms.WithTools(tools), llms.WithToolChoice("required"))
 		if err != nil {
 			log.Fatalf("Ошибка генерации контента моделью Qwen: %v", err)
 		}
@@ -148,14 +139,6 @@ func main() {
 			fmt.Printf("🛠️ Агент вызывает инструмент: %s\n", toolCall.FunctionCall.Name)
 
 			switch toolCall.FunctionCall.Name {
-			case "read_mr_diff":
-				diff, err := getMRDiff(config)
-				if err != nil {
-					resultStr = fmt.Sprintf("Ошибка получения diff: %v", err)
-				} else {
-					resultStr = diff
-					fmt.Println("✅ Diff успешно загружен и передан локальной модели.")
-				}
 
 			case "post_review_comment":
 				var args struct {
@@ -203,8 +186,7 @@ func main() {
 // === Реализация API-инструментов GitLab ===
 
 func getMRDiff(c *GitLabConfig) (string, error) {
-	// urlStr := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/diffs", c.BaseURL, c.ProjID, c.MRIID)
-	urlStr := fmt.Sprintf("%s/projects/%s/merge_requests/%s/diffs", c.BaseURL, c.ProjID, c.MRIID)
+	urlStr := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/diffs", c.BaseURL, c.ProjID, c.MRIID)
 	req, _ := http.NewRequest("GET", urlStr, nil)
 	req.Header.Set("PRIVATE-TOKEN", c.Token)
 
@@ -223,8 +205,7 @@ func getMRDiff(c *GitLabConfig) (string, error) {
 }
 
 func postComment(c *GitLabConfig, filePath string, line int, comment string) error {
-	// urlStr := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/discussions", c.BaseURL, c.ProjID, c.MRIID)
-	urlStr := fmt.Sprintf("%s/projects/%s/merge_requests/%s/discussions", c.BaseURL, c.ProjID, c.MRIID)
+	urlStr := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/discussions", c.BaseURL, c.ProjID, c.MRIID)
 
 	baseSHA, startSHA, headSHA, err := getMRVersions(c)
 	if err != nil {
@@ -262,8 +243,7 @@ func postComment(c *GitLabConfig, filePath string, line int, comment string) err
 }
 
 func approveMR(c *GitLabConfig) error {
-	// urlStr := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/approve", c.BaseURL, c.ProjID, c.MRIID)
-	urlStr := fmt.Sprintf("%s/projects/%s/merge_requests/%s/approve", c.BaseURL, c.ProjID, c.MRIID)
+	urlStr := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/approve", c.BaseURL, c.ProjID, c.MRIID)
 	req, _ := http.NewRequest("POST", urlStr, nil)
 	req.Header.Set("PRIVATE-TOKEN", c.Token)
 
