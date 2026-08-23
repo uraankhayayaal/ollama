@@ -4,6 +4,7 @@ import (
 	"ai/agents"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 
@@ -27,7 +28,7 @@ func NewAlisaProvider() *AlisaProvider {
 		option.WithBaseURL("https://ai.api.cloud.yandex.net/v1"),
 		option.WithHeader("OpenAI-Project", yandexFolderID),
 	)
-	return &AlisaProvider{client: client, model: yandexModel}
+	return &AlisaProvider{client: client, model: fmt.Sprintf("gpt://%s/%s", yandexFolderID, yandexModel)}
 }
 
 func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*AgentResponse, error) {

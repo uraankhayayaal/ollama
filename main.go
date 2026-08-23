@@ -1,4 +1,4 @@
-package ai
+package main
 
 import (
 	"ai/agents/codereviewer"
@@ -12,8 +12,6 @@ import (
 )
 
 func main() {
-	fmt.Println("Hello bro!")
-
 	ctx := context.Background()
 
 	// Load the .env file
@@ -52,5 +50,5 @@ func main() {
 		log.Fatalf("Error: %v", err)
 	}
 
-	fmt.Printf("[Response] %s\n", resp.Content)
+	fmt.Println("Response:", resp.Content)
 }
