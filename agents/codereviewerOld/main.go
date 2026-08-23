@@ -66,7 +66,7 @@ func main() {
 		{
 			Type: "function",
 			Function: &llms.FunctionDefinition{
-				Name:        "post_review_comment",
+				Name:        "review_comments",
 				Description: "Оставить комментарий к строке кода в Merge Request через GitLab API",
 				Parameters: map[string]any{
 					"type": "object",
@@ -99,7 +99,7 @@ func main() {
 
 	// Формируем системный промпт для агента
 	systemPrompt := "Ты — опытный ведущий разработчик. Твоя задача — провести ревью изменений кода. " +
-		"Сначала внимательно изучи diff. Если найдешь баги, проблемы безопасности или архитектурные дефекты, оставь комментарии к конкретным строкам, номер строки вычисли из входных данных, используя иннструмент 'post_review_comment'. " +
+		"Сначала внимательно изучи diff. Если найдешь баги, проблемы безопасности или архитектурные дефекты, оставь комментарии к конкретным строкам, номер строки вычисли из входных данных, используя иннструмент 'review_comments'. " +
 		"Если критических багов и ломающих изменений нет (или все замечания носят характер мелких улучшений), обязательно вызови интсрумент 'approve_mr'. "
 
 	diff, err := getMRDiff(config)
@@ -142,7 +142,7 @@ func main() {
 
 			switch toolCall.FunctionCall.Name {
 
-			case "post_review_comment":
+			case "review_comments":
 				var args struct {
 					FilePath string `json:"file_path"`
 					Line     int    `json:"line"`
