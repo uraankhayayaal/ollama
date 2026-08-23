@@ -43,7 +43,8 @@ func main() {
 		log.Fatalf("Failed to init provider: %v", err)
 	}
 
-	codereviewer := codereviewer.NewCodereviewer()
+	codereviewer := codereviewer.NewCodereviewer() // Кодревью
+	// codereviewer := codegenerator.NewCodegenerator() // Генератор кода
 
 	resp, err := provider.Generate(ctx, codereviewer)
 	if err != nil {
