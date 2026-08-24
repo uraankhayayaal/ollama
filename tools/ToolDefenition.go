@@ -4,7 +4,7 @@ package tools
 type ToolDefinition struct {
 	Name        string
 	Description string
-	Parameters  map[string]interface{} // JSON Schema
+	Parameters  map[string]any // JSON Schema
 }
 
 type ToolCall struct {

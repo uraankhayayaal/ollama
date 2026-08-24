@@ -17,7 +17,7 @@ type OllamaProvider struct {
 }
 
 func NewOllamaProvider(model string) (*OllamaProvider, error) {
-	llmModelName := os.Getenv("LLM")
+	llmModelName := os.Getenv("OLLAMA_MODEL")
 
 	client, err := ollama.New(
 		ollama.WithServerURL("http://localhost:11434"),
@@ -68,16 +68,25 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 
 	// Выполнение запроса
 	for {
-		resp, err := o.client.GenerateContent(ctx, messages, llms.WithTools(ollamaTools), llms.WithToolChoice("required"))
+		log.Println("promts", messages)
+		log.Println("tools", ollamaTools)
+
+		resp, err := o.client.GenerateContent(ctx, messages,
+			llms.WithTools(ollamaTools),
+			llms.WithStreamingFunc(nil), // Гарантирует атомарный (не потоковый) ответ
+		)
 		if err != nil {
 			log.Fatalf("Ошибка генерации контента моделью Qwen: %v", err)
 			return nil, err
 		}
 
 		choice := resp.Choices[0]
+		log.Println("resp", resp)
 
 		// Если модель решила продолжить текстом и больше не вызывает функции, завершаем работу
 		if len(choice.ToolCalls) == 0 {
+			log.Println("choice", choice)
+			log.Println("tool calls", choice.ToolCalls)
 			return &AgentResponse{Content: choice.Content}, nil
 		}
 
@@ -86,6 +95,11 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 			Role:  llms.ChatMessageTypeAI,
 			Parts: []llms.ContentPart{llms.TextPart(choice.Content)},
 		})
+
+		var functionArgs map[string]any
+		if err := json.Unmarshal([]byte(choice.Content), &functionArgs); err != nil {
+			log.Fatalf("Ошибка при разборе аргументов: %v", err)
+		}
 
 		// Обрабатываем каждый вызов инструмента от LLM
 		for _, toolCall := range choice.ToolCalls {
