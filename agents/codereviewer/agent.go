@@ -55,22 +55,21 @@ func (cr Codereviewer) GetMessages() []agents.Message {
 	return []agents.Message{
 		{
 			Type: agents.MessageTypeSystem,
-			Message: "Ты — опытный ведущий разработчик. Твоя задача — провести ревью изменений кода. Сначала внимательно изучи diff. " +
-				"Если найдешь баги, проблемы безопасности или архитектурные дефекты, оставь комментарии к конкретным строкам. Используя инртумент ReviewMr. " +
-				"В начале комменатрия ставь ключевые слова 'minor:' или 'major:', где " +
-				"minor: - рекомендация к функционалу, который ничего не ломает и может работать и без починки, " +
-				"major: - где без правок предложений приложение не буедт работать и это самые критичные ошибки. " +
-				"Отвечаешь на русском языке. " +
-				"Ставь ApproveMr если нет ошибок с клюбчевыми словами 'major:' и критичесикх ошибок.",
+			Message: "Ты — опытный ведущий Laravel PHP разработчик. Твоя задача — провести кодевью. " +
+				"Найдешь баги, проблемы безопасности или дефекты, оставь комментарии к конкретным строкам. " +
+				"Комменатрия начинай со слов 'для заметки:' или 'критично:', где " +
+				"для заметки: - мелкие баги или дефекты, котрые блокируют запуск. " +
+				"критично: - критические ошибки, явное нарушение работы приложения. " +
+				"Рекомендации делаешь на русском и с интсрументом 'ReviewMr'. " +
+				"Одобряещь изменения с интсрументом 'ApproveMr' если нет критических ошибок.",
 		},
 		{
 			Type:    agents.MessageTypeHuman,
-			Message: "Вот изменения кода: " + diff,
+			Message: "Изменения кода: " + diff,
 		},
 		{
-			Type: agents.MessageTypeHuman,
-			Message: "Проведи код-ревью для текущего MR и выбери инструменты." +
-				"Ответ только в виде вызовов функций ApproveMr или ReviewMr",
+			Type:    agents.MessageTypeHuman,
+			Message: "Ответ только в виде вызовов функций ApproveMr или ReviewMr",
 		},
 	}
 }
@@ -79,19 +78,19 @@ func (cr Codereviewer) GetTools() []tools.ToolDefinition {
 	return []tools.ToolDefinition{
 		{
 			Name:        "ReviewMr",
-			Description: "Оставить рекомендации и замечания по результатам код-ревью",
+			Description: "Рекомендовать и сделать замечания по результатам код-ревью",
 			Parameters: map[string]any{
 				"type": "object", // Корень параметров ВСЕГДА должен быть object
 				"properties": map[string]any{
 					"comments": map[string]any{ // Наш параметр-массив
 						"type":        "array",
-						"description": "Список замечаний к коду",
+						"description": "Список замечаний и рекомендаций к коду",
 						"items": map[string]any{ // Описание элементов внутри массива (объекты)
 							"type": "object",
 							"properties": map[string]any{
 								"file_path": map[string]any{"type": "string", "description": "Путь к файлу, к которому приводится кодревью"},
 								"line":      map[string]any{"type": "integer", "description": "Номер строки в новой версии файла, к которой относится комментарий"},
-								"text":      map[string]any{"type": "string", "description": "Текст рекомендации или описание ошибки и решения"},
+								"text":      map[string]any{"type": "string", "description": "Текст рекомендации или замечания"},
 							},
 							// Если включен Strict Mode, все поля в items.properties должны быть в required
 							"required":             []string{"file_path", "line", "text"},
@@ -105,7 +104,7 @@ func (cr Codereviewer) GetTools() []tools.ToolDefinition {
 		},
 		{
 			Name:        "ApproveMr",
-			Description: "Поставить апрув (approve) к Merge Request, если изменения не критичны и не ломают систему",
+			Description: "Одобрить измений кода, если нет критичных багов и дефектов",
 		},
 	}
 }
@@ -127,13 +126,13 @@ func (cr Codereviewer) GetToolsForOllama() []api.Tool {
 	})
 	commentItemsProps.Set("text", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Текст рекомендации или описание ошибки и решения",
+		Description: "Текст рекомендации или замечания",
 	})
 
 	// Описываем сам массив "comments"
 	reviewProps.Set("comments", api.ToolProperty{
 		Type:        api.PropertyType{"array"},
-		Description: "Список замечаний к коду",
+		Description: "Список замечаний и рекомендаций к коду",
 		Items: api.ToolFunctionParameters{
 			Type:       "object",
 			Properties: commentItemsProps,
@@ -146,7 +145,7 @@ func (cr Codereviewer) GetToolsForOllama() []api.Tool {
 			Type: "function",
 			Function: api.ToolFunction{
 				Name:        "ReviewMr",
-				Description: "Оставить рекомендации и замечания по результатам код-ревью",
+				Description: "Рекомендовать и сделать замечания по результатам код-ревью",
 				Parameters: api.ToolFunctionParameters{
 					Type:       "object",
 					Properties: reviewProps,
@@ -158,7 +157,7 @@ func (cr Codereviewer) GetToolsForOllama() []api.Tool {
 			Type: "function",
 			Function: api.ToolFunction{
 				Name:        "ApproveMr",
-				Description: "Поставить апрув (approve) к Merge Request, если изменения не критичны и не ломают систему",
+				Description: "Одобрить измений кода, если нет критичных багов и дефектов",
 				Parameters: api.ToolFunctionParameters{
 					Type:       "object",
 					Properties: api.NewToolPropertiesMap(), // Пустая карта параметров
