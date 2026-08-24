@@ -65,7 +65,7 @@ func (cr Codereviewer) GetMessages() []agents.Message {
 		},
 		{
 			Type:    agents.MessageTypeHuman,
-			Message: diff,
+			Message: "Вот изменения кода: " + diff,
 		},
 		{
 			Type: agents.MessageTypeHuman,
