@@ -4,131 +4,129 @@ import (
 	"ai/agents"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 
-	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/llms/ollama"
+	"github.com/ollama/ollama/api"
 )
 
 type OllamaProvider struct {
-	client *ollama.LLM
+	client *api.Client
 	model  string
 }
 
 func NewOllamaProvider(model string) (*OllamaProvider, error) {
 	llmModelName := os.Getenv("OLLAMA_MODEL")
 
-	client, err := ollama.New(
-		ollama.WithServerURL("http://localhost:11434"),
-		ollama.WithModel(llmModelName),
-	)
+	// 1. Создаем клиент Ollama (по умолчанию подключается к http://127.0.0.1:11434)
+	client, err := api.ClientFromEnvironment()
 	if err != nil {
-		log.Fatalf("Ошибка инициализации Ollama: %v", err)
+		log.Fatalf("Ошибка инициализации клиента: %v", err)
 	}
 
-	return &OllamaProvider{client: client, model: model}, nil
+	return &OllamaProvider{client: client, model: llmModelName}, nil
 }
 
 func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*AgentResponse, error) {
 	// Перевод tools
-	var ollamaTools []llms.Tool
-	for _, t := range agent.GetTools() {
-		ollamaTools = append(ollamaTools, llms.Tool{
-			Type: "function",
-			Function: &llms.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-				Strict:      true,
-			},
-		})
-	}
+	ollamaTools := agent.GetToolsForOllama()
 
 	// Перевод prompt
-	var messages []llms.MessageContent
-	var userMessage string
+	var messages []api.Message
 	for _, m := range agent.GetMessages() {
 		switch m.Type {
 		case agents.MessageTypeAI:
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeAI, m.Message))
+			messages = append(messages, api.Message{
+				Role:    "ai",
+				Content: m.Message,
+			})
 		case agents.MessageTypeFunction:
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeFunction, m.Message))
+			messages = append(messages, api.Message{
+				Role:    "function",
+				Content: m.Message,
+			})
 		case agents.MessageTypeTool:
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeTool, m.Message))
-		case agents.MessageTypeGeneric:
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeGeneric, m.Message))
-		case agents.MessageTypeSystem:
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeSystem, m.Message))
+			messages = append(messages, api.Message{
+				Role:    "tool",
+				Content: m.Message,
+			})
+		case agents.MessageTypeGeneric, agents.MessageTypeSystem:
+			messages = append(messages, api.Message{
+				Role:    "system",
+				Content: m.Message,
+			})
 		case agents.MessageTypeHuman:
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, m.Message))
-			userMessage = userMessage + "; " + m.Message
-		}
-	}
-
-	// Выполнение запроса
-	for {
-		log.Println("promts", messages)
-		log.Println("tools", ollamaTools)
-
-		resp, err := o.client.GenerateContent(ctx, messages,
-			llms.WithTools(ollamaTools),
-			llms.WithStreamingFunc(nil), // Гарантирует атомарный (не потоковый) ответ
-		)
-		if err != nil {
-			log.Fatalf("Ошибка генерации контента моделью Qwen: %v", err)
-			return nil, err
-		}
-
-		choice := resp.Choices[0]
-		log.Println("resp", resp)
-
-		// Если модель решила продолжить текстом и больше не вызывает функции, завершаем работу
-		if len(choice.ToolCalls) == 0 {
-			log.Println("choice", choice)
-			log.Println("tool calls", choice.ToolCalls)
-			return &AgentResponse{Content: choice.Content}, nil
-		}
-
-		// Добавляем ответ модели в историю сообщений
-		messages = append(messages, llms.MessageContent{
-			Role:  llms.ChatMessageTypeAI,
-			Parts: []llms.ContentPart{llms.TextPart(choice.Content)},
-		})
-
-		var functionArgs map[string]any
-		if err := json.Unmarshal([]byte(choice.Content), &functionArgs); err != nil {
-			log.Fatalf("Ошибка при разборе аргументов: %v", err)
-		}
-
-		// Обрабатываем каждый вызов инструмента от LLM
-		for _, toolCall := range choice.ToolCalls {
-			functionName := toolCall.FunctionCall.Name
-			var functionArgs map[string]any
-			if err := json.Unmarshal([]byte(toolCall.FunctionCall.Arguments), &functionArgs); err != nil {
-				log.Fatalf("Ошибка при разборе аргументов: %v", err)
-				return nil, err
-			}
-
-			var resultJSON []byte
-
-			resultJSON, err := agent.CallFunction(functionName, functionArgs)
-			if err != nil {
-				log.Fatalf("Ошибка при выполнении инструмента: %v", err)
-				return nil, err
-			}
-
-			// Возвращаем результат выполнения инструмента обратно в контекст LLM
-			messages = append(messages, llms.MessageContent{
-				Role: llms.ChatMessageTypeTool,
-				Parts: []llms.ContentPart{
-					llms.ToolCallResponse{
-						ToolCallID: toolCall.ID,
-						Name:       toolCall.FunctionCall.Name,
-						Content:    string(resultJSON),
-					},
-				},
+			messages = append(messages, api.Message{
+				Role:    "user",
+				Content: m.Message,
 			})
 		}
 	}
+	messages = append(messages, api.Message{
+		Role:    "system",
+		Content: "Используй перечисленные инструменты",
+	})
+
+	// Флаг для отключения стриминга (false гарантирует атомарный ответ)
+	stream := false
+
+	// 4. Отправляем запрос к модели (например, llama3 или qwen2.5)
+	req := &api.ChatRequest{
+		Model:    o.model, // Убедитесь, что модель на вашем ПК поддерживает Tools
+		Messages: messages,
+		Tools:    ollamaTools,
+		Stream:   &stream,
+	}
+
+	// Функция-колбэк для обработки ответа
+	var Result string
+	var responseError error
+	err := o.client.Chat(ctx, req, func(resp api.ChatResponse) error {
+		// 5. Проверяем, хочет ли модель вызвать инструмент
+		if len(resp.Message.ToolCalls) > 0 {
+			for _, tc := range resp.Message.ToolCalls {
+				functionName := tc.Function.Name
+				// var functionArgs map[string]any
+				// Аргументы приходят в виде map[string]interface{}
+				// Для удобства переведем их в JSON и распарсим в нашу структуру
+				argsBytes, err := json.Marshal(tc.Function.Arguments)
+				if err != nil {
+					responseError = fmt.Errorf("ошибка маршалинга аргументов: %w", err)
+					return nil
+				}
+				var functionArgs map[string]any
+				if err := json.Unmarshal(argsBytes, &functionArgs); err != nil {
+					responseError = fmt.Errorf("ошибка парсинга аргументов: %w", err)
+					return nil
+				}
+
+				var resultJSON []byte
+
+				resultJSON, err = agent.CallFunction(functionName, functionArgs)
+				if err != nil {
+					log.Fatalf("Ошибка при выполнении инструмента: %v", err)
+					return err
+				}
+
+				fmt.Printf("-> Результат выполнения функции: %s\n", string(resultJSON))
+				Result = string(resultJSON)
+			}
+		} else {
+			// Если модель ответила обычным текстом
+			fmt.Printf("Текстовый ответ модели: %s\n", resp.Message.Content)
+			Result = resp.Message.Content
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		log.Fatalf("Ошибка выполнения Chat: %v", err)
+	}
+	if responseError != nil {
+		log.Fatalf("Ошибка внутри колбэка: %v", responseError)
+	}
+
+	return &AgentResponse{Content: Result}, nil
 }

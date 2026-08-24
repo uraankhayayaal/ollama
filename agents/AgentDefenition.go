@@ -1,10 +1,15 @@
 package agents
 
-import "ai/tools"
+import (
+	"ai/tools"
+
+	"github.com/ollama/ollama/api"
+)
 
 type Agent interface {
 	GetMessages() []Message
 	GetTools() []tools.ToolDefinition
+	GetToolsForOllama() []api.Tool
 	CallFunction(functionName string, functionArgs map[string]any) ([]byte, error)
 }
 

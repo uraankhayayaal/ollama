@@ -6,6 +6,8 @@ import (
 	"ai/tools/filepath"
 	"encoding/json"
 	"fmt"
+
+	"github.com/ollama/ollama/api"
 )
 
 type Codegenerator struct {
@@ -45,9 +47,33 @@ func (cg Codegenerator) GetTools() []tools.ToolDefinition {
 				},
 			},
 		},
+	}
+}
+
+// Метод возвращает слайс официальных инструментов Ollama
+func (cr Codegenerator) GetToolsForOllama() []api.Tool {
+	codeProps := api.NewToolPropertiesMap()
+	codeProps.Set("filename", api.ToolProperty{
+		Type:        api.PropertyType{"string"},
+		Description: "Название файла, например 'main.go'",
+	})
+	codeProps.Set("content", api.ToolProperty{
+		Type:        api.PropertyType{"string"},
+		Description: "Код файла",
+	})
+
+	return []api.Tool{
 		{
-			Name:        "ApproveMr",
-			Description: "Поставить апрув (approve) к Merge Request, если изменения не критичны и не ломают систему",
+			Type: "function",
+			Function: api.ToolFunction{
+				Name:        "WriteFile",
+				Description: "Используй этот инструмент для сохранения написанного кода в файл.",
+				Parameters: api.ToolFunctionParameters{
+					Type:       "object",
+					Properties: codeProps,
+					Required:   []string{"filename", "content"},
+				},
+			},
 		},
 	}
 }
