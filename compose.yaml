@@ -39,8 +39,19 @@ services:
     depends_on:
       - ollama
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_rag
+    ports:
+      - "6333:6333" # REST API и Web UI
+      - "6334:6334" # gRPC API (лучший выбор для Go)
+    volumes:
+      - qdrant:/qdrant/storage
+    restart: always
+
 volumes:
   ollama: {}
+  qdrant: {}
   open-webui: {}
 
 networks:
