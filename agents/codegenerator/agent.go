@@ -22,7 +22,7 @@ func (cg Codegenerator) GetMessages() []agents.Message {
 	return []agents.Message{
 		{
 			Type:    agents.MessageTypeHuman,
-			Message: "Напиши микросервис для расчета квадратного уровнения, придумай формат аргументов для передачи в код, пример запуска: go run .",
+			Message: `Напиши микросервис для расчета квадратного уровнения, придумай формат аргументов для передачи в код.`,
 		},
 	}
 }
@@ -30,8 +30,9 @@ func (cg Codegenerator) GetMessages() []agents.Message {
 func (cg Codegenerator) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
 	return []agents.Message{
 		{
-			Type:    agents.MessageTypeSystem,
-			Message: `Ты - опытный golang разработчик. Нельзя отвечать просто текстом. Используй интсрумент WriteFiles. Передавай все файлы в одном вызове спсиком в свйостве files.`,
+			Type: agents.MessageTypeSystem,
+			Message: `Ты - опытный golang разработчик, который пишет автотесты, соблюдает архитектурные слои и обязанности кажного участка кода. Прикладывает инструкцию запуска и использования в файле readme.md.
+				Нельзя отвечать текстом. Передавай все файлы списком в свойстве files в одном вызове инструмента WriteFiles.`,
 		},
 	}
 }
@@ -75,6 +76,42 @@ func (cg Codegenerator) GetTools() []tools.ToolDefinition {
 				"additionalProperties": false,
 			},
 		},
+		// {
+		// 	Name:        "ReadFiles",
+		// 	Description: "Используй этот инструмент для одновременного чтения содержимого одного или нескольких файлов проекта.",
+		// 	Parameters: map[string]any{
+		// 		"type": "object", // Корень параметров ВСЕГДА должен быть object
+		// 		"properties": map[string]any{
+		// 			"filenames": map[string]any{
+		// 				"type":        "array",
+		// 				"description": "Список путей к файлам, которые нужно прочитать, например ['main.go', 'utils/math.go']",
+		// 				"items": map[string]any{
+		// 					"type": "string",
+		// 				},
+		// 			},
+		// 		},
+		// 		"required":             []string{"filenames"}, // Массив файлов обязателен для вызова инструмента
+		// 		"additionalProperties": false,                 // Обязательно для Structured Outputs / Strict Mode
+		// 	},
+		// },
+		// {
+		// 	Name:        "DeleteFiles",
+		// 	Description: "Используй этот инструмент для удаления ненужных файлов или целых папок с диска.",
+		// 	Parameters: map[string]any{
+		// 		"type": "object", // Корень параметров ВСЕГДА должен быть object
+		// 		"properties": map[string]any{
+		// 			"paths": map[string]any{
+		// 				"type":        "array",
+		// 				"description": "Список путей к файлам или папкам для удаления, например ['old_code.go', 'temp_dir']",
+		// 				"items": map[string]any{
+		// 					"type": "string",
+		// 				},
+		// 			},
+		// 		},
+		// 		"required":             []string{"paths"}, // Массив путей обязателен для вызова инструмента
+		// 		"additionalProperties": false,             // Обязательно для Structured Outputs / Strict Mode
+		// 	},
+		// },
 	}
 }
 
@@ -101,6 +138,26 @@ func (cr Codegenerator) GetToolsForOllama() []api.Tool {
 	itemProps.Set("content", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
 		Description: "Полный исходный код файла",
+	})
+
+	// 1. Схема для ReadFiles
+	readProps := api.NewToolPropertiesMap()
+	readProps.Set("filenames", api.ToolProperty{
+		Type:        api.PropertyType{"array"},
+		Description: "Список имен файлов для чтения, например ['main.go', 'calc/roots.go']",
+		Items: &api.ToolProperty{
+			Type: api.PropertyType{"string"},
+		},
+	})
+
+	// 2. Схема для DeleteFiles
+	deleteProps := api.NewToolPropertiesMap()
+	deleteProps.Set("paths", api.ToolProperty{
+		Type:        api.PropertyType{"array"},
+		Description: "Список путей к файлам или папкам для удаления, например ['old_code.go', 'temp_dir']",
+		Items: &api.ToolProperty{
+			Type: api.PropertyType{"string"},
+		},
 	})
 
 	// Теперь создаем корневые свойства для WriteFiles, куда помещаем массив с itemProps
@@ -137,6 +194,30 @@ func (cr Codegenerator) GetToolsForOllama() []api.Tool {
 					Type:       "object",
 					Properties: bulkProps, // Передаем *api.ToolPropertiesMap
 					Required:   []string{"files"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: api.ToolFunction{
+				Name:        "ReadFiles",
+				Description: "Используй этот инструмент для чтения содержимого одного или нескольких файлов проекта.",
+				Parameters: api.ToolFunctionParameters{
+					Type:       "object",
+					Properties: readProps,
+					Required:   []string{"filenames"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: api.ToolFunction{
+				Name:        "DeleteFiles",
+				Description: "Используй этот инструмент для удаления ненужных файлов или папок.",
+				Parameters: api.ToolFunctionParameters{
+					Type:       "object",
+					Properties: deleteProps,
+					Required:   []string{"paths"},
 				},
 			},
 		},
@@ -230,15 +311,16 @@ func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 	result := []map[string]string{}
 
 	for _, file := range params.Files {
+		relativeFilename := "./temp/" + file.Filename
 		// Извлекаем путь к поддиректории из имени файла (например, из "models/user.go" получим "models")
 		// Если файл лежит в корне (например, "main.go"), dir вернет "."
-		dir := filepath.Dir(file.Filename)
+		dir := filepath.Dir(relativeFilename)
 
 		// Если путь содержит поддиректории, создаем их перед вызовом функции записи
-		if dir != "." && dir != "/" {
+		if dir != "." && dir != "/" && dir != string(filepath.Separator) {
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				result = append(result, map[string]string{
-					"filename": file.Filename,
+					"filename": relativeFilename,
 					"status":   "error",
 					"message":  fmt.Sprintf("не удалось создать директорию %s: %v", dir, err),
 				})
@@ -249,15 +331,15 @@ func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 		// Вызываем вашу функцию записи (предполагаем, что она возвращает error)
 		// Замените "filepath.WriteFile" на ваш актуальный вызов (например, cg.writeFile или пакет.WriteFile)
 		// Записываем файл на диск, используя стандартный os.WriteFile
-		if err := os.WriteFile(file.Filename, []byte(file.Content), 0644); err != nil {
+		if err := os.WriteFile(relativeFilename, []byte(file.Content), 0644); err != nil {
 			result = append(result, map[string]string{
-				"filename": file.Filename,
+				"filename": relativeFilename,
 				"status":   "error",
 				"message":  err.Error(),
 			})
 		} else {
 			result = append(result, map[string]string{
-				"filename": file.Filename,
+				"filename": relativeFilename,
 				"status":   "success",
 			})
 		}
@@ -268,5 +350,110 @@ func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 
 	fmt.Println("Ответ инструмента множественной записи", result)
 
+	return resultJSON, nil
+}
+
+// ReadParams соответствует JSON-параметрам инструмента ReadFiles
+type ReadParams struct {
+	Filenames []string `json:"filenames"`
+}
+
+// ReadFiles читает содержимое указанных файлов и возвращает их контент ИИ-агенту
+func (cg Codegenerator) ReadFiles(args map[string]any) ([]byte, error) {
+	var params ReadParams
+
+	bytes, err := json.Marshal(args)
+	if err == nil {
+		_ = json.Unmarshal(bytes, &params)
+	}
+
+	if len(params.Filenames) == 0 {
+		resultJSON, _ := json.Marshal(map[string]string{
+			"status":  "error",
+			"message": "Список файлов для чтения пуст",
+		})
+		return resultJSON, nil
+	}
+
+	// Структура ответа: массив объектов с контентом или ошибкой по каждому файлу
+	result := []map[string]string{}
+
+	for _, filename := range params.Filenames {
+		cleanFilename := "./temp/" + filepath.Clean(filename)
+
+		// Читаем файл с диска
+		contentBytes, err := os.ReadFile(cleanFilename)
+		if err != nil {
+			result = append(result, map[string]string{
+				"filename": cleanFilename,
+				"status":   "error",
+				"message":  err.Error(),
+			})
+		} else {
+			result = append(result, map[string]string{
+				"filename": cleanFilename,
+				"status":   "success",
+				"content":  string(contentBytes), // Конвертируем []byte обратно в string для ИИ
+			})
+		}
+	}
+
+	resultJSON, _ := json.Marshal(result)
+	return resultJSON, nil
+}
+
+// DeleteParams соответствует JSON-параметрам инструмента DeleteFiles
+type DeleteParams struct {
+	Paths []string `json:"paths"` // Может принимать как файлы, так и папки
+}
+
+// DeleteFiles удаляет указанные файлы или папки с диска
+func (cg Codegenerator) DeleteFiles(args map[string]any) ([]byte, error) {
+	var params DeleteParams
+
+	bytes, err := json.Marshal(args)
+	if err == nil {
+		_ = json.Unmarshal(bytes, &params)
+	}
+
+	if len(params.Paths) == 0 {
+		resultJSON, _ := json.Marshal(map[string]string{
+			"status":  "error",
+			"message": "Список путей для удаления пуст",
+		})
+		return resultJSON, nil
+	}
+
+	result := []map[string]string{}
+
+	for _, path := range params.Paths {
+		cleanPath := "./temp/" + filepath.Clean(path)
+
+		// Проверяем, существует ли файл/папка вообще
+		if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+			result = append(result, map[string]string{
+				"path":    cleanPath,
+				"status":  "error",
+				"message": "файл или папка не существует",
+			})
+			continue
+		}
+
+		// Удаляем (RemoveAll удалит файл, а если это папка — удалит её со всем содержимым)
+		if err := os.RemoveAll(cleanPath); err != nil {
+			result = append(result, map[string]string{
+				"path":    cleanPath,
+				"status":  "error",
+				"message": err.Error(),
+			})
+		} else {
+			result = append(result, map[string]string{
+				"path":   cleanPath,
+				"status": "success",
+			})
+		}
+	}
+
+	resultJSON, _ := json.Marshal(result)
 	return resultJSON, nil
 }
