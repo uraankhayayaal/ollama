@@ -2,6 +2,7 @@ package models
 
 import (
 	"ai/agents"
+	"ai/tools"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 )
+
+const MAX_TOKEN_COUNT = 1000
 
 type AlisaProvider struct {
 	client openai.Client
@@ -46,22 +49,16 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*Agen
 	}
 
 	// Перевод prompt
-	var oaMessages []openai.ChatCompletionMessageParamUnion
-	var userMessage string
+	var messages []openai.ChatCompletionMessageParamUnion
+
+	// Системное сообщение
+	for _, m := range agent.GetAgentMemoryMessages([]agents.Message{}) {
+		messages = append(messages, openai.SystemMessage(m.Message))
+	}
+
+	// Пользвоательское сообщение
 	for _, m := range agent.GetMessages() {
-		switch m.Type {
-		case agents.MessageTypeAI, agents.MessageTypeFunction, agents.MessageTypeTool:
-			oaMessages = append(oaMessages, openai.AssistantMessage(m.Message))
-		case agents.MessageTypeGeneric:
-			oaMessages = append(oaMessages, openai.DeveloperMessage(m.Message))
-		case agents.MessageTypeSystem:
-			oaMessages = append(oaMessages, openai.SystemMessage(m.Message))
-		case agents.MessageTypeHuman:
-			oaMessages = append(oaMessages, openai.UserMessage(m.Message))
-			userMessage = userMessage + "; " + m.Message
-		default:
-			oaMessages = append(oaMessages, openai.UserMessage(m.Message))
-		}
+		messages = append(messages, openai.UserMessage(m.Message))
 	}
 
 	// Выполнение запроса
@@ -69,75 +66,90 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*Agen
 		context.Background(),
 		openai.ChatCompletionNewParams{
 			Model:    y.model,
-			Messages: oaMessages,
+			Messages: messages,
 			Tools:    oaTools,
 			ToolChoice: openai.ChatCompletionToolChoiceOptionUnionParam{
 				OfAuto: openai.String("auto"),
 			},
+			MaxCompletionTokens: openai.Int(MAX_TOKEN_COUNT),
+
+			// ОТКЛЮЧАЕМ THINKING: Передаем "none" для подавления рассуждений,
+			// чтобы модель сразу генерировала ответ и не тратила контекст.
+			ReasoningEffort: openai.ReasoningEffort("none"),
 		},
 	)
 	if err != nil {
 		log.Fatalf("Ошибка при выполнении запроса: %v", err)
 	}
 
+	fmt.Println("олыворалывора", response)
+	fmt.Println("JKHKJHKJHKJ", len(response.Choices))
+	fmt.Println("JKHKJHKJHKJ", len(response.Choices[0].Message.ToolCalls))
 	// Ответ модели
 	message := response.Choices[0].Message
 
+	var toolCalls []tools.ToolCall
+
 	// Вызов запрошенных моделью функций
 	if len(message.ToolCalls) > 0 {
-		// Массив сообщений для отправки результатов выполнения
-		newMessages := []openai.ChatCompletionMessageParamUnion{
-			openai.UserMessage(userMessage),
-			message.ToParam(),
-		}
-
 		// Заполнение результата для каждой вызванной функции
 		for _, toolCall := range message.ToolCalls {
 			functionName := toolCall.Function.Name
 			var functionArgs map[string]any
 			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &functionArgs); err != nil {
-				log.Fatalf("Ошибка при разборе аргументов: %v", err)
+				return nil, fmt.Errorf("Ошибка при разборе аргументов: %w", err)
 			}
 
-			var resultJSON []byte
-
-			resultJSON, err := agent.CallFunction(functionName, functionArgs)
+			toolCalls = append(toolCalls, tools.ToolCall{Name: functionName})
+			toolResult, err := agent.CallFunction(functionName, functionArgs)
 			if err != nil {
-				log.Fatalf("Ошибка при выполнении инструмента: %v", err)
+				return nil, fmt.Errorf("Ошибка при выполнении инструмента: %w", err)
 			}
-
-			newMessages = append(newMessages, openai.ToolMessage(string(resultJSON), toolCall.ID))
+			fmt.Println("Результат работы инструмента", toolResult)
 		}
-
-		// Второй запрос с результатами функций
-		secondResponse, err := y.client.Chat.Completions.New(
-			context.Background(),
-			openai.ChatCompletionNewParams{
-				Model:    y.model,
-				Messages: newMessages,
-				Tools:    oaTools,
-			},
-		)
-		if err != nil {
-			log.Fatalf("Ошибка при выполнении второго запроса: %v", err)
-		}
-
-		// Ответ модели с учетом вызова функций
-		return &AgentResponse{Content: secondResponse.Choices[0].Message.Content}, nil
-
-		// agentResp := &AgentResponse{
-		// 	Content: response.Choices[0].Message.Content,
-		// }
-		// for _, tc := range response.Choices[0].Message.ToolCalls {
-		// 	agentResp.ToolCalls = append(agentResp.ToolCalls, tools.ToolCall{
-		// 		ID:        tc.ID,
-		// 		Name:      tc.Function.Name,
-		// 		Arguments: tc.Function.Arguments,
-		// 	})
-		// }
-
-		// return agentResp, nil
 	}
 
-	return &AgentResponse{Content: message.Content}, nil
+	return &AgentResponse{Content: message.Content, ToolCalls: toolCalls}, nil
+}
+
+func (y *AlisaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
+	req := openai.EmbeddingNewParams{
+		Model: y.model,
+		Input: openai.EmbeddingNewParamsInputUnion{
+			OfString: openai.String("Язык программирования Go идеально подходит для микросервисов."),
+		},
+	}
+
+	resp, err := y.client.Embeddings.New(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("Ошибка генерации вектора: %v", err)
+	}
+
+	if len(resp.Data) == 0 {
+		return nil, fmt.Errorf("Срез пуст!")
+	}
+
+	return convertAlisaMatrix(resp.Data), nil
+}
+
+func (y *AlisaProvider) GetModelName(ctx context.Context) string {
+	return y.model
+}
+
+func convertAlisaMatrix(embeddings []openai.Embedding) [][]float64 {
+	if len(embeddings) == 0 {
+		return nil
+	}
+
+	result := make([][]float64, len(embeddings))
+
+	for i, embedding := range embeddings {
+		if embedding.Embedding == nil {
+			continue
+		}
+
+		result[i] = embedding.Embedding
+	}
+
+	return result
 }

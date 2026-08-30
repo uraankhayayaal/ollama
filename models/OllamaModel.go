@@ -2,6 +2,7 @@ package models
 
 import (
 	"ai/agents"
+	"ai/tools"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,34 +35,22 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 
 	// Перевод prompt
 	var messages []api.Message
+
+	// Системное сообщение
+	memoryMessages := agent.GetAgentMemoryMessages([]agents.Message{})
+	for _, m := range memoryMessages {
+		messages = append(messages, api.Message{
+			Role:    "system",
+			Content: m.Message,
+		})
+	}
+
+	// Пользвоательское сообщение
 	for _, m := range agent.GetMessages() {
-		switch m.Type {
-		case agents.MessageTypeAI:
-			messages = append(messages, api.Message{
-				Role:    "ai",
-				Content: m.Message,
-			})
-		case agents.MessageTypeFunction:
-			messages = append(messages, api.Message{
-				Role:    "function",
-				Content: m.Message,
-			})
-		case agents.MessageTypeTool:
-			messages = append(messages, api.Message{
-				Role:    "tool",
-				Content: m.Message,
-			})
-		case agents.MessageTypeGeneric, agents.MessageTypeSystem:
-			messages = append(messages, api.Message{
-				Role:    "system",
-				Content: m.Message,
-			})
-		case agents.MessageTypeHuman:
-			messages = append(messages, api.Message{
-				Role:    "user",
-				Content: m.Message,
-			})
-		}
+		messages = append(messages, api.Message{
+			Role:    "user",
+			Content: m.Message,
+		})
 	}
 	messages = append(messages, api.Message{
 		Role:    "system",
@@ -81,7 +70,7 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 
 	// Функция-колбэк для обработки ответа
 	var Result string
-	var responseError error
+	var toolCalls []tools.ToolCall
 	err := o.client.Chat(ctx, req, func(resp api.ChatResponse) error {
 		// 5. Проверяем, хочет ли модель вызвать инструмент
 		if len(resp.Message.ToolCalls) > 0 {
@@ -92,21 +81,20 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 				// Для удобства переведем их в JSON и распарсим в нашу структуру
 				argsBytes, err := json.Marshal(tc.Function.Arguments)
 				if err != nil {
-					responseError = fmt.Errorf("ошибка маршалинга аргументов: %w", err)
-					return nil
+					return fmt.Errorf("ошибка маршалинга аргументов: %w", err)
 				}
 				var functionArgs map[string]any
 				if err := json.Unmarshal(argsBytes, &functionArgs); err != nil {
-					responseError = fmt.Errorf("ошибка парсинга аргументов: %w", err)
-					return nil
+					return fmt.Errorf("ошибка парсинга аргументов: %w", err)
 				}
 
 				var resultJSON []byte
 
+				toolCalls = append(toolCalls, tools.ToolCall{Name: functionName})
+
 				resultJSON, err = agent.CallFunction(functionName, functionArgs)
 				if err != nil {
-					log.Fatalf("Ошибка при выполнении инструмента: %v", err)
-					return err
+					return fmt.Errorf("Ошибка при выполнении инструмента: %v", err)
 				}
 
 				fmt.Printf("-> Результат выполнения функции: %s\n", string(resultJSON))
@@ -122,11 +110,54 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 	})
 
 	if err != nil {
-		log.Fatalf("Ошибка выполнения Chat: %v", err)
-	}
-	if responseError != nil {
-		log.Fatalf("Ошибка внутри колбэка: %v", responseError)
+		return nil, fmt.Errorf("Ошибка выполнения Chat: %v", err)
 	}
 
-	return &AgentResponse{Content: Result}, nil
+	return &AgentResponse{Content: Result, ToolCalls: toolCalls}, nil
+}
+
+func (o *OllamaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
+	req := &api.EmbedRequest{
+		Model: o.model,
+		Input: "Язык программирования Go идеально подходит для микросервисов.",
+	}
+
+	resp, err := o.client.Embed(ctx, req)
+	if err != nil {
+		log.Fatalf("Ошибка генерации вектора: %v", err)
+	}
+
+	if len(resp.Embeddings) == 0 {
+		return nil, fmt.Errorf("Срез пуст!")
+	}
+
+	return convertOllamaMatrix(resp.Embeddings), nil
+}
+
+func (o *OllamaProvider) GetModelName(ctx context.Context) string {
+	return o.model
+}
+
+func convertOllamaMatrix(input [][]float32) [][]float64 {
+	if input == nil {
+		return nil
+	}
+
+	// 1. Выделяем память под внешнюю матрицу
+	result := make([][]float64, len(input))
+
+	for i, row := range input {
+		if row == nil {
+			continue
+		}
+		// 2. Выделяем память под внутреннюю строку (точного размера)
+		result[i] = make([]float64, len(row))
+
+		// 3. Копируем элементы с приведением типа
+		for j, val := range row {
+			result[i][j] = float64(val)
+		}
+	}
+
+	return result
 }

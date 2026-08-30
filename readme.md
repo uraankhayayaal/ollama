@@ -71,7 +71,7 @@ func main() {
 	err = client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
-			Size:     1024, // Укажите размерность вашей модели эмбеддингов
+			Size:     1024,                   // Укажите размерность вашей модели эмбеддингов
 			Distance: qdrant.Distance_Cosine, // Косинусное сходство — стандарт для RAG
 		}),
 	})

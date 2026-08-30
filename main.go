@@ -1,18 +1,20 @@
 package main
 
 import (
-	"ai/agents/codereviewer"
+	"ai/agents/codegenerator"
 	"ai/models"
 	"context"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
 	// Load the .env file
 	err := godotenv.Load()
@@ -43,13 +45,14 @@ func main() {
 		log.Fatalf("Failed to init provider: %v", err)
 	}
 
-	codereviewer := codereviewer.NewCodereviewer() // Кодревью
-	// codereviewer := codegenerator.NewCodegenerator() // Генератор кода
+	// codereviewer := codereviewer.NewCodereviewer() // Кодревью
+	codereviewer := codegenerator.NewCodegenerator() // Генератор кода
 
 	resp, err := provider.Generate(ctx, codereviewer)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}
 
-	fmt.Println("Response:", resp.Content)
+	fmt.Println("Response Message:", resp.Content)
+	fmt.Println("Response Tools:", resp.ToolCalls)
 }
