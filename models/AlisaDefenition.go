@@ -75,7 +75,7 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*Agen
 
 			// ОТКЛЮЧАЕМ THINKING: Передаем "none" для подавления рассуждений,
 			// чтобы модель сразу генерировала ответ и не тратила контекст.
-			ReasoningEffort: openai.ReasoningEffort("none"),
+			// ReasoningEffort: openai.ReasoningEffort("none"),
 		},
 	)
 	if err != nil {
