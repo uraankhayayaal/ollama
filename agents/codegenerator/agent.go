@@ -32,7 +32,7 @@ func (cg Codegenerator) GetAgentMemoryMessages(text []agents.Message) []agents.M
 		{
 			Type: agents.MessageTypeSystem,
 			Message: `Ты - опытный golang разработчик, который пишет автотесты, соблюдает архитектурные слои и обязанности каждого участка кода.
-				Прикладывает инструкцию запуска и использования в файле readme.md. Оформляет swagger инструкцию по url /docs.
+				Прикладывает инструкцию запуска и использования в файле readme.md.
 				Нельзя отвечать текстом. Передавай все файлы списком в свойстве files в одном вызове инструмента WriteFiles.`,
 		},
 	}
@@ -300,13 +300,17 @@ func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 
 	// Если массив файлов пустой (например, ошибка парсинга или агент ничего не передал)
 	if len(params.Files) == 0 {
+		fmt.Printf("[WriteFiles] ВНИМАНИЕ: список файлов пуст. Полученные аргументы: %s\n", string(bytes))
 		resultJSON, _ := json.Marshal(map[string]string{
-			"status":  "error",
-			"message": "Список файлов пуст или неверный формат аргументов",
+			"status":     "error",
+			"message":    "Список файлов пуст или неверный формат аргументов",
+			"raw_args":   string(bytes),
+			"suggestion": "Аргументы должны быть в формате: {\"files\": [{\"filename\": \"путь\", \"content\": \"код\"}]}",
 		})
 		return resultJSON, nil
 	}
 
+	workdir, _ := os.Getwd()
 	// 3. Вызываем бизнес-логику записи для каждого файла
 	// Будем собирать статус по каждому файлу отдельно, чтобы агент видел полную картину
 	result := []map[string]string{}
@@ -316,6 +320,7 @@ func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 		// Извлекаем путь к поддиректории из имени файла (например, из "models/user.go" получим "models")
 		// Если файл лежит в корне (например, "main.go"), dir вернет "."
 		dir := filepath.Dir(relativeFilename)
+		fmt.Printf("[WriteFiles] записываю %q -> %q\n", file.Filename, filepath.Join(workdir, relativeFilename))
 
 		// Если путь содержит поддиректории, создаем их перед вызовом функции записи
 		if dir != "." && dir != "/" && dir != string(filepath.Separator) {

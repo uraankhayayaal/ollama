@@ -5,15 +5,40 @@ import (
 	"ai/runner"
 	"ai/tools"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
+	"github.com/openai/openai-go/shared/constant"
 )
 
-const MAX_TOKEN_COUNT = 1000
+// maxTokensOut для Yandex: 1000 токенов не хватало, из-за чего аргументы
+// WriteFiles обрезались и доходил только 1 файл. Значение можно задать
+// через переменную окружения YANDEX_MAX_TOKENS.
+func maxTokensOut() int {
+	if n := os.Getenv("YANDEX_MAX_TOKENS"); n != "" {
+		return atoiDefault(n, 4000)
+	}
+	return 4000
+}
+
+func atoiDefault(s string, def int) int {
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return def
+		}
+		n = n*10 + int(r-'0')
+	}
+	if n == 0 {
+		return def
+	}
+	return n
+}
 
 type AlisaProvider struct {
 	client openai.Client
@@ -34,6 +59,11 @@ func NewAlisaProvider() *AlisaProvider {
 }
 
 func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+	return runner.Generate(ctx, y, agent)
+}
+
+// ChatOnce выполняет один запрос к YandexGPT.
+func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
 	// Перевод tools
 	var oaTools []openai.ChatCompletionToolParam
 	for _, t := range agent.GetTools() {
@@ -47,22 +77,51 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 		})
 	}
 
-	// Перевод prompt
+	// Перевод нейтральных сообщений в формат OpenAI
 	var messages []openai.ChatCompletionMessageParamUnion
+	for _, m := range msgs {
+		switch m.Role {
+		case "system":
+			messages = append(messages, openai.SystemMessage(m.Content))
 
-	// Системное сообщение
-	for _, m := range agent.GetAgentMemoryMessages([]agents.Message{}) {
-		messages = append(messages, openai.SystemMessage(m.Message))
-	}
+		case "user":
+			messages = append(messages, openai.UserMessage(m.Content))
 
-	// Пользвоательское сообщение
-	for _, m := range agent.GetMessages() {
-		messages = append(messages, openai.UserMessage(m.Message))
+		case "tool":
+			messages = append(messages, openai.ToolMessage(m.Content, m.ToolCallID))
+
+		case "assistant":
+			am := openai.ChatCompletionAssistantMessageParam{
+				Role: constant.Assistant("assistant"),
+				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfString: param.NewOpt(m.Content),
+				},
+			}
+			for _, tc := range m.ToolCalls {
+				am.ToolCalls = append(am.ToolCalls, openai.ChatCompletionMessageToolCallParam{
+					ID:   tc.ID,
+					Type: constant.Function("function"),
+					Function: openai.ChatCompletionMessageToolCallFunctionParam{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
+			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
+		}
 	}
 
 	// Выполнение запроса
+	runner.Debugf("YANDEX: запрос к модели %q (сообщений: %d, инструментов: %d)", y.model, len(messages), len(oaTools))
+	for i, m := range messages {
+		runner.Debugf("YANDEX: messages[%d] role=%q content=%q", i, messageRole(m), runner.Truncate(messageContent(m), 300))
+	}
+	for _, t := range oaTools {
+		runner.Debugf("YANDEX: tool=%q", t.Function.Name)
+	}
+
 	response, err := y.client.Chat.Completions.New(
-		context.Background(),
+		ctx,
 		openai.ChatCompletionNewParams{
 			Model:    y.model,
 			Messages: messages,
@@ -70,11 +129,11 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 			ToolChoice: openai.ChatCompletionToolChoiceOptionUnionParam{
 				OfAuto: openai.String("auto"),
 			},
-			MaxCompletionTokens: openai.Int(MAX_TOKEN_COUNT),
+			MaxCompletionTokens: openai.Int(int64(maxTokensOut())),
 
 			// ОТКЛЮЧАЕМ THINKING: Передаем "none" для подавления рассуждений,
 			// чтобы модель сразу генерировала ответ и не тратила контекст.
-			// ReasoningEffort: openai.ReasoningEffort("none"),
+			ReasoningEffort: openai.ReasoningEffort("none"),
 		},
 	)
 	if err != nil {
@@ -83,22 +142,47 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 
 	// Пустой ответ модели — защита от паники ниже
 	if len(response.Choices) == 0 {
+		runner.DebugJSON("YANDEX: пустой срез Choices, полный ответ", response)
 		return nil, fmt.Errorf("Модель не вернула ни одного ответа")
 	}
 
 	// Ответ модели
 	message := response.Choices[0].Message
+	runner.Debugf(
+		"YANDEX: ответ choice[0] finish_reason=%q content=%q tool_calls=%d function_call=%q",
+		response.Choices[0].FinishReason, runner.Truncate(message.Content, 300),
+		len(message.ToolCalls), message.FunctionCall.Name,
+	)
+	runner.DebugCheckEmpty("yandex", string(response.Choices[0].FinishReason), message.Content, len(message.ToolCalls), response)
 
-	// Вызов запрошенных моделью функций
+	// Вызов запрошенных моделью функций.
+	// Yandex отвечает устаревшим полем function_call (одиночный вызов),
+	// а не массивом tool_calls — поддерживаем оба варианта.
 	var toolCalls []tools.ToolCall
 	for _, toolCall := range message.ToolCalls {
+		runner.Debugf("YANDEX: tool_call %q args=%s", toolCall.Function.Name, runner.Truncate(toolCall.Function.Arguments, 300))
 		toolCalls = append(toolCalls, tools.ToolCall{
+			ID:        toolCall.ID,
 			Name:      toolCall.Function.Name,
 			Arguments: toolCall.Function.Arguments,
 		})
 	}
 
-	return runner.RunToolCalls(agent, toolCalls, message.Content)
+	if len(toolCalls) == 0 && message.FunctionCall.Name != "" {
+		runner.Debugf("YANDEX: tool_call через function_call %q args=%s",
+			message.FunctionCall.Name, runner.Truncate(message.FunctionCall.Arguments, 300))
+		toolCalls = append(toolCalls, tools.ToolCall{
+			ID:        fmt.Sprintf("call_%s", message.FunctionCall.Name),
+			Name:      message.FunctionCall.Name,
+			Arguments: message.FunctionCall.Arguments,
+		})
+	}
+
+	return &runner.ModelReply{
+		Content:      message.Content,
+		ToolCalls:    toolCalls,
+		FinishReason: string(response.Choices[0].FinishReason),
+	}, nil
 }
 
 func (y *AlisaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
@@ -123,6 +207,44 @@ func (y *AlisaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
 
 func (y *AlisaProvider) GetModelName(ctx context.Context) string {
 	return y.model
+}
+
+// messageContent достаёт текстовое содержимое сообщения из union-типа OpenAI.
+func messageContent(m openai.ChatCompletionMessageParamUnion) string {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Sprintf("<marshal error: %v>", err)
+	}
+
+	var v struct {
+		Role    json.RawMessage `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil || v.Content == nil {
+		return ""
+	}
+
+	var s string
+	if json.Unmarshal(v.Content, &s) == nil {
+		return s
+	}
+	return string(v.Content)
+}
+
+// messageRole достаёт роль сообщения из union-типа OpenAI.
+func messageRole(m openai.ChatCompletionMessageParamUnion) string {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "<unknown>"
+	}
+
+	var v struct {
+		Role string `json:"role"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return "<unknown>"
+	}
+	return v.Role
 }
 
 func convertAlisaMatrix(embeddings []openai.Embedding) [][]float64 {
