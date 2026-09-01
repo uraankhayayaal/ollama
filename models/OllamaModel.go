@@ -2,6 +2,7 @@ package models
 
 import (
 	"ai/agents"
+	"ai/runner"
 	"ai/tools"
 	"context"
 	"encoding/json"
@@ -29,7 +30,7 @@ func NewOllamaProvider(model string) (*OllamaProvider, error) {
 	return &OllamaProvider{client: client, model: llmModelName}, nil
 }
 
-func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*AgentResponse, error) {
+func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	// Перевод tools
 	ollamaTools := agent.GetToolsForOllama()
 
@@ -69,41 +70,23 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 	}
 
 	// Функция-колбэк для обработки ответа
-	var Result string
+	var content string
 	var toolCalls []tools.ToolCall
 	err := o.client.Chat(ctx, req, func(resp api.ChatResponse) error {
 		// 5. Проверяем, хочет ли модель вызвать инструмент
 		if len(resp.Message.ToolCalls) > 0 {
 			for _, tc := range resp.Message.ToolCalls {
-				functionName := tc.Function.Name
-				// var functionArgs map[string]any
-				// Аргументы приходят в виде map[string]interface{}
-				// Для удобства переведем их в JSON и распарсим в нашу структуру
 				argsBytes, err := json.Marshal(tc.Function.Arguments)
 				if err != nil {
 					return fmt.Errorf("ошибка маршалинга аргументов: %w", err)
 				}
-				var functionArgs map[string]any
-				if err := json.Unmarshal(argsBytes, &functionArgs); err != nil {
-					return fmt.Errorf("ошибка парсинга аргументов: %w", err)
-				}
 
-				var resultJSON []byte
-
-				toolCalls = append(toolCalls, tools.ToolCall{Name: functionName})
-
-				resultJSON, err = agent.CallFunction(functionName, functionArgs)
-				if err != nil {
-					return fmt.Errorf("Ошибка при выполнении инструмента: %v", err)
-				}
-
-				fmt.Printf("-> Результат выполнения функции: %s\n", string(resultJSON))
-				Result = string(resultJSON)
+				toolCalls = append(toolCalls, tools.ToolCall{Name: tc.Function.Name, Arguments: string(argsBytes)})
 			}
 		} else {
 			// Если модель ответила обычным текстом
 			fmt.Printf("Текстовый ответ модели: %s\n", resp.Message.Content)
-			Result = resp.Message.Content
+			content = resp.Message.Content
 		}
 
 		return nil
@@ -113,7 +96,7 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*Age
 		return nil, fmt.Errorf("Ошибка выполнения Chat: %v", err)
 	}
 
-	return &AgentResponse{Content: Result, ToolCalls: toolCalls}, nil
+	return runner.RunToolCalls(agent, toolCalls, content)
 }
 
 func (o *OllamaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
