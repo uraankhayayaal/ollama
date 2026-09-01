@@ -2,11 +2,10 @@ package models
 
 import (
 	"ai/agents"
+	"ai/runner"
 	"ai/tools"
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/openai/openai-go"
@@ -34,7 +33,7 @@ func NewAlisaProvider() *AlisaProvider {
 	return &AlisaProvider{client: client, model: fmt.Sprintf("gpt://%s/%s", yandexFolderID, yandexModel)}
 }
 
-func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*AgentResponse, error) {
+func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	// Перевод tools
 	var oaTools []openai.ChatCompletionToolParam
 	for _, t := range agent.GetTools() {
@@ -79,37 +78,27 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*Agen
 		},
 	)
 	if err != nil {
-		log.Fatalf("Ошибка при выполнении запроса: %v", err)
+		return nil, fmt.Errorf("Ошибка при выполнении запроса: %w", err)
 	}
 
-	fmt.Println("олыворалывора", response)
-	fmt.Println("JKHKJHKJHKJ", len(response.Choices))
-	fmt.Println("JKHKJHKJHKJ", len(response.Choices[0].Message.ToolCalls))
+	// Пустой ответ модели — защита от паники ниже
+	if len(response.Choices) == 0 {
+		return nil, fmt.Errorf("Модель не вернула ни одного ответа")
+	}
+
 	// Ответ модели
 	message := response.Choices[0].Message
 
-	var toolCalls []tools.ToolCall
-
 	// Вызов запрошенных моделью функций
-	if len(message.ToolCalls) > 0 {
-		// Заполнение результата для каждой вызванной функции
-		for _, toolCall := range message.ToolCalls {
-			functionName := toolCall.Function.Name
-			var functionArgs map[string]any
-			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &functionArgs); err != nil {
-				return nil, fmt.Errorf("Ошибка при разборе аргументов: %w", err)
-			}
-
-			toolCalls = append(toolCalls, tools.ToolCall{Name: functionName})
-			toolResult, err := agent.CallFunction(functionName, functionArgs)
-			if err != nil {
-				return nil, fmt.Errorf("Ошибка при выполнении инструмента: %w", err)
-			}
-			fmt.Println("Результат работы инструмента", toolResult)
-		}
+	var toolCalls []tools.ToolCall
+	for _, toolCall := range message.ToolCalls {
+		toolCalls = append(toolCalls, tools.ToolCall{
+			Name:      toolCall.Function.Name,
+			Arguments: toolCall.Function.Arguments,
+		})
 	}
 
-	return &AgentResponse{Content: message.Content, ToolCalls: toolCalls}, nil
+	return runner.RunToolCalls(agent, toolCalls, message.Content)
 }
 
 func (y *AlisaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
