@@ -209,14 +209,37 @@ func (f *Forge) postToPRThread(comment forges.ReviewComment) error {
 	return nil
 }
 
-// Approve одобряет Pull Request.
-func (f *Forge) Approve() error {
+// PostSummary публикует итоговый отчёт в общий тред Pull Request.
+func (f *Forge) PostSummary(summary string) error {
+	apiPath := fmt.Sprintf("/repos/%s/%s/issues/%s/comments",
+		f.cfg.Owner, f.cfg.Repo, f.cfg.PRNumber)
+
+	payload := map[string]string{"body": summary}
+
+	data, status, err := f.do("POST", apiPath, payload)
+	if err != nil {
+		return err
+	}
+
+	if status != http.StatusCreated {
+		return fmt.Errorf("статус %d: %s", status, string(data))
+	}
+	return nil
+}
+
+// Approve одобряет Pull Request. summary — текст легенды, прикладываемой
+// к апруву (может быть пустым).
+func (f *Forge) Approve(summary string) error {
 	apiPath := fmt.Sprintf("/repos/%s/%s/pulls/%s/reviews",
 		f.cfg.Owner, f.cfg.Repo, f.cfg.PRNumber)
 
+	if summary == "" {
+		summary = "Ревью пройдено, изменений принимаю."
+	}
+
 	payload := map[string]string{
 		"event": "APPROVE",
-		"body":  "Ревью пройдено, изменений принимаю.",
+		"body":  summary,
 	}
 
 	data, status, err := f.do("POST", apiPath, payload)

@@ -185,8 +185,34 @@ func (f *Forge) postCommentOnFile(comment forges.ReviewComment) error {
 	return nil
 }
 
-// Approve одобряет Merge Request.
-func (f *Forge) Approve() error {
+// PostSummary публикует итоговый отчёт в общий тред Merge Request
+// (заметка на MR).
+func (f *Forge) PostSummary(summary string) error {
+	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s/notes",
+		f.cfg.ProjID, f.cfg.MRIID)
+
+	payload := map[string]string{"body": summary}
+
+	data, status, err := f.do("POST", path, payload)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusCreated && status != http.StatusOK {
+		return fmt.Errorf("статус %d: %s", status, string(data))
+	}
+	return nil
+}
+
+// Approve одобряет Merge Request. summary — текст легенды (заметка),
+// публикуется как комментарий на MR перед одобрением; может быть пустым.
+func (f *Forge) Approve(summary string) error {
+	// Сначала публикуем легенду ревью, затем одобряем.
+	if summary != "" {
+		if err := f.PostSummary(summary); err != nil {
+			return err
+		}
+	}
+
 	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s/approve",
 		f.cfg.ProjID, f.cfg.MRIID)
 
