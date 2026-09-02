@@ -106,6 +106,67 @@ func TestCommentLimitTruncates(t *testing.T) {
 	}
 }
 
+func TestFilterCommentsByDiffRejectsHallucinations(t *testing.T) {
+	diff := `diff --git a/app.go b/app.go
++++ b/app.go
+@@ -5,3 +5,3 @@
+  x
++go version
+ y
+diff --git a/readme.md b/readme.md
++++ b/readme.md
+@@ -1,1 +1,2 @@
+ # Title
++added line
+`
+
+	comments := []forges.ReviewComment{
+		{FilePath: "app.go", Line: 6},   // добавленная строка
+		{FilePath: "app.go", Line: 5},   // контекстная строка
+		{FilePath: "app.go", Line: 7},   // есть в ханке (y)
+		{FilePath: "app.go", Line: 100}, // нет в диффе
+		{FilePath: "ghost.go", Line: 1}, // файла нет
+		{FilePath: "readme.md", Line: 2},
+	}
+
+	valid, rejected := filterCommentsByDiff(diff, comments)
+
+	if len(valid) != 4 {
+		t.Errorf("должно пройти 4 валидных комментария, got %d: %v", len(valid), valid)
+	}
+	if len(rejected) != 2 {
+		t.Errorf("должно отсечь 2 галлюцинирующих комментария, got %d: %v", len(rejected), rejected)
+	}
+}
+
+func TestReviewMrSkipsHallucinatedComments(t *testing.T) {
+	ff := &fakeForge{}
+	cr := &Codereviewer{
+		forge: ff,
+		diff: `+++ b/app.go
+@@ -1,1 +1,1 @@
++real line`,
+	}
+
+	// Один комментарий валидный, второй — к несуществующей строке/файлу.
+	payload := `[
+		{"file_path":"app.go","line":1,"text":"реальное замечание"},
+		{"file_path":"app.go","line":999,"text":"галлюцинация: строка не существует"},
+		{"file_path":"missing.go","line":1,"text":"галлюцинация: файла нет"}
+	]`
+	_ = cr.ReviewMr(map[string]any{"comments": payload})
+
+	if cr.commentCount != 1 {
+		t.Errorf("commentCount = %d, ожидали 1 (только валидное)", cr.commentCount)
+	}
+	if cr.rejectedCount != 2 {
+		t.Errorf("rejectedCount = %d, ожидали 2", cr.rejectedCount)
+	}
+	if len(cr.postErrors) != 0 {
+		t.Errorf("галлюцинации не должны фиксироваться как ошибки постинга: %v", cr.postErrors)
+	}
+}
+
 func TestIsCritical(t *testing.T) {
 	if !isCritical("критично: что-то сломано") {
 		t.Error("ожидали критичность для 'критично:'")

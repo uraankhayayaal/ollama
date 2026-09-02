@@ -30,6 +30,13 @@ type Codereviewer struct {
 	summaryPosted bool
 	// commentCount — сколько замечаний опубликовано за это ревью.
 	commentCount int
+	// diff — актуальный дифф, кэшируется в GetMessages и используется
+	// в ReviewMr для отсечения галлюцинирующих комментариев к фантомным
+	// файлам/строкам.
+	diff string
+	// rejectedCount — сколько комментариев отсечено проверкой по diff
+	// (галлюцинации).
+	rejectedCount int
 }
 
 // NewCodereviewer создаёт агента код-ревью. Ссылка может указывать на
@@ -77,7 +84,7 @@ func pickToken(prURL string) string {
 	}
 }
 
-func (cr Codereviewer) GetMessages() []agents.Message {
+func (cr *Codereviewer) GetMessages() []agents.Message {
 	diff, err := cr.forge.GetDiff()
 	if err != nil {
 		// Не убиваем весь процесс при сбое получения диффа: сообщаем
@@ -97,6 +104,9 @@ func (cr Codereviewer) GetMessages() []agents.Message {
 	if cr.cfg.SkipGenerated {
 		diff = filterGeneratedDiff(diff)
 	}
+
+	// Кэшируем актуальный дифф для валидации комментариев в ReviewMr.
+	cr.diff = diff
 
 	// Пустой (или полностью отфильтрованный) дифф — завершаем без ревью.
 	if strings.TrimSpace(diff) == "" {
@@ -243,6 +253,16 @@ func (cr *Codereviewer) ReviewMr(args map[string]any) []byte {
 	// (Yandex), иногда уже как разобранный слайс. Парсим оба варианта.
 	comments = parseComments(args["comments"])
 
+	// Отсекаем галлюцинирующие замечания — к файлам/строкам, которых нет
+	// в актуальном диффе. Такие комментарии GitHub/GitLab всё равно не
+	// примут (422), а модель может насочинять несуществующие строки.
+	// Отклонённые не блокируют апрув, но сообщаются модели в ответе.
+	var rejected []string
+	if cr.diff != "" {
+		comments, rejected = filterCommentsByDiff(cr.diff, comments)
+		cr.rejectedCount += len(rejected)
+	}
+
 	// 1. Лимит замечаний за одно ревью (Feature 1). Оставляем только
 	//    первые MaxComments, остальные игнорируем.
 	if cr.cfg.MaxComments > 0 && len(comments) > cr.cfg.MaxComments {
@@ -266,6 +286,15 @@ func (cr *Codereviewer) ReviewMr(args map[string]any) []byte {
 		}
 		cr.commentCount++
 		result = append(result, map[string]string{"status": "ok"})
+	}
+
+	// Передаём модели сведения об отсечённых галлюцинациях, чтобы она
+	// не повторяла их в следующих раундах.
+	if len(rejected) > 0 {
+		result = append(result, map[string]string{
+			"status":  "warning",
+			"message": fmt.Sprintf("отсечено галлюцинирующих замечаний: %d", len(rejected)),
+		})
 	}
 
 	// Кодируем результат обратно в JSON для модели (Tool message)
@@ -351,6 +380,7 @@ func (cr *Codereviewer) PostSummaryToPR() error {
 	fmt.Fprintf(&b, "- Замечаний опубликовано: **%d**\n", cr.commentCount)
 	fmt.Fprintf(&b, "- Критических замечаний: **%s**\n", yesNo(cr.criticalFound))
 	fmt.Fprintf(&b, "- Ошибок публикации: **%d**\n", len(cr.postErrors))
+	fmt.Fprintf(&b, "- Отсечено галлюцинирующих замечаний: **%d**\n", cr.rejectedCount)
 	if cr.focus != "" {
 		fmt.Fprintf(&b, "- Фокус ревью: **%s**\n", cr.focus)
 	}
