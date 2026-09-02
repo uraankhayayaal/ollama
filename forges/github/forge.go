@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 
 	"ai/forges"
 )
@@ -19,6 +20,9 @@ type config struct {
 	Owner    string
 	Repo     string
 	PRNumber string
+	// CommitID — SHA головного коммита PR. Требуется GitHub API для
+	// inline review comments (commit_id).
+	CommitID string
 }
 
 // ParseURL разбирает ссылку на Pull Request GitHub.
@@ -28,7 +32,9 @@ func ParseURL(prURL string, token string) (*config, error) {
 		return nil, err
 	}
 
-	baseURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+	// GitHub REST API живёт на api.<host>, а не на веб-хосте github.com.
+	apiHost := "api." + u.Hostname()
+	baseURL := fmt.Sprintf("%s://%s", u.Scheme, apiHost)
 
 	re := regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/(\d+)`)
 	matches := re.FindStringSubmatch(u.Path)
@@ -62,7 +68,41 @@ func New(prURL string, token string) (*Forge, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Forge{cfg: cfg}, nil
+
+	f := &Forge{cfg: cfg}
+	if err := f.resolveHeadCommit(); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// resolveHeadCommit получает SHA головного коммита PR и сохраняет его в конфиге.
+func (f *Forge) resolveHeadCommit() error {
+	apiPath := fmt.Sprintf("/repos/%s/%s/pulls/%s",
+		f.cfg.Owner, f.cfg.Repo, f.cfg.PRNumber)
+
+	data, status, err := f.do("GET", apiPath, nil)
+	if err != nil {
+		return err
+	}
+
+	var pr struct {
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(data, &pr); err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("статус %d: %s", status, string(data))
+	}
+	if pr.Head.SHA == "" {
+		return fmt.Errorf("не удалось получить SHA головного коммита PR")
+	}
+
+	f.cfg.CommitID = pr.Head.SHA
+	return nil
 }
 
 func (f *Forge) do(method, apiPath string, body any) ([]byte, int, error) {
@@ -122,16 +162,40 @@ func (f *Forge) GetDiff() (string, error) {
 }
 
 // PostComment публикует замечание на строку Pull Request.
+// Если привязка к строке невозможна (строка вне диффа), публикует
+// замечание в общий тред PR, чтобы оно гарантированно отобразилось.
 func (f *Forge) PostComment(comment forges.ReviewComment) error {
 	apiPath := fmt.Sprintf("/repos/%s/%s/pulls/%s/comments",
 		f.cfg.Owner, f.cfg.Repo, f.cfg.PRNumber)
 
 	payload := map[string]any{
-		"path":     comment.FilePath,
-		"line":     comment.Line,
-		"side":     "RIGHT",
-		"body":     comment.Text,
-		"position": comment.Line,
+		"path":      comment.FilePath,
+		"line":      comment.Line,
+		"side":      "RIGHT",
+		"body":      comment.Text,
+		"commit_id": f.cfg.CommitID,
+	}
+
+	_, status, err := f.do("POST", apiPath, payload)
+	if err != nil {
+		return err
+	}
+
+	// GitHub отклоняет строку, не входящую в дифф (422). Тогда комментируем
+	// в общий тред PR, чтобы замечание не терялось.
+	if status != http.StatusCreated {
+		return f.postToPRThread(comment)
+	}
+	return nil
+}
+
+// postToPRThread публикует замечание в общий комментарий к Pull Request.
+func (f *Forge) postToPRThread(comment forges.ReviewComment) error {
+	apiPath := fmt.Sprintf("/repos/%s/%s/issues/%s/comments",
+		f.cfg.Owner, f.cfg.Repo, f.cfg.PRNumber)
+
+	payload := map[string]string{
+		"body": comment.FilePath + " (строка " + strconv.Itoa(comment.Line) + "): " + comment.Text,
 	}
 
 	data, status, err := f.do("POST", apiPath, payload)

@@ -4,6 +4,10 @@ import (
 	"ai/agents"
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
+	// Blank-import провайдеров систем ревью: их init() регистрирует
+	// реализации в фабрике forges.New.
+	_ "ai/forges/github"
+	_ "ai/forges/gitlab"
 	"ai/models"
 	"context"
 	"fmt"

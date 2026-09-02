@@ -11,7 +11,7 @@ func TestParseURL(t *testing.T) {
 	if cfg.Owner != "owner" || cfg.Repo != "repo" || cfg.PRNumber != "42" {
 		t.Errorf("неверный разбор: %+v", cfg)
 	}
-	if cfg.BaseURL != "https://github.com" {
+	if cfg.BaseURL != "https://api.github.com" {
 		t.Errorf("неверный BaseURL: %s", cfg.BaseURL)
 	}
 }
