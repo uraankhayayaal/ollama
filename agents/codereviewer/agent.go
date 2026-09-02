@@ -16,8 +16,10 @@ import (
 type Codereviewer struct {
 	forge       forges.Forge
 	IsUseMemory bool
-	diff        string
-	language    langdetect.Language
+	// postErrors накапливает ошибки публикации комментариев в ReviewMr.
+	// Если хотя бы одно замечание не удалось опубликовать, ApproveMr
+	// отказывается ставить апрув, чтобы не одобрить изменения вслепую.
+	postErrors []string
 }
 
 // NewCodereviewer создаёт агента код-ревью. Ссылка может указывать на
@@ -36,19 +38,9 @@ func NewCodereviewer(args []string) *Codereviewer {
 		log.Fatalf("Ошибка создания провайдера ревью: %v", err)
 	}
 
-	// Дифф и язык определяем один раз при инициализации, чтобы и системный
-	// промпт (GetAgentMemoryMessages), и user-сообщение (GetMessages)
-	// использовали единые данные без повторных запросов к API.
-	diff, err := forge.GetDiff()
-	if err != nil {
-		log.Fatalf("Ошибка при получении изменений кода: %v", err)
-	}
-
 	return &Codereviewer{
 		forge:       forge,
 		IsUseMemory: true,
-		diff:        diff,
-		language:    langdetect.Detect(diff),
 	}
 }
 
@@ -66,13 +58,29 @@ func pickToken(prURL string) string {
 }
 
 func (cr Codereviewer) GetMessages() []agents.Message {
+	diff, err := cr.forge.GetDiff()
+	if err != nil {
+		log.Fatalf("Ошибка при получении изменений кода: %v", err)
+	}
+
 	return []agents.Message{
 		{
 			Type: agents.MessageTypeHuman,
-			Message: "Изменения кода: " + cr.diff +
+			Message: "Изменения кода: " + diff +
 				". Ответ только в виде вызовов функций ApproveMr или ReviewMr",
 		},
 	}
+}
+
+// diffFromMessages извлекает текст диффа из переданных user-сообщений.
+// Дифф приходит от раннера в GetAgentMemoryMessages вместе с сообщениями.
+func diffFromMessages(messages []agents.Message) string {
+	for _, m := range messages {
+		if m.Type == agents.MessageTypeHuman {
+			return m.Message
+		}
+	}
+	return ""
 }
 
 func (cr Codereviewer) GetTools() []tools.ToolDefinition {
@@ -168,7 +176,7 @@ func (cr Codereviewer) GetToolsForOllama() []api.Tool {
 	}
 }
 
-func (cr Codereviewer) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
+func (cr *Codereviewer) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
 	switch functionName {
 
 	case "ReviewMr":
@@ -182,34 +190,65 @@ func (cr Codereviewer) CallFunction(functionName string, functionArgs map[string
 	}
 }
 
-func (cr Codereviewer) ReviewMr(args map[string]any) []byte {
-	// 1. Создаем переменную нужного типа
+func (cr *Codereviewer) ReviewMr(args map[string]any) []byte {
 	var comments []forges.ReviewComment
 
-	// 2. Сериализуем сырые данные обратно в JSON-байты
-	bytes, err := json.Marshal(args["comments"])
-	if err == nil {
-		// 3. Десериализуем байты напрямую в структуру ReviewComment
-		_ = json.Unmarshal(bytes, &comments)
-	}
+	// comments приходит от разных провайдеров: иногда как JSON-строка
+	// (Yandex), иногда уже как разобранный слайс. Парсим оба варианта.
+	comments = parseComments(args["comments"])
 
-	// 4. Публикуем каждое замечание через выбранный провайдер
+	// Публикуем каждое замечание. При сбое фиксируем ошибку на структуре,
+	// чтобы ApproveMr в последующем раунде отказался одобрять изменения.
 	result := []map[string]string{}
 	for _, comment := range comments {
 		err := cr.forge.PostComment(comment)
 		if err != nil {
+			cr.postErrors = append(cr.postErrors, err.Error())
 			result = append(result, map[string]string{"status": "error", "message": err.Error()})
 		}
 	}
 
-	// 5. Кодируем результат обратно в JSON для модели (Tool message)
+	// Кодируем результат обратно в JSON для модели (Tool message)
 	resultJSON, _ := json.Marshal(result)
 
 	return resultJSON
 }
 
-func (cr Codereviewer) ApproveMr(args map[string]any) []byte {
+// parseComments преобразует аргумент "comments" в слайс ReviewComment,
+// независимо от того, пришёл он JSON-строкой или уже разобранным массивом.
+func parseComments(raw any) []forges.ReviewComment {
+	var comments []forges.ReviewComment
+
+	switch v := raw.(type) {
+	case string:
+		// JSON-строка вида `[{"file_path": ...}]`.
+		_ = json.Unmarshal([]byte(v), &comments)
+	case []map[string]any:
+		b, _ := json.Marshal(v)
+		_ = json.Unmarshal(b, &comments)
+	case map[string]any:
+		b, _ := json.Marshal(v)
+		_ = json.Unmarshal(b, &comments)
+	case nil:
+		return nil
+	}
+
+	return comments
+}
+
+func (cr *Codereviewer) ApproveMr(args map[string]any) []byte {
 	result := map[string]string{}
+
+	// Не одобряем изменения, если хотя бы одно замечание не опубликовано.
+	if len(cr.postErrors) > 0 {
+		result = map[string]string{
+			"status":  "error",
+			"message": fmt.Sprintf("нельзя одобрить: %d замечание(й) не были опубликованы", len(cr.postErrors)),
+		}
+		resultJSON, _ := json.Marshal(result)
+		return resultJSON
+	}
+
 	err := cr.forge.Approve()
 	if err != nil {
 		result = map[string]string{"status": "error", "message": err.Error()}
@@ -221,17 +260,19 @@ func (cr Codereviewer) ApproveMr(args map[string]any) []byte {
 
 func (cr Codereviewer) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
 	if cr.IsUseMemory {
-		// Промпт подбирается по языку, определённому из диффа.
+		// Определяем язык по диффу, переданному раннером в user-сообщениях.
+		language := langdetect.Detect(diffFromMessages(text))
+
 		// Для PHP дополнительно указываем фреймворк (Laravel), сохраняя
 		// все прежние правила проекта (PSR-12, SOLID, lighthouse, DTO и пр.).
 		framework := ""
-		if cr.language == langdetect.PHP {
+		if language == langdetect.PHP {
 			framework = "Laravel"
 		}
 		return []agents.Message{
 			{
 				Type:    agents.MessageTypeSystem,
-				Message: langdetect.ReviewPrompt(cr.language, framework),
+				Message: langdetect.ReviewPrompt(language, framework),
 			},
 		}
 	}

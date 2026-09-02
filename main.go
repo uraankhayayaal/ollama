@@ -4,10 +4,9 @@ import (
 	"ai/agents"
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
-	// Blank-import провайдеров систем ревью: их init() регистрирует
-	// реализации в фабрике forges.New.
-	_ "ai/forges/github"
-	_ "ai/forges/gitlab"
+	// Blank-import регистрирует все встроенные провайдеры систем ревью
+	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
+	_ "ai/forges/all"
 	"ai/models"
 	"context"
 	"fmt"
@@ -19,14 +18,17 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
 	// Load the .env file
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+
+	// Таймаут цикла агента берётся из окружения REVIEW_TIMEOUT, иначе 5 минут.
+	// Длительное ревью большого PR может требовать большего лимита.
+	timeout := parseTimeout(os.Getenv("REVIEW_TIMEOUT"))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	providerType := os.Getenv("LLM_PROVIDER") // "ollama" или "yandex"
 
@@ -70,6 +72,10 @@ func main() {
 		log.Fatalf("Error: %v", err)
 	}
 
+	if resp.Truncated {
+		log.Println("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
+	}
+
 	fmt.Println("Response Message:", resp.Content)
 	fmt.Println("Response Tools:", resp.ToolCalls)
 }
@@ -90,4 +96,19 @@ func agentCommand(args []string) (name string, rest []string) {
 		return "", nil
 	}
 	return args[1], args[2:]
+}
+
+// parseTimeout разбирает длительность таймаута из строки (например "10m").
+// При пустой строке или ошибке разбора возвращается значение по умолчанию.
+func parseTimeout(raw string) time.Duration {
+	const def = 5 * time.Minute
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("Неверный REVIEW_TIMEOUT=%q, использую %v", raw, def)
+		return def
+	}
+	return d
 }
