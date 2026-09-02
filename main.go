@@ -76,6 +76,16 @@ func main() {
 		log.Println("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
 	}
 
+	// 6b. Запасной путь: если модель вернула ревью текстом, а не вызовами
+	// инструментов (характерно для YandexGPT), а замечаний ещё не
+	// опубликовано — пытаемся распарсить текст в комментарии и опубликовать.
+	if r, ok := agent.(reviewParser); ok {
+		n := r.PublishParsedReview(resp.Content)
+		if n > 0 {
+			log.Printf("Опубликовано замечаний из текстового ответа модели: %d", n)
+		}
+	}
+
 	// 7. Итоговый отчёт-сводка в тред MR/PR, если агент его поддерживает.
 	if r, ok := agent.(summarizer); ok {
 		if serr := r.PostSummaryToPR(); serr != nil {
@@ -85,6 +95,12 @@ func main() {
 
 	fmt.Println("Response Message:", resp.Content)
 	fmt.Println("Response Tools:", resp.ToolCalls)
+}
+
+// reviewParser — опциональный интерфейс агента, умеющего опубликовать ревью,
+// которое модель написала текстом (без вызова инструментов).
+type reviewParser interface {
+	PublishParsedReview(content string) int
 }
 
 // summarizer — опциональный интерфейс агента, умеющего публиковать
