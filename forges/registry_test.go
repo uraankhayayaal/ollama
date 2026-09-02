@@ -33,4 +33,5 @@ type fakeForge struct{}
 
 func (fakeForge) GetDiff() (string, error)        { return "", nil }
 func (fakeForge) PostComment(ReviewComment) error { return nil }
-func (fakeForge) Approve() error                  { return nil }
+func (fakeForge) PostSummary(string) error        { return nil }
+func (fakeForge) Approve(string) error            { return nil }

@@ -76,8 +76,21 @@ func main() {
 		log.Println("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
 	}
 
+	// 7. Итоговый отчёт-сводка в тред MR/PR, если агент его поддерживает.
+	if r, ok := agent.(summarizer); ok {
+		if serr := r.PostSummaryToPR(); serr != nil {
+			log.Printf("Не удалось опубликовать итоговую сводку: %v", serr)
+		}
+	}
+
 	fmt.Println("Response Message:", resp.Content)
 	fmt.Println("Response Tools:", resp.ToolCalls)
+}
+
+// summarizer — опциональный интерфейс агента, умеющего публиковать
+// итоговую сводку ревью в тред MR/PR после завершения цикла.
+type summarizer interface {
+	PostSummaryToPR() error
 }
 
 // defaultPrompt возвращает текст задания для генератора. Если промпт не

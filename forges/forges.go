@@ -30,8 +30,13 @@ type Forge interface {
 	// как постить комментарий к файлу.
 	PostComment(comment ReviewComment) error
 
-	// Approve одобряет запрос на слияние.
-	Approve() error
+	// PostSummary публикует итоговый отчёт-сводку в общий тред запроса
+	// слияния (например, сводку ревью: число критичных/оставшихся замечаний).
+	PostSummary(summary string) error
+
+	// Approve одобряет запрос на слияние. summary — текст комментария,
+	// прикладываемый к одобрению (легенда ревью, может быть пустым).
+	Approve(summary string) error
 }
 
 // DetectType определяет тип провайдера по URL.
