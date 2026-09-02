@@ -40,6 +40,20 @@ type ChatProvider interface {
 	ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error)
 }
 
+// ToolRequiringAgent — необязательный интерфейс агента, который требует,
+// чтобы в ПЕРВОМ раунде модель обязательно вызвала определённый инструмент
+// (например, WriteFiles у генератора кода). Если модель вместо вызова вернула
+// текст — раннер повторит запрос с подсказкой использовать этот инструмент.
+type ToolRequiringAgent interface {
+	// RequiredToolFirstRound возвращает имя инструмента, обязательного к
+	// вызову в первом раунде, и true, если требование активно.
+	RequiredToolFirstRound() (string, bool)
+}
+
+// requiredRetries — сколько раз переспрашиваем модель, если она не вызвала
+// обязательный инструмент первого раунда и ответила текстом.
+const requiredRetries = 2
+
 // maxRoundsLimit ограничивает количество итераций выполнения инструментов,
 // чтобы защититься от бесконечного цикла "модель -> инструмент".
 // Значение по умолчанию можно переопределить переменной REVIEW_MAX_ROUNDS.
@@ -52,6 +66,12 @@ func maxRounds() int {
 		}
 	}
 	return defaultMaxRounds
+}
+
+// nudgeMessage формулирует подсказку модели, если она не вызвала
+// обязательный инструмент в первом раунде и ответила текстом.
+func nudgeMessage(toolName string) string {
+	return fmt.Sprintf("Ты ответил текстом, но по заданию обязан вызвать инструмент %q для создания файлов. Немедленно вызови %q с нужными аргументами (файлы/код проекта). Не отвечай текстом.", toolName, toolName)
 }
 
 // Generate выполняет агентский цикл: отправляет диалог модели, исполняет
@@ -79,6 +99,15 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 	content := ""
 	mx := maxRounds()
 
+	// Если агент требует обязательный инструмент в первом раунде — узнаём его.
+	requiredTool := ""
+	if req, ok := agent.(ToolRequiringAgent); ok {
+		if n, yes := req.RequiredToolFirstRound(); yes {
+			requiredTool = n
+		}
+	}
+	requiredAttempts := 0
+
 	for round := 0; round < mx; round++ {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("контекст отменён до раунда %d: %w", round+1, err)
@@ -90,6 +119,19 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 		}
 
 		if len(reply.ToolCalls) == 0 {
+			// Если обязательный инструмент ещё ни разу не вызван (конец = первый
+			// раунд генерации), а модель ответила текстом — подскажем и повторим
+			// (с ограничением), чтобы не завершить цикл без действия.
+			if requiredTool != "" && len(allToolCalls) == 0 && requiredAttempts < requiredRetries {
+				requiredAttempts++
+				Debugf("RUNNER: раунд %d: требуемый инструмент %q не вызван, подсказываю (%d/%d) и повторяю", round+1, requiredTool, requiredAttempts, requiredRetries)
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: nudgeMessage(requiredTool),
+				})
+				continue
+			}
+
 			content = reply.Content
 			Debugf("RUNNER: раунд %d: модель завершила (finish_reason=%q), content=%q",
 				round+1, reply.FinishReason, Truncate(content, 300))

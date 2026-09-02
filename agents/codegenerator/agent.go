@@ -48,6 +48,13 @@ func (cg Codegenerator) GetMessages() []agents.Message {
 	}
 }
 
+// RequiredToolFirstRound требует, чтобы в первом раунде модель обязательно
+// вызвала WriteFiles (создание файлов проекта), а не ответила текстом.
+// Раннер при необходимости подскажет модели и повторит запрос.
+func (cg Codegenerator) RequiredToolFirstRound() (string, bool) {
+	return "WriteFiles", true
+}
+
 func (cg Codegenerator) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
 	lang := cg.Config.Language
 	if lang == "" {

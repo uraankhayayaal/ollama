@@ -111,6 +111,25 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 		}
 	}
 
+	// tool_choice: если агент требует обязательный инструмент и он ещё не был
+	// вызван (нет сообщений роли "tool"), форсируем вызов инструмента
+	// (tool_choice="required"), чтобы модель не отвечала текстом вместо кода.
+	toolChoice := openai.ChatCompletionToolChoiceOptionUnionParam{
+		OfAuto: openai.String("auto"),
+	}
+	if req, ok := agent.(runner.ToolRequiringAgent); ok {
+		if name, yes := req.RequiredToolFirstRound(); yes && name != "" && !hasToolResult(msgs) {
+			toolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfChatCompletionNamedToolChoice: &openai.ChatCompletionNamedToolChoiceParam{
+					Type: constant.Function("function"),
+					Function: openai.ChatCompletionNamedToolChoiceFunctionParam{
+						Name: name,
+					},
+				},
+			}
+		}
+	}
+
 	// Выполнение запроса
 	runner.Debugf("YANDEX: запрос к модели %q (сообщений: %d, инструментов: %d)", y.model, len(messages), len(oaTools))
 	for i, m := range messages {
@@ -123,12 +142,10 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 	response, err := y.client.Chat.Completions.New(
 		ctx,
 		openai.ChatCompletionNewParams{
-			Model:    y.model,
-			Messages: messages,
-			Tools:    oaTools,
-			ToolChoice: openai.ChatCompletionToolChoiceOptionUnionParam{
-				OfAuto: openai.String("auto"),
-			},
+			Model:               y.model,
+			Messages:            messages,
+			Tools:               oaTools,
+			ToolChoice:          toolChoice,
 			MaxCompletionTokens: openai.Int(int64(maxTokensOut())),
 
 			// ОТКЛЮЧАЕМ THINKING: Передаем "none" для подавления рассуждений,
@@ -207,6 +224,18 @@ func (y *AlisaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
 
 func (y *AlisaProvider) GetModelName(ctx context.Context) string {
 	return y.model
+}
+
+// hasToolResult сообщает, выполнился ли уже хотя бы один инструмент
+// (в истории есть сообщение роли "tool"). Используется, чтобы форсировать
+// tool_choice только на самом первом (или ещё не выполнившем инструмент) шаге.
+func hasToolResult(msgs []runner.Message) bool {
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			return true
+		}
+	}
+	return false
 }
 
 // messageContent достаёт текстовое содержимое сообщения из union-типа OpenAI.
