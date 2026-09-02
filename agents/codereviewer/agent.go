@@ -5,7 +5,6 @@ import (
 	"ai/tools"
 	"ai/tools/gitlab"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -20,29 +19,23 @@ type Codereviewer struct {
 	IsUseMemory bool
 }
 
-func NewCodereviewer() *Codereviewer {
+func NewCodereviewer(args []string) *Codereviewer {
 	token := os.Getenv("GITLAB_TOKEN")
 
-	// Описание флагов: имя, дефолтное значение, описание для --help
-	mrURL := flag.String("mr", "", "Ссылка на MR Gitlab")
-	// ВАЖНО: парсинг аргументов нужно запустить до использования переменных
-	flag.Parse()
-
-	// Проверяем, осталось ли значение пустым
-	if *mrURL == "" {
-		fmt.Fprintln(os.Stderr, "Ошибка: флаг -mr является обязательным.")
-		flag.Usage() // Выводит стандартную справку --help
-		os.Exit(1)   // Завершаем работу с кодом ошибки
+	if len(args) < 1 || args[0] == "" {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажите ссылку на MR, например: go run . review <URL>")
+		os.Exit(1)
 	}
+	mrURL := args[0]
 
-	config, err := gitlab.ParseGitLabURL(*mrURL, token)
+	config, err := gitlab.ParseGitLabURL(mrURL, token)
 	if err != nil {
 		log.Fatalf("Ошибка парсинга URL: %v", err)
 	}
 
 	return &Codereviewer{
 		token,
-		*mrURL,
+		mrURL,
 		config,
 		true,
 	}

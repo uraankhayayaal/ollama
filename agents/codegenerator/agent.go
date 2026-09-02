@@ -7,22 +7,35 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	"github.com/ollama/ollama/api"
 )
 
 type Codegenerator struct {
+	OutputDir string
+	Prompt    string
 }
 
-func NewCodegenerator() *Codegenerator {
-	return &Codegenerator{}
+var genSeq int64
+
+// NewCodegenerator создаёт генератор с уникальной папкой в temp/.
+// Имя папки строится из времени и атомарного счётчика, что исключает
+// коллизии даже при создании нескольких генераторов в одну микросекунду.
+// prompt — текст задания для модели, передаётся как аргумент командной строки.
+func NewCodegenerator(prompt string) *Codegenerator {
+	seq := atomic.AddInt64(&genSeq, 1)
+	dir := filepath.Join("temp", fmt.Sprintf("gen_%s_%04d", time.Now().Format("20060102_150405"), seq))
+	os.MkdirAll(dir, 0755)
+	return &Codegenerator{OutputDir: dir, Prompt: prompt}
 }
 
 func (cg Codegenerator) GetMessages() []agents.Message {
 	return []agents.Message{
 		{
 			Type:    agents.MessageTypeHuman,
-			Message: `Напиши микросервис для расчета квадратного уровнения, придумай формат аргументов для передачи в код.`,
+			Message: cg.Prompt,
 		},
 	}
 }
@@ -316,7 +329,7 @@ func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 	result := []map[string]string{}
 
 	for _, file := range params.Files {
-		relativeFilename := "./temp/" + file.Filename
+		relativeFilename := filepath.Join(cg.OutputDir, file.Filename)
 		// Извлекаем путь к поддиректории из имени файла (например, из "models/user.go" получим "models")
 		// Если файл лежит в корне (например, "main.go"), dir вернет "."
 		dir := filepath.Dir(relativeFilename)
@@ -385,7 +398,7 @@ func (cg Codegenerator) ReadFiles(args map[string]any) ([]byte, error) {
 	result := []map[string]string{}
 
 	for _, filename := range params.Filenames {
-		cleanFilename := "./temp/" + filepath.Clean(filename)
+		cleanFilename := filepath.Join(cg.OutputDir, filepath.Clean(filename))
 
 		// Читаем файл с диска
 		contentBytes, err := os.ReadFile(cleanFilename)
@@ -433,7 +446,7 @@ func (cg Codegenerator) DeleteFiles(args map[string]any) ([]byte, error) {
 	result := []map[string]string{}
 
 	for _, path := range params.Paths {
-		cleanPath := "./temp/" + filepath.Clean(path)
+		cleanPath := filepath.Join(cg.OutputDir, filepath.Clean(path))
 
 		// Проверяем, существует ли файл/папка вообще
 		if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
