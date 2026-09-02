@@ -3,6 +3,7 @@ package codereviewer
 import (
 	"ai/agents"
 	"ai/forges"
+	"ai/langdetect"
 	"ai/tools"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 type Codereviewer struct {
 	forge       forges.Forge
 	IsUseMemory bool
+	diff        string
+	language    langdetect.Language
 }
 
 // NewCodereviewer создаёт агента код-ревью. Ссылка может указывать на
@@ -33,9 +36,19 @@ func NewCodereviewer(args []string) *Codereviewer {
 		log.Fatalf("Ошибка создания провайдера ревью: %v", err)
 	}
 
+	// Дифф и язык определяем один раз при инициализации, чтобы и системный
+	// промпт (GetAgentMemoryMessages), и user-сообщение (GetMessages)
+	// использовали единые данные без повторных запросов к API.
+	diff, err := forge.GetDiff()
+	if err != nil {
+		log.Fatalf("Ошибка при получении изменений кода: %v", err)
+	}
+
 	return &Codereviewer{
 		forge:       forge,
 		IsUseMemory: true,
+		diff:        diff,
+		language:    langdetect.Detect(diff),
 	}
 }
 
@@ -53,15 +66,10 @@ func pickToken(prURL string) string {
 }
 
 func (cr Codereviewer) GetMessages() []agents.Message {
-	diff, err := cr.forge.GetDiff()
-	if err != nil {
-		log.Fatalf("Ошибка при получении изменений кода: %v", err)
-	}
-
 	return []agents.Message{
 		{
 			Type: agents.MessageTypeHuman,
-			Message: "Изменения кода: " + diff +
+			Message: "Изменения кода: " + cr.diff +
 				". Ответ только в виде вызовов функций ApproveMr или ReviewMr",
 		},
 	}
@@ -213,30 +221,17 @@ func (cr Codereviewer) ApproveMr(args map[string]any) []byte {
 
 func (cr Codereviewer) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
 	if cr.IsUseMemory {
+		// Промпт подбирается по языку, определённому из диффа.
+		// Для PHP дополнительно указываем фреймворк (Laravel), сохраняя
+		// все прежние правила проекта (PSR-12, SOLID, lighthouse, DTO и пр.).
+		framework := ""
+		if cr.language == langdetect.PHP {
+			framework = "Laravel"
+		}
 		return []agents.Message{
 			{
-				Type: agents.MessageTypeSystem,
-				Message: `Ты — опытный ведущий Laravel PHP разработчик. Твоя задача — провести кодевью.
-					Найдешь баги, проблемы безопасности или дефекты, оставь комментарии к конкретным строкам.
-					Комменатрия начинай со слов 'для заметки:' или 'критично:',
-					где для заметки: - мелкие баги или дефекты, котрые блокируют запуск,
-						критично: - критические ошибки, явное нарушение работы приложения.
-					Рекомендации делаешь на русском и с интсрументом 'ReviewMr'.
-					Одобряещь изменения с интсрументом 'ApproveMr' если нет критических ошибок.
-					Проверить код на соответствие руководства по стилю кодирования PSR-12.
-					Проверить код на соблюдение патернов проектирования SOLID, DRY, KISS.
-					Для файлов с расширением .graphql проверять систаксис и логику согласно библиотеки laravel lighthouse.
-					В ресолверах ./Resolvers не должно быть бизнес логики, они должны вызывать метод batchLoader-а или сервиса.
-					В запросах графкуль ./Queries, мутациях ./Mutatioins не должно быть бизнес логики, они должны вызывать метод сервиса.
-					В батчлоадерах ./Batch сложная логика для оптимизации запросов, решения проблемы N+1, кэширования по тэгам, задча сделать один общий запрос к БД, и максимально всю работу закэшировать.
-					Бизнес логика приложения должна быть определена и описана в сервисах, папка ./serices.
-					Используются репозиотрии ./repositories, они имеют статические методы, чтобы импользовать в разных частях приложения без внедрения зависимостей.
-					Используются клиенты ./clients, они совершают соединение в другие сервисы (свои и сторонние) их публичные методы должны возвращать DTO объекты.
-					Используются DTO ./DTO, они описываю те данные которые не описывают модели (Model), Являются контрактами между разными частями сервиса и внешними сервисами.
-					Если класс не имеет более одной зависимости и сложно реализации, то ипредпочтительно импользовать автобиндинг laravel, без лишнего объявления в dic.
-					В проекте используется laravel octane swoole, проверять регистрацию клаассов, singltone, scope, bind.
-					Проверять что нет статических переменных или свойств, которые нарушали бы работу swoole.
-					Если Разработчик указывает константные значение, типа констант в классе, перменных окружения, конфиге, без орфографических ошибок, то довреять ему и не предлагать убедиться в правильности.`,
+				Type:    agents.MessageTypeSystem,
+				Message: langdetect.ReviewPrompt(cr.language, framework),
 			},
 		}
 	}
