@@ -11,6 +11,9 @@ import (
 type AgentResponse struct {
 	Content   string
 	ToolCalls []tools.ToolCall
+	// Truncated указывает, что цикл остановлен по лимиту раундов (maxRounds),
+	// а не потому, что модель завершила ответ.
+	Truncated bool
 }
 
 // Message — нейтральное представление сообщения диалога,
@@ -43,11 +46,20 @@ const maxRounds = 12
 // запрошенные инструменты, возвращает результат модели обратно в историю
 // и повторяет, пока модель не завершит ответ (нет tool_calls).
 func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*AgentResponse, error) {
-	var messages []Message
-	for _, m := range agent.GetAgentMemoryMessages(nil) {
+	// Собираем user-сообщения (например, дифф для ревью), чтобы передать
+	// их контекст в метод системных сообщений (GetAgentMemoryMessages).
+	userMessages := agent.GetMessages()
+
+	// Системные сообщения размещаем в начале диалога, как это принято,
+	// а user-сообщения — следом. Контекст (дифф) передаётся в метод
+	// системных сообщений через параметр.
+	systemMessages := agent.GetAgentMemoryMessages(userMessages)
+
+	messages := []Message{}
+	for _, m := range systemMessages {
 		messages = append(messages, Message{Role: "system", Content: m.Message})
 	}
-	for _, m := range agent.GetMessages() {
+	for _, m := range userMessages {
 		messages = append(messages, Message{Role: "user", Content: m.Message})
 	}
 
@@ -102,5 +114,5 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 	}
 
 	Debugf("RUNNER: достигнут лимит раундов (%d), возвращаю частичный результат", maxRounds)
-	return &AgentResponse{Content: content, ToolCalls: allToolCalls}, nil
+	return &AgentResponse{Content: content, ToolCalls: allToolCalls, Truncated: true}, nil
 }
