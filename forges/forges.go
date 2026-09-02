@@ -40,8 +40,13 @@ type Forge interface {
 }
 
 // DetectType определяет тип провайдера по URL.
-// Возвращает kind ("gitlab"/"github") или "" если тип не распознан.
+// Возвращает kind ("gitlab"/"github"/"local") или "" если тип не распознан.
 func DetectType(prURL string) kind {
+	// Локальная директория адресуется схемой local://<path>.
+	if strings.HasPrefix(prURL, localSchemeLegacy) {
+		return KindLocal
+	}
+
 	u, err := url.Parse(prURL)
 	if err != nil {
 		return ""

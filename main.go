@@ -6,6 +6,7 @@ import (
 	"ai/agents/codereviewer"
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
+	"ai/forges"
 	_ "ai/forges/all"
 	"ai/models"
 	"context"
@@ -76,6 +77,13 @@ func main() {
 		log.Println("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
 	}
 
+	// 5. Цикл генерации/само-ревью для агента-генератора: после первого
+	// прогона код проверяется локально (LocalForge), найденные замечания
+	// передаются модели, и она исправляет код в той же OutputDir.
+	if sr, ok := agent.(selfReviewer); ok {
+		doSelfReview(ctx, provider, sr, "", defaultPrompt(agentArgs))
+	}
+
 	// 6b. Запасной путь: если модель вернула ревью текстом, а не вызовами
 	// инструментов (характерно для YandexGPT), а замечаний ещё не
 	// опубликовано — пытаемся распарсить текст в комментарии и опубликовать.
@@ -93,6 +101,11 @@ func main() {
 		}
 	}
 
+	// 8. Финальный отчёт агента (например, SUMMARY.md у генератора кода).
+	if r, ok := agent.(finalizer); ok {
+		r.Finalize()
+	}
+
 	fmt.Println("Response Message:", resp.Content)
 	fmt.Println("Response Tools:", resp.ToolCalls)
 }
@@ -103,10 +116,30 @@ type reviewParser interface {
 	PublishParsedReview(content string) int
 }
 
+// selfReviewer — опциональный интерфейс агента-генератора, поддерживающего
+// цикл self-repair: после первой генерации код прогоняется через локальное
+// ревью, а найденные замечания передаются модели для исправления.
+type selfReviewer interface {
+	// SelfReviewDir возвращает путь к сгенерированному коду для ревью.
+	SelfReviewDir() string
+	// NewReviewAgentFor создаёт агента код-ревью для директории и возвращает
+	// и агента, и его forge (чтобы извлечь собранные замечания).
+	NewReviewAgentFor(dir string, focus string) (agents.Agent, forges.Forge, error)
+	// FixPromptFor собирает текст задания для исправления кода на основе
+	// замечаний ревью. Первый аргумент — текущее задание, второй — замечания.
+	FixPromptFor(original string, comments []forges.ReviewComment) string
+}
+
 // summarizer — опциональный интерфейс агента, умеющего публиковать
 // итоговую сводку ревью в тред MR/PR после завершения цикла.
 type summarizer interface {
 	PostSummaryToPR() error
+}
+
+// finalizer — опциональный интерфейс агента, выполняющего финализацию
+// после завершения цикла (например, генератор кода пишет SUMMARY.md).
+type finalizer interface {
+	Finalize()
 }
 
 // defaultPrompt возвращает текст задания для генератора. Если промпт не
@@ -116,6 +149,48 @@ func defaultPrompt(args []string) string {
 		return args[0]
 	}
 	return "Напиши микросервис для расчета квадратного уровнения, придумай формат аргументов для передачи в код."
+}
+
+// doSelfReview запускает цикл self-repair для агента-генератора: генерация →
+// локальное ревью сгенерированного кода → исправление по замечаниям ревью.
+// focus — цель ревью (может быть "" для общего обзора).
+func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, focus string, originalPrompt string) {
+	dir := sr.SelfReviewDir()
+	log.Printf("Self-review: ревью кода в %s", dir)
+
+	reviewAgent, forge, err := sr.NewReviewAgentFor(dir, focus)
+	if err != nil {
+		log.Printf("Self-review: не удалось создать агента ревью: %v", err)
+		return
+	}
+
+	if _, err := provider.Generate(ctx, reviewAgent); err != nil {
+		log.Printf("Self-review: ошибка ревью: %v", err)
+	}
+
+	lf, ok := forge.(*forges.LocalForge)
+	if !ok {
+		log.Printf("Self-review: неожиданный тип forge, пропускаю исправление")
+		return
+	}
+
+	if len(lf.Published) == 0 {
+		log.Println("Self-review: замечаний не найдено, исправление не требуется")
+		return
+	}
+
+	fixPrompt := sr.FixPromptFor(originalPrompt, lf.Published)
+	log.Printf("Self-review: найдено замечаний: %d. Запускаю исправление.", len(lf.Published))
+
+	fixAgent, err := codegenerator.NewCodegeneratorInDir(fixPrompt, dir)
+	if err != nil {
+		log.Printf("Self-review: не удалось создать агента исправления: %v", err)
+		return
+	}
+
+	if _, err := provider.Generate(ctx, fixAgent); err != nil {
+		log.Printf("Self-review: ошибка на этапе исправления: %v", err)
+	}
 }
 
 // agentCommand возвращает имя агента (первый аргумент) и оставшиеся

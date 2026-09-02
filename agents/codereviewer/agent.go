@@ -80,6 +80,19 @@ func NewCodereviewer(args []string) *Codereviewer {
 	}
 }
 
+// NewCodereviewerWithForge создаёт агента код-ревью с уже готовой
+// реализацией forges.Forge (например, для local self-review). Позволяет
+// переиспользовать логику ревью без обращения к реальному хостингу.
+func NewCodereviewerWithForge(forge forges.Forge, focus string) *Codereviewer {
+	return &Codereviewer{
+		forge:       forge,
+		IsUseMemory: true,
+		cfg:         LoadConfig(),
+		focus:       focus,
+		dedupSeen:   map[string]bool{},
+	}
+}
+
 // pickToken выбирает токен доступа в зависимости от хостинга:
 // GitLab → GITLAB_TOKEN, GitHub → GITHUB_TOKEN.
 func pickToken(prURL string) string {

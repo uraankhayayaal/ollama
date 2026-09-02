@@ -2,11 +2,16 @@ package codegenerator
 
 import (
 	"ai/agents"
+	"ai/agents/codereviewer"
+	"ai/forges"
 	"ai/tools"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +21,8 @@ import (
 type Codegenerator struct {
 	OutputDir string
 	Prompt    string
+	Config    Config
+	written   int
 }
 
 var genSeq int64
@@ -28,7 +35,7 @@ func NewCodegenerator(prompt string) *Codegenerator {
 	seq := atomic.AddInt64(&genSeq, 1)
 	dir := filepath.Join("temp", fmt.Sprintf("gen_%s_%04d", time.Now().Format("20060102_150405"), seq))
 	os.MkdirAll(dir, 0755)
-	return &Codegenerator{OutputDir: dir, Prompt: prompt}
+	return &Codegenerator{OutputDir: dir, Prompt: prompt, Config: LoadConfig()}
 }
 
 func (cg Codegenerator) GetMessages() []agents.Message {
@@ -41,34 +48,59 @@ func (cg Codegenerator) GetMessages() []agents.Message {
 }
 
 func (cg Codegenerator) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
+	lang := cg.Config.Language
+	if lang == "" {
+		lang = "Go"
+	}
+
+	var moduleInstruction string
+	if cg.Config.Module != "" {
+		moduleInstruction = fmt.Sprintf("Используй имя модуля Go %q в файле go.mod.", cg.Config.Module)
+	}
+
+	overwriteRule := "Ты можешь перезаписывать файлы инструментами WriteFiles/WriteFile."
+	if cg.Config.NoOverwrite {
+		overwriteRule = "Включена защита от перезаписи: инструменты вернут ошибку, если ты попытаешься перезаписать уже существующий файл. Перезаписывай файлы только при необходимости."
+	}
+
 	return []agents.Message{
 		{
 			Type: agents.MessageTypeSystem,
-			Message: `Ты - опытный golang разработчик, который пишет автотесты, соблюдает архитектурные слои и обязанности каждого участка кода.
-				Прикладывает инструкцию запуска и использования в файле readme.md.
-				Нельзя отвечать текстом. Передавай все файлы списком в свойстве files в одном вызове инструмента WriteFiles.`,
+			Message: fmt.Sprintf(`Ты - опытный разработчик на языке %s и архитектор, который пишет аккуратный, рабочий код и соблюдает архитектурные слои и обязанности каждого участка кода.
+Ты работаешь только внутри выходной директории проекта (OutputDir).
+%s
+%s
+
+Твой план работы:
+1. Создай все нужные файлы (включая go.mod, если требуется) инструментами WriteFiles/WriteFile.
+2. Проверь, что проект компилируется и проходит проверки, запустив инструмент Run с командами: "go build ./...", "go vet ./..." и (если есть тесты) "go test ./...".
+3. Если компиляция или проверки падают, исправь код (WriteFiles перезапишет файл) и запускай Run снова, пока всё не станет зелёным.
+4. После успешного build продумай краткую проверку главного сценария работы (вызов программы).
+
+Правила:
+- Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты.
+- Передавай все файлы списком в свойстве files в одном вызове инструмента WriteFiles.
+- В конце приведи файл readme.md с инструкцией запуска и использования.
+- Нельзя писать файлы вне OutputDir (инструменты сами это заблокируют).`, lang, moduleInstruction, overwriteRule),
 		},
 	}
 }
 
 func (cg Codegenerator) GetTools() []tools.ToolDefinition {
 	return []tools.ToolDefinition{
-		// {
-		// 	Name:        "WriteFile",
-		// 	Description: "Используй этот инструмент для сохранения написанного кода в файл.",
-		// 	Parameters: map[string]any{
-		// 		"type": "object", // Корень параметров ВСЕГДА должен быть object
-		// 		"properties": map[string]any{
-		// 			"filename":             map[string]any{"type": "string", "description": "Название файла, например 'main.go'"},
-		// 			"content":              map[string]any{"type": "string", "description": "Код файла"},
-		// 			"required":             []string{"filename", "content"}, // Делаем массив обязательным аргументом
-		// 			"additionalProperties": false,                           // Обязательно для Structured Outputs / Strict Mode
-		// 		},
-		// 	},
-		// },
+		{
+			Name:        "WriteFile",
+			Description: "Используй этот инструмент для сохранения одного файла с кодом.",
+			Parameters: map[string]any{
+				"type":                 "object", // Корень параметров ВСЕГДА object
+				"properties":           singleFileProps(),
+				"required":             []string{"filename", "content"},
+				"additionalProperties": false,
+			},
+		},
 		{
 			Name:        "WriteFiles",
-			Description: "Используй этот инструмент для сохранения файлов.",
+			Description: "Используй этот инструмент для сохранения множества файлов.",
 			Parameters: map[string]any{
 				"type": "object", // Корень параметров ВСЕГДА object
 				"properties": map[string]any{
@@ -76,12 +108,9 @@ func (cg Codegenerator) GetTools() []tools.ToolDefinition {
 						"type":        "array",
 						"description": "Список файлов для записи",
 						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"filename": map[string]any{"type": "string", "description": "Название файла с путем, например 'utils/math.go'"},
-								"content":  map[string]any{"type": "string", "description": "Полный исходный код файла"},
-							},
-							"required":             []string{"filename", "content"}, // Обязательные поля для каждого файла
+							"type":                 "object",
+							"properties":           singleFileProps(),
+							"required":             []string{"filename", "content"},
 							"additionalProperties": false,
 						},
 					},
@@ -90,42 +119,62 @@ func (cg Codegenerator) GetTools() []tools.ToolDefinition {
 				"additionalProperties": false,
 			},
 		},
-		// {
-		// 	Name:        "ReadFiles",
-		// 	Description: "Используй этот инструмент для одновременного чтения содержимого одного или нескольких файлов проекта.",
-		// 	Parameters: map[string]any{
-		// 		"type": "object", // Корень параметров ВСЕГДА должен быть object
-		// 		"properties": map[string]any{
-		// 			"filenames": map[string]any{
-		// 				"type":        "array",
-		// 				"description": "Список путей к файлам, которые нужно прочитать, например ['main.go', 'utils/math.go']",
-		// 				"items": map[string]any{
-		// 					"type": "string",
-		// 				},
-		// 			},
-		// 		},
-		// 		"required":             []string{"filenames"}, // Массив файлов обязателен для вызова инструмента
-		// 		"additionalProperties": false,                 // Обязательно для Structured Outputs / Strict Mode
-		// 	},
-		// },
-		// {
-		// 	Name:        "DeleteFiles",
-		// 	Description: "Используй этот инструмент для удаления ненужных файлов или целых папок с диска.",
-		// 	Parameters: map[string]any{
-		// 		"type": "object", // Корень параметров ВСЕГДА должен быть object
-		// 		"properties": map[string]any{
-		// 			"paths": map[string]any{
-		// 				"type":        "array",
-		// 				"description": "Список путей к файлам или папкам для удаления, например ['old_code.go', 'temp_dir']",
-		// 				"items": map[string]any{
-		// 					"type": "string",
-		// 				},
-		// 			},
-		// 		},
-		// 		"required":             []string{"paths"}, // Массив путей обязателен для вызова инструмента
-		// 		"additionalProperties": false,             // Обязательно для Structured Outputs / Strict Mode
-		// 	},
-		// },
+		{
+			Name:        "ReadFiles",
+			Description: "Используй этот инструмент для чтения содержимого одного или нескольких файлов проекта.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"filenames": map[string]any{
+						"type":        "array",
+						"description": "Список путей к файлам, которые нужно прочитать, например ['main.go', 'utils/math.go']",
+						"items": map[string]any{
+							"type": "string",
+						},
+					},
+				},
+				"required":             []string{"filenames"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name:        "DeleteFiles",
+			Description: "Используй этот инструмент для удаления ненужных файлов или папок.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"paths": map[string]any{
+						"type":        "array",
+						"description": "Список путей к файлам или папкам для удаления, например ['old_code.go', 'temp_dir']",
+						"items": map[string]any{
+							"type": "string",
+						},
+					},
+				},
+				"required":             []string{"paths"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name:        "Run",
+			Description: "Используй этот инструмент для запуска команд (например, go build, go vet) в выходной директории сгенерированного проекта, чтобы проверить, что код компилируется и проходит проверки. Возвращает stdout+stderr.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{"type": "string", "description": "Команда для запуска, например 'go build ./...'"},
+				},
+				"required":             []string{"command"},
+				"additionalProperties": false,
+			},
+		},
+	}
+}
+
+// singleFileProps возвращает общую схему свойств для одного файла (filename + content).
+func singleFileProps() map[string]any {
+	return map[string]any{
+		"filename": map[string]any{"type": "string", "description": "Название файла с путем, например 'utils/math.go'"},
+		"content":  map[string]any{"type": "string", "description": "Полный исходный код файла"},
 	}
 }
 
@@ -235,40 +284,59 @@ func (cr Codegenerator) GetToolsForOllama() []api.Tool {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: api.ToolFunction{
+				Name:        "Run",
+				Description: "Используй этот инструмент для запуска команд (например, go build, go vet) в выходной директории сгенерированного проекта.",
+				Parameters: api.ToolFunctionParameters{
+					Type: "object",
+					Properties: func() *api.ToolPropertiesMap {
+						p := api.NewToolPropertiesMap()
+						p.Set("command", api.ToolProperty{
+							Type:        api.PropertyType{"string"},
+							Description: "Команда для запуска, например 'go build ./...'",
+						})
+						return p
+					}(),
+					Required: []string{"command"},
+				},
+			},
+		},
 	}
 }
 
-func (cg Codegenerator) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
+func (cg *Codegenerator) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
 	switch functionName {
 
 	case "WriteFiles":
 		return cg.WriteFiles(functionArgs)
 	case "WriteFile":
 		return cg.WriteFile(functionArgs)
+	case "ReadFiles":
+		return cg.ReadFiles(functionArgs)
+	case "DeleteFiles":
+		return cg.DeleteFiles(functionArgs)
+	case "Run":
+		return cg.Run(functionArgs)
 	default:
-		return nil, fmt.Errorf("function %s not implemented in MathAgent", functionName)
+		return nil, fmt.Errorf("function %s not implemented in Codegenerator", functionName)
 	}
 }
 
-func (cg Codegenerator) WriteFile(args map[string]any) ([]byte, error) {
-	// 1. Создаем переменную нужного типа
+func (cg *Codegenerator) WriteFile(args map[string]any) ([]byte, error) {
 	var params map[string]string
 
-	// 2. Сериализуем сырые данные обратно в JSON-байты
 	bytes, err := json.Marshal(args)
 	if err == nil {
-		// 3. Десериализуем байты напрямую в вашу структуру []ReviewComment
 		_ = json.Unmarshal(bytes, &params)
 	}
 
 	filename := params["filename"]
 	content := params["content"]
 
-	// 3. Вызываем вашу бизнес-логику (функцию, которая обрабатывает комментарии)
-	// Внутри args.Comments уже лежит готовый срез (slice) []ReviewComment
 	result := []map[string]string{}
-
-	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+	if err := cg.write(filename, content); err != nil {
 		result = append(result, map[string]string{
 			"filename": filename,
 			"status":   "error",
@@ -281,10 +349,7 @@ func (cg Codegenerator) WriteFile(args map[string]any) ([]byte, error) {
 		})
 	}
 
-	// 4. Кодируем результат работы вашей функции обратно в JSON,
-	// чтобы отправить его обратно в OpenAI (как Tool message)
 	resultJSON, _ := json.Marshal(result)
-
 	return resultJSON, nil
 }
 
@@ -300,18 +365,14 @@ type BulkParams struct {
 }
 
 // WriteFiles обрабатывает пакетную запись файлов, вызванную ИИ-агентом
-func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
-	// 1. Создаем переменную структуры для десериализации массива файлов
+func (cg *Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 	var params BulkParams
 
-	// 2. Сериализуем сырые данные map[string]any обратно в JSON-байты
 	bytes, err := json.Marshal(args)
 	if err == nil {
-		// Десериализуем байты напрямую в нашу структуру BulkParams
 		_ = json.Unmarshal(bytes, &params)
 	}
 
-	// Если массив файлов пустой (например, ошибка парсинга или агент ничего не передал)
 	if len(params.Files) == 0 {
 		fmt.Printf("[WriteFiles] ВНИМАНИЕ: список файлов пуст. Полученные аргументы: %s\n", string(bytes))
 		resultJSON, _ := json.Marshal(map[string]string{
@@ -323,52 +384,24 @@ func (cg Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 		return resultJSON, nil
 	}
 
-	workdir, _ := os.Getwd()
-	// 3. Вызываем бизнес-логику записи для каждого файла
-	// Будем собирать статус по каждому файлу отдельно, чтобы агент видел полную картину
 	result := []map[string]string{}
-
 	for _, file := range params.Files {
-		relativeFilename := filepath.Join(cg.OutputDir, file.Filename)
-		// Извлекаем путь к поддиректории из имени файла (например, из "models/user.go" получим "models")
-		// Если файл лежит в корне (например, "main.go"), dir вернет "."
-		dir := filepath.Dir(relativeFilename)
-		fmt.Printf("[WriteFiles] записываю %q -> %q\n", file.Filename, filepath.Join(workdir, relativeFilename))
-
-		// Если путь содержит поддиректории, создаем их перед вызовом функции записи
-		if dir != "." && dir != "/" && dir != string(filepath.Separator) {
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				result = append(result, map[string]string{
-					"filename": relativeFilename,
-					"status":   "error",
-					"message":  fmt.Sprintf("не удалось создать директорию %s: %v", dir, err),
-				})
-				continue // Пропускаем этот файл и переходим к следующему
-			}
-		}
-
-		// Вызываем вашу функцию записи (предполагаем, что она возвращает error)
-		// Замените "filepath.WriteFile" на ваш актуальный вызов (например, cg.writeFile или пакет.WriteFile)
-		// Записываем файл на диск, используя стандартный os.WriteFile
-		if err := os.WriteFile(relativeFilename, []byte(file.Content), 0644); err != nil {
+		if err := cg.write(file.Filename, file.Content); err != nil {
 			result = append(result, map[string]string{
-				"filename": relativeFilename,
+				"filename": file.Filename,
 				"status":   "error",
 				"message":  err.Error(),
 			})
 		} else {
 			result = append(result, map[string]string{
-				"filename": relativeFilename,
+				"filename": file.Filename,
 				"status":   "success",
 			})
 		}
 	}
 
-	// 4. Кодируем результат работы обратно в JSON для отправки в модель (Tool Response)
 	resultJSON, _ := json.Marshal(result)
-
-	fmt.Println("Ответ инструмента множественной записи", result)
-
+	fmt.Println("[WriteFiles] результат:", result)
 	return resultJSON, nil
 }
 
@@ -394,31 +427,27 @@ func (cg Codegenerator) ReadFiles(args map[string]any) ([]byte, error) {
 		return resultJSON, nil
 	}
 
-	// Структура ответа: массив объектов с контентом или ошибкой по каждому файлу
 	result := []map[string]string{}
 
 	for _, filename := range params.Filenames {
-		cleanFilename := filepath.Join(cg.OutputDir, filepath.Clean(filename))
-
-		// Читаем файл с диска
-		contentBytes, err := os.ReadFile(cleanFilename)
-		if err != nil {
-			result = append(result, map[string]string{
-				"filename": cleanFilename,
-				"status":   "error",
-				"message":  err.Error(),
-			})
-		} else {
-			result = append(result, map[string]string{
-				"filename": cleanFilename,
-				"status":   "success",
-				"content":  string(contentBytes), // Конвертируем []byte обратно в string для ИИ
-			})
-		}
+		result = append(result, cg.readResult(filename))
 	}
 
 	resultJSON, _ := json.Marshal(result)
 	return resultJSON, nil
+}
+
+// readResult читает файл и возвращает результат-статус.
+func (cg Codegenerator) readResult(name string) map[string]string {
+	full, err := cg.resolvePath(name)
+	if err != nil {
+		return map[string]string{"filename": name, "status": "error", "message": err.Error()}
+	}
+	content, err := os.ReadFile(full)
+	if err != nil {
+		return map[string]string{"filename": name, "status": "error", "message": err.Error()}
+	}
+	return map[string]string{"filename": name, "status": "success", "content": string(content)}
 }
 
 // DeleteParams соответствует JSON-параметрам инструмента DeleteFiles
@@ -446,33 +475,221 @@ func (cg Codegenerator) DeleteFiles(args map[string]any) ([]byte, error) {
 	result := []map[string]string{}
 
 	for _, path := range params.Paths {
-		cleanPath := filepath.Join(cg.OutputDir, filepath.Clean(path))
-
-		// Проверяем, существует ли файл/папка вообще
-		if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+		res, err := cg.remove(path)
+		if err != nil {
 			result = append(result, map[string]string{
-				"path":    cleanPath,
-				"status":  "error",
-				"message": "файл или папка не существует",
-			})
-			continue
-		}
-
-		// Удаляем (RemoveAll удалит файл, а если это папка — удалит её со всем содержимым)
-		if err := os.RemoveAll(cleanPath); err != nil {
-			result = append(result, map[string]string{
-				"path":    cleanPath,
+				"path":    path,
 				"status":  "error",
 				"message": err.Error(),
 			})
-		} else {
-			result = append(result, map[string]string{
-				"path":   cleanPath,
-				"status": "success",
-			})
+			continue
 		}
+		result = append(result, res)
 	}
 
 	resultJSON, _ := json.Marshal(result)
 	return resultJSON, nil
+}
+
+// resolvePath приводит относительный путь к абсолютному в пределах OutputDir
+// и защищает от выхода за границу через ".." или абсолютные пути.
+func (cg Codegenerator) resolvePath(name string) (string, error) {
+	cleaned := filepath.Clean(filepath.FromSlash(name))
+	if filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("абсолютный путь запрещён: %s", name)
+	}
+	full := filepath.Join(cg.OutputDir, cleaned)
+	root := filepath.Clean(cg.OutputDir)
+	if !strings.HasPrefix(full, root+string(filepath.Separator)) && full != root {
+		return "", fmt.Errorf("путь выходит за пределы OutputDir: %s", name)
+	}
+	return full, nil
+}
+
+// write создаёт директории при необходимости и записывает файл.
+func (cg *Codegenerator) write(name, content string) error {
+	full, err := cg.resolvePath(name)
+	if err != nil {
+		return err
+	}
+
+	if cg.Config.MaxFiles > 0 && cg.written >= cg.Config.MaxFiles {
+		return fmt.Errorf("превышен лимит записанных файлов (%d)", cg.Config.MaxFiles)
+	}
+	if cg.Config.NoOverwrite {
+		if _, err := os.Stat(full); err == nil {
+			return fmt.Errorf("файл уже существует (%s), перезапись запрещена (CODEGEN_NO_OVERWRITE=true)", name)
+		}
+	}
+
+	if dir := filepath.Dir(full); dir != "." && dir != "/" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("не удалось создать директорию %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+		return err
+	}
+	cg.written++
+	fmt.Printf("[WriteFiles] записано %q -> %q\n", name, full)
+	return nil
+}
+
+// RunParams соответствует JSON-параметрам инструмента Run
+type RunParams struct {
+	Command string `json:"command"`
+}
+
+// Run запускает команду в OutputDir (например, go build) и возвращает вывод ИИ-агенту.
+func (cg Codegenerator) Run(args map[string]any) ([]byte, error) {
+	var params RunParams
+
+	raw, err := json.Marshal(args)
+	if err == nil {
+		_ = json.Unmarshal(raw, &params)
+	}
+
+	if params.Command == "" {
+		resultJSON, _ := json.Marshal(map[string]string{
+			"status":  "error",
+			"message": "команда не указана",
+		})
+		return resultJSON, nil
+	}
+
+	workdir := cg.OutputDir
+	cmd := exec.Command("sh", "-c", params.Command)
+	cmd.Dir = workdir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	result := map[string]string{
+		"command":    params.Command,
+		"workdir":    workdir,
+		"exit_error": "",
+		"stdout":     stdout.String(),
+		"stderr":     stderr.String(),
+	}
+	if runErr != nil {
+		result["exit_error"] = runErr.Error()
+		result["status"] = "error"
+	} else {
+		result["status"] = "success"
+	}
+
+	resultJSON, _ := json.Marshal(result)
+	return resultJSON, nil
+}
+
+// remove удаляет файл или папку и возвращает (результат-статус, ошибку).
+func (cg Codegenerator) remove(name string) (map[string]string, error) {
+	full, err := cg.resolvePath(name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(full); os.IsNotExist(err) {
+		return map[string]string{"path": name, "status": "error", "message": "файл или папка не существует"}, nil
+	}
+	if err := os.RemoveAll(full); err != nil {
+		return nil, err
+	}
+	return map[string]string{"path": name, "status": "success"}, nil
+}
+
+// SelfReviewDir возвращает путь к директории сгенерированного кода.
+// Используется main.go для цикла self-repair: локальное ревью + исправление.
+func (cg Codegenerator) SelfReviewDir() string {
+	return cg.OutputDir
+}
+
+// NewReviewAgentFor создаёт агента код-ревью, привязанного к локальной
+// директории с кодом (через forges.LocalForge). Позволяет прогнать написанный
+// код через логику codereviewer без сети. focus — необязательная цель ревью
+// (например "безопасность"). Возвращает агента и его forge, чтобы вызывающий
+// мог извлечь собранные замечания (lf.Published).
+func (cg Codegenerator) NewReviewAgentFor(dir string, focus string) (agents.Agent, forges.Forge, error) {
+	lf, err := forges.NewLocalForge(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return codereviewer.NewCodereviewerWithForge(lf, focus), lf, nil
+}
+
+// FixPromptFor формирует новое задание для исправления сгенерированного кода:
+// берет исходное задание и дополняет его найденными при ревью замечаниями.
+func (cg Codegenerator) FixPromptFor(original string, comments []forges.ReviewComment) string {
+	if len(comments) == 0 {
+		return original + "\n\nКод прошёл локальное ревью без замечаний — финальный прогон: убедись, что всё компилируется и работает."
+	}
+
+	var b strings.Builder
+	b.WriteString(original)
+	b.WriteString("\n\nИсправь уже сгенерированный код в OutputDir по следующим замечаниям ревью (не ломай остальной функционал, затем снова загони go build и go vet через Run):\n")
+	for _, c := range comments {
+		fmt.Fprintf(&b, "- %s:%d %s\n", c.FilePath, c.Line, c.Text)
+	}
+	return b.String()
+}
+
+// NewCodegeneratorInDir создаёт генератор в заданной директории (а не в новой
+// temp/). Используется для повторных раундов self-repair: модель исправляет
+// уже существующий вывод на основе замечаний ревью.
+func NewCodegeneratorInDir(prompt, dir string) (*Codegenerator, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(abs, 0755); err != nil {
+		return nil, err
+	}
+	return &Codegenerator{OutputDir: abs, Prompt: prompt, Config: LoadConfig()}, nil
+}
+
+// Finalize пишет в OutputDir файл-отчёт SUMMARY.md (если включено конфигом)
+// со структурой сгенерированного проекта. Вызывается из main.go после цикла
+// генерации, заполняя отчёт реально созданными файлами.
+func (cg Codegenerator) Finalize() {
+	if cg.Config.SummaryFile == "" {
+		return
+	}
+
+	full, err := cg.resolvePath(cg.Config.SummaryFile)
+	if err != nil {
+		return
+	}
+
+	lines := []string{
+		"# Сгенерированный проект",
+		"",
+		"- Язык: " + cg.Config.Language,
+		"- Задание: " + cg.Prompt,
+		"",
+		"## Файлы",
+		"",
+	}
+
+	_ = filepath.Walk(cg.OutputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(cg.OutputDir, path)
+		if rerr != nil {
+			return nil
+		}
+		if rel == cg.Config.SummaryFile {
+			return nil
+		}
+		lines = append(lines, "- "+filepath.ToSlash(rel))
+		return nil
+	})
+
+	content := strings.Join(lines, "\n") + "\n"
+	_ = os.WriteFile(full, []byte(content), 0644)
+	fmt.Printf("[Finalize] написан отчёт: %s\n", full)
 }
