@@ -216,6 +216,67 @@ func TestFinalizeSkipsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestEnsureREADMEWritesWhenMissing(t *testing.T) {
+	cg := newTestCG(t)
+	cg.Config = DefaultConfig()
+	cg.Config.Module = "example.com/gen"
+	if err := cg.write("main.go", "package main\n\nfunc main() {}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cg.write("go.mod", "module example.com/gen\n\ngo 1.22\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	cg.EnsureREADME()
+
+	res := cg.readResult("README.md")
+	if res["status"] != "success" {
+		t.Fatalf("README.md не создан: %#v", res)
+	}
+	content := res["content"]
+	for _, want := range []string{"example.com/gen", "1.22", "go run main.go", "Установка", "Запуск"} {
+		if !contains(content, want) {
+			t.Errorf("README.md не содержит %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestEnsureREADMEPreservesExisting(t *testing.T) {
+	cg := newTestCG(t)
+	cg.Config = DefaultConfig()
+	if err := cg.write("main.go", "package main\n\nfunc main() {}\n"); err != nil {
+		t.Fatal(err)
+	}
+	// Модель уже написала свой README.
+	modelReadme := "# Модельный README\nРучной текст автора.\n"
+	if err := cg.write("README.md", modelReadme); err != nil {
+		t.Fatal(err)
+	}
+
+	cg.EnsureREADME()
+
+	res := cg.readResult("README.md")
+	if res["content"] != modelReadme {
+		t.Errorf("EnsureREADME не должен перезаписывать существующий README, got:\n%s", res["content"])
+	}
+}
+
+func TestFindMainGo(t *testing.T) {
+	cases := []struct {
+		files []string
+		want  string
+	}{
+		{[]string{"main.go", "util.go"}, "main.go"},
+		{[]string{"cmd/app/main.go", "util.go"}, "cmd/app/main.go"},
+		{[]string{"util.go"}, ""},
+	}
+	for _, c := range cases {
+		if got := findMainGo(c.files); got != c.want {
+			t.Errorf("findMainGo(%v) = %q, ожидали %q", c.files, got, c.want)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (indexOf(s, sub) >= 0)
 }

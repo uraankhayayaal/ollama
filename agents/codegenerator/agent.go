@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -692,4 +693,169 @@ func (cg Codegenerator) Finalize() {
 	content := strings.Join(lines, "\n") + "\n"
 	_ = os.WriteFile(full, []byte(content), 0644)
 	fmt.Printf("[Finalize] написан отчёт: %s\n", full)
+
+	// Гарантируем наличие README.md с инструкциями по установке, запуску и
+	// использованию. Если модель уже создала его — не трогаем (не перезапишем).
+	cg.EnsureREADME()
+}
+
+// EnsureREADME создаёт README.md в OutputDir, если он ещё не существует,
+// с инструкцией по установке, запуску и использованию, собранной из
+// реально сгенерированных файлов. Если README уже есть (его написала
+// модель) — файл не перезаписывается, чтобы не портить авторский текст.
+func (cg Codegenerator) EnsureREADME() {
+	const name = "README.md"
+
+	full, err := cg.resolvePath(name)
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(full); err == nil {
+		// README уже есть (например, его создала модель) — не трогаем.
+		fmt.Printf("[EnsureREADME] %s уже существует, пропускаю\n", full)
+		return
+	}
+
+	files := cg.listProjectFiles()
+	content := buildReadme(cg, files)
+	if content == "" {
+		return
+	}
+	_ = os.WriteFile(full, []byte(content), 0644)
+	fmt.Printf("[EnsureREADME] создан: %s\n", full)
+}
+
+// listProjectFiles возвращает относительные пути всех файлов OutputDir
+// (рекурсивно), кроме собственного README/SUMMARY, отсортированные.
+func (cg Codegenerator) listProjectFiles() []string {
+	var out []string
+	_ = filepath.Walk(cg.OutputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(cg.OutputDir, path)
+		if rerr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "README.md" || rel == cg.Config.SummaryFile {
+			return nil
+		}
+		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+// buildReadme собирает текст README.md из имеющихся файлов: определяет
+// модуль и точку входа (main.go, cmd/), Go-версию, наличие тестов и
+// формирует разделы "Установка", "Запуск", "Использование".
+func buildReadme(cg Codegenerator, files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("# Сгенерированный проект\n\n")
+	b.WriteString("Проект создан агентом-генератором кода.\n\n")
+
+	module := cg.Config.Module
+	goVersion := goVersionFromFiles(cg.OutputDir, files)
+	hasTests := hasGoTests(files)
+
+	if module != "" {
+		fmt.Fprintf(&b, "- Модуль: `%s`\n", module)
+	}
+	if goVersion != "" {
+		fmt.Fprintf(&b, "- Go: `%s`\n", goVersion)
+	}
+	if hasTests {
+		b.WriteString("- Тесты: есть\n")
+	}
+
+	b.WriteString("\n## Установка\n\n")
+	if module != "" {
+		fmt.Fprintf(&b, "```bash\ngo mod download\n```\n\n")
+	}
+	if goVersion != "" {
+		fmt.Fprintf(&b, "Требуется Go %s или новее.\n\n", goVersion)
+	}
+
+	b.WriteString("## Запуск\n\n")
+	if mainPath := findMainGo(files); mainPath != "" {
+		fmt.Fprintf(&b, "```bash\ngo run %s\n```\n\n", mainPath)
+	} else {
+		b.WriteString("```bash\ngo run .\n```\n\n")
+	}
+
+	if hasTests {
+		b.WriteString("## Тесты\n\n```bash\ngo test ./...\n```\n\n")
+	}
+
+	b.WriteString("## Использование\n\n")
+	if mainPath := findMainGo(files); mainPath != "" {
+		fmt.Fprintf(&b, "После запуска (`go run %s`) программа выполнит основной сценарий из задания.\n", mainPath)
+	} else {
+		b.WriteString("Публичные пакеты/функции проекта используются через импорт: `import \"%s/…\"`.\n")
+	}
+
+	b.WriteString("\n## Структура\n\n```\n")
+	for _, f := range files {
+		fmt.Fprintf(&b, "%s\n", f)
+	}
+	b.WriteString("```\n")
+
+	return b.String()
+}
+
+// findMainGo возвращает путь к файлу point-of-entry (main.go или первый
+// файл под cmd/), подходящий для команды "go run". Иначе "".
+func findMainGo(files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	// Отдаём предпочтение корневому main.go.
+	for _, f := range files {
+		if f == "main.go" || f == "./main.go" {
+			return "main.go"
+		}
+	}
+	for _, f := range files {
+		if filepath.Base(f) == "main.go" {
+			return f
+		}
+	}
+	return ""
+}
+
+// hasGoTests сообщает, содержит ли список файлов Go-тесты (*_test.go).
+func hasGoTests(files []string) bool {
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			return true
+		}
+	}
+	return false
+}
+
+// goVersionFromFiles ищет строку "go x.y.z" в go.mod и возвращает её,
+// иначе "".
+func goVersionFromFiles(dir string, files []string) string {
+	for _, f := range files {
+		if filepath.Base(f) != "go.mod" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			return ""
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "go ") {
+				return strings.TrimPrefix(line, "go ")
+			}
+		}
+	}
+	return ""
 }

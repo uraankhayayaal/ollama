@@ -191,6 +191,10 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 	if _, err := provider.Generate(ctx, fixAgent); err != nil {
 		log.Printf("Self-review: ошибка на этапе исправления: %v", err)
 	}
+
+	// После исправления финализируем ещё раз: обновляем SUMMARY и
+	// гарантируем наличие README.md с инструкцией по запуску.
+	fixAgent.Finalize()
 }
 
 // agentCommand возвращает имя агента (первый аргумент) и оставшиеся
