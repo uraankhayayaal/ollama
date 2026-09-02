@@ -37,6 +37,14 @@ type Codereviewer struct {
 	// rejectedCount — сколько комментариев отсечено проверкой по diff
 	// (галлюцинации).
 	rejectedCount int
+	// chunks — дифф, разбитый на части (если превышает ChunkSize) для
+	// ревью по частям; заменяет большой дифф single-сообщением.
+	chunks []string
+	// chunkIdx — индекс текущего обрабатываемого чанка.
+	chunkIdx int
+	// dedupSeen — уже опубликованные локации/сигнатуры замечаний, чтобы
+	// не публиковать одно и то же замечание повторно (в т.ч. между раундами).
+	dedupSeen map[string]bool
 }
 
 // NewCodereviewer создаёт агента код-ревью. Ссылка может указывать на
@@ -68,6 +76,7 @@ func NewCodereviewer(args []string) *Codereviewer {
 		IsUseMemory: true,
 		cfg:         LoadConfig(),
 		focus:       focus,
+		dedupSeen:   map[string]bool{},
 	}
 }
 
@@ -105,7 +114,7 @@ func (cr *Codereviewer) GetMessages() []agents.Message {
 		diff = filterGeneratedDiff(diff)
 	}
 
-	// Кэшируем актуальный дифф для валидации комментариев в ReviewMr.
+	// Полный дифф кэшируем для детекции языка и валидации комментариев.
 	cr.diff = diff
 
 	// Пустой (или полностью отфильтрованный) дифф — завершаем без ревью.
@@ -119,11 +128,17 @@ func (cr *Codereviewer) GetMessages() []agents.Message {
 		}
 	}
 
+	// Разбиваем большой дифф на части, чтобы не переполнять контекст:
+	// ревью идёт по чанкам, между которыми модель вызывает NextChunk.
+	cr.chunks = splitDiffChunks(diff, cr.cfg.ChunkSize)
+	cr.chunkIdx = 0
+
 	return []agents.Message{
 		{
 			Type: agents.MessageTypeHuman,
-			Message: "Изменения кода: " + diff +
-				". Ответ только в виде вызовов функций ApproveMr или ReviewMr",
+			Message: "Изменения кода (часть " + chunkLabel(cr.chunkIdx, len(cr.chunks)) + "): " +
+				cr.chunks[0] + ". Просмотри эту часть и вызови ReviewMr, если есть замечания, " +
+				"затем NextChunk, чтобы получить следующую часть.",
 		},
 	}
 }
@@ -170,6 +185,15 @@ func (cr Codereviewer) GetTools() []tools.ToolDefinition {
 		{
 			Name:        "ApproveMr",
 			Description: "Одобрить измений кода, если нет критичных багов и дефектов",
+		},
+		{
+			Name: "NextChunk",
+			Description: "Получить следующую часть диффа для ревью, если текущая просмотрена. " +
+				"Вызывать после ReviewMr по каждому чанку. Если частей больше нет, вместо него вызови ApproveMr.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
 		},
 	}
 }
@@ -229,6 +253,18 @@ func (cr Codereviewer) GetToolsForOllama() []api.Tool {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: api.ToolFunction{
+				Name: "NextChunk",
+				Description: "Получить следующую часть диффа для ревью, если текущая просмотрена. " +
+					"Вызывать после ReviewMr по каждому чанку. Если частей больше нет, вместо него вызови ApproveMr.",
+				Parameters: api.ToolFunctionParameters{
+					Type:       "object",
+					Properties: api.NewToolPropertiesMap(),
+				},
+			},
+		},
 	}
 }
 
@@ -241,9 +277,34 @@ func (cr *Codereviewer) CallFunction(functionName string, functionArgs map[strin
 	case "ApproveMr":
 		return cr.ApproveMr(functionArgs), nil
 
+	case "NextChunk":
+		return cr.NextChunk(), nil
+
 	default:
 		return nil, fmt.Errorf("function %s not implemented in MathAgent", functionName)
 	}
+}
+
+// NextChunk возвращает следующий чанк диффа для ревью, если такой есть.
+// Вызывается моделью после обработки текущего чанка (Feature: ревью по частям
+// большого диффа). Если это был последний чанк — сообщает модели, что пора
+// принять решение через ApproveMr.
+func (cr *Codereviewer) NextChunk() []byte {
+	if cr.chunkIdx+1 >= len(cr.chunks) {
+		out, _ := json.Marshal(map[string]string{
+			"status":  "done",
+			"message": "все части диффа просмотрены. Прими окончательное решение: вызови ApproveMr, если критичных замечаний нет.",
+		})
+		return out
+	}
+
+	cr.chunkIdx++
+	out, _ := json.Marshal(map[string]string{
+		"status": "ok",
+		"diff": "Изменения кода (часть " + chunkLabel(cr.chunkIdx, len(cr.chunks)) + "): " + cr.chunks[cr.chunkIdx] +
+			". Просмотри эту часть, вызови ReviewMr при необходимости, затем NextChunk для следующей.",
+	})
+	return out
 }
 
 func (cr *Codereviewer) ReviewMr(args map[string]any) []byte {
@@ -261,6 +322,17 @@ func (cr *Codereviewer) ReviewMr(args map[string]any) []byte {
 	if cr.diff != "" {
 		comments, rejected = filterCommentsByDiff(cr.diff, comments)
 		cr.rejectedCount += len(rejected)
+	}
+
+	// Дедупек однотипных замечаний (Feature): одно и то же замечание,
+	// повторённое в разных местах или раундах, публикуется только один раз.
+	// Карта сохраняется на структуре и накапливается между раундами, чтобы
+	// модель не повторяла одно и то же замечание в разных чанках/раундах.
+	if len(comments) > 0 {
+		if cr.dedupSeen == nil {
+			cr.dedupSeen = map[string]bool{}
+		}
+		comments = dedupComments(comments, cr.dedupSeen)
 	}
 
 	// 1. Лимит замечаний за одно ревью (Feature 1). Оставляем только
@@ -402,10 +474,17 @@ func yesNo(v bool) string {
 	return "нет"
 }
 
-func (cr Codereviewer) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
+func (cr *Codereviewer) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
 	if cr.IsUseMemory {
-		// Определяем язык по диффу, переданному раннером в user-сообщениях.
-		language := langdetect.Detect(diffFromMessages(text))
+		// Язык определяем по полному диффу (он кэшируется при разбиении
+		// диффа на чанки); если его нет — по тексту user-сообщений.
+		diffForLang := cr.diff
+		if diffForLang == "" {
+			diffForLang = diffFromMessages(text)
+		}
+
+		// Определяем язык по диффу.
+		language := langdetect.Detect(diffForLang)
 
 		// Для PHP дополнительно указываем фреймворк (Laravel), сохраняя
 		// все прежние правила проекта (PSR-12, SOLID, lighthouse, DTO и пр.).
@@ -426,6 +505,15 @@ func (cr Codereviewer) GetAgentMemoryMessages(text []agents.Message) []agents.Me
 		// Разъясняем семантику критичности для блокировки апрува (Feature 2).
 		prompt += "\n\t\tЗамечание считается 'критично:', если оно нарушает работу приложения или безопасность. " +
 			"Если есть хотя бы одно критическое замечание — НЕ вызывай ApproveMr."
+
+		// Протокол ревью по частям (Feature): когда дифф передан чанками,
+		// модель должна обрабатывать по одному чанку за раз и двигаться
+		// через NextChunk, а не ApproveMr до просмотра всех частей.
+		if len(cr.chunks) > 1 {
+			prompt += "\n\t\tДифф передан по частям. Обрабатывай ровно одну часть за раз: " +
+				"сначала ReviewMr по текущей части, затем NextChunk для следующей. " +
+				"ApproveMr вызывай только после получения сообщения о просмотре всех частей."
+		}
 
 		return []agents.Message{
 			{

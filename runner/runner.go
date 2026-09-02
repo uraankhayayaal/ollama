@@ -5,6 +5,8 @@ import (
 	"ai/tools"
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 )
 
 // AgentResponse содержит ответ модели и все выполненные вызовы функций.
@@ -38,9 +40,19 @@ type ChatProvider interface {
 	ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error)
 }
 
-// maxRounds ограничивает количество итераций выполнения инструментов,
+// maxRoundsLimit ограничивает количество итераций выполнения инструментов,
 // чтобы защититься от бесконечного цикла "модель -> инструмент".
-const maxRounds = 12
+// Значение по умолчанию можно переопределить переменной REVIEW_MAX_ROUNDS.
+const defaultMaxRounds = 12
+
+func maxRounds() int {
+	if v := os.Getenv("REVIEW_MAX_ROUNDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxRounds
+}
 
 // Generate выполняет агентский цикл: отправляет диалог модели, исполняет
 // запрошенные инструменты, возвращает результат модели обратно в историю
@@ -65,8 +77,9 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 
 	var allToolCalls []tools.ToolCall
 	content := ""
+	mx := maxRounds()
 
-	for round := 0; round < maxRounds; round++ {
+	for round := 0; round < mx; round++ {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("контекст отменён до раунда %d: %w", round+1, err)
 		}
@@ -113,6 +126,6 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 		}
 	}
 
-	Debugf("RUNNER: достигнут лимит раундов (%d), возвращаю частичный результат", maxRounds)
+	Debugf("RUNNER: достигнут лимит раундов (%d), возвращаю частичный результат", mx)
 	return &AgentResponse{Content: content, ToolCalls: allToolCalls, Truncated: true}, nil
 }
