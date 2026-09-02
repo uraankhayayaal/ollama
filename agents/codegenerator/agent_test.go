@@ -143,9 +143,77 @@ func TestRunReturnsOutput(t *testing.T) {
 	}
 }
 
+func TestListReturnsTree(t *testing.T) {
+	cg := newTestCG(t)
+	if err := cg.write("main.go", "package main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cg.write("sub/util.go", "package sub"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := cg.List(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !contains(s, "main.go") || !contains(s, "sub/util.go") || !contains(s, "sub/") {
+		t.Errorf("List должен вернуть пути файлов/папок, got: %s", s)
+	}
+}
+
+func TestListEmptyDir(t *testing.T) {
+	cg := newTestCG(t)
+	out, err := cg.List(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(out), "empty") && !contains(string(out), "файлов нет") {
+		t.Errorf("List пустой директории должен сообщить об отсутствии файлов, got: %s", out)
+	}
+}
+
+func TestAppendFileAppends(t *testing.T) {
+	cg := newTestCG(t)
+	if err := cg.write("main.go", "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cg.AppendFile(map[string]any{"filename": "main.go", "content": "func main(){}\n"}); err != nil {
+		t.Fatal(err)
+	}
+	res := cg.readResult("main.go")
+	if res["status"] != "success" {
+		t.Fatalf("чтение после append: %#v", res)
+	}
+	if res["content"] != "package main\nfunc main(){}\n" {
+		t.Errorf("AppendFile должен дописать в конец, got: %q", res["content"])
+	}
+}
+
+func TestAppendFileCreatesNewFile(t *testing.T) {
+	cg := newTestCG(t)
+	if _, err := cg.AppendFile(map[string]any{"filename": "new.go", "content": "package main"}); err != nil {
+		t.Fatal(err)
+	}
+	res := cg.readResult("new.go")
+	if res["status"] != "success" || res["content"] != "package main" {
+		t.Errorf("AppendFile должен создать файл при отсутствии, got: %#v", res)
+	}
+}
+
+func TestAppendFileRejectsTraversal(t *testing.T) {
+	cg := newTestCG(t)
+	out, err := cg.AppendFile(map[string]any{"filename": "../escape.go", "content": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(out), "error") {
+		t.Errorf("AppendFile должен отклонить выход за OutputDir, got: %s", out)
+	}
+}
+
 func TestCallFunctionDispatchesTools(t *testing.T) {
 	cg := newTestCG(t)
-	cases := []string{"WriteFiles", "WriteFile", "ReadFiles", "DeleteFiles", "Run"}
+	cases := []string{"WriteFiles", "WriteFile", "ReadFiles", "DeleteFiles", "Run", "List", "AppendFile"}
 	for _, name := range cases {
 		if _, err := cg.CallFunction(name, map[string]any{}); err != nil {
 			t.Errorf("CallFunction(%q) не должен возвращать ошибку, got: %v", name, err)

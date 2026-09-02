@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,8 +83,9 @@ func (cg Codegenerator) GetAgentMemoryMessages(text []agents.Message) []agents.M
 Твой план работы:
 1. Создай все нужные файлы (включая go.mod, если требуется) инструментами WriteFiles/WriteFile.
 2. Проверь, что проект компилируется и проходит проверки, запустив инструмент Run с командами: "go build ./...", "go vet ./..." и (если есть тесты) "go test ./...".
-3. Если компиляция или проверки падают, исправь код (WriteFiles перезапишет файл) и запускай Run снова, пока всё не станет зелёным.
+3. Если компиляция или проверки падают, исправь код (WriteFiles перезапишет файл, а для точечных добавлений используй AppendFile) и запускай Run снова, пока всё не станет зелёным.
 4. После успешного build продумай краткую проверку главного сценария работы (вызов программы).
+5. Перед чтением или правкой файлов узнай, что уже создано, инструментом List.
 
 Правила:
 - Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты.
@@ -175,6 +177,29 @@ func (cg Codegenerator) GetTools() []tools.ToolDefinition {
 				"additionalProperties": false,
 			},
 		},
+		{
+			Name:        "List",
+			Description: "Используй этот инструмент для получения списка (дерева) файлов в проекте, чтобы узнать, что уже создано, прежде чем читать или изменять.",
+			Parameters: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"required":             []string{},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name:        "AppendFile",
+			Description: "Используй этот инструмент для добавления текста в конец существующего файла (например, новой функции или реализации). Для больших правок лучше перезаписать файл через WriteFile/WriteFiles.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"filename": map[string]any{"type": "string", "description": "Путь к файлу для дополнения, например 'main.go'"},
+					"content":  map[string]any{"type": "string", "description": "Текст, добавляемый в конец файла"},
+				},
+				"required":             []string{"filename", "content"},
+				"additionalProperties": false,
+			},
+		},
 	}
 }
 
@@ -241,6 +266,17 @@ func (cr Codegenerator) GetToolsForOllama() []api.Tool {
 			Properties: itemProps, // Передаем упорядоченную мапу для внутренней схемы
 			Required:   []string{"filename", "content"},
 		},
+	})
+
+	// Схема для AppendFile
+	appendProps := api.NewToolPropertiesMap()
+	appendProps.Set("filename", api.ToolProperty{
+		Type:        api.PropertyType{"string"},
+		Description: "Путь к файлу для дополнения, например 'main.go'",
+	})
+	appendProps.Set("content", api.ToolProperty{
+		Type:        api.PropertyType{"string"},
+		Description: "Текст, добавляемый в конец файла",
 	})
 
 	return []api.Tool{
@@ -311,6 +347,29 @@ func (cr Codegenerator) GetToolsForOllama() []api.Tool {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: api.ToolFunction{
+				Name:        "List",
+				Description: "Используй этот инструмент для получения списка (дерева) файлов в проекте, чтобы узнать, что уже создано.",
+				Parameters: api.ToolFunctionParameters{
+					Type:       "object",
+					Properties: api.NewToolPropertiesMap(),
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: api.ToolFunction{
+				Name:        "AppendFile",
+				Description: "Используй этот инструмент для добавления текста в конец существующего файла.",
+				Parameters: api.ToolFunctionParameters{
+					Type:       "object",
+					Properties: appendProps,
+					Required:   []string{"filename", "content"},
+				},
+			},
+		},
 	}
 }
 
@@ -327,6 +386,10 @@ func (cg *Codegenerator) CallFunction(functionName string, functionArgs map[stri
 		return cg.DeleteFiles(functionArgs)
 	case "Run":
 		return cg.Run(functionArgs)
+	case "List":
+		return cg.List(functionArgs)
+	case "AppendFile":
+		return cg.AppendFile(functionArgs)
 	default:
 		return nil, fmt.Errorf("function %s not implemented in Codegenerator", functionName)
 	}
@@ -541,6 +604,93 @@ func (cg *Codegenerator) write(name, content string) error {
 	cg.written++
 	fmt.Printf("[WriteFiles] записано %q -> %q\n", name, full)
 	return nil
+}
+
+// appendTo прибавляет текст в конец существующего файла (без полной
+// перезаписи). Используется инструментом AppendFile для точечных правок.
+func (cg *Codegenerator) appendTo(name, content string) error {
+	full, err := cg.resolvePath(name)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(full, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(content); err != nil {
+		return err
+	}
+	fmt.Printf("[AppendFile] дополнен %q -> %q\n", name, full)
+	return nil
+}
+
+// AppendFile добавляет текст в конец указанного файла.
+func (cg *Codegenerator) AppendFile(args map[string]any) ([]byte, error) {
+	var params map[string]string
+	bytes, err := json.Marshal(args)
+	if err == nil {
+		_ = json.Unmarshal(bytes, &params)
+	}
+	filename := params["filename"]
+	content := params["content"]
+
+	var res map[string]string
+	if filename == "" || content == "" {
+		res = map[string]string{
+			"filename": filename,
+			"status":   "error",
+			"message":  "filename и content обязательны",
+		}
+	} else if err := cg.appendTo(filename, content); err != nil {
+		res = map[string]string{
+			"filename": filename,
+			"status":   "error",
+			"message":  err.Error(),
+		}
+	} else {
+		res = map[string]string{
+			"filename": filename,
+			"status":   "success",
+		}
+	}
+	return json.Marshal(res)
+}
+
+// List возвращает дерево файлов/папок внутри OutputDir, чтобы модель знала,
+// что уже создано, прежде чем читать или править код.
+func (cg *Codegenerator) List(args map[string]any) ([]byte, error) {
+	var entries []string
+	err := filepath.WalkDir(cg.OutputDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == cg.OutputDir {
+			return nil
+		}
+		rel, rerr := filepath.Rel(cg.OutputDir, path)
+		if rerr != nil {
+			return rerr
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			entries = append(entries, rel+"/")
+		} else {
+			if info, ierr := d.Info(); ierr == nil {
+				entries = append(entries, fmt.Sprintf("%s (%d B)", rel, info.Size()))
+			} else {
+				entries = append(entries, rel)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return json.Marshal(map[string]string{"status": "error", "message": err.Error()})
+	}
+	if len(entries) == 0 {
+		return json.Marshal(map[string]string{"status": "empty", "message": "В каталоге пока нет файлов."})
+	}
+	return json.Marshal(map[string]any{"status": "success", "files": entries})
 }
 
 // RunParams соответствует JSON-параметрам инструмента Run

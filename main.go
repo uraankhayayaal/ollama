@@ -152,11 +152,19 @@ func defaultPrompt(args []string) string {
 }
 
 // doSelfReview запускает цикл self-repair для агента-генератора: генерация →
-// локальное ревью сгенерированного кода → исправление по замечаниям ревью.
+// локальное ревью сгенерированного кода → исправление по замечаниям ревью →
+// повтор до схождения (нет замечаний) или исчерпания бюджета раундов.
 // focus — цель ревью (может быть "" для общего обзора).
 func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, focus string, originalPrompt string) {
 	dir := sr.SelfReviewDir()
-	log.Printf("Self-review: ревью кода в %s", dir)
+
+	// Узнаём бюджет раундов исправления из конфига генератора.
+	maxRounds := codegenerator.LoadConfig().MaxRepairRounds
+	if maxRounds <= 0 {
+		log.Println("Self-review: исправление отключено (CODEGEN_MAX_REPAIR_ROUNDS<=0)")
+		return
+	}
+	log.Printf("Self-review: ревью кода в %s (бюджет исправлений: %d)", dir, maxRounds)
 
 	reviewAgent, forge, err := sr.NewReviewAgentFor(dir, focus)
 	if err != nil {
@@ -179,22 +187,63 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 		return
 	}
 
-	fixPrompt := sr.FixPromptFor(originalPrompt, lf.Published)
-	log.Printf("Self-review: найдено замечаний: %d. Запускаю исправление.", len(lf.Published))
+	// Цикл исправления: исправить → снова проверить ревью → повторять,
+	// пока остаются замечания и не исчерпан бюджет раундов.
+	pending := lf.Published
+	for round := 1; round <= maxRounds && len(pending) > 0; round++ {
+		log.Printf("Self-review: раунд %d/%d, замечаний: %d. Запускаю исправление.", round, maxRounds, len(pending))
 
-	fixAgent, err := codegenerator.NewCodegeneratorInDir(fixPrompt, dir)
+		fixPrompt := sr.FixPromptFor(originalPrompt, pending)
+
+		fixAgent, ferr := codegenerator.NewCodegeneratorInDir(fixPrompt, dir)
+		if ferr != nil {
+			log.Printf("Self-review: не удалось создать агента исправления: %v", ferr)
+			break
+		}
+
+		if _, err := provider.Generate(ctx, fixAgent); err != nil {
+			log.Printf("Self-review: ошибка на этапе исправления: %v", err)
+			break
+		}
+
+		// После исправления финализируем: обновляем SUMMARY и гарантируем README.md.
+		fixAgent.Finalize()
+
+		if round >= maxRounds {
+			break
+		}
+
+		// Перечитываем код после правок и смотрим, остались ли замечания.
+		next, rerr := reReview(ctx, provider, sr, dir, focus)
+		if rerr != nil {
+			log.Printf("Self-review: ошибка повторного ревью: %v", rerr)
+			break
+		}
+		pending = next
+	}
+
+	if len(pending) > 0 {
+		log.Printf("Self-review: цикл завершён, осталось неисправленных замечаний: %d", len(pending))
+	} else {
+		log.Printf("Self-review: цикл завершён, замечаний больше нет")
+	}
+}
+
+// reReview создаёт свежий LocalForge для той же директории, прогоняет ревью
+// и возвращает новые замечания. Используется между раундами исправления.
+func reReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, dir string, focus string) ([]forges.ReviewComment, error) {
+	newAgent, newForge, err := sr.NewReviewAgentFor(dir, focus)
 	if err != nil {
-		log.Printf("Self-review: не удалось создать агента исправления: %v", err)
-		return
+		return nil, err
 	}
-
-	if _, err := provider.Generate(ctx, fixAgent); err != nil {
-		log.Printf("Self-review: ошибка на этапе исправления: %v", err)
+	if _, err := provider.Generate(ctx, newAgent); err != nil {
+		return nil, err
 	}
-
-	// После исправления финализируем ещё раз: обновляем SUMMARY и
-	// гарантируем наличие README.md с инструкцией по запуску.
-	fixAgent.Finalize()
+	lf, ok := newForge.(*forges.LocalForge)
+	if !ok {
+		return nil, fmt.Errorf("неожиданный тип forge при повторном ревью")
+	}
+	return lf.Published, nil
 }
 
 // agentCommand возвращает имя агента (первый аргумент) и оставшиеся

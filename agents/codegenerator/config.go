@@ -26,14 +26,20 @@ type Config struct {
 	// SummaryFile — имя файла-отчёта, который пишется после генерации.
 	// Пусто — файл не создаётся.
 	SummaryFile string
+
+	// MaxRepairRounds — сколько раундов self-repair (исправление по
+	// замечаниям ревью) допустимо выполнить. 1 — один проход fix
+	// (как раньше), 0 или отрицательное — ремонт отключён (без фикса).
+	MaxRepairRounds int
 }
 
 // DefaultConfig возвращает конфиг со значениями по умолчанию.
 func DefaultConfig() Config {
 	return Config{
-		Language:    "Go",
-		NoOverwrite: false,
-		SummaryFile: "SUMMARY.md",
+		Language:        "Go",
+		NoOverwrite:     false,
+		SummaryFile:     "SUMMARY.md",
+		MaxRepairRounds: 3,
 	}
 }
 
@@ -60,6 +66,11 @@ func LoadConfig() Config {
 	}
 	if v := os.Getenv("CODEGEN_SUMMARY_FILE"); v != "" {
 		cfg.SummaryFile = v
+	}
+	if v := os.Getenv("CODEGEN_MAX_REPAIR_ROUNDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.MaxRepairRounds = n
+		}
 	}
 
 	return cfg
