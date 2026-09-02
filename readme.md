@@ -4,8 +4,26 @@
 1. Загрузить модель `docker compose exec -it ollama ollama pull qwen2.5-coder:7b`
 
 # Запуск команд
-1. Кодревью использовать агента `codereviewer := codereviewer.NewCodereviewer()` и выполнить команду `go run . --mr=https://gitlab.com/it-yakutia/botsad.ru/-/merge_requests/2`
-1. Генератор кода использовать агента `codereviewer := codegenerator.NewCodegenerator()` и выполнить команду `go run .`
+
+Агент выбирается через первый аргумент командной строки.
+
+1. **Генератор кода** — каждое выполнение создаёт новый каталог `temp/gen_<дата>_<время>_<номер>/`. Текст задания передаётся первым аргументом (в кавычках):
+   ```bash
+   go run . generate "Напиши микросервис для расчета квадратного уровнения, придумай формат аргументов для передачи в код."
+   ```
+   Если промпт не указан, используется задание по умолчанию: `go run . generate`
+1. **Кодревью** MR — ссылку на Merge Request передаём напрямую:
+   ```bash
+   go run . review <URL_MR>
+   # пример:
+   go run . review https://gitlab.com/it-yakutia/botsad.ru/-/merge_requests/2
+   ```
+
+Вспомогательные флаги:
+- `LLM_DEBUG=1` — подробный лог запросов/ответов моделей: `LLM_DEBUG=1 go run . generate`
+- `YANDEX_MAX_TOKENS=<число>` — лимит токенов ответа Yandex (по умолчанию 4000)
+
+Провайдер (ollama/yandex) и ключи задаются в файле `.env` (переменная `LLM_PROVIDER`).
 
 ----
 Test tools call
