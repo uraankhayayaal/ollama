@@ -384,6 +384,9 @@ func isCritical(text string) bool {
 
 // parseComments преобразует аргумент "comments" в слайс ReviewComment,
 // независимо от того, пришёл он JSON-строкой или уже разобранным массивом.
+// Аргументы приходят через tools.ParseArguments (json.Unmarshal в any),
+// поэтому массивы имеют динамический тип []interface{} — это тоже
+// поддерживается.
 func parseComments(raw any) []forges.ReviewComment {
 	var comments []forges.ReviewComment
 
@@ -391,6 +394,12 @@ func parseComments(raw any) []forges.ReviewComment {
 	case string:
 		// JSON-строка вида `[{"file_path": ...}]`.
 		_ = json.Unmarshal([]byte(v), &comments)
+	case []byte:
+		_ = json.Unmarshal(v, &comments)
+	case []interface{}:
+		// Типичный случай от инструментов: json.Unmarshal даёт []interface{}.
+		b, _ := json.Marshal(v)
+		_ = json.Unmarshal(b, &comments)
 	case []map[string]any:
 		b, _ := json.Marshal(v)
 		_ = json.Unmarshal(b, &comments)
@@ -399,6 +408,12 @@ func parseComments(raw any) []forges.ReviewComment {
 		_ = json.Unmarshal(b, &comments)
 	case nil:
 		return nil
+	default:
+		// Последний резервный путь — пытаемся сериализовать обратно в JSON.
+		b, err := json.Marshal(v)
+		if err == nil {
+			_ = json.Unmarshal(b, &comments)
+		}
 	}
 
 	return comments

@@ -167,6 +167,39 @@ func TestReviewMrSkipsHallucinatedComments(t *testing.T) {
 	}
 }
 
+func TestReviewMrParsesInterfaceArrayComments(t *testing.T) {
+	// Воспроизводит реальный путь: tools.ParseArguments отдаёт
+	// map[string]any{"comments": []interface{}{...}}.
+	ff := &fakeForge{}
+	cr := &Codereviewer{
+		forge: ff,
+		diff: `+++ b/AuthManager.php
+@@ -280,1 +280,1 @@
++line`,
+	}
+
+	args := map[string]any{
+		"comments": []any{
+			map[string]any{
+				"file_path": "AuthManager.php",
+				"line":      280,
+				"text":      "для заметки: проверь nil",
+			},
+			map[string]any{
+				"file_path": "AuthManager.php",
+				"line":      999,
+				"text":      "галлюцинация: этой строки нет",
+			},
+		},
+	}
+	_ = cr.ReviewMr(args)
+
+	// Валидное замечание опубликовано, галлюцинация отсечена.
+	if cr.commentCount != 1 {
+		t.Errorf("commentCount = %d, ожидали 1 (массив []any должен разбираться)", cr.commentCount)
+	}
+}
+
 func TestIsCritical(t *testing.T) {
 	if !isCritical("критично: что-то сломано") {
 		t.Error("ожидали критичность для 'критично:'")
