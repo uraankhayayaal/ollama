@@ -2,8 +2,8 @@ package codereviewer
 
 import (
 	"ai/agents"
+	"ai/forges"
 	"ai/tools"
-	"ai/tools/gitlab"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,36 +13,47 @@ import (
 )
 
 type Codereviewer struct {
-	Token       string
-	MrUrl       string
-	config      *gitlab.GitLabConfig
+	forge       forges.Forge
 	IsUseMemory bool
 }
 
+// NewCodereviewer создаёт агента код-ревью. Ссылка может указывать на
+// любой поддерживаемый хостинг (GitLab/GitHub) — тип определяется по URL,
+// а токен берётся из переменной окружения <HOST>_TOKEN (см. forges.New).
 func NewCodereviewer(args []string) *Codereviewer {
-	token := os.Getenv("GITLAB_TOKEN")
-
 	if len(args) < 1 || args[0] == "" {
 		fmt.Fprintln(os.Stderr, "Ошибка: укажите ссылку на MR, например: go run . review <URL>")
 		os.Exit(1)
 	}
-	mrURL := args[0]
+	prURL := args[0]
 
-	config, err := gitlab.ParseGitLabURL(mrURL, token)
+	token := pickToken(prURL)
+	forge, err := forges.New(prURL, token)
 	if err != nil {
-		log.Fatalf("Ошибка парсинга URL: %v", err)
+		log.Fatalf("Ошибка создания провайдера ревью: %v", err)
 	}
 
 	return &Codereviewer{
-		token,
-		mrURL,
-		config,
-		true,
+		forge:       forge,
+		IsUseMemory: true,
+	}
+}
+
+// pickToken выбирает токен доступа в зависимости от хостинга:
+// GitLab → GITLAB_TOKEN, GitHub → GITHUB_TOKEN.
+func pickToken(prURL string) string {
+	switch forges.DetectType(prURL) {
+	case forges.KindGitHub:
+		return os.Getenv("GITHUB_TOKEN")
+	case forges.KindGitLab:
+		return os.Getenv("GITLAB_TOKEN")
+	default:
+		return ""
 	}
 }
 
 func (cr Codereviewer) GetMessages() []agents.Message {
-	diff, err := gitlab.GetMRDiff(cr.config)
+	diff, err := cr.forge.GetDiff()
 	if err != nil {
 		log.Fatalf("Ошибка при получении изменений кода: %v", err)
 	}
@@ -165,45 +176,38 @@ func (cr Codereviewer) CallFunction(functionName string, functionArgs map[string
 
 func (cr Codereviewer) ReviewMr(args map[string]any) []byte {
 	// 1. Создаем переменную нужного типа
-	var comments []gitlab.ReviewComment
+	var comments []forges.ReviewComment
 
 	// 2. Сериализуем сырые данные обратно в JSON-байты
 	bytes, err := json.Marshal(args["comments"])
 	if err == nil {
-		// 3. Десериализуем байты напрямую в вашу структуру []ReviewComment
+		// 3. Десериализуем байты напрямую в структуру ReviewComment
 		_ = json.Unmarshal(bytes, &comments)
 	}
 
-	// 3. Вызываем вашу бизнес-логику (функцию, которая обрабатывает комментарии)
-	// Внутри args.Comments уже лежит готовый срез (slice) []ReviewComment
+	// 4. Публикуем каждое замечание через выбранный провайдер
 	result := []map[string]string{}
 	for _, comment := range comments {
-		err := gitlab.PostCommentOnLine(cr.config, comment)
+		err := cr.forge.PostComment(comment)
 		if err != nil {
 			result = append(result, map[string]string{"status": "error", "message": err.Error()})
 		}
 	}
 
-	// 4. Кодируем результат работы вашей функции обратно в JSON,
-	// чтобы отправить его обратно в OpenAI (как Tool message)
+	// 5. Кодируем результат обратно в JSON для модели (Tool message)
 	resultJSON, _ := json.Marshal(result)
 
 	return resultJSON
 }
 
 func (cr Codereviewer) ApproveMr(args map[string]any) []byte {
-	// 1. Вызываем вашу бизнес-логику (функцию, которая обрабатывает комментарии)
-	// Внутри args.Comments уже лежит готовый срез (slice) []ReviewComment
 	result := map[string]string{}
-	err := gitlab.ApproveMR(cr.config)
+	err := cr.forge.Approve()
 	if err != nil {
 		result = map[string]string{"status": "error", "message": err.Error()}
 	}
 
-	// 2. Кодируем результат работы вашей функции обратно в JSON,
-	// чтобы отправить его обратно в OpenAI (как Tool message)
 	resultJSON, _ := json.Marshal(result)
-
 	return resultJSON
 }
 
