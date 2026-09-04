@@ -47,8 +47,11 @@ func main() {
 	case "yandex":
 		provider = models.NewAlisaProvider()
 
+	case "trim":
+		provider, err = models.NewTrimProvider()
+
 	default:
-		log.Fatalf("Unknown provider: %s. Use 'ollama' or 'yandex'", providerType)
+		log.Fatalf("Unknown provider: %s. Use 'ollama', 'yandex' or 'trim'", providerType)
 	}
 
 	if err != nil {
