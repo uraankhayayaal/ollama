@@ -5,14 +5,12 @@ import (
 	"ai/runner"
 	"ai/tools"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
-	"github.com/openai/openai-go/shared"
 	"github.com/openai/openai-go/shared/constant"
 )
 
@@ -194,54 +192,6 @@ func (t *TrimProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
 
 func (t *TrimProvider) GetModelName(ctx context.Context) string {
 	return t.model
-}
-
-// Функции вспомогательные, скопированы из AlisaProvider
-func hasToolResult(msgs []runner.Message) bool {
-	for _, m := range msgs {
-		if m.Role == "tool" {
-			return true
-		}
-	}
-	return false
-}
-
-// messageContent достаёт текстовое содержимое сообщения из union-типа OpenAI.
-func messageContent(m openai.ChatCompletionMessageParamUnion) string {
-	b, err := json.Marshal(m)
-	if err != nil {
-		return fmt.Sprintf("<marshal error: %v>", err)
-	}
-
-	var v struct {
-		Role    json.RawMessage `json:"role"`
-		Content json.RawMessage `json:"content"`
-	}
-	if err := json.Unmarshal(b, &v); err != nil || v.Content == nil {
-		return ""
-	}
-
-	var s string
-	if json.Unmarshal(v.Content, &s) == nil {
-		return s
-	}
-	return string(v.Content)
-}
-
-// messageRole достаёт роль сообщения из union-типа OpenAI.
-func messageRole(m openai.ChatCompletionMessageParamUnion) string {
-	b, err := json.Marshal(m)
-	if err != nil {
-		return "<unknown>"
-	}
-
-	var v struct {
-		Role string `json:"role"`
-	}
-	if err := json.Unmarshal(b, &v); err != nil {
-		return "<unknown>"
-	}
-	return v.Role
 }
 
 func convertTrimMatrix(embeddings []openai.Embedding) [][]float64 {
