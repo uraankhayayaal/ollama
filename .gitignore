@@ -1,4 +1,5 @@
 .env
 
-# Собранный бинарь CLI
+# Собранные бинари CLI
 ai
+/services/mrListener/mrListener

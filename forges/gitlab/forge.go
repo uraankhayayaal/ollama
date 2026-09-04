@@ -14,6 +14,19 @@ import (
 // Forge — реализация интерфейса forges.Forge для GitLab.
 type Forge struct {
 	cfg *config
+	// Кэши результатов чтения MR: за время одного ревью дифф и SHA коммитов
+	// не меняются, а каждый комментарий не должен порождать лишние GET.
+	// Мемоизация только успеха — ошибки не запоминаются, чтобы сбой сети
+	// не «залипал» на всё ревью.
+	diffDone   bool
+	diffResult string
+	diffErr    error
+
+	versionsDone bool
+	verBase      string
+	verStart     string
+	verHead      string
+	verErr       error
 }
 
 func init() {
@@ -61,31 +74,56 @@ func (f *Forge) do(method, path string, body any) ([]byte, int, error) {
 	return data, resp.StatusCode, nil
 }
 
+// diffsPageSize — сколько файлов диффа запрашивается за одну страницу.
+const diffsPageSize = 100
+
+// diffFile — файл в ответе GitLab API /merge_requests/:iid/diffs.
+type diffFile struct {
+	OldPath string `json:"old_path"`
+	NewPath string `json:"new_path"`
+	Diff    string `json:"diff"`
+}
+
+// fetchDiffs загружает все страницы диффа Merge Request.
+func (f *Forge) fetchDiffs() ([]diffFile, error) {
+	var files []diffFile
+	for page := 1; ; page++ {
+		path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s/diffs?per_page=%d&page=%d",
+			f.cfg.ProjID, f.cfg.MRIID, diffsPageSize, page)
+
+		data, status, err := f.do("GET", path, nil)
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("статус %d: %s", status, string(data))
+		}
+
+		var pageFiles []diffFile
+		if err := json.Unmarshal(data, &pageFiles); err != nil {
+			return nil, err
+		}
+		files = append(files, pageFiles...)
+
+		// Результатов меньше размера страницы — это последняя страница.
+		if len(pageFiles) < diffsPageSize {
+			return files, nil
+		}
+	}
+}
+
 // GetDiff возвращает изменения Merge Request единым unified-диффом.
 // GitLab API отдаёт массив объектов {old_path, new_path, diff}, где diff —
 // только ханки без заголовков ---/+++. Собираем их в обычный формат
 // "diff --git a/.. b/..\n--- a/..\n+++ b/..\n<ханки>", который ожидают
-// фильтр сгенерированных файлов и валидация комментариев.
+// фильтр сгенерированных файлов и валидация комментариев. Результат
+// кэшируется: повторные вызовы не обращаются к API.
 func (f *Forge) GetDiff() (string, error) {
-	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s/diffs?per_page=100",
-		f.cfg.ProjID, f.cfg.MRIID)
-
-	data, status, err := f.do("GET", path, nil)
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusOK {
-		return "", fmt.Errorf("статус %d: %s", status, string(data))
+	if f.diffDone {
+		return f.diffResult, f.diffErr
 	}
 
-	var files []struct {
-		OldPath string `json:"old_path"`
-		NewPath string `json:"new_path"`
-		Diff    string `json:"diff"`
-	}
-	if err := json.Unmarshal(data, &files); err != nil {
-		return "", err
-	}
+	files, err := f.fetchDiffs()
 
 	var out strings.Builder
 	for _, file := range files {
@@ -100,20 +138,26 @@ func (f *Forge) GetDiff() (string, error) {
 			out.WriteByte('\n')
 		}
 	}
-	return out.String(), nil
+
+	f.diffDone = true
+	f.diffResult = out.String()
+	f.diffErr = err
+	return f.diffResult, f.diffErr
 }
 
 // versions возвращает SHA коммитов для позиционирования комментариев.
+// Результат кэшируется на структуре.
 func (f *Forge) versions() (base, start, head string, err error) {
+	if f.versionsDone {
+		return f.verBase, f.verStart, f.verHead, f.verErr
+	}
+
 	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s",
 		f.cfg.ProjID, f.cfg.MRIID)
 
 	data, status, err := f.do("GET", path, nil)
-	if err != nil {
-		return "", "", "", err
-	}
-	if status != http.StatusOK {
-		return "", "", "", fmt.Errorf("статус %d: %s", status, string(data))
+	if err == nil && status != http.StatusOK {
+		err = fmt.Errorf("статус %d: %s", status, string(data))
 	}
 
 	var parsed struct {
@@ -123,10 +167,14 @@ func (f *Forge) versions() (base, start, head string, err error) {
 			HeadSha  string `json:"head_sha"`
 		} `json:"diff_refs"`
 	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return "", "", "", err
+	if err == nil {
+		err = json.Unmarshal(data, &parsed)
 	}
-	return parsed.DiffRefs.BaseSha, parsed.DiffRefs.StartSha, parsed.DiffRefs.HeadSha, nil
+
+	f.versionsDone = true
+	f.verBase, f.verStart, f.verHead = parsed.DiffRefs.BaseSha, parsed.DiffRefs.StartSha, parsed.DiffRefs.HeadSha
+	f.verErr = err
+	return f.verBase, f.verStart, f.verHead, f.verErr
 }
 
 // PostComment публикует замечание. Сначала пробует привязать комментарий к

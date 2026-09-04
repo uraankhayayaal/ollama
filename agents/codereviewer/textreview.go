@@ -246,13 +246,14 @@ func parseReviewCalls(content string) []forges.ReviewComment {
 // parseTextReview разбирает текстовое ревью в слайс замечаний.
 // Ожидаемые форматы:
 //
-//	1) Псевдо-вызовы ReviewMr(...) — модели без инструментов (trim):
-//	   ReviewMr(file_path="core/AuthManager.php", line=285, text="...")
+//  1. Псевдо-вызовы ReviewMr(...) — модели без инструментов (trim):
+//     ReviewMr(file_path="core/AuthManager.php", line=285, text="...")
 //
-//	2) Заголовки вида (пример реального ответа YandexGPT):
-//	   **Файл:** `core/.../AuthManager.php`
-//	   1. **Строка:** ~285 (в блоке ...)
-//	      **Текст:** `критично:` Проверка ...
+//  2. Заголовки вида (пример реального ответа YandexGPT):
+//     **Файл:** `core/.../AuthManager.php`
+//
+//  1. **Строка:** ~285 (в блоке ...)
+//     **Текст:** `критично:` Проверка ...
 //
 // Возвращает замечания с file_path, line и text.
 func parseTextReview(content string) []forges.ReviewComment {

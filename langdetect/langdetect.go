@@ -132,12 +132,13 @@ func extOf(path string) string {
 }
 
 // dominant возвращает язык с наибольшим числом вхождений.
-// При равенстве — any consistent; здесь берём первый максимальный.
+// При равенстве — язык, идущий раньше по алфавиту, чтобы выбор был
+// детерминированным независимо от порядка обхода map.
 func dominant(counts map[Language]int) Language {
 	var best Language
 	bestCount := 0
 	for lang, n := range counts {
-		if n > bestCount {
+		if n > bestCount || (n == bestCount && lang < best) {
 			best = lang
 			bestCount = n
 		}

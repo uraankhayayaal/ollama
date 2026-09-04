@@ -102,6 +102,7 @@ func TestParseTextReviewTrimPositional(t *testing.T) {
 		}
 	}
 }
+
 const sampleTextReview = `ReviewMr для ` + "`core/components/minishop3/src/Services/Customer/AuthManager.php`" + `:
 
 **Файл:** ` + "`core/components/minishop3/src/Services/Customer/AuthManager.php`" + `

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/ollama/ollama/api"
 )
@@ -19,15 +18,13 @@ type OllamaProvider struct {
 }
 
 func NewOllamaProvider(model string) (*OllamaProvider, error) {
-	llmModelName := os.Getenv("OLLAMA_MODEL")
-
 	// 1. Создаем клиент Ollama (по умолчанию подключается к http://127.0.0.1:11434)
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
 		log.Fatalf("Ошибка инициализации клиента: %v", err)
 	}
 
-	return &OllamaProvider{client: client, model: llmModelName}, nil
+	return &OllamaProvider{client: client, model: model}, nil
 }
 
 func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
@@ -132,50 +129,4 @@ func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 	}
 
 	return &runner.ModelReply{Content: content, ToolCalls: toolCalls, FinishReason: doneReason}, nil
-}
-
-func (o *OllamaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
-	req := &api.EmbedRequest{
-		Model: o.model,
-		Input: "Язык программирования Go идеально подходит для микросервисов.",
-	}
-
-	resp, err := o.client.Embed(ctx, req)
-	if err != nil {
-		log.Fatalf("Ошибка генерации вектора: %v", err)
-	}
-
-	if len(resp.Embeddings) == 0 {
-		return nil, fmt.Errorf("Срез пуст!")
-	}
-
-	return convertOllamaMatrix(resp.Embeddings), nil
-}
-
-func (o *OllamaProvider) GetModelName(ctx context.Context) string {
-	return o.model
-}
-
-func convertOllamaMatrix(input [][]float32) [][]float64 {
-	if input == nil {
-		return nil
-	}
-
-	// 1. Выделяем память под внешнюю матрицу
-	result := make([][]float64, len(input))
-
-	for i, row := range input {
-		if row == nil {
-			continue
-		}
-		// 2. Выделяем память под внутреннюю строку (точного размера)
-		result[i] = make([]float64, len(row))
-
-		// 3. Копируем элементы с приведением типа
-		for j, val := range row {
-			result[i][j] = float64(val)
-		}
-	}
-
-	return result
 }

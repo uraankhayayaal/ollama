@@ -9,6 +9,7 @@ import (
 	"ai/forges"
 	_ "ai/forges/all"
 	"ai/models"
+	"ai/services/mrlistener"
 	"context"
 	"fmt"
 	"log"
@@ -20,21 +21,33 @@ import (
 )
 
 func main() {
-	// Load the .env file
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+	// Load the .env file. Отсутствие файла не фатально: критичные настройки
+	// (провайдер, токены) всё равно проверяются ниже по ходу выполнения.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("Предупреждение: .env не загружен (%v)", err)
 	}
 
-	// Таймаут цикла агента берётся из окружения REVIEW_TIMEOUT, иначе 5 минут.
-	// Длительное ревью большого PR может требовать большего лимита.
+	// Сервис мониторинга новых MR — не требует провайдера модели.
+	if len(os.Args) > 1 && os.Args[1] == "listen" {
+		if err := mrlistener.Listen(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	// Таймаут цикла агента берётся из окружения REVIEW_TIMEOUT, иначе 10 минут.
+	// Дефолт выбран заведомо выше таймаута отдельного HTTP-запроса провайдера
+	// (5 минут), чтобы один долгий ответ модели не съедал весь бюджет цикла.
 	timeout := parseTimeout(os.Getenv("REVIEW_TIMEOUT"))
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	providerType := os.Getenv("LLM_PROVIDER") // "ollama" или "yandex"
+	providerType := os.Getenv("LLM_PROVIDER") // "ollama", "yandex" или "trim"
 
-	var provider models.LLMProvider
+	var (
+		provider models.LLMProvider
+		err      error
+	)
 
 	switch providerType {
 	case "ollama":
@@ -62,7 +75,8 @@ func main() {
 	// у ревьювера — дифф передаём целиком без разбиения на части.
 	noChunk := providerType == "trim"
 
-	// Выбор агента по первому аргументу: go run . generate <имя> [промпт] | refactor <имя> <промпт> | review <URL>
+	// Выбор агента по первому аргументу:
+	// go run . generate <имя> [промпт] | refactor <имя> <промпт> | review <URL> | listen
 	agentName, agentArgs := agentCommand(os.Args)
 
 	var agent agents.Agent
@@ -95,7 +109,7 @@ func main() {
 			}
 		}
 	default:
-		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>' или 'go run . review <URL>'", agentName)
+		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . review <URL>' или 'go run . listen'", agentName)
 	}
 
 	resp, err := provider.Generate(ctx, agent)
@@ -298,7 +312,7 @@ func agentCommand(args []string) (name string, rest []string) {
 // parseTimeout разбирает длительность таймаута из строки (например "10m").
 // При пустой строке или ошибке разбора возвращается значение по умолчанию.
 func parseTimeout(raw string) time.Duration {
-	const def = 5 * time.Minute
+	const def = 10 * time.Minute
 	if raw == "" {
 		return def
 	}

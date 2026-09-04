@@ -202,30 +202,6 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 	}, nil
 }
 
-func (y *AlisaProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
-	req := openai.EmbeddingNewParams{
-		Model: y.model,
-		Input: openai.EmbeddingNewParamsInputUnion{
-			OfString: openai.String("Язык программирования Go идеально подходит для микросервисов."),
-		},
-	}
-
-	resp, err := y.client.Embeddings.New(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("Ошибка генерации вектора: %v", err)
-	}
-
-	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("Срез пуст!")
-	}
-
-	return convertAlisaMatrix(resp.Data), nil
-}
-
-func (y *AlisaProvider) GetModelName(ctx context.Context) string {
-	return y.model
-}
-
 // hasToolResult сообщает, выполнился ли уже хотя бы один инструмент
 // (в истории есть сообщение роли "tool"). Используется, чтобы форсировать
 // tool_choice только на самом первом (или ещё не выполнившем инструмент) шаге.
@@ -274,22 +250,4 @@ func messageRole(m openai.ChatCompletionMessageParamUnion) string {
 		return "<unknown>"
 	}
 	return v.Role
-}
-
-func convertAlisaMatrix(embeddings []openai.Embedding) [][]float64 {
-	if len(embeddings) == 0 {
-		return nil
-	}
-
-	result := make([][]float64, len(embeddings))
-
-	for i, embedding := range embeddings {
-		if embedding.Embedding == nil {
-			continue
-		}
-
-		result[i] = embedding.Embedding
-	}
-
-	return result
 }

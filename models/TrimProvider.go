@@ -48,10 +48,13 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
-type embeddingResponse struct {
-	Data []struct {
-		Embedding []float64 `json:"embedding"`
-	} `json:"data"`
+// trimMaxTokens — лимит выходных токенов для Trim. Задаётся переменной
+// окружения TRIM_MAX_TOKENS.
+func trimMaxTokens() int {
+	if n := os.Getenv("TRIM_MAX_TOKENS"); n != "" {
+		return atoiDefault(n, 4000)
+	}
+	return 4000
 }
 
 func NewTrimProvider() (*TrimProvider, error) {
@@ -65,11 +68,16 @@ func NewTrimProvider() (*TrimProvider, error) {
 		trimURL = "https://vllm-app.rc.itops.su/v1"
 	}
 
+	model := os.Getenv("TRIM_MODEL")
+	if model == "" {
+		model = "/models/T-pro-it-1.0"
+	}
+
 	return &TrimProvider{
 		client:  &http.Client{Timeout: 5 * time.Minute},
 		baseURL: strings.TrimSuffix(trimURL, "/"),
 		apiKey:  apiKey,
-		model:   "/models/T-pro-it-1.0",
+		model:   model,
 	}, nil
 }
 
@@ -148,7 +156,7 @@ func (t *TrimProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []
 	req := map[string]any{
 		"model":                 t.model,
 		"messages":              messages,
-		"max_completion_tokens": 4000,
+		"max_completion_tokens": trimMaxTokens(),
 	}
 	if forceTool != "" {
 		req["tools"] = toolsParam
@@ -200,32 +208,6 @@ func (t *TrimProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []
 		ToolCalls:    toolCalls,
 		FinishReason: choice.FinishReason,
 	}, nil
-}
-
-func (t *TrimProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
-	body, err := json.Marshal(map[string]any{
-		"model": t.model,
-		"input": "Язык программирования Go идеально подходит для микросервисов.",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Ошибка сериализации запроса: %w", err)
-	}
-
-	var resp embeddingResponse
-	if err := t.do(ctx, "/embeddings", body, &resp); err != nil {
-		return nil, err
-	}
-
-	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("Срез пуст!")
-	}
-
-	result := make([][]float64, len(resp.Data))
-	for i, e := range resp.Data {
-		result[i] = e.Embedding
-	}
-
-	return result, nil
 }
 
 func (t *TrimProvider) GetModelName(ctx context.Context) string {
