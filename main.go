@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -54,18 +55,35 @@ func main() {
 		log.Fatalf("Failed to init provider: %v", err)
 	}
 
-	// Выбор агента по первому аргументу: go run . generate <промпт> | review <URL>
+	// Выбор агента по первому аргументу: go run . generate <имя> [промпт] | refactor <имя> <промпт> | review <URL>
 	agentName, agentArgs := agentCommand(os.Args)
 
 	var agent agents.Agent
 	switch agentName {
 	case "generate":
-		prompt := defaultPrompt(agentArgs)
-		agent = codegenerator.NewCodegenerator(prompt)
+		if len(agentArgs) < 1 {
+			log.Fatal("Использование: go run . generate <имя_проекта> [промпт]\n" +
+				"Пример: go run . generate storageService \"Напиши микросервис для хранения файлов\"")
+		}
+		projectName := agentArgs[0]
+		prompt := defaultPrompt(agentArgs[1:])
+		agent = codegenerator.NewCodegenerator(projectName, prompt)
+	case "refactor":
+		if len(agentArgs) < 2 {
+			log.Fatal("Использование: go run . refactor <имя_проекта> <промпт>\n" +
+				"Пример: go run . refactor storageService \"Добавить эндпоинт /health\"")
+		}
+		projectName := agentArgs[0]
+		prompt := strings.Join(agentArgs[1:], " ")
+		cg, err := codegenerator.NewRefactorGenerator(prompt, projectName)
+		if err != nil {
+			log.Fatalf("Ошибка: %v", err)
+		}
+		agent = codegenerator.NewRefactorAgent(cg)
 	case "review":
 		agent = codereviewer.NewCodereviewer(agentArgs)
 	default:
-		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <промпт>' или 'go run . review <URL>'", agentName)
+		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>' или 'go run . review <URL>'", agentName)
 	}
 
 	resp, err := provider.Generate(ctx, agent)

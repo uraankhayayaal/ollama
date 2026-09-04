@@ -14,8 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/ollama/ollama/api"
 )
@@ -27,15 +25,12 @@ type Codegenerator struct {
 	written   int
 }
 
-var genSeq int64
-
-// NewCodegenerator создаёт генератор с уникальной папкой в temp/.
-// Имя папки строится из времени и атомарного счётчика, что исключает
-// коллизии даже при создании нескольких генераторов в одну микросекунду.
-// prompt — текст задания для модели, передаётся как аргумент командной строки.
-func NewCodegenerator(prompt string) *Codegenerator {
-	seq := atomic.AddInt64(&genSeq, 1)
-	dir := filepath.Join("temp", fmt.Sprintf("gen_%s_%04d", time.Now().Format("20060102_150405"), seq))
+// NewCodegenerator создаёт генератор в папке temp/<projectName>.
+// projectName — обязательное имя проекта, задаётся пользователем.
+// prompt — текст задания для модели (может быть пустым — тогда используется
+// задание по умолчанию).
+func NewCodegenerator(projectName, prompt string) *Codegenerator {
+	dir := filepath.Join("temp", projectName)
 	os.MkdirAll(dir, 0755)
 	return &Codegenerator{OutputDir: dir, Prompt: prompt, Config: LoadConfig()}
 }
@@ -804,6 +799,91 @@ func NewCodegeneratorInDir(prompt, dir string) (*Codegenerator, error) {
 		return nil, err
 	}
 	return &Codegenerator{OutputDir: abs, Prompt: prompt, Config: LoadConfig()}, nil
+}
+
+// NewRefactorGenerator создаёт генератор для работы с уже существующим проектом
+// в папке temp/<projectName>. В отличие от NewCodegenerator, не требует
+// обязательного вызова WriteFiles в первом раунде — модель может начать с
+// чтения существующего кода (List, ReadFiles) и затем вносить целенаправленные
+// правки.
+func NewRefactorGenerator(prompt, projectName string) (*Codegenerator, error) {
+	dir := filepath.Join("temp", projectName)
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("неверный путь %q: %v", dir, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("проект не найден: %s (путь: %s)", projectName, dir)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("путь не является директорией: %s", dir)
+	}
+	return &Codegenerator{OutputDir: abs, Prompt: prompt, Config: LoadConfig()}, nil
+}
+
+// refactorAgent — обёртка над Codegenerator, которая отключает требование
+// WriteFiles в первом раунде и использует рефакторинговый системный промпт.
+type refactorAgent struct {
+	*Codegenerator
+}
+
+// NewRefactorAgent оборачивает Codegenerator в refactorAgent, который
+// использует рефакторинговый системный промпт и не требует WriteFiles
+// в первом раунде.
+func NewRefactorAgent(cg *Codegenerator) refactorAgent {
+	return refactorAgent{Codegenerator: cg}
+}
+
+// RequiredToolFirstRound возвращает ("", false) — модель не обязана вызывать
+// WriteFiles в первом раунде, она может начать с List/ReadFiles.
+func (ra refactorAgent) RequiredToolFirstRound() (string, bool) {
+	return "", false
+}
+
+// GetAgentMemoryMessages использует рефакторинговый системный промпт вместо
+// генераторного (без требования "создай все файлы с нуля").
+func (ra refactorAgent) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
+	lang := ra.Config.Language
+	if lang == "" {
+		lang = "Go"
+	}
+
+	var moduleInstruction string
+	if ra.Config.Module != "" {
+		moduleInstruction = fmt.Sprintf("Модуль проекта: %q. При необходимости обнови go.mod.", ra.Config.Module)
+	}
+
+	overwriteRule := "Ты можешь перезаписывать файлы инструментами WriteFiles/WriteFile."
+	if ra.Config.NoOverwrite {
+		overwriteRule = "Включена защита от перезаписи: инструменты вернут ошибку, если ты попытаешься перезаписать уже существующий файл."
+	}
+
+	return []agents.Message{
+		{
+			Type: agents.MessageTypeSystem,
+			Message: fmt.Sprintf(`Ты — опытный разработчик на языке %s и архитектор. Твоя задача — провести рефакторинг или доработку уже существующего проекта.
+%s
+
+Ты работаешь только внутри выходной директории проекта (OutputDir).
+%s
+
+Твой план работы:
+1. Сначала изучи текущее состояние проекта: используй List для просмотра структуры, затем ReadFiles для чтения ключевых файлов.
+2. Проанализируй код и определи, какие изменения необходимы для выполнения задания.
+3. Вноси изменения: для больших файлов используй WriteFile/WriteFiles (полная перезапись), для точечных правок — AppendFile или DeleteFiles + WriteFile.
+4. После каждого набора изменений проверяй, что проект компилируется: запускай "go build ./...", "go vet ./..." и (при наличии тестов) "go test ./..." через Run.
+5. Если компиляция или проверки падают — исправляй код и запускай проверки снова, пока не станет зелёным.
+6. При необходимости обнови README.md отражением изменений.
+
+Правила:
+- Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты.
+- Начинай с изучения существующего кода, не переписывай всё без анализа.
+- Сохраняй существующую архитектуру и стиль кода проекта.
+- Не ломай существующий функционал, который не затрагивается заданием.
+- Нельзя писать файлы вне OutputDir (инструменты сами это заблокируют).`, lang, moduleInstruction, overwriteRule),
+		},
+	}
 }
 
 // Finalize пишет в OutputDir файл-отчёт SUMMARY.md (если включено конфигом)
