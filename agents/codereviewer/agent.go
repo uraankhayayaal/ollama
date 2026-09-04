@@ -42,6 +42,10 @@ type Codereviewer struct {
 	chunks []string
 	// chunkIdx — индекс текущего обрабатываемого чанка.
 	chunkIdx int
+	// NoChunk отключает разбиение диффа на части: ревьювер получает весь
+	// изменённый код одним сообщением. Используется для провайдеров с одним
+	// раундом (например, trim), где цикл NextChunk недоступен.
+	NoChunk bool
 	// dedupSeen — уже опубликованные локации/сигнатуры замечаний, чтобы
 	// не публиковать одно и то же замечание повторно (в т.ч. между раундами).
 	dedupSeen map[string]bool
@@ -143,16 +147,29 @@ func (cr *Codereviewer) GetMessages() []agents.Message {
 
 	// Разбиваем большой дифф на части, чтобы не переполнять контекст:
 	// ревью идёт по чанкам, между которыми модель вызывает NextChunk.
-	cr.chunks = splitDiffChunks(diff, cr.cfg.ChunkSize)
+	// Для провайдеров с одним раундом (NoChunk) дифф передаётся целиком.
+	maxChars := cr.cfg.ChunkSize
+	if cr.NoChunk {
+		maxChars = 0
+	}
+	cr.chunks = splitDiffChunks(diff, maxChars)
 	cr.chunkIdx = 0
+
+	msg := "Изменения кода"
+	if len(cr.chunks) > 1 {
+		msg += " (часть " + chunkLabel(cr.chunkIdx, len(cr.chunks)) + ")"
+	}
+	msg += ": " + cr.chunks[0] + ". Просмотри эту часть и вызови ReviewMr для каждого замечания " +
+		"(file_path, line — точный номер из диффа, text)"
+	if len(cr.chunks) > 1 {
+		msg += ", затем NextChunk, чтобы получить следующую часть"
+	}
+	msg += ". НЕ пиши ревью текстом — только вызовы инструментов."
 
 	return []agents.Message{
 		{
-			Type: agents.MessageTypeHuman,
-			Message: "Изменения кода (часть " + chunkLabel(cr.chunkIdx, len(cr.chunks)) + "): " +
-				cr.chunks[0] + ". Просмотри эту часть и вызови ReviewMr для каждого замечания " +
-				"(file_path, line — точный номер из диффа, text), затем NextChunk, чтобы получить " +
-				"следующую часть. НЕ пиши ревью текстом — только вызовы инструментов.",
+			Type:    agents.MessageTypeHuman,
+			Message: msg,
 		},
 	}
 }

@@ -4,153 +4,185 @@ import (
 	"ai/agents"
 	"ai/runner"
 	"ai/tools"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/packages/param"
-	"github.com/openai/openai-go/shared/constant"
+	"strings"
+	"time"
 )
 
 type TrimProvider struct {
-	client openai.Client
-	model  string
+	client  *http.Client
+	baseURL string
+	apiKey  string
+	model   string
+}
+
+type chatMessage struct {
+	Role       string         `json:"role"`
+	Content    string         `json:"content,omitempty"`
+	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+type chatToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type chatResponse struct {
+	Choices []struct {
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
+			Content   string         `json:"content"`
+			ToolCalls []chatToolCall `json:"tool_calls"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+type embeddingResponse struct {
+	Data []struct {
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
 }
 
 func NewTrimProvider() (*TrimProvider, error) {
-	// Get API key from environment variable
 	apiKey := os.Getenv("TRIM_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("TRIM_API_KEY environment variable is not set")
 	}
 
-	// Use the specified URL from environment variable or default to the provided URL
 	trimURL := os.Getenv("TRIM_HOST")
 	if trimURL == "" {
 		trimURL = "https://vllm-app.rc.itops.su/v1"
 	}
 
-	// Create client with Bearer token authentication
-	client := openai.NewClient(
-		option.WithAPIKey(apiKey),
-		option.WithBaseURL(trimURL),
-		option.WithHeader("Authorization", "Bearer "+apiKey),
-	)
-
-	return &TrimProvider{client: client, model: "/models/T-pro-it-1.0"}, nil
+	return &TrimProvider{
+		client:  &http.Client{Timeout: 5 * time.Minute},
+		baseURL: strings.TrimSuffix(trimURL, "/"),
+		apiKey:  apiKey,
+		model:   "/models/T-pro-it-1.0",
+	}, nil
 }
 
 func (t *TrimProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	return runner.Generate(ctx, t, agent)
 }
 
-// ChatOnce выполняет один запрос к модели Trim.
+// ChatOnce выполняет один запрос к модели Trim через обычный HTTP.
 func (t *TrimProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
-	// Перевод tools
-	var oaTools []openai.ChatCompletionToolParam
-	for _, t := range agent.GetTools() {
-		oaTools = append(oaTools, openai.ChatCompletionToolParam{
-			Function: openai.FunctionDefinitionParam{
-				Name:        t.Name,
-				Description: openai.String(t.Description),
-				Parameters:  t.Parameters,
-				Strict:      openai.Bool(true), // Рекомендуется включать для точного следования схеме
-			},
-		})
-	}
-
-	// Перевод нейтральных сообщений в формат OpenAI
-	var messages []openai.ChatCompletionMessageParamUnion
-	for _, m := range msgs {
-		switch m.Role {
-		case "system":
-			messages = append(messages, openai.SystemMessage(m.Content))
-
-		case "user":
-			messages = append(messages, openai.UserMessage(m.Content))
-
-		case "tool":
-			messages = append(messages, openai.ToolMessage(m.Content, m.ToolCallID))
-
-		case "assistant":
-			am := openai.ChatCompletionAssistantMessageParam{
-				Role: constant.Assistant("assistant"),
-				Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-					OfString: param.NewOpt(m.Content),
-				},
-			}
-			for _, tc := range m.ToolCalls {
-				am.ToolCalls = append(am.ToolCalls, openai.ChatCompletionMessageToolCallParam{
-					ID:   tc.ID,
-					Type: constant.Function("function"),
-					Function: openai.ChatCompletionMessageToolCallFunctionParam{
-						Name:      tc.Name,
-						Arguments: tc.Arguments,
-					},
-				})
-			}
-			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
+	// forceTool — обязательный инструмент первого раунда: если агент требует
+	// вызвать конкретный инструмент и он ещё не был вызван (нет сообщений роли
+	// "tool"), передаём tools и форсируем его через tool_choice (named function).
+	// В остальных раундах tools не передаём совсем: сервер требует флаг
+	// --enable-auto-tool-choice, чтобы модель сама выбирала инструменты,
+	// поэтому свободного выбора здесь нет — модель завершает цикл текстом.
+	forceTool := ""
+	if req, ok := agent.(runner.ToolRequiringAgent); ok {
+		if name, yes := req.RequiredToolFirstRound(); yes && name != "" && !hasToolResult(msgs) {
+			forceTool = name
 		}
 	}
 
-	// tool_choice: если агент требует обязательный инструмент и он ещё не был
-	// вызван (нет сообщений роли "tool"), форсируем вызов инструмента
-	// (tool_choice="required"), чтобы модель не отвечала текстом вместо кода.
-	toolChoice := openai.ChatCompletionToolChoiceOptionUnionParam{
-		OfAuto: openai.String("auto"),
-	}
-	if req, ok := agent.(runner.ToolRequiringAgent); ok {
-		if name, yes := req.RequiredToolFirstRound(); yes && name != "" && !hasToolResult(msgs) {
-			toolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-				OfChatCompletionNamedToolChoice: &openai.ChatCompletionNamedToolChoiceParam{
-					Type: constant.Function("function"),
-					Function: openai.ChatCompletionNamedToolChoiceFunctionParam{
-						Name: name,
-					},
+	var toolsParam []map[string]any
+	if forceTool != "" {
+		for _, tool := range agent.GetTools() {
+			toolsParam = append(toolsParam, map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        tool.Name,
+					"description": tool.Description,
+					"parameters":  tool.Parameters,
+					"strict":      true,
 				},
+			})
+		}
+	}
+
+	// Перевод нейтральных сообщений в формат OpenAI
+	var messages []chatMessage
+	for _, m := range msgs {
+		switch m.Role {
+		case "system":
+			messages = append(messages, chatMessage{Role: "system", Content: m.Content})
+		case "user":
+			messages = append(messages, chatMessage{Role: "user", Content: m.Content})
+		case "tool":
+			messages = append(messages, chatMessage{Role: "tool", Content: m.Content, ToolCallID: m.ToolCallID})
+		case "assistant":
+			am := chatMessage{Role: "assistant", Content: m.Content}
+			for _, tc := range m.ToolCalls {
+				am.ToolCalls = append(am.ToolCalls, chatToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: tc.Name, Arguments: tc.Arguments},
+				})
 			}
+			messages = append(messages, am)
 		}
 	}
 
 	// Выполнение запроса
-	runner.Debugf("TRIM: запрос к модели %q (сообщений: %d, инструментов: %d)", t.model, len(messages), len(oaTools))
+	runner.Debugf("TRIM: запрос к модели %q (сообщений: %d, инструментов: %d, force_tool=%q)",
+		t.model, len(messages), len(toolsParam), forceTool)
 	for i, m := range messages {
-		runner.Debugf("TRIM: messages[%d] role=%q content=%q", i, messageRole(m), runner.Truncate(messageContent(m), 300))
+		runner.Debugf("TRIM: messages[%d] role=%q content=%q", i, m.Role, runner.Truncate(m.Content, 300))
 	}
-	for _, t := range oaTools {
-		runner.Debugf("TRIM: tool=%q", t.Function.Name)
+	if len(toolsParam) > 0 {
+		for _, tool := range toolsParam {
+			runner.Debugf("TRIM: tool=%q", tool["function"].(map[string]any)["name"])
+		}
 	}
 
-	response, err := t.client.Chat.Completions.New(
-		ctx,
-		openai.ChatCompletionNewParams{
-			Model:               t.model,
-			Messages:            messages,
-			Tools:               oaTools,
-			ToolChoice:          toolChoice,
-			MaxCompletionTokens: openai.Int(4000),
-		},
-	)
+	req := map[string]any{
+		"model":                 t.model,
+		"messages":              messages,
+		"max_completion_tokens": 4000,
+	}
+	if forceTool != "" {
+		req["tools"] = toolsParam
+		req["tool_choice"] = map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": forceTool},
+		}
+	}
+
+	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("Ошибка при выполнении запроса: %w", err)
+		return nil, fmt.Errorf("Ошибка сериализации запроса: %w", err)
+	}
+
+	var chat chatResponse
+	if err := t.do(ctx, "/chat/completions", body, &chat); err != nil {
+		return nil, err
 	}
 
 	// Пустой ответ модели — защита от паники ниже
-	if len(response.Choices) == 0 {
-		runner.DebugJSON("TRIM: пустой срез Choices, полный ответ", response)
+	if len(chat.Choices) == 0 {
+		runner.DebugJSON("TRIM: пустой срез Choices, полный ответ", chat)
 		return nil, fmt.Errorf("Модель не вернула ни одного ответа")
 	}
 
 	// Ответ модели
-	message := response.Choices[0].Message
+	choice := chat.Choices[0]
+	message := choice.Message
 	runner.Debugf(
-		"TRIM: ответ choice[0] finish_reason=%q content=%q tool_calls=%d function_call=%q",
-		response.Choices[0].FinishReason, runner.Truncate(message.Content, 300),
-		len(message.ToolCalls), message.FunctionCall.Name,
+		"TRIM: ответ choice[0] finish_reason=%q content=%q tool_calls=%d",
+		choice.FinishReason, runner.Truncate(message.Content, 300),
+		len(message.ToolCalls),
 	)
-	runner.DebugCheckEmpty("trim", string(response.Choices[0].FinishReason), message.Content, len(message.ToolCalls), response)
+	runner.DebugCheckEmpty("trim", choice.FinishReason, message.Content, len(message.ToolCalls), chat)
 
 	// Вызов запрошенных моделью функций.
 	var toolCalls []tools.ToolCall
@@ -166,48 +198,67 @@ func (t *TrimProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []
 	return &runner.ModelReply{
 		Content:      message.Content,
 		ToolCalls:    toolCalls,
-		FinishReason: string(response.Choices[0].FinishReason),
+		FinishReason: choice.FinishReason,
 	}, nil
 }
 
 func (t *TrimProvider) GetEmbedded(ctx context.Context) ([][]float64, error) {
-	req := openai.EmbeddingNewParams{
-		Model: t.model,
-		Input: openai.EmbeddingNewParamsInputUnion{
-			OfString: openai.String("Язык программирования Go идеально подходит для микросервисов."),
-		},
+	body, err := json.Marshal(map[string]any{
+		"model": t.model,
+		"input": "Язык программирования Go идеально подходит для микросервисов.",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Ошибка сериализации запроса: %w", err)
 	}
 
-	resp, err := t.client.Embeddings.New(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("Ошибка генерации вектора: %v", err)
+	var resp embeddingResponse
+	if err := t.do(ctx, "/embeddings", body, &resp); err != nil {
+		return nil, err
 	}
 
 	if len(resp.Data) == 0 {
 		return nil, fmt.Errorf("Срез пуст!")
 	}
 
-	return convertTrimMatrix(resp.Data), nil
+	result := make([][]float64, len(resp.Data))
+	for i, e := range resp.Data {
+		result[i] = e.Embedding
+	}
+
+	return result, nil
 }
 
 func (t *TrimProvider) GetModelName(ctx context.Context) string {
 	return t.model
 }
 
-func convertTrimMatrix(embeddings []openai.Embedding) [][]float64 {
-	if len(embeddings) == 0 {
-		return nil
+// do выполняет POST-запрос к указанному пути с JSON-телом и разбирает ответ.
+func (t *TrimProvider) do(ctx context.Context, path string, body []byte, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("Ошибка создания запроса: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("Ошибка при выполнении запроса: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("Ошибка чтения ответа: %w", err)
 	}
 
-	result := make([][]float64, len(embeddings))
-
-	for i, embedding := range embeddings {
-		if embedding.Embedding == nil {
-			continue
-		}
-
-		result[i] = embedding.Embedding
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Сервер вернул статус %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	return result
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return fmt.Errorf("Ошибка разбора ответа: %w", err)
+	}
+
+	return nil
 }

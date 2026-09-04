@@ -61,9 +61,13 @@ func (f *Forge) do(method, path string, body any) ([]byte, int, error) {
 	return data, resp.StatusCode, nil
 }
 
-// GetDiff возвращает изменения Merge Request.
+// GetDiff возвращает изменения Merge Request единым unified-диффом.
+// GitLab API отдаёт массив объектов {old_path, new_path, diff}, где diff —
+// только ханки без заголовков ---/+++. Собираем их в обычный формат
+// "diff --git a/.. b/..\n--- a/..\n+++ b/..\n<ханки>", который ожидают
+// фильтр сгенерированных файлов и валидация комментариев.
 func (f *Forge) GetDiff() (string, error) {
-	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s/diffs",
+	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%s/diffs?per_page=100",
 		f.cfg.ProjID, f.cfg.MRIID)
 
 	data, status, err := f.do("GET", path, nil)
@@ -73,7 +77,30 @@ func (f *Forge) GetDiff() (string, error) {
 	if status != http.StatusOK {
 		return "", fmt.Errorf("статус %d: %s", status, string(data))
 	}
-	return string(data), nil
+
+	var files []struct {
+		OldPath string `json:"old_path"`
+		NewPath string `json:"new_path"`
+		Diff    string `json:"diff"`
+	}
+	if err := json.Unmarshal(data, &files); err != nil {
+		return "", err
+	}
+
+	var out strings.Builder
+	for _, file := range files {
+		if file.NewPath == "" {
+			continue
+		}
+		out.WriteString("diff --git a/" + file.OldPath + " b/" + file.NewPath + "\n")
+		out.WriteString("--- a/" + file.OldPath + "\n")
+		out.WriteString("+++ b/" + file.NewPath + "\n")
+		out.WriteString(file.Diff)
+		if !strings.HasSuffix(file.Diff, "\n") {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String(), nil
 }
 
 // versions возвращает SHA коммитов для позиционирования комментариев.

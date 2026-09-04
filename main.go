@@ -58,6 +58,10 @@ func main() {
 		log.Fatalf("Failed to init provider: %v", err)
 	}
 
+	// Провайдеры с одним раундом (например, trim) не умеют цикл NextChunk
+	// у ревьювера — дифф передаём целиком без разбиения на части.
+	noChunk := providerType == "trim"
+
 	// Выбор агента по первому аргументу: go run . generate <имя> [промпт] | refactor <имя> <промпт> | review <URL>
 	agentName, agentArgs := agentCommand(os.Args)
 
@@ -85,6 +89,11 @@ func main() {
 		agent = codegenerator.NewRefactorAgent(cg)
 	case "review":
 		agent = codereviewer.NewCodereviewer(agentArgs)
+		if noChunk {
+			if cw, ok := agent.(*codereviewer.Codereviewer); ok {
+				cw.NoChunk = true
+			}
+		}
 	default:
 		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>' или 'go run . review <URL>'", agentName)
 	}
@@ -102,7 +111,7 @@ func main() {
 	// прогона код проверяется локально (LocalForge), найденные замечания
 	// передаются модели, и она исправляет код в той же OutputDir.
 	if sr, ok := agent.(selfReviewer); ok {
-		doSelfReview(ctx, provider, sr, "", defaultPrompt(agentArgs))
+		doSelfReview(ctx, provider, sr, "", defaultPrompt(agentArgs), noChunk)
 	}
 
 	// 6b. Запасной путь: если модель вернула ревью текстом, а не вызовами
@@ -176,7 +185,7 @@ func defaultPrompt(args []string) string {
 // локальное ревью сгенерированного кода → исправление по замечаниям ревью →
 // повтор до схождения (нет замечаний) или исчерпания бюджета раундов.
 // focus — цель ревью (может быть "" для общего обзора).
-func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, focus string, originalPrompt string) {
+func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, focus string, originalPrompt string, noChunk bool) {
 	dir := sr.SelfReviewDir()
 
 	// Узнаём бюджет раундов исправления из конфига генератора.
@@ -191,6 +200,11 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 	if err != nil {
 		log.Printf("Self-review: не удалось создать агента ревью: %v", err)
 		return
+	}
+	if noChunk {
+		if cw, ok := reviewAgent.(*codereviewer.Codereviewer); ok {
+			cw.NoChunk = true
+		}
 	}
 
 	if _, err := provider.Generate(ctx, reviewAgent); err != nil {
@@ -235,7 +249,7 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 		}
 
 		// Перечитываем код после правок и смотрим, остались ли замечания.
-		next, rerr := reReview(ctx, provider, sr, dir, focus)
+		next, rerr := reReview(ctx, provider, sr, dir, focus, noChunk)
 		if rerr != nil {
 			log.Printf("Self-review: ошибка повторного ревью: %v", rerr)
 			break
@@ -252,10 +266,15 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 
 // reReview создаёт свежий LocalForge для той же директории, прогоняет ревью
 // и возвращает новые замечания. Используется между раундами исправления.
-func reReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, dir string, focus string) ([]forges.ReviewComment, error) {
+func reReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, dir string, focus string, noChunk bool) ([]forges.ReviewComment, error) {
 	newAgent, newForge, err := sr.NewReviewAgentFor(dir, focus)
 	if err != nil {
 		return nil, err
+	}
+	if noChunk {
+		if cw, ok := newAgent.(*codereviewer.Codereviewer); ok {
+			cw.NoChunk = true
+		}
 	}
 	if _, err := provider.Generate(ctx, newAgent); err != nil {
 		return nil, err
