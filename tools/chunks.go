@@ -1,4 +1,4 @@
-package codereviewer
+package tools
 
 import (
 	"fmt"
@@ -8,11 +8,11 @@ import (
 	"ai/forges"
 )
 
-// splitDiffChunks разбивает diff на чанки так, чтобы не разрезать ханк
+// SplitDiffChunks разбивает diff на чанки так, чтобы не разрезать ханк
 // по середине (целый файл всегда попадает в один чанк), а суммарный размер
 // каждого чанка не превышал примерно maxChars. Возвращает один элемент,
 // если дифф меньше лимита.
-func splitDiffChunks(diff string, maxChars int) []string {
+func SplitDiffChunks(diff string, maxChars int) []string {
 	if maxChars <= 0 || len(diff) <= maxChars {
 		return []string{diff}
 	}
@@ -61,8 +61,8 @@ func splitDiffChunks(diff string, maxChars int) []string {
 	return chunks
 }
 
-// chunkLabel возвращает подпись чанка вида "1 из 3" или "" для одного чанка.
-func chunkLabel(idx, total int) string {
+// ChunkLabel возвращает подпись чанка вида "1 из 3" или "" для одного чанка.
+func ChunkLabel(idx, total int) string {
 	if total <= 1 {
 		return ""
 	}
@@ -79,13 +79,13 @@ func commentKey(c forges.ReviewComment) string {
 	return fmt.Sprintf("%s:%d|%s", c.FilePath, c.Line, text)
 }
 
-// dedupComments оставляет одно замечание на каждую уникальную локацию
+// DedupComments оставляет одно замечание на каждую уникальную локацию
 // (файл:строка) — защита от того, чтобы модель повторно публиковала одно и
 // то же замечание в одном месте (в т.ч. с отличающимся регистром). Разные
 // строки сохраняются, даже если текст совпадает: полезно отмечать одну и ту
 // же проблему в нескольких местах. Порядок сохраняется. seen — постоянная
 // карта, накапливаемая между раундами ревью.
-func dedupComments(comments []forges.ReviewComment, seen map[string]bool) []forges.ReviewComment {
+func DedupComments(comments []forges.ReviewComment, seen map[string]bool) []forges.ReviewComment {
 	out := make([]forges.ReviewComment, 0, len(comments))
 	for _, c := range comments {
 		key := commentKey(c)

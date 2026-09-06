@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"ai/forges"
+	"ai/tools"
 )
 
 // diff с двумя файлами, чтобы проверить разбиение по границам файлов.
@@ -20,7 +21,7 @@ diff --git a/b.go b/b.go
 `
 
 func TestSplitDiffChunksWithinLimit(t *testing.T) {
-	chunks := splitDiffChunks(twoFilesDiff, 10000)
+	chunks := tools.SplitDiffChunks(twoFilesDiff, 10000)
 	if len(chunks) != 1 {
 		t.Fatalf("дифф меньше лимита должен дать 1 чанк, got %d", len(chunks))
 	}
@@ -31,7 +32,7 @@ func TestSplitDiffChunksWithinLimit(t *testing.T) {
 
 func TestSplitDiffChunksByFile(t *testing.T) {
 	// Лимит меньше размера диффа — должно разбиться на 2 чанка по файлам.
-	chunks := splitDiffChunks(twoFilesDiff, 10)
+	chunks := tools.SplitDiffChunks(twoFilesDiff, 10)
 	if len(chunks) != 2 {
 		t.Fatalf("ожидали 2 чанка (по файлам), got %d: %#v", len(chunks), chunks)
 	}
@@ -48,32 +49,32 @@ func TestSplitDiffChunksByFile(t *testing.T) {
 }
 
 func TestSplitDiffChunksDisableWithZero(t *testing.T) {
-	chunks := splitDiffChunks(twoFilesDiff, 0)
+	chunks := tools.SplitDiffChunks(twoFilesDiff, 0)
 	if len(chunks) != 1 {
 		t.Fatalf("ChunkSize=0 должен отключить разбиение, got %d", len(chunks))
 	}
 }
 
 func TestNextChunkFlow(t *testing.T) {
-	cr := &Codereviewer{
-		chunks:   []string{"chunk1", "chunk2"},
-		chunkIdx: 0,
-	}
+	cr := newCodereviewer(&tools.ReviewSession{
+		Chunks:   []string{"chunk1", "chunk2"},
+		ChunkIdx: 0,
+	}, Config{}, "")
 	// Первый NextChunk отдаёт второй чанк.
 	r1 := cr.NextChunk()
 	if !strings.Contains(string(r1), "chunk2") {
 		t.Errorf("первый NextChunk должен вернуть chunk2, got %s", r1)
 	}
-	if cr.chunkIdx != 1 {
-		t.Errorf("chunkIdx = %d, ожидали 1", cr.chunkIdx)
+	if cr.ChunkIdx != 1 {
+		t.Errorf("ChunkIdx = %d, ожидали 1", cr.ChunkIdx)
 	}
 	// Второй NextChunk (последний) сообщает о завершении.
 	r2 := cr.NextChunk()
 	if !strings.Contains(string(r2), "done") {
 		t.Errorf("последний NextChunk должен сообщить о завершении, got %s", r2)
 	}
-	if cr.chunkIdx != 1 {
-		t.Errorf("chunkIdx не должен сдвигаться после последнего чанка, got %d", cr.chunkIdx)
+	if cr.ChunkIdx != 1 {
+		t.Errorf("ChunkIdx не должен сдвигаться после последнего чанка, got %d", cr.ChunkIdx)
 	}
 }
 
@@ -86,7 +87,7 @@ func TestDedupCommentsByLocation(t *testing.T) {
 		{FilePath: "a.go", Line: 4, Text: "утечка памяти"}, // та же мысль, другая строка — сохраняется
 	}
 
-	out := dedupComments(in, map[string]bool{})
+	out := tools.DedupComments(in, map[string]bool{})
 
 	lines := []int{}
 	for _, c := range out {
@@ -112,7 +113,7 @@ func TestDedupCommentsPersistsAcrossBatches(t *testing.T) {
 	seen := map[string]bool{}
 
 	// Первый раунд публикует замечание на a.go:1.
-	first := dedupComments([]forges.ReviewComment{
+	first := tools.DedupComments([]forges.ReviewComment{
 		{FilePath: "a.go", Line: 1, Text: "Проверь nil"},
 	}, seen)
 	if len(first) != 1 {
@@ -121,7 +122,7 @@ func TestDedupCommentsPersistsAcrossBatches(t *testing.T) {
 
 	// Второй раунд снова предлагает то же замечание — оно должно быть
 	// отброшено, т.к. локация уже опубликована.
-	second := dedupComments([]forges.ReviewComment{
+	second := tools.DedupComments([]forges.ReviewComment{
 		{FilePath: "a.go", Line: 1, Text: "Проверь nil"},
 		{FilePath: "b.go", Line: 7, Text: "новое замечание"},
 	}, seen)

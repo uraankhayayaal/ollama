@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"ai/forges"
+	"ai/tools"
 )
 
 // fakeForge: PostComment можно заставить падать, Approve фиксирует вызовы.
@@ -27,15 +28,15 @@ func (f *fakeForge) Approve(string) error     { f.approves++; return nil }
 
 func TestApproveBlockedWhenPostFailed(t *testing.T) {
 	ff := &fakeForge{failPost: true}
-	cr := &Codereviewer{forge: ff}
+	cr := newCodereviewer(&tools.ReviewSession{Forge: ff}, Config{}, "")
 
-	// Публикуем замечание — оно падает, ошибка фиксируется на структуре.
+	// Публикуем замечание — оно падает, ошибка фиксируется на сеансе.
 	reviewArgs := map[string]any{
 		"comments": `[{"file_path":"a.go","line":1,"text":"x"}]`,
 	}
 	_ = cr.ReviewMr(reviewArgs)
 
-	if len(cr.postErrors) == 0 {
+	if len(cr.PostErrors) == 0 {
 		t.Fatal("ожидалась зафиксированная ошибка постинга")
 	}
 
@@ -55,7 +56,7 @@ func TestApproveBlockedWhenPostFailed(t *testing.T) {
 
 func TestApproveProceedsWhenNoPostFailure(t *testing.T) {
 	ff := &fakeForge{}
-	cr := &Codereviewer{forge: ff}
+	cr := newCodereviewer(&tools.ReviewSession{Forge: ff}, Config{}, "")
 
 	resp := cr.ApproveMr(map[string]any{})
 	var out map[string]string
@@ -72,7 +73,7 @@ func TestApproveProceedsWhenNoPostFailure(t *testing.T) {
 
 func TestApproveBlockedOnCritical(t *testing.T) {
 	ff := &fakeForge{}
-	cr := &Codereviewer{forge: ff, cfg: Config{BlockOnCritical: true}}
+	cr := newCodereviewer(&tools.ReviewSession{Forge: ff, BlockOnCritical: true}, Config{}, "")
 
 	// Критичное замечание. ApproveMr должен отказаться ставить апрув.
 	_ = cr.ReviewMr(map[string]any{
@@ -92,7 +93,7 @@ func TestApproveBlockedOnCritical(t *testing.T) {
 
 func TestCommentLimitTruncates(t *testing.T) {
 	ff := &fakeForge{}
-	cr := &Codereviewer{forge: ff, cfg: Config{MaxComments: 2}}
+	cr := newCodereviewer(&tools.ReviewSession{Forge: ff, MaxComments: 2}, Config{}, "")
 
 	payload := `[
 		{"file_path":"a.go","line":1,"text":"c1"},
@@ -101,8 +102,8 @@ func TestCommentLimitTruncates(t *testing.T) {
 	]`
 	_ = cr.ReviewMr(map[string]any{"comments": payload})
 
-	if cr.commentCount != 2 {
-		t.Errorf("commentCount = %d, ожидали 2 (лимит)", cr.commentCount)
+	if cr.CommentCount != 2 {
+		t.Errorf("CommentCount = %d, ожидали 2 (лимит)", cr.CommentCount)
 	}
 }
 
@@ -129,7 +130,7 @@ diff --git a/readme.md b/readme.md
 		{FilePath: "readme.md", Line: 2},
 	}
 
-	valid, rejected := filterCommentsByDiff(diff, comments)
+	valid, rejected := tools.FilterCommentsByDiff(diff, comments)
 
 	if len(valid) != 4 {
 		t.Errorf("должно пройти 4 валидных комментария, got %d: %v", len(valid), valid)
@@ -141,12 +142,12 @@ diff --git a/readme.md b/readme.md
 
 func TestReviewMrSkipsHallucinatedComments(t *testing.T) {
 	ff := &fakeForge{}
-	cr := &Codereviewer{
-		forge: ff,
-		diff: `+++ b/app.go
+	cr := newCodereviewer(&tools.ReviewSession{
+		Forge: ff,
+		Diff: `+++ b/app.go
 @@ -1,1 +1,1 @@
 +real line`,
-	}
+	}, Config{}, "")
 
 	// Один комментарий валидный, второй — к несуществующей строке/файлу.
 	payload := `[
@@ -156,14 +157,14 @@ func TestReviewMrSkipsHallucinatedComments(t *testing.T) {
 	]`
 	_ = cr.ReviewMr(map[string]any{"comments": payload})
 
-	if cr.commentCount != 1 {
-		t.Errorf("commentCount = %d, ожидали 1 (только валидное)", cr.commentCount)
+	if cr.CommentCount != 1 {
+		t.Errorf("CommentCount = %d, ожидали 1 (только валидное)", cr.CommentCount)
 	}
-	if cr.rejectedCount != 2 {
-		t.Errorf("rejectedCount = %d, ожидали 2", cr.rejectedCount)
+	if cr.RejectedCount != 2 {
+		t.Errorf("RejectedCount = %d, ожидали 2", cr.RejectedCount)
 	}
-	if len(cr.postErrors) != 0 {
-		t.Errorf("галлюцинации не должны фиксироваться как ошибки постинга: %v", cr.postErrors)
+	if len(cr.PostErrors) != 0 {
+		t.Errorf("галлюцинации не должны фиксироваться как ошибки постинга: %v", cr.PostErrors)
 	}
 }
 
@@ -171,12 +172,12 @@ func TestReviewMrParsesInterfaceArrayComments(t *testing.T) {
 	// Воспроизводит реальный путь: tools.ParseArguments отдаёт
 	// map[string]any{"comments": []interface{}{...}}.
 	ff := &fakeForge{}
-	cr := &Codereviewer{
-		forge: ff,
-		diff: `+++ b/AuthManager.php
+	cr := newCodereviewer(&tools.ReviewSession{
+		Forge: ff,
+		Diff: `+++ b/AuthManager.php
 @@ -280,1 +280,1 @@
 +line`,
-	}
+	}, Config{}, "")
 
 	args := map[string]any{
 		"comments": []any{
@@ -195,19 +196,19 @@ func TestReviewMrParsesInterfaceArrayComments(t *testing.T) {
 	_ = cr.ReviewMr(args)
 
 	// Валидное замечание опубликовано, галлюцинация отсечена.
-	if cr.commentCount != 1 {
-		t.Errorf("commentCount = %d, ожидали 1 (массив []any должен разбираться)", cr.commentCount)
+	if cr.CommentCount != 1 {
+		t.Errorf("CommentCount = %d, ожидали 1 (массив []any должен разбираться)", cr.CommentCount)
 	}
 }
 
 func TestIsCritical(t *testing.T) {
-	if !isCritical("критично: что-то сломано") {
+	if !tools.IsCritical("критично: что-то сломано") {
 		t.Error("ожидали критичность для 'критично:'")
 	}
-	if !isCritical("  КРИТИЧНО: сервер падает") {
+	if !tools.IsCritical("  КРИТИЧНО: сервер падает") {
 		t.Error("ожидали критичность без учета регистра и пробелов")
 	}
-	if isCritical("для заметки: улучшение стиля") {
+	if tools.IsCritical("для заметки: улучшение стиля") {
 		t.Error("'для заметки:' не должно считаться критичным")
 	}
 }
@@ -227,7 +228,7 @@ diff --git a/bundle.min.js b/bundle.min.js
 minified
 `
 
-	filtered := filterGeneratedDiff(diff)
+	filtered := tools.FilterGeneratedDiff(diff)
 
 	if !strings.Contains(filtered, "fmt.Println") {
 		t.Error("app.go ханк должен остаться в отфильтрованном диффе")

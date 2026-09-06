@@ -1,4 +1,4 @@
-package codereviewer
+package tools
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 // Модели (особенно YandexGPT) иногда вместо вызова инструментов пишут
 // ревью текстом. Чтобы замечания не терялись, такой текст парсится в
 // замечания и публикуется. Несуществующие файлы/строки затем отсекаются
-// фильтром по диффу (filterCommentsByDiff), поэтому ложные срабатывания
+// фильтром по диффу (FilterCommentsByDiff), поэтому ложные срабатывания
 // парсера безопасны.
 
 // fileBlockRe находит строку "**Файл:** <path>".
@@ -243,7 +243,7 @@ func parseReviewCalls(content string) []forges.ReviewComment {
 	return comments
 }
 
-// parseTextReview разбирает текстовое ревью в слайс замечаний.
+// ParseTextReview разбирает текстовое ревью в слайс замечаний.
 // Ожидаемые форматы:
 //
 //  1. Псевдо-вызовы ReviewMr(...) — модели без инструментов (trim):
@@ -256,7 +256,7 @@ func parseReviewCalls(content string) []forges.ReviewComment {
 //     **Текст:** `критично:` Проверка ...
 //
 // Возвращает замечания с file_path, line и text.
-func parseTextReview(content string) []forges.ReviewComment {
+func ParseTextReview(content string) []forges.ReviewComment {
 	// Формат псевдо-вызовов ReviewMr(...) — основной для моделей без tools.
 	if calls := parseReviewCalls(content); len(calls) > 0 {
 		return calls
@@ -310,24 +310,39 @@ func parseTextReview(content string) []forges.ReviewComment {
 	return result
 }
 
-// PublishParsedReview публикует текстовое ревью, преобразуя его в комментарии
-// через стандартный ReviewMr-путь (включая фильтр по diff и дедупек).
-// Модели, склонные писать текст вместо вызова инструментов, теряют замечания:
-// этот метод спасает результат. Возвращает число опубликованных замечаний.
-func (cr *Codereviewer) PublishParsedReview(content string) int {
-	if strings.TrimSpace(content) == "" {
-		return 0
+// parseComments преобразует аргумент "comments" в слайс ReviewComment,
+// независимо от того, пришёл он JSON-строкой или уже разобранным массивом.
+// Аргументы приходят через ParseArguments (json.Unmarshal в any),
+// поэтому массивы имеют динамический тип []interface{} — это тоже
+// поддерживается.
+func parseComments(raw any) []forges.ReviewComment {
+	var comments []forges.ReviewComment
+
+	switch v := raw.(type) {
+	case string:
+		// JSON-строка вида `[{"file_path": ...}]`.
+		_ = json.Unmarshal([]byte(v), &comments)
+	case []byte:
+		_ = json.Unmarshal(v, &comments)
+	case []interface{}:
+		// Типичный случай от инструментов: json.Unmarshal даёт []interface{}.
+		b, _ := json.Marshal(v)
+		_ = json.Unmarshal(b, &comments)
+	case []map[string]any:
+		b, _ := json.Marshal(v)
+		_ = json.Unmarshal(b, &comments)
+	case map[string]any:
+		b, _ := json.Marshal(v)
+		_ = json.Unmarshal(b, &comments)
+	case nil:
+		return nil
+	default:
+		// Последний резервный путь — пытаемся сериализовать обратно в JSON.
+		b, err := json.Marshal(v)
+		if err == nil {
+			_ = json.Unmarshal(b, &comments)
+		}
 	}
-	comments := parseTextReview(content)
-	if len(comments) == 0 {
-		return 0
-	}
-	// Кодируем в JSON-строку, т.к. parseComments принимает этот формат.
-	b, err := json.Marshal(comments)
-	if err != nil {
-		return 0
-	}
-	// Используем ReviewMr, чтобы применить фильтр по diff и дедупликацию.
-	cr.ReviewMr(map[string]any{"comments": string(b)})
-	return cr.commentCount
+
+	return comments
 }

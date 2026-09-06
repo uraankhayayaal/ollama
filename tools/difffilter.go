@@ -1,4 +1,4 @@
-package codereviewer
+package tools
 
 import (
 	"regexp"
@@ -19,10 +19,10 @@ func skipFile(path string) bool {
 	return generatedFileRe.MatchString(path) || pbGeneratedRe.MatchString(path)
 }
 
-// filterGeneratedDiff удаляет из diff ханки сгенерированных/бинарных файлов.
+// FilterGeneratedDiff удаляет из diff ханки сгенерированных/бинарных файлов.
 // Заголовок файла начинается строкой "+++ b/<path>"; все строки до следующего
 // такого заголовка принадлежат этому файлу и удаляются, если он сгенерирован.
-func filterGeneratedDiff(diff string) string {
+func FilterGeneratedDiff(diff string) string {
 	lines := strings.Split(diff, "\n")
 	var out []string
 

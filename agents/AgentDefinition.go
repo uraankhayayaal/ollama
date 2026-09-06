@@ -7,8 +7,8 @@ import (
 )
 
 type Agent interface {
-	GetAgentMemoryMessages(text []Message) []Message
-	GetMessages() []Message
+	GetSystemMessages(text []Message) []Message
+	GetUserMessages() []Message
 	GetTools() []tools.ToolDefinition
 	GetToolsForOllama() []api.Tool
 	CallFunction(functionName string, functionArgs map[string]any) ([]byte, error)

@@ -1,4 +1,4 @@
-package codereviewer
+package tools
 
 import (
 	"fmt"
@@ -60,10 +60,10 @@ func diffNewLines(diff string) map[string]map[int]bool {
 	return index
 }
 
-// filterCommentsByDiff отбрасывает комментарии, привязанные к файлам или
+// FilterCommentsByDiff отбрасывает комментарии, привязанные к файлам или
 // строкам, которых нет в diff (защита от галлюцинаций модели).
 // Возвращает валидные комментарии и список отклонённых причин.
-func filterCommentsByDiff(diff string, comments []forges.ReviewComment) (valid []forges.ReviewComment, rejected []string) {
+func FilterCommentsByDiff(diff string, comments []forges.ReviewComment) (valid []forges.ReviewComment, rejected []string) {
 	index := diffNewLines(diff)
 
 	presentFiles := map[string]bool{}

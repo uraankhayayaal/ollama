@@ -14,10 +14,10 @@ type fakeAgent struct {
 	requiredTool string
 }
 
-func (f *fakeAgent) GetMessages() []agents.Message {
+func (f *fakeAgent) GetUserMessages() []agents.Message {
 	return []agents.Message{{Type: agents.MessageTypeHuman, Message: "напиши код"}}
 }
-func (f *fakeAgent) GetAgentMemoryMessages(text []agents.Message) []agents.Message {
+func (f *fakeAgent) GetSystemMessages(text []agents.Message) []agents.Message {
 	return []agents.Message{{Type: agents.MessageTypeSystem, Message: "ты агент"}}
 }
 func (f *fakeAgent) GetTools() []tools.ToolDefinition {

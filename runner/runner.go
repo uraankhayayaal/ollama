@@ -79,13 +79,13 @@ func nudgeMessage(toolName string) string {
 // и повторяет, пока модель не завершит ответ (нет tool_calls).
 func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*AgentResponse, error) {
 	// Собираем user-сообщения (например, дифф для ревью), чтобы передать
-	// их контекст в метод системных сообщений (GetAgentMemoryMessages).
-	userMessages := agent.GetMessages()
+	// их контекст в метод системных сообщений (GetSystemMessages).
+	userMessages := agent.GetUserMessages()
 
 	// Системные сообщения размещаем в начале диалога, как это принято,
 	// а user-сообщения — следом. Контекст (дифф) передаётся в метод
 	// системных сообщений через параметр.
-	systemMessages := agent.GetAgentMemoryMessages(userMessages)
+	systemMessages := agent.GetSystemMessages(userMessages)
 
 	messages := []Message{}
 	for _, m := range systemMessages {

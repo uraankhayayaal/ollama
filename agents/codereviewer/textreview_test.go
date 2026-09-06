@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"ai/tools"
 )
 
 // Пример ответа trim-модели: без вызова инструментов она пишет ревью текстом
@@ -21,7 +23,7 @@ const sampleTrimCallsReview = "```python\n" +
 	"```\n"
 
 func TestParseTextReviewTrimCalls(t *testing.T) {
-	comments := parseTextReview(sampleTrimCallsReview)
+	comments := tools.ParseTextReview(sampleTrimCallsReview)
 	if len(comments) != 3 {
 		t.Fatalf("ожидали 3 замечания, got %d: %#v", len(comments), comments)
 	}
@@ -50,7 +52,7 @@ func TestParseTextReviewTrimCalls(t *testing.T) {
 
 func TestParseTextReviewTrimCallWithEscapedQuote(t *testing.T) {
 	content := `ReviewMr(file_path="a.php", line=12, text="важно: проверка \" и \n перенос")`
-	comments := parseTextReview(content)
+	comments := tools.ParseTextReview(content)
 	if len(comments) != 1 {
 		t.Fatalf("ожидали 1 замечание, got %d: %#v", len(comments), comments)
 	}
@@ -75,7 +77,7 @@ const sampleTrimPositionalReview = "```php\n" +
 	"```\n"
 
 func TestParseTextReviewTrimPositional(t *testing.T) {
-	comments := parseTextReview(sampleTrimPositionalReview)
+	comments := tools.ParseTextReview(sampleTrimPositionalReview)
 	if len(comments) != 4 {
 		t.Fatalf("ожидали 4 замечания, got %d: %#v", len(comments), comments)
 	}
@@ -121,7 +123,7 @@ const sampleTextReview = `ReviewMr для ` + "`core/components/minishop3/src/Se
 `
 
 func TestParseTextReview(t *testing.T) {
-	comments := parseTextReview(sampleTextReview)
+	comments := tools.ParseTextReview(sampleTextReview)
 	if len(comments) != 3 {
 		t.Fatalf("ожидали 3 замечания, got %d: %#v", len(comments), comments)
 	}
@@ -149,13 +151,13 @@ func TestParseTextReview(t *testing.T) {
 
 func TestPublishParsedReviewPostsAndCounts(t *testing.T) {
 	ff := &fakeForge{}
-	cr := &Codereviewer{
-		forge: ff,
-		diff: `+++ b/core/components/minishop3/src/Services/Customer/AuthManager.php
+	cr := newCodereviewer(&tools.ReviewSession{
+		Forge: ff,
+		Diff: `+++ b/core/components/minishop3/src/Services/Customer/AuthManager.php
 @@ -284,2 +284,2 @@
 +285 line here
 +286 another`,
-	}
+	}, Config{}, "")
 
 	n := cr.PublishParsedReview(sampleTextReview)
 	// Валидным должен пройти только реально существующий файл/строка.
@@ -163,14 +165,14 @@ func TestPublishParsedReviewPostsAndCounts(t *testing.T) {
 	if n < 1 {
 		t.Errorf("ожидали >= 1 опубликованное замечание, got %d", n)
 	}
-	if cr.commentCount != n {
-		t.Errorf("commentCount = %d, не совпадает с вернувшимся %d", cr.commentCount, n)
+	if cr.CommentCount != n {
+		t.Errorf("CommentCount = %d, не совпадает с вернувшимся %d", cr.CommentCount, n)
 	}
 }
 
 func TestPublishParsedReviewEmptyContent(t *testing.T) {
 	ff := &fakeForge{}
-	cr := &Codereviewer{forge: ff}
+	cr := newCodereviewer(&tools.ReviewSession{Forge: ff}, Config{}, "")
 	if n := cr.PublishParsedReview(""); n != 0 {
 		t.Errorf("пустой контент: ожидали 0, got %d", n)
 	}
@@ -179,20 +181,20 @@ func TestPublishParsedReviewEmptyContent(t *testing.T) {
 func TestPublishParsedReviewRejectsLiesWhenOutsideDiff(t *testing.T) {
 	ff := &fakeForge{}
 	// Дифф вообще не содержит tsp-файл, который модель выдумала.
-	cr := &Codereviewer{
-		forge: ff,
-		diff:  "+++ b/real.php\n",
-	}
+	cr := newCodereviewer(&tools.ReviewSession{
+		Forge: ff,
+		Diff:  "+++ b/real.php\n",
+	}, Config{}, "")
 
 	// Парсер сам по себе отдаёт замечания, но фильтр по diff их отсекает.
-	parsed := parseTextReview(sampleTextReview)
+	parsed := tools.ParseTextReview(sampleTextReview)
 	if len(parsed) == 0 {
 		t.Fatal("парсер должен вернуть замечания до фильтрации")
 	}
 	args := map[string]any{"comments": mustJSON(t, parsed)}
 	_ = cr.ReviewMr(args)
-	if cr.commentCount != 0 {
-		t.Errorf("все замечания должны отсечься фильтром по diff, got %d", cr.commentCount)
+	if cr.CommentCount != 0 {
+		t.Errorf("все замечания должны отсечься фильтром по diff, got %d", cr.CommentCount)
 	}
 }
 

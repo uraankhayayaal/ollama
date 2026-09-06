@@ -13,7 +13,7 @@ func newTestCG(t *testing.T) *Codegenerator {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	return &Codegenerator{OutputDir: dir}
+	return newCG(dir, "", Config{})
 }
 
 func TestResolvePathNormal(t *testing.T) {
@@ -223,8 +223,7 @@ func TestCallFunctionDispatchesTools(t *testing.T) {
 
 func TestNoOverwriteBlocksRewrite(t *testing.T) {
 	cg := newTestCG(t)
-	cg.Config = DefaultConfig()
-	cg.Config.NoOverwrite = true
+	cg.FileOps.NoOverwrite = true
 
 	if err := cg.write("a.go", "v1"); err != nil {
 		t.Fatalf("первая запись: %v", err)
@@ -241,8 +240,7 @@ func TestNoOverwriteBlocksRewrite(t *testing.T) {
 
 func TestMaxFilesLimit(t *testing.T) {
 	cg := newTestCG(t)
-	cg.Config = DefaultConfig()
-	cg.Config.MaxFiles = 1
+	cg.FileOps.MaxFiles = 1
 
 	if err := cg.write("a.go", "a"); err != nil {
 		t.Fatal(err)
