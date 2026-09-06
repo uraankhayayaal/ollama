@@ -211,9 +211,33 @@ func TestAppendFileRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestListSkipsIgnoredDirs(t *testing.T) {
+	cg := newTestCG(t)
+	if err := cg.write("src/main.go", "package main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cg.write("node_modules/lib/a.js", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cg.write("dist/app.min.js", "y"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := cg.List(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !contains(s, "src/main.go") {
+		t.Errorf("List должен содержать src/main.go, got: %s", s)
+	}
+	if contains(s, "node_modules") || contains(s, "dist") {
+		t.Errorf("List не должен содержать node_modules/dist, got: %s", s)
+	}
+}
+
 func TestCallFunctionDispatchesTools(t *testing.T) {
 	cg := newTestCG(t)
-	cases := []string{"WriteFiles", "WriteFile", "ReadFiles", "DeleteFiles", "Run", "List", "AppendFile"}
+	cases := []string{"WriteFiles", "ReadFiles", "DeleteFiles", "Run", "List", "AppendFile"}
 	for _, name := range cases {
 		if _, err := cg.CallFunction(name, map[string]any{}); err != nil {
 			t.Errorf("CallFunction(%q) не должен возвращать ошибку, got: %v", name, err)

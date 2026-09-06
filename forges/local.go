@@ -117,14 +117,12 @@ func (lf *LocalForge) Approve(summary string) error {
 }
 
 // listFiles возвращает отсортированный список относительных путей всех
-// файлов в директории (рекурсивно), исключая скрытые и служебные.
+// файлов в директории (рекурсивно), исключая скрытые, служебные и
+// игнорируемые каталоги (зависимости, билды, кеши — см. ignore.go).
 func (lf *LocalForge) listFiles() ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(lf.Dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
 			return nil
 		}
 		rel, rerr := filepath.Rel(lf.Dir, path)
@@ -132,7 +130,16 @@ func (lf *LocalForge) listFiles() ([]string, error) {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if strings.HasPrefix(path, ".") || strings.Contains(rel, "/.") {
+		if d.IsDir() {
+			if rel == "." {
+				return nil
+			}
+			if strings.HasPrefix(d.Name(), ".") || IsIgnoredDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(rel, ".") || strings.Contains(rel, "/.") {
 			return nil
 		}
 		out = append(out, rel)

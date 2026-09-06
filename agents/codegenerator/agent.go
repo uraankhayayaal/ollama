@@ -16,10 +16,10 @@ import (
 
 // codegenToolNames — инструменты, которые генератор выбирает из общего реестра
 // tools. Каждый агент сам решает, с какими инструментами работать; сами
-// реализации (WriteFile, WriteFiles, ...) живут в пакете tools и разделяются
+// реализации (WriteFiles, ReadFiles, ...) живут в пакете tools и разделяются
 // между агентами.
 var codegenToolNames = []string{
-	"WriteFiles", "WriteFile", "ReadFiles", "DeleteFiles", "Run", "List", "AppendFile",
+	"WriteFiles", "ReadFiles", "DeleteFiles", "Run", "List", "AppendFile",
 }
 
 type Codegenerator struct {
@@ -34,14 +34,42 @@ type Codegenerator struct {
 	Tools *tools.Set
 }
 
-// NewCodegenerator создаёт генератор в папке temp/<projectName>.
-// projectName — обязательное имя проекта, задаётся пользователем.
+// NewCodegenerator создаёт генератор в общей для всех агентов выходной папке
+// temp/<projectName> в корне модуля (там же, где рефактор ищет существующие
+// проекты). projectName — обязательное имя проекта, задаётся пользователем.
 // prompt — текст задания для модели (может быть пустым — тогда используется
 // задание по умолчанию).
 func NewCodegenerator(projectName, prompt string) *Codegenerator {
-	dir := filepath.Join("temp", projectName)
+	dir := ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	return newCG(dir, prompt, LoadConfig())
+}
+
+// ProjectDir возвращает путь к выходной директории проекта
+// temp/<projectName> в корне модуля. Единый источник пути для конструкторов
+// генератора и рефактора: рефактор гарантированно найдёт проект, созданный
+// генератором, независимо от рабочей директории запуска.
+func ProjectDir(projectName string) string {
+	return filepath.Join(moduleRoot(), "temp", projectName)
+}
+
+// moduleRoot находит корень модуля — директорию с go.mod, поднимаясь вверх от
+// рабочей директории. Если go.mod не найден, возвращает рабочую директорию
+// (запуск вне модуля): temp/ тогда окажется рядом с CWD и для генератора,
+// и для рефактора.
+func moduleRoot() string {
+	wd, _ := os.Getwd()
+	dir := wd
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return wd
+		}
+		dir = parent
+	}
 }
 
 // newCG создаёт генератор в заданной директории: собирает *tools.FileOps
@@ -84,7 +112,7 @@ func (cg Codegenerator) GetSystemMessages(text []agents.Message) []agents.Messag
 		moduleInstruction = fmt.Sprintf("Используй имя модуля Go %q в файле go.mod.", cg.Config.Module)
 	}
 
-	overwriteRule := "Ты можешь перезаписывать файлы инструментами WriteFiles/WriteFile."
+	overwriteRule := "Ты можешь перезаписывать файлы инструментами WriteFiles."
 	if cg.Config.NoOverwrite {
 		overwriteRule = "Включена защита от перезаписи: инструменты вернут ошибку, если ты попытаешься перезаписать уже существующий файл. Перезаписывай файлы только при необходимости."
 	}
@@ -98,7 +126,7 @@ func (cg Codegenerator) GetSystemMessages(text []agents.Message) []agents.Messag
 %s
 
 Твой план работы:
-1. Создай все нужные файлы (включая go.mod, если требуется) инструментами WriteFiles/WriteFile.
+1. Создай все нужные файлы (включая go.mod, если требуется) инструментами WriteFiles.
 2. Проверь, что проект компилируется и проходит проверки, запустив инструмент Run с командами: "go build ./...", "go vet ./..." и (если есть тесты) "go test ./...".
 3. Если компиляция или проверки падают, исправь код (WriteFiles перезапишет файл, а для точечных добавлений используй AppendFile) и запускай Run снова, пока всё не станет зелёным.
 4. После успешного build продумай краткую проверку главного сценария работы (вызов программы).
@@ -133,9 +161,6 @@ func (cg *Codegenerator) CallFunction(functionName string, functionArgs map[stri
 // наблюдаемые снаружи сигнатуры сохранены (используются тестами и
 // программными вызовами) и просто делегируют в реестр.
 
-func (cg *Codegenerator) WriteFile(args map[string]any) ([]byte, error) {
-	return cg.Tools.Execute("WriteFile", args)
-}
 func (cg *Codegenerator) WriteFiles(args map[string]any) ([]byte, error) {
 	return cg.Tools.Execute("WriteFiles", args)
 }
@@ -218,91 +243,6 @@ func NewCodegeneratorInDir(prompt, dir string) (*Codegenerator, error) {
 	return newCG(abs, prompt, LoadConfig()), nil
 }
 
-// NewRefactorGenerator создаёт генератор для работы с уже существующим проектом
-// в папке temp/<projectName>. В отличие от NewCodegenerator, не требует
-// обязательного вызова WriteFiles в первом раунде — модель может начать с
-// чтения существующего кода (List, ReadFiles) и затем вносить целенаправленные
-// правки.
-func NewRefactorGenerator(prompt, projectName string) (*Codegenerator, error) {
-	dir := filepath.Join("temp", projectName)
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, fmt.Errorf("неверный путь %q: %v", dir, err)
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return nil, fmt.Errorf("проект не найден: %s (путь: %s)", projectName, dir)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("путь не является директорией: %s", dir)
-	}
-	return newCG(abs, prompt, LoadConfig()), nil
-}
-
-// refactorAgent — обёртка над Codegenerator, которая отключает требование
-// WriteFiles в первом раунде и использует рефакторинговый системный промпт.
-type refactorAgent struct {
-	*Codegenerator
-}
-
-// NewRefactorAgent оборачивает Codegenerator в refactorAgent, который
-// использует рефакторинговый системный промпт и не требует WriteFiles
-// в первом раунде.
-func NewRefactorAgent(cg *Codegenerator) refactorAgent {
-	return refactorAgent{Codegenerator: cg}
-}
-
-// RequiredToolFirstRound возвращает ("", false) — модель не обязана вызывать
-// WriteFiles в первом раунде, она может начать с List/ReadFiles.
-func (ra refactorAgent) RequiredToolFirstRound() (string, bool) {
-	return "", false
-}
-
-// GetSystemMessages использует рефакторинговый системный промпт вместо
-// генераторного (без требования "создай все файлы с нуля").
-func (ra refactorAgent) GetSystemMessages(text []agents.Message) []agents.Message {
-	lang := ra.Config.Language
-	if lang == "" {
-		lang = "Go"
-	}
-
-	var moduleInstruction string
-	if ra.Config.Module != "" {
-		moduleInstruction = fmt.Sprintf("Модуль проекта: %q. При необходимости обнови go.mod.", ra.Config.Module)
-	}
-
-	overwriteRule := "Ты можешь перезаписывать файлы инструментами WriteFiles/WriteFile."
-	if ra.Config.NoOverwrite {
-		overwriteRule = "Включена защита от перезаписи: инструменты вернут ошибку, если ты попытаешься перезаписать уже существующий файл."
-	}
-
-	return []agents.Message{
-		{
-			Type: agents.MessageTypeSystem,
-			Message: fmt.Sprintf(`Ты — опытный разработчик на языке %s и архитектор. Твоя задача — провести рефакторинг или доработку уже существующего проекта.
-%s
-
-Ты работаешь только внутри выходной директории проекта (OutputDir).
-%s
-
-Твой план работы:
-1. Сначала изучи текущее состояние проекта: используй List для просмотра структуры, затем ReadFiles для чтения ключевых файлов.
-2. Проанализируй код и определи, какие изменения необходимы для выполнения задания.
-3. Вноси изменения: для больших файлов используй WriteFile/WriteFiles (полная перезапись), для точечных правок — AppendFile или DeleteFiles + WriteFile.
-4. После каждого набора изменений проверяй, что проект компилируется: запускай "go build ./...", "go vet ./..." и (при наличии тестов) "go test ./..." через Run.
-5. Если компиляция или проверки падают — исправляй код и запускай проверки снова, пока не станет зелёным.
-6. При необходимости обнови README.md отражением изменений.
-
-Правила:
-- Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты.
-- Начинай с изучения существующего кода, не переписывай всё без анализа.
-- Сохраняй существующую архитектуру и стиль кода проекта.
-- Не ломай существующий функционал, который не затрагивается заданием.
-- Нельзя писать файлы вне OutputDir (инструменты сами это заблокируют).`, lang, moduleInstruction, overwriteRule),
-		},
-	}
-}
-
 // Finalize пишет в OutputDir файл-отчёт SUMMARY.md (если включено конфигом)
 // со структурой сгенерированного проекта. Вызывается из main.go после цикла
 // генерации, заполняя отчёт реально созданными файлами.
@@ -330,17 +270,22 @@ func (cg Codegenerator) Finalize() {
 		if err != nil {
 			return nil
 		}
-		if info.IsDir() {
-			return nil
-		}
 		rel, rerr := filepath.Rel(cg.OutputDir, path)
 		if rerr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if info.IsDir() {
+			// Не спускаемся в зависимости/билды/кеши (node_modules и т.п.).
+			if rel != "." && (strings.HasPrefix(info.Name(), ".") || forges.IsIgnoredDir(info.Name())) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if rel == cg.Config.SummaryFile {
 			return nil
 		}
-		lines = append(lines, "- "+filepath.ToSlash(rel))
+		lines = append(lines, "- "+rel)
 		return nil
 	})
 
@@ -384,7 +329,7 @@ func (cg Codegenerator) EnsureREADME() {
 func (cg Codegenerator) listProjectFiles() []string {
 	var out []string
 	_ = filepath.Walk(cg.OutputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
 			return nil
 		}
 		rel, rerr := filepath.Rel(cg.OutputDir, path)
@@ -392,6 +337,13 @@ func (cg Codegenerator) listProjectFiles() []string {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
+		if info.IsDir() {
+			// Пропускаем зависимости/билды/кеши (node_modules и т.п.).
+			if rel != "." && (strings.HasPrefix(info.Name(), ".") || forges.IsIgnoredDir(info.Name())) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if rel == "README.md" || rel == cg.Config.SummaryFile {
 			return nil
 		}

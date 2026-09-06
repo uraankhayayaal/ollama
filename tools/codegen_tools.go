@@ -4,23 +4,6 @@ package tools
 // они используются в Definition() (для OpenAI/Yandex) и, после конвертации
 // ToOllama, для провайдера Ollama. Реализация делегируется в *FileOps.
 
-type writeFileTool struct{ ops *FileOps }
-
-func (t *writeFileTool) Name() string { return "WriteFile" }
-func (t *writeFileTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name:        "WriteFile",
-		Description: "Используй этот инструмент для сохранения одного файла с кодом.",
-		Parameters: map[string]any{
-			"type":                 "object", // Корень параметров ВСЕГДА object
-			"properties":           singleFileProps(),
-			"required":             []string{"filename", "content"},
-			"additionalProperties": false,
-		},
-	}
-}
-func (t *writeFileTool) Execute(args map[string]any) ([]byte, error) { return t.ops.WriteFile(args) }
-
 type writeFilesTool struct{ ops *FileOps }
 
 func (t *writeFilesTool) Name() string { return "WriteFiles" }
@@ -143,7 +126,7 @@ func (t *appendFileTool) Name() string { return "AppendFile" }
 func (t *appendFileTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "AppendFile",
-		Description: "Используй этот инструмент для добавления текста в конец существующего файла (например, новой функции или реализации). Для больших правок лучше перезаписать файл через WriteFile/WriteFiles.",
+		Description: "Используй этот инструмент для добавления текста в конец существующего файла (например, новой функции или реализации). Для больших правок лучше перезаписать файл через WriteFiles.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

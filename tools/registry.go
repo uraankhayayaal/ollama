@@ -55,8 +55,6 @@ func (s *Set) Definitions() []ToolDefinition {
 // инструменты доступны любому агенту через Select.
 func newTool(name string, deps Deps) Tool {
 	switch name {
-	case "WriteFile":
-		return &writeFileTool{ops: deps.FileOps}
 	case "WriteFiles":
 		return &writeFilesTool{ops: deps.FileOps}
 	case "ReadFiles":

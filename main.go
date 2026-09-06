@@ -4,6 +4,7 @@ import (
 	"ai/agents"
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
+	"ai/agents/refactor"
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	"ai/forges"
@@ -96,11 +97,10 @@ func main() {
 		}
 		projectName := agentArgs[0]
 		prompt := strings.Join(agentArgs[1:], " ")
-		cg, err := codegenerator.NewRefactorGenerator(prompt, projectName)
+		agent, err = refactor.NewRefactorAgent(prompt, projectName)
 		if err != nil {
 			log.Fatalf("Ошибка: %v", err)
 		}
-		agent = codegenerator.NewRefactorAgent(cg)
 	case "review":
 		agent = codereviewer.NewCodereviewer(agentArgs)
 		if noChunk {

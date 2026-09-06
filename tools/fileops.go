@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"ai/forges"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,7 @@ import (
 )
 
 // FileOps — разделяемое состояние файловых инструментов генератора кода
-// (WriteFile, WriteFiles, ReadFiles, DeleteFiles, Run, List, AppendFile).
+// (WriteFiles, ReadFiles, DeleteFiles, Run, List, AppendFile).
 // Держит рабочую директорию (OutputDir) и политики записи, общие для всех
 // выбранных агентом инструментов.
 type FileOps struct {
@@ -128,35 +129,6 @@ type FileItem struct {
 // BulkParams соответствует корневому JSON-объекту параметров инструмента WriteFiles
 type BulkParams struct {
 	Files []FileItem `json:"files"`
-}
-
-func (ops *FileOps) WriteFile(args map[string]any) ([]byte, error) {
-	var params map[string]string
-
-	bytes, err := json.Marshal(args)
-	if err == nil {
-		_ = json.Unmarshal(bytes, &params)
-	}
-
-	filename := params["filename"]
-	content := params["content"]
-
-	result := []map[string]string{}
-	if err := ops.Write(filename, content); err != nil {
-		result = append(result, map[string]string{
-			"filename": filename,
-			"status":   "error",
-			"message":  err.Error(),
-		})
-	} else {
-		result = append(result, map[string]string{
-			"filename": filename,
-			"status":   "success",
-		})
-	}
-
-	resultJSON, _ := json.Marshal(result)
-	return resultJSON, nil
 }
 
 // WriteFiles обрабатывает пакетную запись файлов, вызванную ИИ-агентом
@@ -322,13 +294,18 @@ func (ops *FileOps) List(args map[string]any) ([]byte, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			entries = append(entries, rel+"/")
-		} else {
-			if info, ierr := d.Info(); ierr == nil {
-				entries = append(entries, fmt.Sprintf("%s (%d B)", rel, info.Size()))
-			} else {
-				entries = append(entries, rel)
+			// Не опускаемся в зависимости/билды/кеши (node_modules и т.п.),
+			// чтобы не жечь контекст модели на мусорных файлах.
+			if forges.IsIgnoredDir(d.Name()) {
+				return filepath.SkipDir
 			}
+			entries = append(entries, rel+"/")
+			return nil
+		}
+		if info, ierr := d.Info(); ierr == nil {
+			entries = append(entries, fmt.Sprintf("%s (%d B)", rel, info.Size()))
+		} else {
+			entries = append(entries, rel)
 		}
 		return nil
 	})

@@ -58,6 +58,55 @@ func TestLocalForgePostCommentAndApprove(t *testing.T) {
 	}
 }
 
+func TestIsIgnoredDir(t *testing.T) {
+	for _, name := range []string{"node_modules", "vendor", "dist", "build", "target", "__pycache__", ".git", ".next", "bower_components"} {
+		if !IsIgnoredDir(name) {
+			t.Errorf("IsIgnoredDir(%q) = false, ожидали true", name)
+		}
+	}
+	for _, name := range []string{"src", "internal", "main", "utils", "public"} {
+		if IsIgnoredDir(name) {
+			t.Errorf("IsIgnoredDir(%q) = true, ожидали false", name)
+		}
+	}
+}
+
+func TestLocalForgeGetDiffSkipsIgnoredDirs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "src.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "dep"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "dep", "big.js"), []byte("// huge lib\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "app.min.js"), []byte("build artifact\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	lf, err := NewLocalForge(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, err := lf.GetDiff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "src.go") {
+		t.Errorf("дифф должен содержать src.go:\n%s", diff)
+	}
+	for _, bad := range []string{"node_modules", "big.js", "dist", "app.min.js"} {
+		if strings.Contains(diff, bad) {
+			t.Errorf("дифф не должен содержать %q:\n%s", bad, diff)
+		}
+	}
+}
+
 func TestDetectTypeLocal(t *testing.T) {
 	if DetectType("local:///tmp/proj") != KindLocal {
 		t.Error("local:// URL должен распознаваться как KindLocal")
