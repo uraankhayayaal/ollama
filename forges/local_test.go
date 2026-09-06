@@ -107,6 +107,44 @@ func TestLocalForgeGetDiffSkipsIgnoredDirs(t *testing.T) {
 	}
 }
 
+func TestLocalForgeGetDiffScoped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "touched.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "order"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "internal", "order", "in.go"), []byte("package order\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "untouched.go"), []byte("package main\n// не тронут\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	lf, err := NewLocalForge(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lf.SetScope([]string{"touched.go", "internal/order/"})
+
+	diff, err := lf.GetDiff()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"touched.go", "internal/order/in.go"} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("дифф должен содержать %q (в scope):\n%s", want, diff)
+		}
+	}
+	for _, bad := range []string{"untouched.go"} {
+		if strings.Contains(diff, bad) {
+			t.Errorf("дифф не должен содержать %q (вне scope):\n%s", bad, diff)
+		}
+	}
+}
+
 func TestDetectTypeLocal(t *testing.T) {
 	if DetectType("local:///tmp/proj") != KindLocal {
 		t.Error("local:// URL должен распознаваться как KindLocal")

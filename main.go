@@ -4,12 +4,14 @@ import (
 	"ai/agents"
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
+	"ai/agents/planner"
 	"ai/agents/refactor"
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	"ai/forges"
 	_ "ai/forges/all"
 	"ai/models"
+	"ai/runner"
 	"ai/services/mrlistener"
 	"context"
 	"fmt"
@@ -81,6 +83,9 @@ func main() {
 	agentName, agentArgs := agentCommand(os.Args)
 
 	var agent agents.Agent
+	var planMode bool
+	var planProject string
+	var planPrompt string
 	switch agentName {
 	case "generate":
 		if len(agentArgs) < 1 {
@@ -90,6 +95,15 @@ func main() {
 		projectName := agentArgs[0]
 		prompt := defaultPrompt(agentArgs[1:])
 		agent = codegenerator.NewCodegenerator(projectName, prompt)
+	case "plan":
+		if len(agentArgs) < 2 {
+			log.Fatal("Использование: go run . plan <имя_проекта> <промпт>\n" +
+				"Пример: go run . plan storageService \"Создай микросервис хранения файлов и ревью кода\"")
+		}
+		planMode = true
+		planProject = agentArgs[0]
+		planPrompt = strings.Join(agentArgs[1:], " ")
+		agent = planner.NewPlanner(planProject, planPrompt)
 	case "refactor":
 		if len(agentArgs) < 2 {
 			log.Fatal("Использование: go run . refactor <имя_проекта> <промпт>\n" +
@@ -109,12 +123,19 @@ func main() {
 			}
 		}
 	default:
-		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . review <URL>' или 'go run . listen'", agentName)
+		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . review <URL>' или 'go run . listen'", agentName)
 	}
 
 	resp, err := provider.Generate(ctx, agent)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
+	}
+
+	// Режим планировщика: планировщик возвращает план в JSON, затем каждый
+	// шаг плана выполняется отдельным агентом с чистым контекстом.
+	if planMode {
+		runPlanMode(ctx, provider, agent, planProject, planPrompt, resp, noChunk)
+		os.Exit(0)
 	}
 
 	if resp.Truncated {
@@ -322,4 +343,36 @@ func parseTimeout(raw string) time.Duration {
 		return def
 	}
 	return d
+}
+
+// runPlanMode выполняет план: планировщик уже вернул ответ (resp), содержимое
+// которого должно быть JSON-планом. План парсится, и каждый шаг выполняется
+// отдельным агентом с чистым контекстом (экономия токенов).
+func runPlanMode(ctx context.Context, provider models.LLMProvider, plannerAgent agents.Agent, projectName, originalPrompt string, resp *runner.AgentResponse, noChunk bool) {
+	plan, err := planner.ParsePlan(resp.Content)
+	if err != nil {
+		log.Printf("Не удалось разобрать план из ответа планировщика: %v", err)
+		log.Printf("Ответ планировщика:\n%s", resp.Content)
+		peer := planner.NewPlanner(projectName, originalPrompt+"\n\nВерни план строго в формате JSON, без markdown-обёрток и лишнего текста.")
+		planResp, perr := provider.Generate(ctx, peer)
+		if perr != nil {
+			log.Fatalf("Получение плана (повтор): %v", perr)
+		}
+		plan, err = planner.ParsePlan(planResp.Content)
+		if err != nil {
+			log.Fatalf("Повторный ответ планировщика не содержит корректного JSON-плана: %v", err)
+		}
+	}
+
+	log.Printf("План получен: %q (%d шагов)", plan.Summary, len(plan.Steps))
+	for i, s := range plan.Steps {
+		log.Printf("  %d. [%s] %s", i+1, s.Agent, s.Description)
+	}
+
+	exec := planner.NewExecutor(provider, plan)
+	if err := exec.Run(ctx); err != nil {
+		log.Fatalf("Ошибка выполнения плана: %v", err)
+	}
+
+	log.Printf("План выполнен успешно. Проект: %q", plan.ProjectName)
 }

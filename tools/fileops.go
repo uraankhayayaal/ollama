@@ -25,8 +25,48 @@ type FileOps struct {
 	MaxFiles int
 	// NoOverwrite — запрещает перезаписывать уже существующие файлы.
 	NoOverwrite bool
+	// Scope — области работы (файлы/директории проекта), в рамках которых
+	// разрешены операции. Пустой — без ограничений (весь OutputDir).
+	Scope []string
+	// scopeMatch — скомпилированный matcher областей; nil — без ограничений.
+	scopeMatch *forges.ScopeMatcher
 	// written — счётчик записанных файлов (разделяется инструментами).
 	written int
+}
+
+// SetScope задаёт области работы для инструментов (нормализует записи через
+// forges.CompileScope). Вызов с пустым/nil-слайсом снимает ограничения.
+func (ops *FileOps) SetScope(scope []string) {
+	ops.Scope = scope
+	ops.scopeMatch = forges.CompileScope(scope)
+}
+
+// allowed проверяет, разрешён ли файл (относительный slash-путь) областью
+// работы. Без установленного scope разрешено всё.
+func (ops *FileOps) allowed(rel string) bool {
+	if ops.scopeMatch == nil || ops.scopeMatch.Empty() {
+		return true
+	}
+	return ops.scopeMatch.Allow(rel)
+}
+
+// dirHasScope сообщает, стоит ли заходить в директорию при обходе
+// (внутри неё есть файлы из области работы), даже если сама директория
+// в область не входит.
+func (ops *FileOps) dirHasScope(rel string) bool {
+	if ops.scopeMatch == nil {
+		return true
+	}
+	return ops.scopeMatch.HasInside(rel)
+}
+
+// relPath возвращает относительный slash-путь файла внутри OutputDir.
+func (ops *FileOps) relPath(full string) string {
+	rel, err := filepath.Rel(ops.OutputDir, full)
+	if err != nil {
+		return filepath.ToSlash(full)
+	}
+	return filepath.ToSlash(rel)
 }
 
 // ResolvePath приводит относительный путь к абсолютному в пределах OutputDir
@@ -49,6 +89,9 @@ func (ops *FileOps) Write(name, content string) error {
 	full, err := ops.ResolvePath(name)
 	if err != nil {
 		return err
+	}
+	if !ops.allowed(ops.relPath(full)) {
+		return fmt.Errorf("файл %q вне области работы (scope: %v)", name, ops.Scope)
 	}
 
 	if ops.MaxFiles > 0 && ops.written >= ops.MaxFiles {
@@ -80,6 +123,9 @@ func (ops *FileOps) AppendTo(name, content string) error {
 	if err != nil {
 		return err
 	}
+	if !ops.allowed(ops.relPath(full)) {
+		return fmt.Errorf("файл %q вне области работы (scope: %v)", name, ops.Scope)
+	}
 	f, err := os.OpenFile(full, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return err
@@ -98,6 +144,9 @@ func (ops *FileOps) ReadResult(name string) map[string]string {
 	if err != nil {
 		return map[string]string{"filename": name, "status": "error", "message": err.Error()}
 	}
+	if !ops.allowed(ops.relPath(full)) {
+		return map[string]string{"filename": name, "status": "error", "message": "файл вне области работы (scope)"}
+	}
 	content, err := os.ReadFile(full)
 	if err != nil {
 		return map[string]string{"filename": name, "status": "error", "message": err.Error()}
@@ -110,6 +159,9 @@ func (ops *FileOps) Remove(name string) (map[string]string, error) {
 	full, err := ops.ResolvePath(name)
 	if err != nil {
 		return nil, err
+	}
+	if !ops.allowed(ops.relPath(full)) {
+		return map[string]string{"path": name, "status": "error", "message": "файл вне области работы (scope)"}, nil
 	}
 	if _, err := os.Stat(full); os.IsNotExist(err) {
 		return map[string]string{"path": name, "status": "error", "message": "файл или папка не существует"}, nil
@@ -278,7 +330,8 @@ func (ops *FileOps) AppendFile(args map[string]any) ([]byte, error) {
 }
 
 // List возвращает дерево файлов/папок внутри OutputDir, чтобы модель знала,
-// что уже создано, прежде чем читать или править код.
+// что уже создано, прежде чем читать или править код. При заданной области
+// работы (Scope) возвращаются только файлы внутри неё.
 func (ops *FileOps) List(args map[string]any) ([]byte, error) {
 	var entries []string
 	err := filepath.WalkDir(ops.OutputDir, func(path string, d fs.DirEntry, err error) error {
@@ -299,7 +352,17 @@ func (ops *FileOps) List(args map[string]any) ([]byte, error) {
 			if forges.IsIgnoredDir(d.Name()) {
 				return filepath.SkipDir
 			}
-			entries = append(entries, rel+"/")
+			// Показываем директорию, если она в области работы; заходим в неё,
+			// даже если она вне области, но внутри есть файлы из области.
+			if ops.dirHasScope(rel) {
+				if ops.allowed(rel) {
+					entries = append(entries, rel+"/")
+				}
+				return nil
+			}
+			return filepath.SkipDir
+		}
+		if !ops.allowed(rel) {
 			return nil
 		}
 		if info, ierr := d.Info(); ierr == nil {

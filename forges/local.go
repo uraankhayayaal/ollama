@@ -40,7 +40,18 @@ type LocalForge struct {
 	Published []ReviewComment
 	Summary   string
 	Approved  bool
-	expanded  map[string]string
+	// Scope — области работы (файлы/директории), по которым строится дифф.
+	// Пустой — весь проект. Используется, чтобы ревьювер не смотрел на
+	// файлы, не затронутые шагом плана.
+	Scope       []string
+	scopeMatch  *ScopeMatcher
+	expanded    map[string]string
+}
+
+// SetScope задаёт области работы для построения диффа ревью.
+func (lf *LocalForge) SetScope(scope []string) {
+	lf.Scope = scope
+	lf.scopeMatch = CompileScope(scope)
 }
 
 // NewLocalForge создаёт LocalForge для директории.
@@ -57,8 +68,9 @@ func NewLocalForge(dir string) (*LocalForge, error) {
 	return &LocalForge{Dir: abs}, nil
 }
 
-// GetDiff строит единый унифицированный diff по всем файлам директории,
-// считая их новыми (весь файл — новая версия). Возвращает его как текст.
+// GetDiff строит единый унифицированный diff по файлам директории
+// (в рамках области работы остаётся так и есть), считая их новыми
+// (весь файл — новая версия). Возвращает его как текст.
 func (lf *LocalForge) GetDiff() (string, error) {
 	files, err := lf.listFiles()
 	if err != nil {
@@ -119,6 +131,8 @@ func (lf *LocalForge) Approve(summary string) error {
 // listFiles возвращает отсортированный список относительных путей всех
 // файлов в директории (рекурсивно), исключая скрытые, служебные и
 // игнорируемые каталоги (зависимости, билды, кеши — см. ignore.go).
+// При заданной области работы (Scope) возвращаются только файлы внутри неё:
+// ревьювер не получает в дифф то, что не затронуто шагом плана.
 func (lf *LocalForge) listFiles() ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(lf.Dir, func(path string, d fs.DirEntry, err error) error {
@@ -137,9 +151,17 @@ func (lf *LocalForge) listFiles() ([]string, error) {
 			if strings.HasPrefix(d.Name(), ".") || IsIgnoredDir(d.Name()) {
 				return filepath.SkipDir
 			}
+			// Заходим в директорию, если внутри неё есть файлы из области,
+			// даже если сама директория вне области.
+			if lf.scopeMatch != nil && !lf.scopeMatch.Empty() && !lf.scopeMatch.HasInside(rel) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if strings.HasPrefix(rel, ".") || strings.Contains(rel, "/.") {
+			return nil
+		}
+		if lf.scopeMatch != nil && !lf.scopeMatch.Allow(rel) {
 			return nil
 		}
 		out = append(out, rel)
