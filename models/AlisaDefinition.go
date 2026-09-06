@@ -18,13 +18,21 @@ import (
 
 // maxTokensOut для Yandex: 1000 токенов не хватало, из-за чего аргументы
 // WriteFiles обрезались и доходил только 1 файл. Значение можно задать
-// через переменную окружения YANDEX_MAX_TOKENS.
+// через переменную окружения YANDEX_MAX_TOKENS. По умолчанию 8000: столько
+// нужно, чтобы модель успела сгенерировать JSON с несколькими файлами
+// в одном вызове WriteFiles без обрезания (finish_reason=length).
 func maxTokensOut() int {
 	if n := os.Getenv("YANDEX_MAX_TOKENS"); n != "" {
-		return atoiDefault(n, 4000)
+		return atoiDefault(n, 8000)
 	}
-	return 4000
+	return 8000
 }
+
+// bigWriteTokens — бюджет на раунд, где модель обязана вызвать инструмент
+// первого раунда (например, WriteFiles с JSON всех файлов проекта). JSON
+// нескольких файлов легко перерастает стандартный лимит, поэтому на таком
+// раунде увеличиваем выделение, если пользователь не задал лимит явно.
+const bigWriteTokens = 16000
 
 func atoiDefault(s string, def int) int {
 	n := 0
@@ -126,6 +134,20 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 						Name: name,
 					},
 				},
+			}
+		}
+	}
+
+	// На раунде, где модель обязана сразу вызвать WriteFiles (сгенерировать
+	// JSON со всеми файлами), обычного лимита может не хватить — даём больше
+	// токенов, если пользователь не задал YANDEX_MAX_TOKENS явно.
+	maxTokens := maxTokensOut()
+	if os.Getenv("YANDEX_MAX_TOKENS") == "" {
+		if req, ok := agent.(runner.ToolRequiringAgent); ok {
+			if name, yes := req.RequiredToolFirstRound(); yes && name != "" && !hasToolResult(msgs) {
+				if maxTokens < bigWriteTokens {
+					maxTokens = bigWriteTokens
+				}
 			}
 		}
 	}

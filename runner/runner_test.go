@@ -104,6 +104,32 @@ func TestGenerateNudgesRequiredTool(t *testing.T) {
 	}
 }
 
+// Модель исчерпала лимит токенов генерации (finish_reason="length") и вернула
+// пустой ответ без инструментов: ответ должен быть помечен Truncated, чтобы
+// вызывающий код отличал «модель закончила» от «модель обрезалась».
+func TestGenerateLengthMarksTruncated(t *testing.T) {
+	agent := &fakeAgent{requiredTool: "WriteFiles"}
+	// Модель всегда обрезается по лимиту и ничего не вызывает.
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{{Content: "", FinishReason: "length"}},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	if !resp.Truncated {
+		t.Fatal("ответ с finish_reason=length должен быть помечен Truncated")
+	}
+	if resp.Content != "" {
+		t.Fatalf("содержимое ожидалось пустым, got %q", resp.Content)
+	}
+	// Запросов: изначальный + requiredRetries подсказок (пока не вызовет
+	// инструмент) — как и при текстовом игноре.
+	expect := 1 + requiredRetries
+	if provider.calls != expect {
+		t.Fatalf("ожидали %d запросов, got %d", expect, provider.calls)
+	}
+}
+
 // Модель упорно не вызывает инструмент: после requiredRetries подсказок
 // цикл завершается с текстовым ответом (не зацикливается вечно).
 func TestGenerateGivesUpRequiredToolAfterRetries(t *testing.T) {

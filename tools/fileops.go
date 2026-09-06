@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -229,7 +230,34 @@ type ReadParams struct {
 	Filenames []string `json:"filenames"`
 }
 
-// ReadFiles читает содержимое указанных файлов и возвращает их контент ИИ-агенту
+// Лимиты чтения защищают контекст модели от переполнения на больших
+// проектах: один файл — не более readMaxFileSize, суммарно за один вызов —
+// не более readMaxTotalSize; избыток содержания обрезается с пометкой.
+// Настраиваются CODEGEN_READ_MAX_FILE и CODEGEN_READ_MAX_TOTAL.
+const (
+	readMaxFileSizeDefault  = 100_000
+	readMaxTotalSizeDefault = 800_000
+)
+
+func readLimit() (perFile, total int) {
+	n := readMaxFileSizeDefault
+	if v := os.Getenv("CODEGEN_READ_MAX_FILE"); v != "" {
+		if x, err := strconv.Atoi(v); err == nil && x > 0 {
+			n = x
+		}
+	}
+	m := readMaxTotalSizeDefault
+	if v := os.Getenv("CODEGEN_READ_MAX_TOTAL"); v != "" {
+		if x, err := strconv.Atoi(v); err == nil && x > 0 {
+			m = x
+		}
+	}
+	return n, m
+}
+
+// ReadFiles читает содержимое указанных файлов и возвращает их контент ИИ-агенту.
+// Размер каждого файла и общий объём за вызов ограничены (см. readLimit),
+// чтобы инструмент не переполнил контекст модели на большом проекте.
 func (ops *FileOps) ReadFiles(args map[string]any) ([]byte, error) {
 	var params ReadParams
 
@@ -246,10 +274,37 @@ func (ops *FileOps) ReadFiles(args map[string]any) ([]byte, error) {
 		return resultJSON, nil
 	}
 
+	maxFile, maxTotal := readLimit()
 	result := []map[string]string{}
+	total := 0
 
 	for _, filename := range params.Filenames {
-		result = append(result, ops.ReadResult(filename))
+		// Если общий бюджет уже исчерпан — остальные файлы пропускаем,
+		// чтобы не раздувать сообщение инструмента.
+		if total >= maxTotal {
+			result = append(result, map[string]string{
+				"filename": filename,
+				"status":   "skipped",
+				"message":  "лимит суммарного объёма чтения исчерпан, содержимое не получено",
+			})
+			continue
+		}
+
+		r := ops.ReadResult(filename)
+		if r["status"] != "success" {
+			result = append(result, r)
+			continue
+		}
+
+		content := r["content"]
+		if len(content) > maxFile {
+			r["content"] = content[:maxFile] +
+				fmt.Sprintf("\n\n[... содержание обрезано, файл %d байт, лимит %d байт ...]",
+					len(content), maxFile)
+			content = r["content"]
+		}
+		total += len(content)
+		result = append(result, r)
 	}
 
 	resultJSON, _ := json.Marshal(result)

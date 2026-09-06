@@ -6,17 +6,18 @@ import (
 	"ai/agents/codereviewer"
 	"ai/agents/planner"
 	"ai/agents/refactor"
+	"ai/checkpoint"
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	"ai/forges"
 	_ "ai/forges/all"
 	"ai/models"
-	"ai/runner"
 	"ai/services/mrlistener"
 	"context"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,13 +98,13 @@ func main() {
 		agent = codegenerator.NewCodegenerator(projectName, prompt)
 	case "plan":
 		if len(agentArgs) < 2 {
-			log.Fatal("Использование: go run . plan <имя_проекта> <промпт>\n" +
-				"Пример: go run . plan storageService \"Создай микросервис хранения файлов и ревью кода\"")
+			log.Fatal("Использование: go run . plan <имя_проекта> <промпт> [--resume]\n" +
+				"Пример: go run . plan storageService \"Создай микросервис хранения файлов и ревью кода\"\n" +
+				"Пример: go run . plan storageService --resume")
 		}
 		planMode = true
 		planProject = agentArgs[0]
 		planPrompt = strings.Join(agentArgs[1:], " ")
-		agent = planner.NewPlanner(planProject, planPrompt)
 	case "refactor":
 		if len(agentArgs) < 2 {
 			log.Fatal("Использование: go run . refactor <имя_проекта> <промпт>\n" +
@@ -126,16 +127,18 @@ func main() {
 		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . review <URL>' или 'go run . listen'", agentName)
 	}
 
+	// Режим планировщика обрабатывается отдельно и до общего прогона:
+	// при resume план восстанавливается из чекпоинта без повторного вызова
+	// планировщика (экономим токены), иначе планировщик строит план,
+	// а затем исполнитель выполняет шаги по волнам параллельности.
+	if planMode {
+		runPlanMode(ctx, provider, planProject, planPrompt)
+		os.Exit(0)
+	}
+
 	resp, err := provider.Generate(ctx, agent)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
-	}
-
-	// Режим планировщика: планировщик возвращает план в JSON, затем каждый
-	// шаг плана выполняется отдельным агентом с чистым контекстом.
-	if planMode {
-		runPlanMode(ctx, provider, agent, planProject, planPrompt, resp, noChunk)
-		os.Exit(0)
 	}
 
 	if resp.Truncated {
@@ -345,22 +348,54 @@ func parseTimeout(raw string) time.Duration {
 	return d
 }
 
-// runPlanMode выполняет план: планировщик уже вернул ответ (resp), содержимое
-// которого должно быть JSON-планом. План парсится, и каждый шаг выполняется
-// отдельным агентом с чистым контекстом (экономия токенов).
-func runPlanMode(ctx context.Context, provider models.LLMProvider, plannerAgent agents.Agent, projectName, originalPrompt string, resp *runner.AgentResponse, noChunk bool) {
-	plan, err := planner.ParsePlan(resp.Content)
-	if err != nil {
-		log.Printf("Не удалось разобрать план из ответа планировщика: %v", err)
-		log.Printf("Ответ планировщика:\n%s", resp.Content)
-		peer := planner.NewPlanner(projectName, originalPrompt+"\n\nВерни план строго в формате JSON, без markdown-обёрток и лишнего текста.")
-		planResp, perr := provider.Generate(ctx, peer)
-		if perr != nil {
-			log.Fatalf("Получение плана (повтор): %v", perr)
+// runPlanMode выполняет план с чекпоинтами. Если запрошен resume и в Redis
+// есть чекпоинт — план и состояние восстанавливаются без повторного вызова
+// планировщика. Иначе планировщик строит план (с повторной попыткой при
+// некорректном JSON), и каждый шаг выполняется отдельным агентом с чистым
+// контекстом (экономия токенов).
+func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, originalPrompt string) {
+	store, resume := plannerStore(ctx, projectName)
+	if store != nil {
+		defer store.Close()
+	}
+
+	var plan *planner.Plan
+
+	// Resume: пытаемся восстановить план и состояние из чекпоинта.
+	if resume && store != nil {
+		snap, err := store.Load(ctx)
+		if err == nil {
+			if p, perr := planner.ParsePlan(string(snap.PlanJSON)); perr == nil && p != nil {
+				plan = p
+				log.Printf("Resume: план восстановлен из чекпоинта, завершено шагов: %d", len(snap.Completed))
+			} else if perr != nil {
+				log.Printf("Чекпоинт существует, но план в нём повреждён (%v), перепланирую", perr)
+			}
+		} else if err != checkpoint.ErrNotFound {
+			log.Printf("Не удалось прочитать чекпоинт: %v", err)
 		}
-		plan, err = planner.ParsePlan(planResp.Content)
+	}
+
+	// Нет чекпоинта / resume не запрошен — строим план планировщиком.
+	if plan == nil {
+		plannerAgent := planner.NewPlanner(projectName, originalPrompt)
+		resp, err := provider.Generate(ctx, plannerAgent)
 		if err != nil {
-			log.Fatalf("Повторный ответ планировщика не содержит корректного JSON-плана: %v", err)
+			log.Fatalf("Получение плана: %v", err)
+		}
+		plan, err = planner.ParsePlan(resp.Content)
+		if err != nil {
+			log.Printf("Не удалось разобрать план из ответа планировщика: %v", err)
+			log.Printf("Ответ планировщика:\n%s", resp.Content)
+			peer := planner.NewPlanner(projectName, originalPrompt+"\n\nВерни план строго в формате JSON, без markdown-обёрток и лишнего текста.")
+			planResp, perr := provider.Generate(ctx, peer)
+			if perr != nil {
+				log.Fatalf("Получение плана (повтор): %v", perr)
+			}
+			plan, err = planner.ParsePlan(planResp.Content)
+			if err != nil {
+				log.Fatalf("Повторный ответ планировщика не содержит корректного JSON-плана: %v", err)
+			}
 		}
 	}
 
@@ -370,9 +405,92 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, plannerAgent 
 	}
 
 	exec := planner.NewExecutor(provider, plan)
+	exec.SetCheckpoint(store, resume)
 	if err := exec.Run(ctx); err != nil {
 		log.Fatalf("Ошибка выполнения плана: %v", err)
 	}
 
 	log.Printf("План выполнен успешно. Проект: %q", plan.ProjectName)
+}
+
+// plannerStore создаёт чекпоинт-хранилище для плана проекта. Контрольные
+// точки включаются автоматически, если в настройках задан REDIS_ADDR, либо
+// явно при PLAN_CHECKPOINT=1 или запросе resume (--resume / PLAN_RESUME=1).
+// Адрес Redis берётся из REDIS_ADDR (по умолчанию localhost:6379). Если Redis
+// недоступен, а resume не запрошен — работаем без чекпоинтов (предупреждение),
+// при resume — завершаемся с ошибкой.
+func plannerStore(ctx context.Context, projectName string) (*checkpoint.Store, bool) {
+	resume := envBool("PLAN_RESUME") || containsArg("--resume")
+
+	// REDIS_ADDR явно задан → включаем чекпоинты автоматически.
+	explicitRedis := strings.TrimSpace(os.Getenv("REDIS_ADDR")) != ""
+	enabled := envBool("PLAN_CHECKPOINT") || explicitRedis || resume
+	if !enabled {
+		return nil, resume
+	}
+
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
+
+	cfg := checkpoint.StoreConfig{
+		Addr:     addr,
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       envInt("REDIS_DB", 0),
+		Key:      "checkpoint:" + projectName,
+		TTL:      envDuration("PLAN_CHECKPOINT_TTL", 0),
+	}
+	store, err := checkpoint.NewStore(ctx, cfg)
+	if err != nil {
+		if resume {
+			log.Fatalf("Resume невозможен: Redis недоступен (%v)", err)
+		}
+		log.Printf("Внимание: Redis недоступен (%v), работаю без чекпоинтов", err)
+		return nil, resume
+	}
+	log.Printf("Контрольные точки включены: %s (чекпоинт: %s)", addr, store.Key())
+	return store, resume
+}
+
+// envBool возвращает true, если переменная окружения установлена в 1/true/yes.
+func envBool(name string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+// containsArg проверяет наличие флага среди аргументов командной строки.
+func containsArg(flag string) bool {
+	for _, a := range os.Args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// envInt парсит целочисленную переменную окружения с запасным значением.
+func envInt(name string, def int) int {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+// envDuration парсит длительность (например "24h") с запасным значением.
+func envDuration(name string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return def
+	}
+	return d
 }

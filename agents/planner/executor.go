@@ -5,20 +5,38 @@ import (
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
 	"ai/agents/refactor"
+	"ai/checkpoint"
 	"ai/forges"
 	"ai/models"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // Executor выполняет план поэтапно, создавая нужных агентов.
 // Каждый шаг запускается отдельным агентом с чистым контекстом:
 // история не накапливается между шагами, что снижает расход токенов.
+//
+// Шаги группируются в волны параллельности (ComputeWaves): внутри волны шаги
+// независимы, волны идут последовательно. Сейчас шаги волны выполняются
+// по одному, но структура готова к параллельному запуску (задел на будущее).
+//
+// При подключённом чекпоинте (SetCheckpoint) состояние выполнения после
+// каждого шага сохраняется в Redis, что позволяет возобновить работу
+// с места остановки (resume).
 type Executor struct {
-	provider  models.LLMProvider
-	plan      *Plan
+	provider models.LLMProvider
+	plan     *Plan
+	// completed — шаги, успешно завершённые в текущем запуске (в т.ч.
+	// восстановленные из чекпоинта при resume).
 	completed map[string]bool
+	statuses  map[string]string
+	// store — Redis-хранилище чекпоинтов; nil — контрольные точки отключены.
+	store *checkpoint.Store
+	// resume — возобновлять ли выполнение с чекпоинта.
+	resume bool
 }
 
 // NewExecutor создаёт исполнителя плана.
@@ -27,37 +45,140 @@ func NewExecutor(provider models.LLMProvider, plan *Plan) *Executor {
 		provider:  provider,
 		plan:      plan,
 		completed: make(map[string]bool),
+		statuses:  make(map[string]string),
 	}
 }
 
-// Run выполняет все шаги плана в топологическом порядке с учётом зависимостей.
+// SetCheckpoint подключает Redis-хранилище чекпоинтов и включает/выключает
+// режим resume. Возвращает сам исполнитель для цепочек вызовов.
+func (e *Executor) SetCheckpoint(store *checkpoint.Store, resume bool) *Executor {
+	e.store = store
+	e.resume = resume
+	return e
+}
+
+// Run выполняет все шаги плана по волнам параллельности с учётом
+// зависимостей. При resume пропускает уже завершённые шаги.
 func (e *Executor) Run(ctx context.Context) error {
-	order, err := e.topoSort()
+	waves, err := e.plan.ComputeWaves()
 	if err != nil {
 		return fmt.Errorf("в плане нарушен порядок шагов: %w", err)
 	}
 
-	for _, stepID := range order {
-		step := e.findStep(stepID)
-		if step == nil {
-			return fmt.Errorf("шаг %q не найден в плане", stepID)
+	// Инициализация чекпоинта: либо восстанавливаем состояние (resume),
+	// либо начинаем с чистого листа.
+	if e.store != nil {
+		if err := e.initCheckpoint(ctx, waves); err != nil {
+			return err
 		}
+	}
 
-		for _, dep := range step.DependsOn {
-			if !e.completed[dep] {
-				return fmt.Errorf("шаг %q зависит от незавершённого шага %q", stepID, dep)
+	for _, wave := range waves {
+		for _, stepID := range wave {
+			step := e.findStep(stepID)
+			if step == nil {
+				return fmt.Errorf("шаг %q не найден в плане", stepID)
 			}
-		}
 
-		log.Printf("[Plan] шаг %s: %s (агент: %s)", step.ID, step.Description, step.Agent)
-		if err := e.executeStep(ctx, step); err != nil {
-			return fmt.Errorf("шаг %q: %w", step.ID, err)
+			// Resume: шаг уже завершён в прошлом запуске — пропускаем.
+			if e.completed[stepID] {
+				log.Printf("[Plan] шаг %s уже выполнен ранее, пропускаю (resume)", stepID)
+				continue
+			}
+
+			log.Printf("[Plan] шаг %s: %s (агент: %s)", step.ID, step.Description, step.Agent)
+			e.markRunning(ctx, stepID)
+			if err := e.executeStep(ctx, step); err != nil {
+				e.markFailed(ctx, stepID)
+				return fmt.Errorf("шаг %q: %w", step.ID, err)
+			}
+			e.markDone(ctx, stepID)
+			log.Printf("[Plan] шаг %s завершён", step.ID)
 		}
-		e.completed[stepID] = true
-		log.Printf("[Plan] шаг %s завершён", step.ID)
 	}
 
 	return nil
+}
+
+// initCheckpoint восстанавливает состояние при resume или создаёт новый
+// снапшот и сохраняет его в Redis.
+func (e *Executor) initCheckpoint(ctx context.Context, waves [][]string) error {
+	if e.resume {
+		if snap, err := e.store.Load(ctx); err == nil && snap != nil {
+			// Восстанавливаем завершённые шаги из чекпоинта.
+			for id := range snap.Completed {
+				e.completed[id] = true
+				e.statuses[id] = checkpoint.StatusDone
+			}
+			n := len(snap.Completed)
+			log.Printf("[Checkpoint] resume: восстановлено %d завершённых шагов", n)
+			return nil
+		} else if err != nil && err != checkpoint.ErrNotFound {
+			log.Printf("[Checkpoint] не удалось прочитать чекпоинт (%v), начинаю заново", err)
+		}
+	}
+
+	// Свежий старт: сохраняем стартовый снапшот.
+	snap := e.newSnapshot(waves)
+	if err := e.store.Save(ctx, snap); err != nil {
+		return fmt.Errorf("сохранение стартового чекпоинта: %w", err)
+	}
+	return nil
+}
+
+// newSnapshot собирает стартовое состояние выполнения плана.
+func (e *Executor) newSnapshot(waves [][]string) *checkpoint.Snapshot {
+	planJSON, _ := json.Marshal(e.plan)
+	statuses := make(map[string]string, len(e.plan.Steps))
+	for _, s := range e.plan.Steps {
+		statuses[s.ID] = checkpoint.StatusPending
+	}
+	return &checkpoint.Snapshot{
+		ProjectName: e.plan.ProjectName,
+		Summary:     e.plan.Summary,
+		PlanJSON:    planJSON,
+		Completed:   map[string]bool{},
+		Statuses:    statuses,
+		Waves:       waves,
+	}
+}
+
+// markRunning помечает шаг как выполняющийся и сбрасывает в чекпоинт.
+func (e *Executor) markRunning(ctx context.Context, stepID string) {
+	e.statuses[stepID] = checkpoint.StatusRunning
+	e.persistStatus(ctx, stepID, checkpoint.StatusRunning)
+}
+
+// markDone помечает шаг завершённым и сбрасывает в чекпоинт.
+func (e *Executor) markDone(ctx context.Context, stepID string) {
+	e.completed[stepID] = true
+	e.statuses[stepID] = checkpoint.StatusDone
+	e.persistStatus(ctx, stepID, checkpoint.StatusDone)
+}
+
+// markFailed помечает шаг упавшим и сбрасывает в чекпоинт.
+func (e *Executor) markFailed(ctx context.Context, stepID string) {
+	e.statuses[stepID] = checkpoint.StatusFailed
+	if e.store != nil {
+		// Загружаем свежий снапшот и обновляем статус.
+		if snap, err := e.store.Load(ctx); err == nil {
+			_ = e.store.MarkStep(ctx, snap, stepID, checkpoint.StatusFailed)
+		}
+	}
+}
+
+// persistStatus сохраняет статус шага в Redis (если чекпоинт подключён).
+func (e *Executor) persistStatus(ctx context.Context, stepID, status string) {
+	if e.store == nil {
+		return
+	}
+	if snap, err := e.store.Load(ctx); err == nil {
+		if err := e.store.MarkStep(ctx, snap, stepID, status); err != nil {
+			log.Printf("[Checkpoint] ошибка сохранения статуса %s=%s: %v", stepID, status, err)
+		}
+	} else {
+		log.Printf("[Checkpoint] ошибка чтения снапшота для %s: %v", stepID, err)
+	}
 }
 
 // executeStep выполняет один шаг плана нужным агентом.
@@ -103,8 +224,13 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 		scoper.SetScope(step.Scope)
 	}
 
-	if _, err := e.provider.Generate(ctx, agent); err != nil {
+	if resp, err := e.provider.Generate(ctx, agent); err != nil {
 		return err
+	} else if resp != nil && resp.Truncated && strings.TrimSpace(resp.Content) == "" {
+		// Модель исчерпала лимит генерации и вернула пустой ответ без
+		// вызовов инструментов — код не создан. Считаем шаг упавшим, чтобы
+		// чекпоинт пометил его как failed и можно было повторить через resume.
+		return fmt.Errorf("агент %T не создал код: модель вернула пустой ответ (исчерпан лимит токенов генерации)", agent)
 	}
 
 	// Self-review сгенерированного/рефакторенного кода — тоже только по
@@ -150,49 +276,6 @@ func (e *Executor) findStep(id string) *Step {
 		}
 	}
 	return nil
-}
-
-// topoSort возвращает ids шагов в порядке выполнения (топологическая
-// сортировка графа зависимостей). При цикле возвращает ошибку.
-func (e *Executor) topoSort() ([]string, error) {
-	inDegree := make(map[string]int)
-	dependents := make(map[string][]string)
-
-	for _, step := range e.plan.Steps {
-		if _, ok := inDegree[step.ID]; !ok {
-			inDegree[step.ID] = 0
-		}
-		for _, dep := range step.DependsOn {
-			dependents[dep] = append(dependents[dep], step.ID)
-			inDegree[step.ID]++
-		}
-	}
-
-	var queue []string
-	for id, deg := range inDegree {
-		if deg == 0 {
-			queue = append(queue, id)
-		}
-	}
-
-	var order []string
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		order = append(order, id)
-		for _, dep := range dependents[id] {
-			inDegree[dep]--
-			if inDegree[dep] == 0 {
-				queue = append(queue, dep)
-			}
-		}
-	}
-
-	if len(order) != len(e.plan.Steps) {
-		return nil, fmt.Errorf("обнаружен цикл в зависимостях")
-	}
-
-	return order, nil
 }
 
 // selfReviewer — интерфейс агента с self-review (без циклического импорта

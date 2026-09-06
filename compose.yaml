@@ -49,10 +49,24 @@ services:
       - qdrant:/qdrant/storage
     restart: always
 
+  redis:
+    image: redis:7-alpine
+    container_name: ollama-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis:/data
+    networks:
+      docker-net:
+    # AOF для durability чекпоинтов планировщика
+    command: ["redis-server", "--appendonly", "yes"]
+
 volumes:
   ollama: {}
   qdrant: {}
   open-webui: {}
+  redis: {}
 
 networks:
   docker-net:

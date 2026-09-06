@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -46,6 +47,26 @@ type LocalForge struct {
 	Scope       []string
 	scopeMatch  *ScopeMatcher
 	expanded    map[string]string
+	// maxDiffSize — жёсткое ограничение суммарного размера диффа в байтах.
+	// Защита от переполнения контекста модели на больших проектах: дифф
+	// обрезается по бюджету, а файлы, не попавшие в дифф, перечисляются
+	// отдельной заметкой. Настраивается REVIEW_MAX_DIFF_SIZE.
+	maxDiffSize int
+}
+
+// maxDiffSizeDefault — размер диффа по умолчанию (~300 КБ ≈ 75К токенов),
+// при котором ревью по чанкам (REVIEW_CHUNK_SIZE) успевает обработать код,
+// не превышая контекст даже у слабых моделей.
+const maxDiffSizeDefault = 300_000
+
+// maxDiffSizeFromEnv возвращает лимит диффа из REVIEW_MAX_DIFF_SIZE.
+func maxDiffSizeFromEnv() int {
+	if v := os.Getenv("REVIEW_MAX_DIFF_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return maxDiffSizeDefault
 }
 
 // SetScope задаёт области работы для построения диффа ревью.
@@ -65,24 +86,45 @@ func NewLocalForge(dir string) (*LocalForge, error) {
 	} else if !st.IsDir() {
 		return nil, fmt.Errorf("не директория: %s", abs)
 	}
-	return &LocalForge{Dir: abs}, nil
+	return &LocalForge{Dir: abs, maxDiffSize: maxDiffSizeFromEnv()}, nil
 }
 
 // GetDiff строит единый унифицированный diff по файлам директории
 // (в рамках области работы остаётся так и есть), считая их новыми
 // (весь файл — новая версия). Возвращает его как текст.
+//
+// Суммарный размер диффа ограничен опцией REVIEW_MAX_DIFF_SIZE: если бюджет
+// исчерпан, оставшиеся файлы в дифф не попадают и перечисляются заметкой,
+// а бинарные файлы пропускаются вовсе. Это не даёт ревьюверу переполнить
+// контекст модели на большом проекте.
 func (lf *LocalForge) GetDiff() (string, error) {
 	files, err := lf.listFiles()
 	if err != nil {
 		return "", err
 	}
 
+	budget := lf.maxDiffSize
+	if budget <= 0 {
+		budget = maxDiffSizeDefault
+	}
+
 	var b strings.Builder
-	for _, rel := range files {
-		content, err := os.ReadFile(filepath.Join(lf.Dir, rel))
-		if err != nil {
-			continue
+	written := 0
+	var skipped []string
+
+	addDiff := func(rel string, content []byte) {
+		// Размер файла — грубая оценка его доли в диффе (дифф чуть больше
+		// из-за заголовков и "+" перед каждой строкой).
+		size := len(content)
+		if written > 0 && written+size > budget {
+			skipped = append(skipped, rel)
+			return
 		}
+		if size > budget && written == 0 {
+			// Один файл больше всего бюджета — берём его с обрезкой.
+			content = content[:budget]
+		}
+
 		b.WriteString("diff --git a/")
 		b.WriteString(rel)
 		b.WriteString(" b/")
@@ -103,8 +145,41 @@ func (lf *LocalForge) GetDiff() (string, error) {
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
+		written += size
+	}
+
+	for _, rel := range files {
+		content, err := os.ReadFile(filepath.Join(lf.Dir, rel))
+		if err != nil {
+			continue
+		}
+		if isBinary(content) {
+			skipped = append(skipped, rel)
+			continue
+		}
+		addDiff(rel, content)
+	}
+
+	if len(skipped) > 0 {
+		fmt.Fprintf(&b, "\n# Примечание: дифф превышает лимит %d байт, файлы не включены: %s\n",
+			budget, strings.Join(skipped, ", "))
 	}
 	return b.String(), nil
+}
+
+// isBinary сообщает, является ли содержимое бинарным (наличие NUL-байта
+// в первых 8 КБ). Бинарные файлы в дифф не попадают.
+func isBinary(b []byte) bool {
+	n := len(b)
+	if n > 8192 {
+		n = 8192
+	}
+	for i := 0; i < n; i++ {
+		if b[i] == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // PostComment накапливает комментарий к строке локального кода.

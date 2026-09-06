@@ -133,9 +133,17 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 			}
 
 			content = reply.Content
+			// finish_reason="length" означает, что модель упёрлась в лимит
+			// токенов генерации и ответ не полный: помечаем ответ усечённым,
+			// чтобы вызывающий код (например, исполнитель плана) мог отличить
+			// «модель закончила» от «модель обрезалась на полуслове».
+			truncated := reply.FinishReason == "length"
+			if truncated {
+				Debugf("RUNNER: раунд %d: модель обрезалась по лимиту токенов (finish_reason=length), content=%q", round+1, Truncate(content, 300))
+			}
 			Debugf("RUNNER: раунд %d: модель завершила (finish_reason=%q), content=%q",
 				round+1, reply.FinishReason, Truncate(content, 300))
-			return &AgentResponse{Content: content, ToolCalls: allToolCalls}, nil
+			return &AgentResponse{Content: content, ToolCalls: allToolCalls, Truncated: truncated}, nil
 		}
 
 		Debugf("RUNNER: раунд %d: модель запросила %d вызова(ов), finish_reason=%q",

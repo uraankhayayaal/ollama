@@ -1,6 +1,7 @@
 package forges
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,6 +143,70 @@ func TestLocalForgeGetDiffScoped(t *testing.T) {
 		if strings.Contains(diff, bad) {
 			t.Errorf("дифф не должен содержать %q (вне scope):\n%s", bad, diff)
 		}
+	}
+}
+
+func TestLocalForgeGetDiffCap(t *testing.T) {
+	dir := t.TempDir()
+	// Уникальное содержимое в каждом файле, чтобы проверить отсутствие
+	// файлов вне бюджета по их уникальным строкам.
+	for i := 0; i < 10; i++ {
+		content := "// файл " + string(rune('a'+i)) + "\n" + strings.Repeat(fmt.Sprintf("payload %d line\n", i), 100)
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.go", i)), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	lf, err := NewLocalForge(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Маленький бюджет: в дифф попадут лишь первые файлы, остальные —
+	// в заметке об обрезании.
+	lf.maxDiffSize = 500
+
+	diff, err := lf.GetDiff()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(diff, "Примечание: дифф превышает лимит") {
+		t.Errorf("дифф должен содержать заметку об обрезании:\n%s", diff)
+	}
+	if len(diff) > 500+2048 {
+		t.Errorf("дифф превысил бюджет: len=%d", len(diff))
+	}
+	// Контент последних файлов (вне бюджета) не должен попасть в дифф.
+	for _, bad := range []string{"payload 8 line", "payload 9 line"} {
+		if strings.Contains(diff, bad) {
+			t.Errorf("дифф не должен содержать содержимое файла вне бюджета (%q):\n%s", bad, diff)
+		}
+	}
+}
+
+func TestLocalForgeGetDiffSkipsBinary(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ok.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "logo.png"), []byte("\x89PNG\r\n\x1a\n\x00\x00binary"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	lf, err := NewLocalForge(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, err := lf.GetDiff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "ok.go") {
+		t.Errorf("дифф должен содержать ok.go:\n%s", diff)
+	}
+	// Содержимое бинарного файла не должно попасть в дифф как код.
+	if strings.Contains(diff, "binary") || strings.Contains(diff, "\x00") {
+		t.Errorf("дифф не должен содержать содержимое бинарного файла:\n%q", diff)
 	}
 }
 
