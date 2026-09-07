@@ -80,6 +80,11 @@ func (s *ReviewSession) ReviewMr(args map[string]any) ([]byte, error) {
 	// Фильтруем подозрительные комментарии с русским "это хорошо, но..." паттерном
 	comments = filterSuspiciousComments(comments)
 
+	// Группируем и удаляем дубликаты по тексту замечания и файлам
+	if len(comments) > 0 {
+		comments = groupSimilarComments(comments)
+	}
+
 	// Дедупек однотипных замечаний: одно и то же замечание, повторённое
 	// в разных местах или раундах, публикуется только один раз. Карта
 	// сохраняется на сессии и накапливается между раундами.
@@ -208,6 +213,58 @@ func (s *ReviewSession) PublishParsedReview(content string) int {
 	// Используем ReviewMr, чтобы применить фильтр по diff и дедупликацию.
 	s.ReviewMr(map[string]any{"comments": string(b)})
 	return s.CommentCount
+}
+
+// groupSimilarComments объединяет похожие замечания по тексту, оставляя только одно
+// замечание для одинаковых проблем в разных файлах
+func groupSimilarComments(comments []forges.ReviewComment) []forges.ReviewComment {
+	if len(comments) <= 1 {
+		return comments
+	}
+
+	// Группируем по тексту замечания
+	type commentGroup struct {
+		text    string
+		files   []string
+		lines   []int
+		comment forges.ReviewComment
+	}
+
+	groups := make(map[string]*commentGroup)
+	for _, comment := range comments {
+		// Используем текст замечания как ключ для группировки
+		text := strings.TrimSpace(comment.Text)
+		
+		if group, exists := groups[text]; exists {
+			// Добавляем файл к существующей группе
+			group.files = append(group.files, comment.FilePath)
+			group.lines = append(group.lines, comment.Line)
+		} else {
+			// Создаём новую группу
+			groups[text] = &commentGroup{
+				text:    text,
+				files:   []string{comment.FilePath},
+				lines:   []int{comment.Line},
+				comment: comment,
+			}
+		}
+	}
+
+	// Если в группе более одного файла, объединяем в одно замечание
+	var result []forges.ReviewComment
+	for _, group := range groups {
+		if len(group.files) > 1 {
+			// Создаем объединённое замечание с упоминанием всех файлов
+			group.comment.FilePath = ""
+			group.comment.Text = fmt.Sprintf("%s (в %d файлах: %s)", 
+				group.text, 
+				len(group.files), 
+				strings.Join(group.files, ", "))
+		}
+		result = append(result, group.comment)
+	}
+
+	return result
 }
 
 // filterSuspiciousComments удаляет комментарии, которые соответствуют русскому
