@@ -37,6 +37,8 @@ type ReviewSession struct {
 	CommentCount int
 	// RejectedCount — сколько комментариев отсечено проверкой по diff.
 	RejectedCount int
+	// FilteredSuspiciousCount — сколько комментариев отфильтровано как нейрослопы
+	FilteredSuspiciousCount int
 
 	// summaryPosted — публиковался ли уже итоговый отчёт в тред.
 	summaryPosted bool
@@ -78,7 +80,9 @@ func (s *ReviewSession) ReviewMr(args map[string]any) ([]byte, error) {
 	}
 
 	// Фильтруем подозрительные комментарии с русским "это хорошо, но..." паттерном
-	comments = filterSuspiciousComments(comments)
+	var filteredSuspicious int
+	comments, filteredSuspicious = filterSuspiciousCommentsWithCount(comments)
+	s.FilteredSuspiciousCount += filteredSuspicious
 
 	// Группируем и удаляем дубликаты по тексту замечания и файлам
 	if len(comments) > 0 {
@@ -234,7 +238,7 @@ func groupSimilarComments(comments []forges.ReviewComment) []forges.ReviewCommen
 	for _, comment := range comments {
 		// Используем текст замечания как ключ для группировки
 		text := strings.TrimSpace(comment.Text)
-		
+
 		if group, exists := groups[text]; exists {
 			// Добавляем файл к существующей группе
 			group.files = append(group.files, comment.FilePath)
@@ -256,9 +260,9 @@ func groupSimilarComments(comments []forges.ReviewComment) []forges.ReviewCommen
 		if len(group.files) > 1 {
 			// Создаем объединённое замечание с упоминанием всех файлов
 			group.comment.FilePath = ""
-			group.comment.Text = fmt.Sprintf("%s (в %d файлах: %s)", 
-				group.text, 
-				len(group.files), 
+			group.comment.Text = fmt.Sprintf("%s (в %d файлах: %s)",
+				group.text,
+				len(group.files),
 				strings.Join(group.files, ", "))
 		}
 		result = append(result, group.comment)
@@ -267,20 +271,34 @@ func groupSimilarComments(comments []forges.ReviewComment) []forges.ReviewCommen
 	return result
 }
 
-// filterSuspiciousComments удаляет комментарии, которые соответствуют русскому
+// filterSuspiciousCommentsWithCount удаляет комментарии, которые соответствуют русскому
 // паттерну "это хорошо, но стоит убедиться, что ..." или аналогичному, чтобы
-// избежать ненужных/непродуктивных замечаний.
-func filterSuspiciousComments(comments []forges.ReviewComment) []forges.ReviewComment {
+// избежать ненужных/непродуктивных замечаний. Возвращает отфильтрованные комментарии и количество отфильтрованных.
+func filterSuspiciousCommentsWithCount(comments []forges.ReviewComment) ([]forges.ReviewComment, int) {
 	var filtered []forges.ReviewComment
-	
+	count := 0
+
 	for _, comment := range comments {
 		text := strings.TrimSpace(comment.Text)
-		
+
+		// Проверяем на признаки предложений о проверке ("убедиться", "увериться")
+		if strings.Contains(strings.ToLower(text), "убедиться") ||
+			strings.Contains(strings.ToLower(text), "проверить") ||
+			strings.Contains(strings.ToLower(text), "убедись") ||
+			strings.Contains(strings.ToLower(text), "проверь") ||
+			strings.Contains(strings.ToLower(text), "это может привести") ||
+			strings.Contains(strings.ToLower(text), "может быть") {
+			// Пропускаем такие комментарии - они не указывают на ошибки
+			count++
+			continue
+		}
+
 		// Проверяем, не соответствует ли текст русскому паттерну
 		// "это хорошо, но стоит убедиться, что ..."
 		if strings.Contains(strings.ToLower(text), "это хорошо") && 
 		   strings.Contains(strings.ToLower(text), "стоит убедиться, что") {
 			// Пропускаем такие комментарии
+			count++
 			continue
 		}
 		
@@ -288,20 +306,14 @@ func filterSuspiciousComments(comments []forges.ReviewComment) []forges.ReviewCo
 		if strings.Contains(strings.ToLower(text), "это хорошо, но") &&
 		   strings.Contains(strings.ToLower(text), "стоит убедиться") {
 			// Пропускаем такие комментарии
+			count++
 			continue
 		}
-		
-		// Проверяем на признаки предложений о проверке ("убедиться", "увериться")
-		if strings.Contains(strings.ToLower(text), "убедиться") ||
-		   strings.Contains(strings.ToLower(text), "увериться") {
-			// Пропускаем такие комментарии - они не указывают на ошибки
-			continue
-		}
-		
+
 		filtered = append(filtered, comment)
 	}
-	
-	return filtered
+
+	return filtered, count
 }
 
 // PostSummaryToPR публикует итоговый отчёт-сводку в тред MR/PR.
@@ -318,6 +330,7 @@ func (s *ReviewSession) PostSummaryToPR() error {
 	fmt.Fprintf(&b, "- Критических замечаний: **%s**\n", yesNo(s.CriticalFound))
 	fmt.Fprintf(&b, "- Ошибок публикации: **%d**\n", len(s.PostErrors))
 	fmt.Fprintf(&b, "- Отсечено галлюцинирующих замечаний: **%d**\n", s.RejectedCount)
+	fmt.Fprintf(&b, "- Отфильтровано нейрослопов: **%d**\n", s.FilteredSuspiciousCount)  // Added this line
 	if s.Focus != "" {
 		fmt.Fprintf(&b, "- Фокус ревью: **%s**\n", s.Focus)
 	}
