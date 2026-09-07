@@ -148,6 +148,36 @@ func TestWriteFilesAcceptsJSONStringForm(t *testing.T) {
 	}
 }
 
+func TestWriteFilesAcceptsDecodedJSONStringForm(t *testing.T) {
+	// Реальный кейс из лога: модель кладёт "files" как JSON-строку, а к моменту
+	// попадания в инструмент один слой экранирования уже снят (Ollama structpb +
+	// ParseArguments) — внутри остаются реальные переводы строк и кавычки.
+	// Это не должно приводить к ошибке «список файлов пуст».
+	cg := newTestCG(t)
+	jsonStr := "[{\"content\":\"package main\n\nimport (\n\t\"fmt\"\n)\n\nfunc main() { fmt.Println(\"hi\") }\",\"filename\":\"cmd/main.go\"}]"
+	out, err := cg.WriteFiles(map[string]any{"files": jsonStr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(out), "success") {
+		t.Fatalf("ожидался status success в %s", out)
+	}
+	b, err := os.ReadFile(filepath.Join(cg.OutputDir, "cmd", "main.go"))
+	if err != nil {
+		t.Fatalf("файл не записан: %v", err)
+	}
+	want := `package main
+
+import (
+	"fmt"
+)
+
+func main() { fmt.Println("hi") }`
+	if string(b) != want {
+		t.Errorf("содержимое файла не совпало:\n--- got ---\n%s\n--- want ---\n%s", b, want)
+	}
+}
+
 func TestRunReturnsOutput(t *testing.T) {
 	cg := newTestCG(t)
 	if err := cg.write("main.go", "package main\nfunc main(){}"); err != nil {

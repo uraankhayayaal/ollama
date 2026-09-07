@@ -321,9 +321,9 @@ func parseComments(raw any) []forges.ReviewComment {
 	switch v := raw.(type) {
 	case string:
 		// JSON-строка вида `[{"file_path": ...}]`.
-		_ = json.Unmarshal([]byte(v), &comments)
+		_ = unmarshalLikeModel(v, &comments)
 	case []byte:
-		_ = json.Unmarshal(v, &comments)
+		_ = unmarshalLikeModel(string(v), &comments)
 	case []interface{}:
 		// Типичный случай от инструментов: json.Unmarshal даёт []interface{}.
 		b, _ := json.Marshal(v)

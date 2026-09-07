@@ -439,6 +439,21 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 
 		for _, s := range failing {
 			rep := e.acceptReports[s.ID]
+			// Check if report is nil before proceeding with fixes
+			if rep == nil {
+				logging.Warnf("[Accept] раунд %d/%d: отчёт приёмки отсутствует для шага %q", round, cfg.MaxRounds, s.Description)
+				// Try to re-run acceptor for this step
+				logging.Infof("[Accept] раунд %d/%d: повторный запуск приёмки для шага %q", round, cfg.MaxRounds, s.Description)
+				if err := e.runAcceptorAgent(ctx, s, e.plan.ProjectName); err != nil {
+					return fmt.Errorf("раунд приёмки %d: повторный запуск приёмки для шага %q: %w", round, s.Description, err)
+				}
+				// Check again if the report is now available
+				rep = e.acceptReports[s.ID]
+				if rep == nil {
+					return fmt.Errorf("раунд приёмки %d: отчёт приёмки всё ещё отсутствует для шага %q", round, s.Description)
+				}
+			}
+			
 			logging.Infof("[Accept] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, cfg.MaxRounds, s.Description)
 
 			fixes, err := e.planFixSteps(ctx, rep)
@@ -507,7 +522,10 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 	// планировщику, чтобы scope шага покрывал файлы, которые придётся менять,
 	// а не сузился до произвольного (например, [go.mod]) и не заблокировал
 	// фикс-агента на записи нужных файлов.
-	issueFiles := uniqueSlash(rep.IssueFiles())
+	issueFiles := []string{}
+	if rep != nil {
+		issueFiles = uniqueSlash(rep.IssueFiles())
+	}
 	prompt := fmt.Sprintf(`Приёмка собранного приложения не пройдена.
 
 %s

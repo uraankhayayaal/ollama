@@ -193,9 +193,15 @@ func parseFileItems(raw any) []FileItem {
 
 	switch v := raw.(type) {
 	case string:
-		_ = json.Unmarshal([]byte(v), &items)
+		if unmarshalLikeModel(v, &items) {
+			return items
+		}
+		items = parseDecodedFiles(v)
 	case []byte:
-		_ = json.Unmarshal(v, &items)
+		if unmarshalLikeModel(string(v), &items) {
+			return items
+		}
+		items = parseDecodedFiles(string(v))
 	case nil:
 		return nil
 	default:
@@ -208,6 +214,139 @@ func parseFileItems(raw any) []FileItem {
 	return items
 }
 
+// parseDecodedFiles разбирает «расшифрованную» JSON-строку поля files: модели
+// (например, qwen) сериализуют массив файлов в JSON-строку, а после разбора
+// аргументов (Ollama structpb + ParseArguments) экранирование внутри содержимого
+// уже снято — в код попадают реальные переводы строк, табы и кавычки, и текст
+// перестаёт быть валидным JSON. Структура при этом сохраняется: массив объектов
+// с ключами "filename"/"content". Разбор идёт по структуре: объекты выделяются
+// сбалансированными фигурными скобками, ключи фиксированы, значения читаются
+// между кавычками.
+func parseDecodedFiles(raw string) []FileItem {
+	body := strings.TrimSpace(raw)
+	if !strings.HasPrefix(body, "[") || !strings.HasSuffix(body, "]") {
+		return nil
+	}
+	body = strings.TrimSpace(body[1 : len(body)-1])
+
+	var items []FileItem
+	for {
+		body = strings.TrimSpace(body)
+		if body == "" {
+			break
+		}
+		if !strings.HasPrefix(body, "{") {
+			return nil
+		}
+		end := findMatchingBrace(body, 0)
+		if end < 0 {
+			return nil
+		}
+		obj := body[:end+1]
+		body = strings.TrimSpace(body[end+1:])
+		if strings.HasPrefix(body, ",") {
+			body = body[1:]
+		} else if body != "" {
+			return nil
+		}
+
+		it := FileItem{}
+		found := false
+		if f, ok := decodedFieldValue(obj, "filename"); ok {
+			it.Filename = f
+			found = true
+		}
+		if c, ok := decodedFieldValue(obj, "content"); ok {
+			it.Content = c
+			found = true
+		}
+		if found {
+			items = append(items, it)
+		}
+	}
+	return items
+}
+
+// findMatchingBrace возвращает индекс парной закрывающей скобки для "{" на
+// позиции start. Скобки внутри содержимого (код) считаются сбалансированными —
+// это типично для корректного исходного кода.
+func findMatchingBrace(s string, start int) int {
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// decodedFieldValue извлекает значение поля key из объекта без экранирования.
+// Значения читаются между кавычками; для поля content берётся текст до закрывающей
+// кавычки перед "," + следующим ключом либо перед "}" объекта.
+func decodedFieldValue(obj, key string) (string, bool) {
+	needle := `"` + key + `"`
+	idx := strings.Index(obj, needle)
+	if idx < 0 {
+		return "", false
+	}
+	rest := obj[idx+len(needle):]
+	rest = strings.TrimLeft(rest, " \t\r\n")
+	if !strings.HasPrefix(rest, ":") {
+		return "", false
+	}
+	rest = strings.TrimLeft(rest[1:], " \t\r\n")
+	if !strings.HasPrefix(rest, `"`) {
+		return "", false
+	}
+	rest = rest[1:]
+
+	// Граница значения: "," + следующий ключ ("filename"/"content"), либо "}" —
+	// закрывающая скобка текущего объекта (возможные "}" внутри кода уже
+	// сбалансированы, поэтому это всегда последняя "}" в объекте).
+	boundary := len(rest)
+	if m := nextKeyBoundary(rest); m >= 0 {
+		boundary = m
+	} else if c := strings.LastIndexByte(rest, '}'); c >= 0 {
+		boundary = c
+	}
+	val := rest[:boundary]
+	val = strings.TrimRight(val, " \t\r\n")
+	val = strings.TrimSuffix(val, `"`)
+	return val, true
+}
+
+// nextKeyBoundary находит позицию, на которой значение поля заканчивается: это
+// индекс "," перед началом следующего ключа ("filename"/"content"), либо -1.
+func nextKeyBoundary(rest string) int {
+	best := -1
+	for _, nk := range []string{"filename", "content"} {
+		anchor := "," + `"` + nk + `"`
+		if i := strings.Index(rest, anchor); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+		// Допускаем пробелы между запятой и ключом: обычно ","кey, но бывает
+		// "," <пробелы> "key", если между полями добавлено форматирование.
+		for j := 1; j < len(rest); j++ {
+			if rest[j-1] == ',' {
+				k := j
+				for k < len(rest) && (rest[k] == ' ' || rest[k] == '\t' || rest[k] == '\n' || rest[k] == '\r') {
+					k++
+				}
+				if strings.HasPrefix(rest[k:], `"`+nk+`"`) && (best < 0 || j-1 < best) {
+					best = j - 1
+				}
+			}
+		}
+	}
+	return best
+}
+
 // parsePathList нормализует аргумент-список путей (filenames/paths) инструментов
 // ReadFiles/DeleteFiles. Модели передают его либо массивом строк, либо JSON-строкой
 // (или []byte) — обе формы приводятся к []string.
@@ -215,20 +354,22 @@ func parsePathList(raw any) []string {
 	switch v := raw.(type) {
 	case string:
 		var out []string
-		_ = json.Unmarshal([]byte(v), &out)
-		return out
+		if unmarshalLikeModel(v, &out) {
+			return out
+		}
 	case []byte:
 		var out []string
-		_ = json.Unmarshal(v, &out)
-		return out
+		if unmarshalLikeModel(string(v), &out) {
+			return out
+		}
 	default:
 		if b, err := json.Marshal(raw); err == nil {
 			var out []string
 			_ = json.Unmarshal(b, &out)
 			return out
 		}
-		return nil
 	}
+	return nil
 }
 
 // WriteFiles обрабатывает пакетную запись файлов, вызванную ИИ-агентом.

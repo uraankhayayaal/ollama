@@ -237,6 +237,9 @@ func filepathToSlash(p string) string {
 // модуль). Используется планировщиком для построения обновлённой области
 // видимости задач исправления.
 func (r *Report) IssueFiles() []string {
+	if r == nil {
+		return []string{}
+	}
 	seen := map[string]bool{}
 	var files []string
 	for _, iss := range r.Issues {
