@@ -77,6 +77,9 @@ func (s *ReviewSession) ReviewMr(args map[string]any) ([]byte, error) {
 		s.RejectedCount += len(rejected)
 	}
 
+	// Фильтруем подозрительные комментарии с русским "это хорошо, но..." паттерном
+	comments = filterSuspiciousComments(comments)
+
 	// Дедупек однотипных замечаний: одно и то же замечание, повторённое
 	// в разных местах или раундах, публикуется только один раз. Карта
 	// сохраняется на сессии и накапливается между раундами.
@@ -205,6 +208,43 @@ func (s *ReviewSession) PublishParsedReview(content string) int {
 	// Используем ReviewMr, чтобы применить фильтр по diff и дедупликацию.
 	s.ReviewMr(map[string]any{"comments": string(b)})
 	return s.CommentCount
+}
+
+// filterSuspiciousComments удаляет комментарии, которые соответствуют русскому
+// паттерну "это хорошо, но стоит убедиться, что ..." или аналогичному, чтобы
+// избежать ненужных/непродуктивных замечаний.
+func filterSuspiciousComments(comments []forges.ReviewComment) []forges.ReviewComment {
+	var filtered []forges.ReviewComment
+	
+	for _, comment := range comments {
+		text := strings.TrimSpace(comment.Text)
+		
+		// Проверяем, не соответствует ли текст русскому паттерну
+		// "это хорошо, но стоит убедиться, что ..."
+		if strings.Contains(strings.ToLower(text), "это хорошо") && 
+		   strings.Contains(strings.ToLower(text), "стоит убедиться, что") {
+			// Пропускаем такие комментарии
+			continue
+		}
+		
+		// Также проверяем другие подобные конструкции
+		if strings.Contains(strings.ToLower(text), "это хорошо, но") &&
+		   strings.Contains(strings.ToLower(text), "стоит убедиться") {
+			// Пропускаем такие комментарии
+			continue
+		}
+		
+		// Проверяем на признаки предложений о проверке ("убедиться", "увериться")
+		if strings.Contains(strings.ToLower(text), "убедиться") ||
+		   strings.Contains(strings.ToLower(text), "увериться") {
+			// Пропускаем такие комментарии - они не указывают на ошибки
+			continue
+		}
+		
+		filtered = append(filtered, comment)
+	}
+	
+	return filtered
 }
 
 // PostSummaryToPR публикует итоговый отчёт-сводку в тред MR/PR.
