@@ -75,6 +75,42 @@ func TestRunCommandTimeout(t *testing.T) {
 	}
 }
 
+// Регрессия: «go run .» (и аналогичные запуски, порождающие потомка, который
+// наследует stdout/stderr) не должен вешать runCommand по таймауту. Раньше
+// убивался только sh, а выживший бинарь держал канал открытым — cmd.Wait()
+// блокировался навсегда. Необходимо завершать всю группу процессов.
+func TestRunCommandTimeoutKillsProcessGroup(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module hangtest\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+import (
+	"log"
+	"net/http"
+)
+
+func main() {
+	// Долгоживущий сервер: go run . скомпилирует и запустит этот бинарь
+	// как дочерний процесс, наследуя stdout/stderr.
+	log.Fatal(http.ListenAndServe("127.0.0.1:0", nil))
+}
+`)
+
+	start := time.Now()
+	out, code, timedOut, err := runCommand(dir, "go run .", 15*time.Second)
+	elapsed := time.Since(start)
+
+	if !timedOut {
+		t.Fatalf("ожидали таймаут, got timedOut=%v code=%d err=%v out=%q", timedOut, code, err, out)
+	}
+	if elapsed > 20*time.Second {
+		t.Fatalf("runCommand завис: затрачено %s", elapsed)
+	}
+}
+
 func TestAnalyzeOutput(t *testing.T) {
 	out := `main.go:9:2: undefined: missingFunc
 panic: runtime error: nil pointer dereference
@@ -214,6 +250,48 @@ func TestReportFixPrompt(t *testing.T) {
 	}
 	if !strings.Contains(p, "ОШИБКА") {
 		t.Fatalf("FixPrompt должен показывать ошибку сборки")
+	}
+}
+
+// Регрессия: HTTP-сервер на Go «не завершается», его убивает таймаут запуска.
+// В server-режиме запуск должен считаться успешным (вердикт approve), а не
+// вести к ложному reject. Раньше такой проект не проходил приёмку (а до исправления
+// runCommand — вообще зависал навсегда из-за незакрытого канала вывода потомка).
+func TestAcceptApprovesLongRunningServer(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module server\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+import (
+	"log"
+	"net/http"
+)
+
+func main() {
+	log.Fatal(http.ListenAndServe("127.0.0.1:0", nil))
+}
+`)
+
+	cfg := DefaultConfig()
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = 5 * time.Second
+
+	start := time.Now()
+	rep := Accept(dir, cfg)
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Fatalf("Accept завис: затрачено %s", elapsed)
+	}
+	if rep.Run == nil || !rep.Run.ServerMode {
+		t.Fatalf("ожидали server-режим, got %#v", rep.Run)
+	}
+	if !rep.Run.OK {
+		t.Fatalf("server-режим должен считаться успешным, got OK=%v", rep.Run.OK)
+	}
+	if rep.Verdict != VerdictApprove {
+		t.Fatalf("долгоживущий сервер должен быть принят, got %s (%s)", rep.Verdict, rep.Summary)
 	}
 }
 

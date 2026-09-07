@@ -166,7 +166,7 @@ func Accept(dir string, cfg Config) *Report {
 		return rep
 	}
 
-	out, code, timedOut, err := runCommand(dir, runCmd, cfg.RunTimeout)
+	out, code, timedOut, _ := runCommand(dir, runCmd, cfg.RunTimeout)
 	run := &RunResult{
 		Command:    runCmd,
 		Output:     trimOutput(out, cfg.MaxLog),
@@ -175,9 +175,11 @@ func Accept(dir string, cfg Config) *Report {
 		OK:         false,
 	}
 	if timedOut {
-		if err == nil {
-			run.OK = true
-		}
+		// Долгоживущий процесс (сервер) жив дольше таймаута и завершён
+		// принудительно. Ошибка от runCommand здесь — это всегда ctx.Err()
+		// от таймаута, а не падение приложения, поэтому запуск считается
+		// успешным, если в логах нет критичных маркеров (проверяем ниже).
+		run.OK = true
 	} else {
 		run.OK = code == 0
 	}

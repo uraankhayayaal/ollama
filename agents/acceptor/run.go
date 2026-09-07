@@ -5,6 +5,7 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -14,12 +15,19 @@ import (
 // Возвращаемая ошибка — это ошибка запуска процесса либо сигнал таймаута.
 // Ненулевой код выхода НЕ превращается в ошибку: он отдаётся через exitCode,
 // чтобы приёмщик мог отличать «процесс упал» от «процесс не стартовал».
+//
+// Команда исполняется в собственной группе процессов (Setpgid), а по таймауту
+// завершается ВСЯ группа: многие запуски порождают дочерние процессы
+// (например «go run .» — скомпилированный бинарь), которые наследуют каналы
+// stdout/stderr. Если убивать только непосредственного ребёнка (sh), выживший
+// потомок держит канал открытым и cmd.Wait() блокируется навсегда.
 func runCommand(dir, command string, timeout time.Duration) (output string, exitCode int, timedOut bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -34,8 +42,10 @@ func runCommand(dir, command string, timeout time.Duration) (output string, exit
 
 	select {
 	case <-ctx.Done():
-		// Превышен таймаут: процесс ещё жив — принудительно завершаем.
-		_ = cmd.Process.Kill()
+		// Превышен таймаут: процесс (и его потомки) ещё жив — принудительно
+		// завершаем всю группу процессов, чтобы закрылись унаследованные
+		// каналы вывода и cmd.Wait() не завис навсегда.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 		return buf.String(), -1, true, ctx.Err()
 	case werr := <-done:

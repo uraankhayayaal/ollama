@@ -14,6 +14,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -349,26 +351,187 @@ func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *runn
 // найденные замечания. Не требует URL — работает с temp/<projectName>.
 // Дифф строится только по файлам из области работы шага, чтобы ревьювер
 // не смотрел на код, не затронутый работой.
+//
+// Если замечания найдены — включается цикл «ревью → исправление → ревью»
+// (бюджет REVIEW_FIX_ROUNDS): планировщик составляет шаги refactor,
+// исполнитель их прогоняет, затем ревью повторяется по обновлённому коду.
+// Цикл завершается, когда замечаний больше нет.
 func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName string) error {
 	dir := codegenerator.ProjectDir(projectName)
+	cfg := codereviewer.LoadConfig()
+
+	// Область ревью расширяется между раундами только файлами исправлений,
+	// чтобы фиксы (вне исходного scope) тоже попадали в повторное ревью.
+	reviewScope := step.Scope
+
+	for round := 1; round <= cfg.MaxRounds; round++ {
+		comments, err := e.runReviewRound(ctx, step, projectName, dir, reviewScope)
+		if err != nil {
+			return err
+		}
+
+		logging.Infof("[Plan] ревью %q (раунд %d/%d, scope: %v): найдено замечаний: %d",
+			dir, round, cfg.MaxRounds, reviewScope, len(comments))
+
+		if len(comments) == 0 {
+			logging.Infof("[Plan] ревью %q: замечаний больше нет — ревью пройдено", dir)
+			return nil
+		}
+
+		if round >= cfg.MaxRounds {
+			return fmt.Errorf("ревью %q не пройдено после %d раунда(ов) — осталось замечаний: %d",
+				dir, cfg.MaxRounds, len(comments))
+		}
+
+		// Замечания найдены: планируем шаги исправления и прогоняем их.
+		fixes, err := e.planReviewFixes(ctx, dir, comments)
+		if err != nil {
+			return fmt.Errorf("раунд ревью %d: планирование исправлений: %w", round, err)
+		}
+		if len(fixes) == 0 {
+			logging.Warnf("[Plan] раунд ревью %d: планировщик не вернул шагов исправлений", round)
+			continue
+		}
+
+		executed := 0
+		for _, fs := range fixes {
+			// Повторную приёмку и ревью запускают циклы исполнителя, а не
+			// планировщик исправлений.
+			if fs.Agent == AgentAcceptor || fs.Agent == AgentCodeReviewer {
+				logging.Detailf("[Plan] раунд ревью %d: шаг %s в плане исправлений пропущен", round, fs.Agent)
+				continue
+			}
+			fixStep := fs
+			fixStep.ID = reviewFixStepID(e, round, executed)
+			// Область исправления: если планировщик не указал scope —
+			// подставляем файлы, на которые указывают замечания ревью.
+			if len(fixStep.Scope) == 0 {
+				fixStep.Scope = commentFiles(comments)
+			}
+			e.plan.Steps = append(e.plan.Steps, fixStep)
+			logging.Infof("[Plan] раунд ревью %d: шаг исправления %s: %s (агент: %s)", round, fixStep.ID, fixStep.Description, fixStep.Agent)
+			e.markRunning(ctx, fixStep.ID)
+			if err := e.executeStep(ctx, &fixStep); err != nil {
+				e.markFailed(ctx, fixStep.ID)
+				return fmt.Errorf("раунд ревью %d, шаг исправления %q: %w", round, fixStep.ID, err)
+			}
+			e.markDone(ctx, fixStep.ID)
+			executed++
+			reviewScope = uniqueSlash(append(reviewScope, fixStep.Scope...))
+		}
+		if executed == 0 {
+			logging.Warnf("[Plan] раунд ревью %d: планировщик не дал применимых шагов исправлений — повторяю ревью", round)
+			continue
+		}
+
+		logging.Infof("[Plan] раунд ревью %d: повторное ревью после исправлений", round)
+	}
+
+	return fmt.Errorf("ревью %q не пройдено после %d раундов исправлений", dir, cfg.MaxRounds)
+}
+
+// runReviewRound выполняет один проход локального ревью и возвращает
+// опубликованные замечания (пустой слайс — замечаний нет).
+func (e *Executor) runReviewRound(ctx context.Context, step *Step, projectName, dir string, scope []string) ([]forges.ReviewComment, error) {
 	lf, err := forges.NewLocalForge(dir)
 	if err != nil {
-		return fmt.Errorf("локальное ревью: %v", err)
+		return nil, fmt.Errorf("локальное ревью: %v", err)
 	}
-	lf.SetScope(step.Scope)
+	lf.SetScope(scope)
 
 	agent := codereviewer.NewCodereviewerWithForge(lf, step.Prompt)
 	resp, err := e.provider.Generate(ctx, agent)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(lf.Published) == 0 && resp != nil && resp.Content != "" {
 		agent.PublishParsedReview(resp.Content)
 	}
 
-	logging.Infof("[Plan] ревью %q (scope: %v): найдено замечаний: %d", dir, step.Scope, len(lf.Published))
-	return nil
+	return lf.Published, nil
+}
+
+// planReviewFixes отдаёт планировщику замечания ревью и получает шаги
+// исправления. Формат — тот же JSON-план, но планировщику запрещено
+// добавлять acceptor и codereviewer: повторные ревью/приёмку запускают
+// циклы исполнителя.
+func (e *Executor) planReviewFixes(ctx context.Context, dir string, comments []forges.ReviewComment) ([]Step, error) {
+	issueFiles := uniqueSlash(commentFiles(comments))
+
+	var b strings.Builder
+	b.WriteString("Код-ревью выявило замечания к проекту. Директория: ")
+	b.WriteString(dir)
+	b.WriteString(".\n\nЗамечания:\n")
+	for _, c := range comments {
+		loc := strings.TrimSpace(c.FilePath)
+		if c.Line > 0 {
+			loc += ":" + strconv.Itoa(c.Line)
+		}
+		if loc != "" {
+			fmt.Fprintf(&b, "- %s %s\n", loc, strings.TrimSpace(c.Text))
+		} else {
+			fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(c.Text))
+		}
+	}
+
+	b.WriteString(`
+Составь план исправлений этих замечаний.
+Требования:
+- Все шаги — только refactor (по одному исправлению на шаг).
+- НЕ добавляй шаги acceptor и codereviewer — повторные ревью и приёмку запустит исполнитель.
+- scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
+  `)
+	if len(issueFiles) > 0 {
+		b.WriteString(bullet(issueFiles))
+	} else {
+		b.WriteString("  (файлы из замечаний ревью)")
+	}
+	b.WriteString("\n- Каждый шаг — одно конкретное исправление.")
+
+	pa := NewPlanner(filepath.Base(dir), b.String())
+	resp, err := e.provider.Generate(ctx, pa)
+	if err != nil {
+		return nil, err
+	}
+	fixPlan, err := ParsePlan(resp.Content)
+	if err != nil {
+		logging.Warnf("[Plan] не удалось разобрать план исправлений ревью: %v", err)
+		logging.Detailf("[Plan] Ответ планировщика:\n%s", resp.Content)
+		return nil, err
+	}
+	return fixPlan.Steps, nil
+}
+
+// commentFiles возвращает уникальные нормализованные файлы, на которые
+// указывают замечания ревью.
+func commentFiles(comments []forges.ReviewComment) []string {
+	seen := map[string]bool{}
+	var files []string
+	for _, c := range comments {
+		f := strings.TrimSpace(strings.TrimPrefix(c.FilePath, "./"))
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		files = append(files, f)
+	}
+	return files
+}
+
+// reviewFixStepID генерирует уникальный ID шага исправления ревью, чтобы не
+// пересекаться с ID шагов основного плана и других раундов.
+func reviewFixStepID(e *Executor, round, idx int) string {
+	base := fmt.Sprintf("review-r%d-%d", round, idx)
+	if e.findStep(base) == nil {
+		return base
+	}
+	for n := 1; ; n++ {
+		id := fmt.Sprintf("review-r%d-%d-%d", round, idx, n)
+		if e.findStep(id) == nil {
+			return id
+		}
+	}
 }
 
 // runAcceptorAgent выполняет детерминированную приёмку собранного приложения:

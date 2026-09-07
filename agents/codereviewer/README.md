@@ -102,6 +102,7 @@ go run . review https://github.com/user/repo/pull/10 "безопасность"
 | `REVIEW_BLOCK_ON_CRITICAL` | `true`       | Блокировать апрув при критичных замечаниях  |
 | `REVIEW_SKIP_GENERATED`    | `true`       | Отсекать сгенерированные/бинарные файлы     |
 | `REVIEW_CHUNK_SIZE`        | `14000`      | Порог (симв.) разбиения диффа на части; `0` — выкл |
+| `REVIEW_FIX_ROUNDS`        | `3`          | Цикл «ревью → исправление → ревью» в планировщике |
 
 ---
 

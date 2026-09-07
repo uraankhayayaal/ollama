@@ -23,6 +23,13 @@ type Config struct {
 	// разбивается на несколько частей и ревьюится по частям, чтобы не
 	// переполнять контекст модели и снижать галлюцинации. 0 — без разбиения.
 	ChunkSize int
+
+	// MaxRounds — максимальное число циклов «ревью → исправление → ревью»
+	// в планировщике (runReviewLoop) для одного шага codereviewer.
+	// Замечания ревью превращаются в шаги refactor, после исправлений ревью
+	// повторяется. 1 — один проход ревью без цикла исправлений, 0 или
+	// отрицательное — цикл отключён.
+	MaxRounds int
 }
 
 // DefaultConfig возвращает конфиг со значениями по умолчанию.
@@ -32,6 +39,7 @@ func DefaultConfig() Config {
 		BlockOnCritical: true,
 		SkipGenerated:   true,
 		ChunkSize:       14000,
+		MaxRounds:       3,
 	}
 }
 
@@ -58,6 +66,11 @@ func LoadConfig() Config {
 	if v := os.Getenv("REVIEW_CHUNK_SIZE"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.ChunkSize = n
+		}
+	}
+	if v := os.Getenv("REVIEW_FIX_ROUNDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.MaxRounds = n
 		}
 	}
 
