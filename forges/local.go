@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"ai/logging"
 )
 
 // KindLocal — локальная директория как «система ревью».
@@ -185,21 +187,21 @@ func isBinary(b []byte) bool {
 // PostComment накапливает комментарий к строке локального кода.
 func (lf *LocalForge) PostComment(c ReviewComment) error {
 	lf.Published = append(lf.Published, c)
-	fmt.Printf("[LocalForge] замечание %s:%d: %s\n", c.FilePath, c.Line, c.Text)
+	logging.Detailf("[LocalForge] замечание %s:%d: %s", c.FilePath, c.Line, c.Text)
 	return nil
 }
 
 // PostSummary сохраняет сводку.
 func (lf *LocalForge) PostSummary(summary string) error {
 	lf.Summary = summary
-	fmt.Printf("[LocalForge] сводка:\n%s\n", summary)
+	logging.Infof("[LocalForge] сводка:\n%s", summary)
 	return nil
 }
 
 // Approve фиксирует одобрение.
 func (lf *LocalForge) Approve(summary string) error {
 	lf.Approved = true
-	fmt.Printf("[LocalForge] апрув: %s\n", summary)
+	logging.Infof("[LocalForge] апрув: %s", summary)
 	return nil
 }
 

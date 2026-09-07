@@ -4,6 +4,7 @@ import (
 	"ai/agents"
 	"ai/agents/codereviewer"
 	"ai/forges"
+	"ai/logging"
 	"ai/tools"
 	"fmt"
 	"os"
@@ -291,7 +292,7 @@ func (cg Codegenerator) Finalize() {
 
 	content := strings.Join(lines, "\n") + "\n"
 	_ = os.WriteFile(full, []byte(content), 0644)
-	fmt.Printf("[Finalize] написан отчёт: %s\n", full)
+	logging.Infof("[Finalize] написан отчёт: %s", full)
 
 	// Гарантируем наличие README.md с инструкциями по установке, запуску и
 	// использованию. Если модель уже создала его — не трогаем (не перезапишем).
@@ -311,7 +312,7 @@ func (cg Codegenerator) EnsureREADME() {
 	}
 	if _, err := os.Stat(full); err == nil {
 		// README уже есть (например, его создала модель) — не трогаем.
-		fmt.Printf("[EnsureREADME] %s уже существует, пропускаю\n", full)
+		logging.Detailf("[EnsureREADME] %s уже существует, пропускаю", full)
 		return
 	}
 
@@ -321,7 +322,7 @@ func (cg Codegenerator) EnsureREADME() {
 		return
 	}
 	_ = os.WriteFile(full, []byte(content), 0644)
-	fmt.Printf("[EnsureREADME] создан: %s\n", full)
+	logging.Infof("[EnsureREADME] создан: %s", full)
 }
 
 // listProjectFiles возвращает относительные пути всех файлов OutputDir

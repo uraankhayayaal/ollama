@@ -4,6 +4,7 @@
 package mrlistener
 
 import (
+	"ai/logging"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -56,15 +57,15 @@ func Listen(ctx context.Context) error {
 		return fmt.Errorf("GITLAB_PROJECTS не задан (список ID проектов через запятую)")
 	}
 
-	fmt.Printf("Загружена база известных MR: %d\n", s.len())
+	logging.Infof("Загружена база известных MR: %d", s.len())
 
 	// Сканируем один раз сразу, затем по тикеру.
-	fmt.Println("Первичное сканирование проектов...")
+	logging.Infof("Первичное сканирование проектов...")
 	for _, id := range projectIDs {
 		checkProject(ctx, s, id, gitlabURL, token)
 	}
 
-	fmt.Printf("Мониторинг запущен. Интервал: %v. Ожидание новых MR...\n", pollInterval)
+	logging.Infof("Мониторинг запущен. Интервал: %v. Ожидание новых MR...", pollInterval)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
@@ -151,45 +152,43 @@ func checkProject(ctx context.Context, s *storage, projectID, gitlabURL, token s
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
-			fmt.Printf("Ошибка создания запроса для проекта %s: %v\n", projectID, err)
+			logging.Warnf("Ошибка создания запроса для проекта %s: %v", projectID, err)
 			return
 		}
 		req.Header.Set("PRIVATE-TOKEN", token)
 
 		resp, err := client.Do(req)
 		if err != nil {
-			fmt.Printf("Ошибка запроса для проекта %s: %v\n", projectID, err)
+			logging.Warnf("Ошибка запроса для проекта %s: %v", projectID, err)
 			return
 		}
 
 		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			fmt.Printf("Ошибка чтения ответа для проекта %s: %v\n", projectID, readErr)
+			logging.Warnf("Ошибка чтения ответа для проекта %s: %v", projectID, readErr)
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
-			fmt.Printf("GitLab вернул ошибку для проекта %s: %s\n", projectID, resp.Status)
+			logging.Warnf("GitLab вернул ошибку для проекта %s: %s", projectID, resp.Status)
 			return
 		}
 
 		var mrs []MergeRequest
 		if err := json.Unmarshal(body, &mrs); err != nil {
-			fmt.Printf("Ошибка парсинга JSON для проекта %s: %v\n", projectID, err)
+			logging.Warnf("Ошибка парсинга JSON для проекта %s: %v", projectID, err)
 			return
 		}
 
 		for _, mr := range mrs {
 			isNew, err := s.add(mr.ID)
 			if err != nil {
-				fmt.Printf("Ошибка сохранения MR %d: %v\n", mr.ID, err)
+				logging.Warnf("Ошибка сохранения MR %d: %v", mr.ID, err)
 				continue
 			}
 			if isNew {
-				fmt.Printf("[%s] Внимание! Новый MR в проекте %d!\n", time.Now().Format("15:04:05"), mr.ProjectID)
-				fmt.Printf("Название: %s\n", mr.Title)
-				fmt.Printf("Ссылка: %s\n", mr.WebURL)
-				fmt.Println("------------------------------------")
+				logging.Infof("[%s] Внимание! Новый MR в проекте %d!\nНазвание: %s\nСсылка: %s\n------------------------------------",
+					time.Now().Format("15:04:05"), mr.ProjectID, mr.Title, mr.WebURL)
 			}
 		}
 

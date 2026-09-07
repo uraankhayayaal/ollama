@@ -2,12 +2,12 @@ package models
 
 import (
 	"ai/agents"
+	"ai/logging"
 	"ai/runner"
 	"ai/tools"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 
 	"github.com/ollama/ollama/api"
 )
@@ -21,7 +21,7 @@ func NewOllamaProvider(model string) (*OllamaProvider, error) {
 	// 1. Создаем клиент Ollama (по умолчанию подключается к http://127.0.0.1:11434)
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
-		log.Fatalf("Ошибка инициализации клиента: %v", err)
+		logging.Fatalf("Ошибка инициализации клиента: %v", err)
 	}
 
 	return &OllamaProvider{client: client, model: model}, nil

@@ -129,6 +129,25 @@ func TestWriteFilesEmptyRejected(t *testing.T) {
 	}
 }
 
+func TestWriteFilesAcceptsJSONStringForm(t *testing.T) {
+	// Модели (например qwen) иногда сериализуют поле "files" в JSON-строку.
+	// Это должна быть корректно разобрано, а не отвергнуто как «список пуст».
+	cg := newTestCG(t)
+	jsonStr := `[{"filename":"cmd/main.go","content":"package main"},{"filename":"utils/helper.go","content":"package utils"}]`
+	out, err := cg.WriteFiles(map[string]any{"files": jsonStr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{filepath.Join(cg.OutputDir, "cmd", "main.go"), filepath.Join(cg.OutputDir, "utils", "helper.go")} {
+		if _, err := os.Stat(want); err != nil {
+			t.Errorf("запись из JSON-строки не создала %q: %v", want, err)
+		}
+	}
+	if !contains(string(out), "success") {
+		t.Errorf("ожидался status success в %s", out)
+	}
+}
+
 func TestRunReturnsOutput(t *testing.T) {
 	cg := newTestCG(t)
 	if err := cg.write("main.go", "package main\nfunc main(){}"); err != nil {

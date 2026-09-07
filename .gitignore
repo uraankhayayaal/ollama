@@ -3,3 +3,6 @@
 # Собранные бинари CLI
 ai
 /services/mrListener/mrListener
+
+# Лог-файлы запусков (подробный лог по проектам)
+logs/

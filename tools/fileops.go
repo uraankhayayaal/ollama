@@ -2,6 +2,7 @@ package tools
 
 import (
 	"ai/forges"
+	"ai/logging"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -113,7 +114,7 @@ func (ops *FileOps) Write(name, content string) error {
 		return err
 	}
 	ops.written++
-	fmt.Printf("[WriteFiles] записано %q -> %q\n", name, full)
+	logging.Detailf("[WriteFiles] записано %q -> %q", name, full)
 	return nil
 }
 
@@ -135,7 +136,7 @@ func (ops *FileOps) AppendTo(name, content string) error {
 	if _, err := f.WriteString(content); err != nil {
 		return err
 	}
-	fmt.Printf("[AppendFile] дополнен %q -> %q\n", name, full)
+	logging.Detailf("[AppendFile] дополнен %q -> %q", name, full)
 	return nil
 }
 
@@ -184,17 +185,72 @@ type BulkParams struct {
 	Files []FileItem `json:"files"`
 }
 
-// WriteFiles обрабатывает пакетную запись файлов, вызванную ИИ-агентом
+// parseFileItems нормализует поле "files" инструмента WriteFiles в массив
+// FileItem. Модели отправляют его по-разному: напрямую массивом, либо
+// JSON-строкой (или []byte). Аналог parseComments в textreview.go.
+func parseFileItems(raw any) []FileItem {
+	var items []FileItem
+
+	switch v := raw.(type) {
+	case string:
+		_ = json.Unmarshal([]byte(v), &items)
+	case []byte:
+		_ = json.Unmarshal(v, &items)
+	case nil:
+		return nil
+	default:
+		// Резервный путь — сериализуем обратно и разбираем.
+		if b, err := json.Marshal(v); err == nil {
+			_ = json.Unmarshal(b, &items)
+		}
+	}
+
+	return items
+}
+
+// parsePathList нормализует аргумент-список путей (filenames/paths) инструментов
+// ReadFiles/DeleteFiles. Модели передают его либо массивом строк, либо JSON-строкой
+// (или []byte) — обе формы приводятся к []string.
+func parsePathList(raw any) []string {
+	switch v := raw.(type) {
+	case string:
+		var out []string
+		_ = json.Unmarshal([]byte(v), &out)
+		return out
+	case []byte:
+		var out []string
+		_ = json.Unmarshal(v, &out)
+		return out
+	default:
+		if b, err := json.Marshal(raw); err == nil {
+			var out []string
+			_ = json.Unmarshal(b, &out)
+			return out
+		}
+		return nil
+	}
+}
+
+// WriteFiles обрабатывает пакетную запись файлов, вызванную ИИ-агентом.
+// Поле "files" может прийти в двух формах — как массив объектов (типично для
+// OpenAI/Ollama) или как JSON-строка (некоторые модели, напр. qwen, склонны
+// сериализовать массив в строку). Обе формы нормализуются, чтобы агент не
+// тратил раунды на повторные попытки из-за неверного парсинга.
 func (ops *FileOps) WriteFiles(args map[string]any) ([]byte, error) {
 	var params BulkParams
 
 	bytes, err := json.Marshal(args)
 	if err == nil {
-		_ = json.Unmarshal(bytes, &params)
+		// Пробуем стандартное разложение «files» как массива.
+		if unmErr := json.Unmarshal(bytes, &params); unmErr != nil || len(params.Files) == 0 {
+			// Не вышло напрямую — пробуем через поле "files" как JSON-строку
+			// (или иной строковый вид), следуя общему паттерну parseComments.
+			params = BulkParams{Files: parseFileItems(args["files"])}
+		}
 	}
 
 	if len(params.Files) == 0 {
-		fmt.Printf("[WriteFiles] ВНИМАНИЕ: список файлов пуст. Полученные аргументы: %s\n", string(bytes))
+		logging.Warnf("[WriteFiles] ВНИМАНИЕ: список файлов пуст. Полученные аргументы: %s", string(bytes))
 		resultJSON, _ := json.Marshal(map[string]string{
 			"status":     "error",
 			"message":    "Список файлов пуст или неверный формат аргументов",
@@ -221,7 +277,7 @@ func (ops *FileOps) WriteFiles(args map[string]any) ([]byte, error) {
 	}
 
 	resultJSON, _ := json.Marshal(result)
-	fmt.Println("[WriteFiles] результат:", result)
+	logging.Detailf("[WriteFiles] результат: %v", result)
 	return resultJSON, nil
 }
 
@@ -263,7 +319,11 @@ func (ops *FileOps) ReadFiles(args map[string]any) ([]byte, error) {
 
 	bytes, err := json.Marshal(args)
 	if err == nil {
-		_ = json.Unmarshal(bytes, &params)
+		// Пробуем стандартное разложение "filenames" как массива; если модель
+		// передала его JSON-строкой — нормализуем через parsePathList.
+		if unmErr := json.Unmarshal(bytes, &params); unmErr != nil || len(params.Filenames) == 0 {
+			params.Filenames = parsePathList(args["filenames"])
+		}
 	}
 
 	if len(params.Filenames) == 0 {
@@ -322,7 +382,10 @@ func (ops *FileOps) DeleteFiles(args map[string]any) ([]byte, error) {
 
 	bytes, err := json.Marshal(args)
 	if err == nil {
-		_ = json.Unmarshal(bytes, &params)
+		// Нормализуем "paths": массив или JSON-строка.
+		if unmErr := json.Unmarshal(bytes, &params); unmErr != nil || len(params.Paths) == 0 {
+			params.Paths = parsePathList(args["paths"])
+		}
 	}
 
 	if len(params.Paths) == 0 {

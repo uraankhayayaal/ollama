@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"ai/forges"
+	"ai/logging"
 )
 
 // Forge — реализация интерфейса forges.Forge для GitLab.
@@ -187,7 +188,7 @@ func (f *Forge) PostComment(comment forges.ReviewComment) error {
 }
 
 func (f *Forge) postCommentOnLine(comment forges.ReviewComment) error {
-	fmt.Println("postCommentOnLine", comment)
+	logging.Detailf("[GitLab] postCommentOnLine: %s:%d %s", comment.FilePath, comment.Line, comment.Text)
 
 	baseSHA, startSHA, headSHA, err := f.versions()
 	if err != nil {
@@ -227,7 +228,7 @@ func (f *Forge) postCommentOnLine(comment forges.ReviewComment) error {
 }
 
 func (f *Forge) postCommentOnFile(comment forges.ReviewComment) error {
-	fmt.Println("postCommentOnFile", comment)
+	logging.Detailf("[GitLab] postCommentOnFile: %s %s", comment.FilePath, comment.Text)
 
 	baseSHA, startSHA, headSHA, err := f.versions()
 	if err != nil {

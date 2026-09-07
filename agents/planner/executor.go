@@ -8,12 +8,12 @@ import (
 	"ai/agents/refactor"
 	"ai/checkpoint"
 	"ai/forges"
+	"ai/logging"
 	"ai/models"
 	"ai/runner"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 )
 
@@ -89,18 +89,18 @@ func (e *Executor) Run(ctx context.Context) error {
 
 			// Resume: шаг уже завершён в прошлом запуске — пропускаем.
 			if e.completed[stepID] {
-				log.Printf("[Plan] шаг %s уже выполнен ранее, пропускаю (resume)", stepID)
+				logging.Detailf("[Plan] шаг %s уже выполнен ранее, пропускаю (resume)", stepID)
 				continue
 			}
 
-			log.Printf("[Plan] шаг %s: %s (агент: %s)", step.ID, step.Description, step.Agent)
+			logging.Infof("[Plan] шаг %s: %s (агент: %s)", step.ID, step.Description, step.Agent)
 			e.markRunning(ctx, stepID)
 			if err := e.executeStep(ctx, step); err != nil {
 				e.markFailed(ctx, stepID)
 				return fmt.Errorf("шаг %q: %w", step.ID, err)
 			}
 			e.markDone(ctx, stepID)
-			log.Printf("[Plan] шаг %s завершён", step.ID)
+			logging.Infof("[Plan] шаг %s завершён", step.ID)
 		}
 	}
 
@@ -121,10 +121,10 @@ func (e *Executor) initCheckpoint(ctx context.Context, waves [][]string) error {
 				e.statuses[id] = checkpoint.StatusDone
 			}
 			n := len(snap.Completed)
-			log.Printf("[Checkpoint] resume: восстановлено %d завершённых шагов", n)
+			logging.Infof("[Checkpoint] resume: восстановлено %d завершённых шагов", n)
 			return nil
 		} else if err != nil && err != checkpoint.ErrNotFound {
-			log.Printf("[Checkpoint] не удалось прочитать чекпоинт (%v), начинаю заново", err)
+			logging.Warnf("[Checkpoint] не удалось прочитать чекпоинт (%v), начинаю заново", err)
 		}
 	}
 
@@ -171,7 +171,7 @@ func (e *Executor) markDone(ctx context.Context, stepID string) {
 			if len(snap.Conversations) > 0 {
 				if _, ok := snap.Conversations[stepID]; ok {
 					if err := e.store.ClearRoundState(ctx, snap, stepID); err != nil {
-						log.Printf("[Checkpoint] ошибка очистки истории шага %s: %v", stepID, err)
+						logging.Detailf("[Checkpoint] ошибка очистки истории шага %s: %v", stepID, err)
 					}
 				}
 			}
@@ -197,10 +197,10 @@ func (e *Executor) persistStatus(ctx context.Context, stepID, status string) {
 	}
 	if snap, err := e.store.Load(ctx); err == nil {
 		if err := e.store.MarkStep(ctx, snap, stepID, status); err != nil {
-			log.Printf("[Checkpoint] ошибка сохранения статуса %s=%s: %v", stepID, status, err)
+			logging.Detailf("[Checkpoint] ошибка сохранения статуса %s=%s: %v", stepID, status, err)
 		}
 	} else {
-		log.Printf("[Checkpoint] ошибка чтения снапшота для %s: %v", stepID, err)
+		logging.Detailf("[Checkpoint] ошибка чтения снапшота для %s: %v", stepID, err)
 	}
 }
 
@@ -256,8 +256,8 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// Контекст с resume-состоянием используется ТОЛЬКО для этого вызова,
 	// чтобы self-review ниже не подхватил чужую историю.
 	genCtx := ctx
-	if rs, ok := e.loadResumeState(ctx, step.ID); ok {
-		log.Printf("[Plan] шаг %s: возобновляю агентский цикл с раунда %d (повторный запуск с --resume)", step.ID, rs.Rounds+1)
+if rs, ok := e.loadResumeState(ctx, step.ID); ok {
+			logging.Detailf("[Plan] шаг %s: возобновляю агентский цикл с раунда %d (повторный запуск с --resume)", step.ID, rs.Rounds+1)
 		genCtx = runner.WithResumeState(ctx, rs)
 	}
 
@@ -271,7 +271,7 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// продолжил шаг с раунда resp.Rounds+1, и останавливаем выполнение плана.
 	if resp != nil && resp.Truncated {
 		if e.persistRoundState(ctx, step, resp) {
-			log.Printf("[Plan] шаг %s: истощён лимит раундов (%d), история сохранена в чекпоинт", step.ID, resp.Rounds)
+			logging.Warnf("[Plan] шаг %s: истощён лимит раундов (%d), история сохранена в чекпоинт", step.ID, resp.Rounds)
 		}
 		if strings.TrimSpace(resp.Content) == "" {
 			// Модель исчерпала лимит и вернула пустой ответ без вызовов
@@ -285,7 +285,7 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 			// resp.Rounds+1 (например 13..24, затем снова resume — 25..36).
 			return fmt.Errorf("шаг %q: исчерпан лимит раундов (%d) агентского цикла, история сохранена — запустите с --resume, чтобы продолжить", step.ID, resp.Rounds)
 		}
-		log.Printf("[Plan] шаг %s: цикл исчерпал лимит раундов (%d), но чекпоинт отключён, продолжаю с частичным результатом", step.ID, resp.Rounds)
+		logging.Warnf("[Plan] шаг %s: цикл исчерпал лимит раундов (%d), но чекпоинт отключён, продолжаю с частичным результатом", step.ID, resp.Rounds)
 	}
 
 	// Self-review сгенерированного/рефакторенного кода — тоже только по
@@ -315,7 +315,7 @@ func (e *Executor) loadResumeState(ctx context.Context, stepID string) (*runner.
 	}
 	var msgs []runner.Message
 	if uerr := json.Unmarshal(conv, &msgs); uerr != nil {
-		log.Printf("[Checkpoint] повреждена сохранённая история шага %s (%v), начинаю шаг заново", stepID, uerr)
+		logging.Warnf("[Checkpoint] повреждена сохранённая история шага %s (%v), начинаю шаг заново", stepID, uerr)
 		return nil, false
 	}
 	return &runner.ResumeState{Messages: msgs, Rounds: snap.Rounds[stepID]}, true
@@ -330,16 +330,16 @@ func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *runn
 	}
 	conv, err := json.Marshal(resp.Messages)
 	if err != nil {
-		log.Printf("[Checkpoint] ошибка сериализации истории шага %s: %v", step.ID, err)
+		logging.Warnf("[Checkpoint] ошибка сериализации истории шага %s: %v", step.ID, err)
 		return false
 	}
 	snap, err := e.store.Load(ctx)
 	if err != nil {
-		log.Printf("[Checkpoint] ошибка чтения чекпоинта для шага %s: %v", step.ID, err)
+		logging.Warnf("[Checkpoint] ошибка чтения чекпоинта для шага %s: %v", step.ID, err)
 		return false
 	}
 	if err := e.store.SaveRoundState(ctx, snap, step.ID, resp.Rounds, conv); err != nil {
-		log.Printf("[Checkpoint] ошибка сохранения истории шага %s: %v", step.ID, err)
+		logging.Warnf("[Checkpoint] ошибка сохранения истории шага %s: %v", step.ID, err)
 		return false
 	}
 	return true
@@ -367,7 +367,7 @@ func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName s
 		agent.PublishParsedReview(resp.Content)
 	}
 
-	log.Printf("[Plan] ревью %q (scope: %v): найдено замечаний: %d", dir, step.Scope, len(lf.Published))
+	logging.Infof("[Plan] ревью %q (scope: %v): найдено замечаний: %d", dir, step.Scope, len(lf.Published))
 	return nil
 }
 
@@ -381,18 +381,18 @@ func (e *Executor) runAcceptorAgent(ctx context.Context, step *Step, projectName
 	e.acceptReports[step.ID] = rep
 
 	if rep.Verdict == acceptor.VerdictApprove {
-		log.Printf("[Accept] шаг %s: приёмка %q пройдена (%s)", step.ID, dir, rep.Summary)
+		logging.Infof("[Accept] шаг %s: приёмка %q пройдена (%s)", step.ID, dir, rep.Summary)
 	} else {
-		log.Printf("[Accept] шаг %s: приёмка %q НЕ пройдена (%s)", step.ID, dir, rep.Summary)
+		logging.Infof("[Accept] шаг %s: приёмка %q НЕ пройдена (%s)", step.ID, dir, rep.Summary)
 		for _, iss := range rep.Issues {
 			loc := iss.File
 			if iss.Line > 0 {
 				loc = fmt.Sprintf("%s:%d", loc, iss.Line)
 			}
 			if loc != "" {
-				log.Printf("[Accept]   - [%s] %s %s", iss.Severity, loc, iss.Text)
+				logging.Detailf("[Accept]   - [%s] %s %s", iss.Severity, loc, iss.Text)
 			} else {
-				log.Printf("[Accept]   - [%s] %s", iss.Severity, iss.Text)
+				logging.Detailf("[Accept]   - [%s] %s", iss.Severity, iss.Text)
 			}
 		}
 	}
@@ -433,20 +433,20 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			}
 		}
 		if len(failing) == 0 {
-			log.Printf("[Accept] приёмка пройдена: все проекты соответствуют требованиям")
+			logging.Infof("[Accept] приёмка пройдена: все проекты соответствуют требованиям")
 			return nil
 		}
 
 		for _, s := range failing {
 			rep := e.acceptReports[s.ID]
-			log.Printf("[Accept] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, cfg.MaxRounds, s.Description)
+			logging.Infof("[Accept] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, cfg.MaxRounds, s.Description)
 
 			fixes, err := e.planFixSteps(ctx, rep)
 			if err != nil {
 				return fmt.Errorf("раунд приёмки %d: планирование исправлений: %w", round, err)
 			}
 			if len(fixes) == 0 {
-				log.Printf("[Accept] раунд %d: планировщик не вернул шагов исправлений", round)
+				logging.Warnf("[Accept] раунд %d: планировщик не вернул шагов исправлений", round)
 				return fmt.Errorf("раунд приёмки %d: планировщик не составил план исправлений для %q", round, s.Description)
 			}
 
@@ -456,12 +456,23 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			for _, fs := range fixes {
 				if fs.Agent == AgentAcceptor {
 					// Модель проигнорировала запрет: приёмку запускает цикл ниже.
-					log.Printf("[Accept] раунд %d: шаг acceptor в плане исправлений пропущен", round)
+					logging.Detailf("[Accept] раунд %d: шаг acceptor в плане исправлений пропущен", round)
 					continue
 				}
 				step := fs
 				step.ID = fixStepID(e, round, executed)
-				log.Printf("[Accept] раунд %d: шаг исправления %s: %s (агент: %s)", round, step.ID, step.Description, step.Agent)
+				// Обновлённая область видимости: если планировщик не указал
+				// scope (или указал только «мусорный» узкий), подставляем
+				// файлы из отчёта приёмки, чтобы фикс-агента не заблокировала
+				// запись нужных исходников.
+				if len(step.Scope) == 0 {
+					step.Scope = rep.IssueFiles()
+				}
+				// Переланировка добавляет задачу исправления в план: она
+				// становится частью плана (findStep/чекпоинт/resume), а её
+				// scope — обновлённый (файлы из отчёта приёмки).
+				e.plan.Steps = append(e.plan.Steps, step)
+				logging.Infof("[Accept] раунд %d: шаг исправления %s: %s (агент: %s)", round, step.ID, step.Description, step.Agent)
 				e.markRunning(ctx, step.ID)
 				if err := e.executeStep(ctx, &step); err != nil {
 					e.markFailed(ctx, step.ID)
@@ -475,14 +486,14 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			}
 
 			// Повторная приёмка после исправлений.
-			log.Printf("[Accept] раунд %d: повторная приёмка после исправлений", round)
+			logging.Infof("[Accept] раунд %d: повторная приёмка после исправлений", round)
 			if err := e.runAcceptorAgent(ctx, s, e.plan.ProjectName); err != nil {
 				return err
 			}
 		}
 	}
 
-	log.Printf("[Accept] исчерпан бюджет раундов приёмки (%d) — остались неисправленные замечания", cfg.MaxRounds)
+	logging.Warnf("[Accept] исчерпан бюджет раундов приёмки (%d) — остались неисправленные замечания", cfg.MaxRounds)
 	return fmt.Errorf("приёмка не пройдена после %d раундов исправлений, см. лог [Accept]", cfg.MaxRounds)
 }
 
@@ -490,6 +501,13 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 // Формат — тот же JSON-план, но планировщику запрещено добавлять acceptor:
 // повторную приёмку запускает цикл приёмки исполнителя.
 func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]Step, error) {
+	// Обновлённая область видимости для задач исправления: исходит из тех
+	// файлов, на которые реально указывает приёмка (acceptor не ограничен
+	// областью видимости и видит весь модуль). Эти локации передаём
+	// планировщику, чтобы scope шага покрывал файлы, которые придётся менять,
+	// а не сузился до произвольного (например, [go.mod]) и не заблокировал
+	// фикс-агента на записи нужных файлов.
+	issueFiles := uniqueSlash(rep.IssueFiles())
 	prompt := fmt.Sprintf(`Приёмка собранного приложения не пройдена.
 
 %s
@@ -498,8 +516,10 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 Требования:
 - Все шаги — только refactor (для проверки исправлений можно добавить codereviewer).
 - НЕ добавляй шаг acceptor — повторную приёмку запустит исполнитель.
-- scope каждого шага — только файлы, относящиеся к ошибкам приёмки, а не весь проект.
-- Каждый шаг — одно конкретное исправление.`, rep.FixPrompt())
+- scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
+%s
+  (а не весь проект и не узкую догадку вроде только [go.mod], если правка нужна в исходниках).
+- Каждый шаг — одно конкретное исправление.`, rep.FixPrompt(), bullet(issueFiles))
 
 	pa := NewPlanner(rep.Project, prompt)
 	resp, err := e.provider.Generate(ctx, pa)
@@ -508,7 +528,8 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 	}
 	fixPlan, err := ParsePlan(resp.Content)
 	if err != nil {
-		log.Printf("[Accept] не удалось разобрать план исправлений: %v\nОтвет планировщика:\n%s", err, resp.Content)
+		logging.Warnf("[Accept] не удалось разобрать план исправлений: %v", err)
+		logging.Detailf("[Accept] Ответ планировщика:\n%s", resp.Content)
 		return nil, err
 	}
 	return fixPlan.Steps, nil
@@ -527,6 +548,36 @@ func fixStepID(e *Executor, round, idx int) string {
 			return id
 		}
 	}
+}
+
+// uniqueSlash возвращает уникальные элементы списка, нормализуя пути к
+// slash-формату.
+func uniqueSlash(items []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, it := range items {
+		it = strings.TrimSpace(strings.ReplaceAll(it, "\\", "/"))
+		if it == "" || seen[it] {
+			continue
+		}
+		seen[it] = true
+		out = append(out, it)
+	}
+	return out
+}
+
+// bullet форматирует список как маркированный отступ (пустой список → «—»).
+func bullet(items []string) string {
+	if len(items) == 0 {
+		return "  - (файлы из отчёта приёмки)"
+	}
+	var b strings.Builder
+	for _, it := range items {
+		b.WriteString("  - ")
+		b.WriteString(it)
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // findStep находит шаг по ID.
@@ -564,13 +615,13 @@ func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfRevi
 
 	reviewAgent, forge, err := sr.NewReviewAgentFor(dir, "")
 	if err != nil {
-		log.Printf("[Plan] self-review: не удалось создать агента ревью: %v", err)
+		logging.Warnf("[Plan] self-review: не удалось создать агента ревью: %v", err)
 		return
 	}
 	applyForgeScope(forge, scope)
 
 	if _, err := provider.Generate(ctx, reviewAgent); err != nil {
-		log.Printf("[Plan] self-review: ошибка ревью: %v", err)
+		logging.Warnf("[Plan] self-review: ошибка ревью: %v", err)
 		return
 	}
 
@@ -586,19 +637,19 @@ func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfRevi
 	prevSig := ""
 	stuckRounds := 0
 	for round := 1; round <= maxRounds && len(pending) > 0; round++ {
-		log.Printf("[Plan] self-review: раунд %d/%d, замечаний: %d", round, maxRounds, len(pending))
+		logging.Infof("[Plan] self-review: раунд %d/%d, замечаний: %d", round, maxRounds, len(pending))
 
 		fixPrompt := sr.FixPromptFor(originalPrompt, pending)
 		fixAgent, ferr := codegenerator.NewCodegeneratorInDir(fixPrompt, dir)
 		if ferr != nil {
-			log.Printf("[Plan] self-review: ошибка создания агента исправления: %v", ferr)
+			logging.Warnf("[Plan] self-review: ошибка создания агента исправления: %v", ferr)
 			break
 		}
 		// Фикс тоже работает только в рамках области шага.
 		fixAgent.SetScope(scope)
 
 		if _, err := provider.Generate(ctx, fixAgent); err != nil {
-			log.Printf("[Plan] self-review: ошибка на этапе исправления: %v", err)
+			logging.Warnf("[Plan] self-review: ошибка на этапе исправления: %v", err)
 			break
 		}
 		fixAgent.Finalize()
@@ -610,12 +661,12 @@ func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfRevi
 		// Перечитываем код после правок и смотрим, остались ли замечания.
 		newAgent, newForge, rerr := sr.NewReviewAgentFor(dir, "")
 		if rerr != nil {
-			log.Printf("[Plan] self-review: ошибка повторного ревью: %v", rerr)
+			logging.Warnf("[Plan] self-review: ошибка повторного ревью: %v", rerr)
 			break
 		}
 		applyForgeScope(newForge, scope)
 		if _, err := provider.Generate(ctx, newAgent); err != nil {
-			log.Printf("[Plan] self-review: ошибка повторного ревью: %v", err)
+			logging.Warnf("[Plan] self-review: ошибка повторного ревью: %v", err)
 			break
 		}
 		rl, ok2 := newForge.(*forges.LocalForge)
@@ -628,7 +679,7 @@ func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfRevi
 		if sig != "" && sig == prevSig {
 			stuckRounds++
 			if stuckRounds >= 2 {
-				log.Printf("[Plan] self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
+				logging.Warnf("[Plan] self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
 				pending = rl.Published
 				break
 			}
@@ -640,9 +691,9 @@ func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfRevi
 	}
 
 	if len(pending) > 0 {
-		log.Printf("[Plan] self-review: завершён, осталось замечаний: %d", len(pending))
+		logging.Infof("[Plan] self-review: завершён, осталось замечаний: %d", len(pending))
 	} else {
-		log.Printf("[Plan] self-review: завершён, замечаний больше нет")
+		logging.Infof("[Plan] self-review: завершён, замечаний больше нет")
 	}
 }
 

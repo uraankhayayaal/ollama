@@ -12,11 +12,11 @@ import (
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	"ai/forges"
 	_ "ai/forges/all"
+	"ai/logging"
 	"ai/models"
 	"ai/services/mrlistener"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -26,16 +26,20 @@ import (
 )
 
 func main() {
+	// Имя проекта из аргументов командной строки — по нему именуется
+	// подробный лог-файл (logs/<проект>.log).
+	logging.Setup(projectFromArgs(os.Args))
+
 	// Load the .env file. Отсутствие файла не фатально: критичные настройки
 	// (провайдер, токены) всё равно проверяются ниже по ходу выполнения.
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
-		log.Printf("Предупреждение: .env не загружен (%v)", err)
+		logging.Warnf("Предупреждение: .env не загружен (%v)", err)
 	}
 
 	// Сервис мониторинга новых MR — не требует провайдера модели.
 	if len(os.Args) > 1 && os.Args[1] == "listen" {
 		if err := mrlistener.Listen(context.Background()); err != nil {
-			log.Fatal(err)
+			logging.Fatalf("%v", err)
 		}
 		return
 	}
@@ -45,7 +49,7 @@ func main() {
 	// go run . accept <имя_проекта>
 	if len(os.Args) > 1 && os.Args[1] == "accept" {
 		if len(os.Args) < 3 || os.Args[2] == "" {
-			log.Fatal("Использование: go run . accept <имя_проекта>\nПример: go run . accept storageService")
+			logging.Fatalf("Использование: go run . accept <имя_проекта>\nПример: go run . accept storageService")
 		}
 		runAcceptCommand(os.Args[2])
 		os.Exit(0)
@@ -80,11 +84,11 @@ func main() {
 		provider, err = models.NewTrimProvider()
 
 	default:
-		log.Fatalf("Unknown provider: %s. Use 'ollama', 'yandex' or 'trim'", providerType)
+		logging.Fatalf("Unknown provider: %s. Use 'ollama', 'yandex' or 'trim'", providerType)
 	}
 
 	if err != nil {
-		log.Fatalf("Failed to init provider: %v", err)
+		logging.Fatalf("Failed to init provider: %v", err)
 	}
 
 	// Провайдеры с одним раундом (например, trim) не умеют цикл NextChunk
@@ -102,7 +106,7 @@ func main() {
 	switch agentName {
 	case "generate":
 		if len(agentArgs) < 1 {
-			log.Fatal("Использование: go run . generate <имя_проекта> [промпт]\n" +
+			logging.Fatalf("Использование: go run . generate <имя_проекта> [промпт]\n" +
 				"Пример: go run . generate storageService \"Напиши микросервис для хранения файлов\"")
 		}
 		projectName := agentArgs[0]
@@ -110,7 +114,7 @@ func main() {
 		agent = codegenerator.NewCodegenerator(projectName, prompt)
 	case "plan":
 		if len(agentArgs) < 2 {
-			log.Fatal("Использование: go run . plan <имя_проекта> <промпт> [--resume]\n" +
+			logging.Fatalf("Использование: go run . plan <имя_проекта> <промпт> [--resume]\n" +
 				"Пример: go run . plan storageService \"Создай микросервис хранения файлов и ревью кода\"\n" +
 				"Пример: go run . plan storageService --resume")
 		}
@@ -119,14 +123,14 @@ func main() {
 		planPrompt = strings.Join(agentArgs[1:], " ")
 	case "refactor":
 		if len(agentArgs) < 2 {
-			log.Fatal("Использование: go run . refactor <имя_проекта> <промпт>\n" +
+			logging.Fatalf("Использование: go run . refactor <имя_проекта> <промпт>\n" +
 				"Пример: go run . refactor storageService \"Добавить эндпоинт /health\"")
 		}
 		projectName := agentArgs[0]
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent, err = refactor.NewRefactorAgent(prompt, projectName)
 		if err != nil {
-			log.Fatalf("Ошибка: %v", err)
+			logging.Fatalf("Ошибка: %v", err)
 		}
 	case "review":
 		agent = codereviewer.NewCodereviewer(agentArgs)
@@ -136,7 +140,7 @@ func main() {
 			}
 		}
 	default:
-		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Режим планировщика обрабатывается отдельно и до общего прогона:
@@ -150,11 +154,11 @@ func main() {
 
 	resp, err := provider.Generate(ctx, agent)
 	if err != nil {
-		log.Fatalf("Error: %v", err)
+		logging.Fatalf("Error: %v", err)
 	}
 
 	if resp.Truncated {
-		log.Println("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
+		logging.Warnf("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
 	}
 
 	// 5. Цикл генерации/само-ревью для агента-генератора: после первого
@@ -170,14 +174,14 @@ func main() {
 	if r, ok := agent.(reviewParser); ok {
 		n := r.PublishParsedReview(resp.Content)
 		if n > 0 {
-			log.Printf("Опубликовано замечаний из текстового ответа модели: %d", n)
+			logging.Infof("Опубликовано замечаний из текстового ответа модели: %d", n)
 		}
 	}
 
 	// 7. Итоговый отчёт-сводка в тред MR/PR, если агент его поддерживает.
 	if r, ok := agent.(summarizer); ok {
 		if serr := r.PostSummaryToPR(); serr != nil {
-			log.Printf("Не удалось опубликовать итоговую сводку: %v", serr)
+			logging.Warnf("Не удалось опубликовать итоговую сводку: %v", serr)
 		}
 	}
 
@@ -186,8 +190,8 @@ func main() {
 		r.Finalize()
 	}
 
-	fmt.Println("Response Message:", resp.Content)
-	fmt.Println("Response Tools:", resp.ToolCalls)
+	logging.Infof("Response Message: %s", resp.Content)
+	logging.Infof("Response Tools: %v", resp.ToolCalls)
 }
 
 // reviewParser — опциональный интерфейс агента, умеющего опубликовать ревью,
@@ -231,6 +235,25 @@ func defaultPrompt(args []string) string {
 	return "Напиши микросервис для расчета квадратного уровнения, придумай формат аргументов для передачи в код."
 }
 
+// projectFromArgs определяет имя проекта (имя лог-файла) по аргументам:
+// generate/refactor/plan/accept <имя> → имя; review → "review"; listen → "mrlistener".
+func projectFromArgs(args []string) string {
+	if len(args) < 2 {
+		return "unnamed"
+	}
+	switch args[1] {
+	case "generate", "refactor", "plan", "accept":
+		if len(args) >= 3 && args[2] != "" {
+			return args[2]
+		}
+	case "review":
+		return "review"
+	case "listen":
+		return "mrlistener"
+	}
+	return "unnamed"
+}
+
 // doSelfReview запускает цикл self-repair для агента-генератора: генерация →
 // локальное ревью сгенерированного кода → исправление по замечаниям ревью →
 // повтор до схождения (нет замечаний) или исчерпания бюджета раундов.
@@ -241,14 +264,14 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 	// Узнаём бюджет раундов исправления из конфига генератора.
 	maxRounds := codegenerator.LoadConfig().MaxRepairRounds
 	if maxRounds <= 0 {
-		log.Println("Self-review: исправление отключено (CODEGEN_MAX_REPAIR_ROUNDS<=0)")
+		logging.Infof("Self-review: исправление отключено (CODEGEN_MAX_REPAIR_ROUNDS<=0)")
 		return
 	}
-	log.Printf("Self-review: ревью кода в %s (бюджет исправлений: %d)", dir, maxRounds)
+	logging.Infof("Self-review: ревью кода в %s (бюджет исправлений: %d)", dir, maxRounds)
 
 	reviewAgent, forge, err := sr.NewReviewAgentFor(dir, focus)
 	if err != nil {
-		log.Printf("Self-review: не удалось создать агента ревью: %v", err)
+		logging.Warnf("Self-review: не удалось создать агента ревью: %v", err)
 		return
 	}
 	if noChunk {
@@ -258,17 +281,17 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 	}
 
 	if _, err := provider.Generate(ctx, reviewAgent); err != nil {
-		log.Printf("Self-review: ошибка ревью: %v", err)
+		logging.Warnf("Self-review: ошибка ревью: %v", err)
 	}
 
 	lf, ok := forge.(*forges.LocalForge)
 	if !ok {
-		log.Printf("Self-review: неожиданный тип forge, пропускаю исправление")
+		logging.Warnf("Self-review: неожиданный тип forge, пропускаю исправление")
 		return
 	}
 
 	if len(lf.Published) == 0 {
-		log.Println("Self-review: замечаний не найдено, исправление не требуется")
+		logging.Infof("Self-review: замечаний не найдено, исправление не требуется")
 		return
 	}
 
@@ -282,18 +305,18 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 	prevSig := ""
 	stuckRounds := 0
 	for round := 1; round <= maxRounds && len(pending) > 0; round++ {
-		log.Printf("Self-review: раунд %d/%d, замечаний: %d. Запускаю исправление.", round, maxRounds, len(pending))
+		logging.Infof("Self-review: раунд %d/%d, замечаний: %d. Запускаю исправление.", round, maxRounds, len(pending))
 
 		fixPrompt := sr.FixPromptFor(originalPrompt, pending)
 
 		fixAgent, ferr := codegenerator.NewCodegeneratorInDir(fixPrompt, dir)
 		if ferr != nil {
-			log.Printf("Self-review: не удалось создать агента исправления: %v", ferr)
+			logging.Warnf("Self-review: не удалось создать агента исправления: %v", ferr)
 			break
 		}
 
 		if _, err := provider.Generate(ctx, fixAgent); err != nil {
-			log.Printf("Self-review: ошибка на этапе исправления: %v", err)
+			logging.Warnf("Self-review: ошибка на этапе исправления: %v", err)
 			break
 		}
 
@@ -307,7 +330,7 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 		// Перечитываем код после правок и смотрим, остались ли замечания.
 		next, rerr := reReview(ctx, provider, sr, dir, focus, noChunk)
 		if rerr != nil {
-			log.Printf("Self-review: ошибка повторного ревью: %v", rerr)
+			logging.Warnf("Self-review: ошибка повторного ревью: %v", rerr)
 			break
 		}
 
@@ -316,7 +339,7 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 		if sig != "" && sig == prevSig {
 			stuckRounds++
 			if stuckRounds >= 2 {
-				log.Printf("Self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
+				logging.Warnf("Self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
 				pending = next
 				break
 			}
@@ -328,9 +351,9 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 	}
 
 	if len(pending) > 0 {
-		log.Printf("Self-review: цикл завершён, осталось неисправленных замечаний: %d", len(pending))
+		logging.Infof("Self-review: цикл завершён, осталось неисправленных замечаний: %d", len(pending))
 	} else {
-		log.Printf("Self-review: цикл завершён, замечаний больше нет")
+		logging.Infof("Self-review: цикл завершён, замечаний больше нет")
 	}
 }
 
@@ -374,7 +397,7 @@ func parseTimeout(raw string) time.Duration {
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil {
-		log.Printf("Неверный REVIEW_TIMEOUT=%q, использую %v", raw, def)
+		logging.Warnf("Неверный REVIEW_TIMEOUT=%q, использую %v", raw, def)
 		return def
 	}
 	return d
@@ -387,57 +410,59 @@ func parseTimeout(raw string) time.Duration {
 func runAcceptCommand(projectName string) {
 	dir := codegenerator.ProjectDir(projectName)
 	rep := acceptor.Accept(dir, acceptor.LoadConfig())
-	printAcceptReport(rep)
+	logging.Infof("%s", acceptReportText(rep))
 	if rep.Verdict == acceptor.VerdictReject {
 		os.Exit(1)
 	}
 }
 
-// printAcceptReport выводит отчёт приёмки в человекочитаемом виде.
-func printAcceptReport(rep *acceptor.Report) {
-	fmt.Printf("Приёмка проекта %q (тип: %s)\n", rep.Project, rep.Tool)
-	fmt.Printf("Вердикт: %s\n", rep.Verdict)
-	fmt.Printf("Сводка: %s\n\n", rep.Summary)
+// acceptReportText собирает человекочитаемый отчёт приёмки.
+func acceptReportText(rep *acceptor.Report) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Приёмка проекта %q (тип: %s)\n", rep.Project, rep.Tool)
+	fmt.Fprintf(&b, "Вердикт: %s\n", rep.Verdict)
+	fmt.Fprintf(&b, "Сводка: %s\n\n", rep.Summary)
 
 	if rep.Install != nil {
-		fmt.Printf("Установка зависимостей: %s\n", installStatusWord(rep.Install))
-		fmt.Printf("  команда: %s\n", rep.Install.Command)
+		fmt.Fprintf(&b, "Установка зависимостей: %s\n", installStatusWord(rep.Install))
+		fmt.Fprintf(&b, "  команда: %s\n", rep.Install.Command)
 		if rep.Install.Output != "" {
-			fmt.Printf("  вывод:\n%s\n", rep.Install.Output)
+			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Install.Output)
 		}
 	}
 	if !rep.Build.Skipped {
-		fmt.Printf("Сборка: %v\n", rep.Build.OK)
-		fmt.Printf("  команда: %s\n", rep.Build.Command)
+		fmt.Fprintf(&b, "Сборка: %v\n", rep.Build.OK)
+		fmt.Fprintf(&b, "  команда: %s\n", rep.Build.Command)
 		if rep.Build.Output != "" {
-			fmt.Printf("  вывод:\n%s\n", rep.Build.Output)
+			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Build.Output)
 		}
 	}
 	if rep.Run != nil {
-		fmt.Printf("Запуск: %v (код выхода: %d, серверный режим: %v)\n",
+		fmt.Fprintf(&b, "Запуск: %v (код выхода: %d, серверный режим: %v)\n",
 			rep.Run.OK, rep.Run.ExitCode, rep.Run.ServerMode)
-		fmt.Printf("  команда: %s\n", rep.Run.Command)
+		fmt.Fprintf(&b, "  команда: %s\n", rep.Run.Command)
 		if rep.Run.Output != "" {
-			fmt.Printf("  вывод последней проверки:\n%s\n", rep.Run.Output)
+			fmt.Fprintf(&b, "  вывод последней проверки:\n%s\n", rep.Run.Output)
 		}
 	}
 	if rep.Format != nil {
-		fmt.Printf("Стилизатор: %s\n", formatStatusWord(rep.Format))
-		fmt.Printf("  команда: %s\n", rep.Format.Command)
+		fmt.Fprintf(&b, "Стилизатор: %s\n", formatStatusWord(rep.Format))
+		fmt.Fprintf(&b, "  команда: %s\n", rep.Format.Command)
 		if rep.Format.Output != "" {
-			fmt.Printf("  вывод:\n%s\n", rep.Format.Output)
+			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Format.Output)
 		}
 	}
 	if rep.Analyze != nil {
-		fmt.Printf("Анализатор: %s\n", formatStatusWord(rep.Analyze))
-		fmt.Printf("  команда: %s\n", rep.Analyze.Command)
+		fmt.Fprintf(&b, "Анализатор: %s\n", formatStatusWord(rep.Analyze))
+		fmt.Fprintf(&b, "  команда: %s\n", rep.Analyze.Command)
 		if rep.Analyze.Output != "" {
-			fmt.Printf("  вывод:\n%s\n", rep.Analyze.Output)
+			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Analyze.Output)
 		}
 	}
 	if text := rep.IssuesText(); text != "замечаний не обнаружено" {
-		fmt.Printf("\nЗамечания:\n%s\n", text)
+		fmt.Fprintf(&b, "\nЗамечания:\n%s\n", text)
 	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func formatStatusWord(res *acceptor.CheckResult) string {
@@ -485,12 +510,12 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, 
 		if err == nil {
 			if p, perr := planner.ParsePlan(string(snap.PlanJSON)); perr == nil && p != nil {
 				plan = p
-				log.Printf("Resume: план восстановлен из чекпоинта, завершено шагов: %d", len(snap.Completed))
+				logging.Infof("Resume: план восстановлен из чекпоинта, завершено шагов: %d", len(snap.Completed))
 			} else if perr != nil {
-				log.Printf("Чекпоинт существует, но план в нём повреждён (%v), перепланирую", perr)
+				logging.Warnf("Чекпоинт существует, но план в нём повреждён (%v), перепланирую", perr)
 			}
 		} else if err != checkpoint.ErrNotFound {
-			log.Printf("Не удалось прочитать чекпоинт: %v", err)
+			logging.Warnf("Не удалось прочитать чекпоинт: %v", err)
 		}
 	}
 
@@ -499,36 +524,36 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, 
 		plannerAgent := planner.NewPlanner(projectName, originalPrompt)
 		resp, err := provider.Generate(ctx, plannerAgent)
 		if err != nil {
-			log.Fatalf("Получение плана: %v", err)
+			logging.Fatalf("Получение плана: %v", err)
 		}
 		plan, err = planner.ParsePlan(resp.Content)
 		if err != nil {
-			log.Printf("Не удалось разобрать план из ответа планировщика: %v", err)
-			log.Printf("Ответ планировщика:\n%s", resp.Content)
+			logging.Warnf("Не удалось разобрать план из ответа планировщика: %v", err)
+			logging.Detailf("Ответ планировщика:\n%s", resp.Content)
 			peer := planner.NewPlanner(projectName, originalPrompt+"\n\nВерни план строго в формате JSON, без markdown-обёрток и лишнего текста.")
 			planResp, perr := provider.Generate(ctx, peer)
 			if perr != nil {
-				log.Fatalf("Получение плана (повтор): %v", perr)
+				logging.Fatalf("Получение плана (повтор): %v", perr)
 			}
 			plan, err = planner.ParsePlan(planResp.Content)
 			if err != nil {
-				log.Fatalf("Повторный ответ планировщика не содержит корректного JSON-плана: %v", err)
+				logging.Fatalf("Повторный ответ планировщика не содержит корректного JSON-плана: %v", err)
 			}
 		}
 	}
 
-	log.Printf("План получен: %q (%d шагов)", plan.Summary, len(plan.Steps))
+	logging.Infof("План получен: %q (%d шагов)", plan.Summary, len(plan.Steps))
 	for i, s := range plan.Steps {
-		log.Printf("  %d. [%s] %s", i+1, s.Agent, s.Description)
+		logging.Infof("  %d. [%s] %s", i+1, s.Agent, s.Description)
 	}
 
 	exec := planner.NewExecutor(provider, plan)
 	exec.SetCheckpoint(store, resume)
 	if err := exec.Run(ctx); err != nil {
-		log.Fatalf("Ошибка выполнения плана: %v", err)
+		logging.Fatalf("Ошибка выполнения плана: %v", err)
 	}
 
-	log.Printf("План выполнен успешно. Проект: %q", plan.ProjectName)
+	logging.Infof("План выполнен успешно. Проект: %q", plan.ProjectName)
 }
 
 // plannerStore создаёт чекпоинт-хранилище для плана проекта. Контрольные
@@ -562,12 +587,12 @@ func plannerStore(ctx context.Context, projectName string) (*checkpoint.Store, b
 	store, err := checkpoint.NewStore(ctx, cfg)
 	if err != nil {
 		if resume {
-			log.Fatalf("Resume невозможен: Redis недоступен (%v)", err)
+			logging.Fatalf("Resume невозможен: Redis недоступен (%v)", err)
 		}
-		log.Printf("Внимание: Redis недоступен (%v), работаю без чекпоинтов", err)
+		logging.Warnf("Внимание: Redis недоступен (%v), работаю без чекпоинтов", err)
 		return nil, resume
 	}
-	log.Printf("Контрольные точки включены: %s (чекпоинт: %s)", addr, store.Key())
+	logging.Infof("Контрольные точки включены: %s (чекпоинт: %s)", addr, store.Key())
 	return store, resume
 }
 

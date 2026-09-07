@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"ai/logging"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,7 +19,7 @@ func DebugEnabled() bool {
 
 func Debugf(format string, args ...any) {
 	if DebugEnabled() {
-		fmt.Printf("[DEBUG] "+format+"\n", args...)
+		logging.Detailf("[DEBUG] "+format, args...)
 	}
 }
 

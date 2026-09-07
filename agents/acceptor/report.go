@@ -232,6 +232,24 @@ func filepathToSlash(p string) string {
 	return strings.ReplaceAll(p, "\\", "/")
 }
 
+// IssueFiles возвращает уникальные файлы, на которые указывают замечания
+// приёмки (acceptor не ограничен областью видимости и может видеть весь
+// модуль). Используется планировщиком для построения обновлённой области
+// видимости задач исправления.
+func (r *Report) IssueFiles() []string {
+	seen := map[string]bool{}
+	var files []string
+	for _, iss := range r.Issues {
+		f := strings.TrimSpace(iss.File)
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		files = append(files, f)
+	}
+	return files
+}
+
 // IssuesText форматирует замечания в краткий текст для планировщика.
 func (r *Report) IssuesText() string {
 	if len(r.Issues) == 0 {
