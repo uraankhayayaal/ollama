@@ -65,6 +65,7 @@ func (p *Planner) GetSystemMessages(_ []agents.Message) []agents.Message {
 - codegenerator: создание нового проекта/файлов с нуля
 - refactor: доработка/рефакторинг существующего проекта
 - codereviewer: ревью написанного кода
+- acceptor: приёмка готового приложения — сборка, запуск, проверка логов на ошибки (всегда финальный шаг)
 
 Твой план:
 1. Если проект уже существует — изучи его структуру через List и ключевые файлы через ReadFiles. Карта проекта выше уже даёт структуру и размеры файлов: используй её, чтобы точно определить, какие файлы/пакеты затронет задача.
@@ -78,7 +79,7 @@ func (p *Planner) GetSystemMessages(_ []agents.Message) []agents.Message {
   "steps": [
     {
       "id": "step1",
-      "agent": "codegenerator|refactor|codereviewer",
+      "agent": "codegenerator|refactor|codereviewer|acceptor",
       "prompt": "конкретная инструкция для агента",
       "project_name": "имя_проекта",
       "depends_on": [],
@@ -103,9 +104,10 @@ func (p *Planner) GetSystemMessages(_ []agents.Message) []agents.Message {
 - Каждый шаг — минимально достаточный контекст для агента.
 - Не дублируй информацию между шагами.
 - Шаги идут в порядке выполнения (depends_on указывает зависимости).
-- Для нового проекта: сначала codegenerator, затем codereviewer.
-- Для рефакторинга: сначала refactor, затем codereviewer.
-- Последний шаг — codereviewer для проверки качества.
+- Для нового проекта: сначала codegenerator, затем codereviewer, затем acceptor.
+- Для рефакторинга: сначала refactor, затем codereviewer, затем acceptor.
+- Финальный шаг ВСЕГДА acceptor (приёмка): сборка, запуск и проверка логов на ошибки.
+  Его prompt — краткая инструкция «Проведи приёмку: сборка, запуск, проверка логов». Scope — весь проект (пустой).
 - Пиши промпты для агентов максимально конкретно и кратко.
 
 Область работы (scope):

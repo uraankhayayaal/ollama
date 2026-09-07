@@ -14,6 +14,7 @@ const (
 	AgentCodeGenerator AgentType = "codegenerator"
 	AgentRefactor      AgentType = "refactor"
 	AgentCodeReviewer  AgentType = "codereviewer"
+	AgentAcceptor      AgentType = "acceptor"
 )
 
 // Step — один этап плана, делегируемый конкретному агенту.

@@ -131,3 +131,49 @@ func TestStoreKey(t *testing.T) {
 		t.Fatalf("Key: got %q", store.Key())
 	}
 }
+
+func TestSaveClearRoundState(t *testing.T) {
+	store := newTestStore(t, "checkpoint:roundstate")
+	defer store.Close()
+	ctx := context.Background()
+
+	snap := &Snapshot{ProjectName: "t", PlanJSON: json.RawMessage(`{"steps":[]}`)}
+	if err := store.Save(ctx, snap); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	conv := json.RawMessage(`[{"Role":"user","Content":"задача"}]`)
+	loaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := store.SaveRoundState(ctx, loaded, "s1", 12, conv); err != nil {
+		t.Fatalf("SaveRoundState: %v", err)
+	}
+
+	again, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if again.Rounds["s1"] != 12 {
+		t.Fatalf("Rounds[s1]: got %d, ожидали 12", again.Rounds["s1"])
+	}
+	if string(again.Conversations["s1"]) != string(conv) {
+		t.Fatalf("Conversations[s1]: got %s", again.Conversations["s1"])
+	}
+
+	// Очистка после успешного завершения шага.
+	if err := store.ClearRoundState(ctx, again, "s1"); err != nil {
+		t.Fatalf("ClearRoundState: %v", err)
+	}
+	final, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := final.Conversations["s1"]; ok {
+		t.Fatal("Conversations[s1] должна быть удалена после ClearRoundState")
+	}
+	if _, ok := final.Rounds["s1"]; ok {
+		t.Fatal("Rounds[s1] должна быть удалена после ClearRoundState")
+	}
+}

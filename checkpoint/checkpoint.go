@@ -22,11 +22,11 @@ var ErrNotFound = errors.New("чекпоинт не найден")
 
 // StepStatus — статус шага плана.
 const (
-	StatusPending   = "pending"
-	StatusRunning   = "running"
-	StatusDone      = "done"
-	StatusFailed    = "failed"
-	StatusSkipped   = "skipped"
+	StatusPending = "pending"
+	StatusRunning = "running"
+	StatusDone    = "done"
+	StatusFailed  = "failed"
+	StatusSkipped = "skipped"
 )
 
 // Snapshot — состояние выполнения плана в момент контрольной точки.
@@ -41,6 +41,13 @@ type Snapshot struct {
 	Completed map[string]bool `json:"completed"`
 	// Statuses — детальный статус каждого шага (pending/running/done/failed).
 	Statuses map[string]string `json:"statuses"`
+	// Rounds — количество раундов агентского цикла, потраченных на каждый шаг
+	// до момента остановки (для resume после лимита раундов).
+	Rounds map[string]int `json:"rounds,omitempty"`
+	// Conversations — история диалога агента незавершённого шага, сериализованная
+	// в JSON (массив runner.Message). Позволяет при resume продолжить агентский
+	// цикл с потраченных раундов, а не начинать шаг заново.
+	Conversations map[string]json.RawMessage `json:"conversations,omitempty"`
 	// Waves — шаги, сгруппированные по волнам параллельности (для resume).
 	Waves [][]string `json:"waves,omitempty"`
 	// UpdatedAt — время последнего обновления чекпоинта (RFC3339).
@@ -181,4 +188,31 @@ func (s *Store) IsCompleted(snap *Snapshot, stepID string) bool {
 		return false
 	}
 	return snap.Completed[stepID]
+}
+
+// SaveRoundState сохраняет состояние агентского цикла шага (потраченные раунды
+// и историю диалога), чтобы при resume продолжить шаг с места остановки.
+// conversation — сериализованный в JSON массив сообщений диалога.
+func (s *Store) SaveRoundState(ctx context.Context, snap *Snapshot, stepID string, rounds int, conversation json.RawMessage) error {
+	if snap.Rounds == nil {
+		snap.Rounds = map[string]int{}
+	}
+	if snap.Conversations == nil {
+		snap.Conversations = map[string]json.RawMessage{}
+	}
+	snap.Rounds[stepID] = rounds
+	snap.Conversations[stepID] = conversation
+	return s.Save(ctx, snap)
+}
+
+// ClearRoundState удаляет сохранённое состояние агентского цикла шага
+// (вызывается, когда шаг успешно завершён и resume больше не нужен).
+func (s *Store) ClearRoundState(ctx context.Context, snap *Snapshot, stepID string) error {
+	if snap.Rounds != nil {
+		delete(snap.Rounds, stepID)
+	}
+	if snap.Conversations != nil {
+		delete(snap.Conversations, stepID)
+	}
+	return s.Save(ctx, snap)
 }

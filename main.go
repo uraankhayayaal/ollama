@@ -2,6 +2,7 @@ package main
 
 import (
 	"ai/agents"
+	"ai/agents/acceptor"
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
 	"ai/agents/planner"
@@ -37,6 +38,17 @@ func main() {
 			log.Fatal(err)
 		}
 		return
+	}
+
+	// Приёмка собранного приложения: сборка, запуск, проверка логов.
+	// Полностью детерминирована (без LLM) — провайдер модели не нужен.
+	// go run . accept <имя_проекта>
+	if len(os.Args) > 1 && os.Args[1] == "accept" {
+		if len(os.Args) < 3 || os.Args[2] == "" {
+			log.Fatal("Использование: go run . accept <имя_проекта>\nПример: go run . accept storageService")
+		}
+		runAcceptCommand(os.Args[2])
+		os.Exit(0)
 	}
 
 	// Таймаут цикла агента берётся из окружения REVIEW_TIMEOUT, иначе 10 минут.
@@ -124,7 +136,7 @@ func main() {
 			}
 		}
 	default:
-		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . review <URL>' или 'go run . listen'", agentName)
+		log.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Режим планировщика обрабатывается отдельно и до общего прогона:
@@ -346,6 +358,92 @@ func parseTimeout(raw string) time.Duration {
 		return def
 	}
 	return d
+}
+
+// runAcceptCommand выполняет приёмку собранного приложения в temp/<projectName>:
+// определяет тип проекта, собирает, запускает на короткое время и проверяет
+// логи на ошибки. Печатает отчёт и завершается с кодом 0 при успехе, 1 — при
+// обнаруженных ошибках.
+func runAcceptCommand(projectName string) {
+	dir := codegenerator.ProjectDir(projectName)
+	rep := acceptor.Accept(dir, acceptor.LoadConfig())
+	printAcceptReport(rep)
+	if rep.Verdict == acceptor.VerdictReject {
+		os.Exit(1)
+	}
+}
+
+// printAcceptReport выводит отчёт приёмки в человекочитаемом виде.
+func printAcceptReport(rep *acceptor.Report) {
+	fmt.Printf("Приёмка проекта %q (тип: %s)\n", rep.Project, rep.Tool)
+	fmt.Printf("Вердикт: %s\n", rep.Verdict)
+	fmt.Printf("Сводка: %s\n\n", rep.Summary)
+
+	if rep.Install != nil {
+		fmt.Printf("Установка зависимостей: %s\n", installStatusWord(rep.Install))
+		fmt.Printf("  команда: %s\n", rep.Install.Command)
+		if rep.Install.Output != "" {
+			fmt.Printf("  вывод:\n%s\n", rep.Install.Output)
+		}
+	}
+	if !rep.Build.Skipped {
+		fmt.Printf("Сборка: %v\n", rep.Build.OK)
+		fmt.Printf("  команда: %s\n", rep.Build.Command)
+		if rep.Build.Output != "" {
+			fmt.Printf("  вывод:\n%s\n", rep.Build.Output)
+		}
+	}
+	if rep.Run != nil {
+		fmt.Printf("Запуск: %v (код выхода: %d, серверный режим: %v)\n",
+			rep.Run.OK, rep.Run.ExitCode, rep.Run.ServerMode)
+		fmt.Printf("  команда: %s\n", rep.Run.Command)
+		if rep.Run.Output != "" {
+			fmt.Printf("  вывод последней проверки:\n%s\n", rep.Run.Output)
+		}
+	}
+	if rep.Format != nil {
+		fmt.Printf("Стилизатор: %s\n", formatStatusWord(rep.Format))
+		fmt.Printf("  команда: %s\n", rep.Format.Command)
+		if rep.Format.Output != "" {
+			fmt.Printf("  вывод:\n%s\n", rep.Format.Output)
+		}
+	}
+	if rep.Analyze != nil {
+		fmt.Printf("Анализатор: %s\n", formatStatusWord(rep.Analyze))
+		fmt.Printf("  команда: %s\n", rep.Analyze.Command)
+		if rep.Analyze.Output != "" {
+			fmt.Printf("  вывод:\n%s\n", rep.Analyze.Output)
+		}
+	}
+	if text := rep.IssuesText(); text != "замечаний не обнаружено" {
+		fmt.Printf("\nЗамечания:\n%s\n", text)
+	}
+}
+
+func formatStatusWord(res *acceptor.CheckResult) string {
+	switch {
+	case res == nil:
+		return "<нет>"
+	case res.Skipped:
+		return "пропущен (инструмент не найден)"
+	case res.OK:
+		return "OK"
+	default:
+		return "ЕСТЬ ЗАМЕЧАНИЯ"
+	}
+}
+
+func installStatusWord(res *acceptor.InstallResult) string {
+	switch {
+	case res == nil:
+		return "<нет>"
+	case res.Skipped:
+		return "не требовалась"
+	case res.OK:
+		return "OK"
+	default:
+		return "ОШИБКА"
+	}
 }
 
 // runPlanMode выполняет план с чекпоинтами. Если запрошен resume и в Redis

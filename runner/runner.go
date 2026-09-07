@@ -13,9 +13,16 @@ import (
 type AgentResponse struct {
 	Content   string
 	ToolCalls []tools.ToolCall
-	// Truncated указывает, что цикл остановлен по лимиту раундов (maxRounds),
-	// а не потому, что модель завершила ответ.
+	// Truncated указывает, что цикл остановлен по лимиту раундов (maxRounds)
+	// или модель обрезалась по лимиту токенов, а не потому, что модель
+	// завершила ответ корректно.
 	Truncated bool
+	// Messages — полная история диалога цикла (system/user + все раунды).
+	// Сохраняется вызывающим кодом в чекпоинт для возобновления (resume).
+	Messages []Message
+	// Rounds — количество уже потраченных раундов цикла. При resume новый
+	// запуск продолжит с раунда Rounds+1, получив снова полный бюджет maxRounds.
+	Rounds int
 }
 
 // Message — нейтральное представление сообщения диалога,
@@ -50,6 +57,31 @@ type ToolRequiringAgent interface {
 	RequiredToolFirstRound() (string, bool)
 }
 
+// ResumeState — точка возобновления агентского цикла после лимита раундов:
+// полная история диалога и количество уже потраченных раундов. Собирается
+// вызывающим кодом из чекпоинта и передаётся в цикл через контекст.
+type ResumeState struct {
+	Messages []Message
+	Rounds   int
+}
+
+// resumeStateKey — тип ключа контекста для передачи состояния resume.
+type resumeStateKey struct{}
+
+// WithResumeState помещает состояние возобновления агентского цикла в контекст.
+// Провайдеры сами не меняются: runner.Generate читает состояние из контекста.
+func WithResumeState(ctx context.Context, state *ResumeState) context.Context {
+	return context.WithValue(ctx, resumeStateKey{}, state)
+}
+
+// ResumeStateFromContext извлекает состояние возобновления из контекста.
+func ResumeStateFromContext(ctx context.Context) *ResumeState {
+	if st, ok := ctx.Value(resumeStateKey{}).(*ResumeState); ok {
+		return st
+	}
+	return nil
+}
+
 // requiredRetries — сколько раз переспрашиваем модель, если она не вызвала
 // обязательный инструмент первого раунда и ответила текстом.
 const requiredRetries = 2
@@ -77,25 +109,50 @@ func nudgeMessage(toolName string) string {
 // Generate выполняет агентский цикл: отправляет диалог модели, исполняет
 // запрошенные инструменты, возвращает результат модели обратно в историю
 // и повторяет, пока модель не завершит ответ (нет tool_calls).
+//
+// Если в контексте передано состояние возобновления (WithResumeState), цикл
+// не начинает заново, а продолжает сохранённый диалог с раунда Rounds+1,
+// имея снова полный бюджет maxRounds. Это позволяет «донаточивать» задачу
+// повторными запусками: 1..12 → resume 13..24 → resume 25..36 и т.д.
 func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*AgentResponse, error) {
+	return generate(ctx, provider, agent, ResumeStateFromContext(ctx))
+}
+
+func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, resume *ResumeState) (*AgentResponse, error) {
 	// Собираем user-сообщения (например, дифф для ревью), чтобы передать
 	// их контекст в метод системных сообщений (GetSystemMessages).
 	userMessages := agent.GetUserMessages()
 
-	// Системные сообщения размещаем в начале диалога, как это принято,
-	// а user-сообщения — следом. Контекст (дифф) передаётся в метод
-	// системных сообщений через параметр.
-	systemMessages := agent.GetSystemMessages(userMessages)
+	var messages []Message
+	startRound := 0
+	if resume != nil && len(resume.Messages) > 0 {
+		// Возобновление после лимита раундов: история уже содержит системные
+		// и user-сообщения, добавлять их повторно нельзя.
+		messages = append(messages, resume.Messages...)
+		startRound = resume.Rounds
+	} else {
+		// Системные сообщения размещаем в начале диалога, как это принято,
+		// а user-сообщения — следом. Контекст (дифф) передаётся в метод
+		// системных сообщений через параметр.
+		systemMessages := agent.GetSystemMessages(userMessages)
 
-	messages := []Message{}
-	for _, m := range systemMessages {
-		messages = append(messages, Message{Role: "system", Content: m.Message})
-	}
-	for _, m := range userMessages {
-		messages = append(messages, Message{Role: "user", Content: m.Message})
+		for _, m := range systemMessages {
+			messages = append(messages, Message{Role: "system", Content: m.Message})
+		}
+		for _, m := range userMessages {
+			messages = append(messages, Message{Role: "user", Content: m.Message})
+		}
 	}
 
+	// Инструменты, уже вызванные в истории диалога: при resume они должны
+	// засчитываться, чтобы проверка «обязательный инструмент первого раунда
+	// не вызван» не сработала для уже продвинутого диалога.
 	var allToolCalls []tools.ToolCall
+	for _, m := range messages {
+		if m.Role == "assistant" {
+			allToolCalls = append(allToolCalls, m.ToolCalls...)
+		}
+	}
 	content := ""
 	mx := maxRounds()
 
@@ -108,7 +165,7 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 	}
 	requiredAttempts := 0
 
-	for round := 0; round < mx; round++ {
+	for round := startRound; round < startRound+mx; round++ {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("контекст отменён до раунда %d: %w", round+1, err)
 		}
@@ -143,7 +200,16 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 			}
 			Debugf("RUNNER: раунд %d: модель завершила (finish_reason=%q), content=%q",
 				round+1, reply.FinishReason, Truncate(content, 300))
-			return &AgentResponse{Content: content, ToolCalls: allToolCalls, Truncated: truncated}, nil
+			// История включает финальный ответ модели: если ответ усечён по
+			// лимиту токенов, следующий resume продолжит его с этого места.
+			messages = append(messages, Message{Role: "assistant", Content: content})
+			return &AgentResponse{
+				Content:   content,
+				ToolCalls: allToolCalls,
+				Truncated: truncated,
+				Rounds:    round + 1,
+				Messages:  messages,
+			}, nil
 		}
 
 		Debugf("RUNNER: раунд %d: модель запросила %d вызова(ов), finish_reason=%q",
@@ -177,5 +243,11 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 	}
 
 	Debugf("RUNNER: достигнут лимит раундов (%d), возвращаю частичный результат", mx)
-	return &AgentResponse{Content: content, ToolCalls: allToolCalls, Truncated: true}, nil
+	return &AgentResponse{
+		Content:   content,
+		ToolCalls: allToolCalls,
+		Truncated: true,
+		Rounds:    startRound + mx,
+		Messages:  append([]Message{}, messages...),
+	}, nil
 }

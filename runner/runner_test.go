@@ -130,6 +130,102 @@ func TestGenerateLengthMarksTruncated(t *testing.T) {
 	}
 }
 
+// recordingProvider записывает сообщения, которые получает модель, дополнительно
+// к поведению fakeChatProvider.
+type recordingProvider struct {
+	fakeChatProvider
+	received [][]Message
+}
+
+func (r *recordingProvider) ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error) {
+	cp := make([]Message, len(messages))
+	copy(cp, messages)
+	r.received = append(r.received, cp)
+	return r.fakeChatProvider.ChatOnce(ctx, agent, messages)
+}
+
+// После лимита раундов Generate должен вернуть полную историю диалога и
+// количество потраченных раундов, чтобы вызывающий код мог сохранить их
+// в чекпоинт для resume.
+func TestGenerateRoundLimitExposesHistory(t *testing.T) {
+	agent := &fakeAgent{}
+	// Модель на каждый вызов просит инструмент — цикл упрётся в лимит раундов.
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{{
+			Content:      "",
+			FinishReason: "tool_calls",
+			ToolCalls:    []tools.ToolCall{{ID: "c1", Name: "WriteFiles", Arguments: "{}"}},
+		}},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	if !resp.Truncated {
+		t.Fatal("ожидали Truncated после исчерпания лимита раундов")
+	}
+	if resp.Rounds != maxRounds() {
+		t.Fatalf("ожидали Rounds=%d, got %d", maxRounds(), resp.Rounds)
+	}
+	if len(resp.Messages) < 2 {
+		t.Fatalf("история должна содержать system+user (+ раунды), got %d", len(resp.Messages))
+	}
+	if resp.Messages[0].Role != "system" || resp.Messages[1].Role != "user" {
+		t.Fatalf("история должна начинаться с system/user, got %#v", resp.Messages[:2])
+	}
+}
+
+// С WithResumeState цикл продолжает сохранённый диалог с раунда Rounds+1:
+// история resume передаётся модели как есть (без повторного добавления
+// system/user), а ответ помечает правильный номер раунда.
+func TestGenerateResumeContinuesConversation(t *testing.T) {
+	agent := &fakeAgent{}
+	saved := []Message{
+		{Role: "system", Content: "ты агент"},
+		{Role: "user", Content: "напиши код"},
+		{Role: "assistant", Content: "вызываю инструмент", ToolCalls: []tools.ToolCall{{ID: "c1", Name: "WriteFiles", Arguments: "{}"}}},
+		{Role: "tool", ToolName: "WriteFiles", ToolCallID: "c1", Content: "ок"},
+	}
+	resume := &ResumeState{Messages: saved, Rounds: 12}
+
+	provider := &recordingProvider{fakeChatProvider: fakeChatProvider{
+		replies: []*ModelReply{{Content: "готово", FinishReason: "stop"}},
+	}}
+
+	ctx := WithResumeState(context.Background(), resume)
+	resp, err := Generate(ctx, provider, agent)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	if provider.calls != 1 {
+		t.Fatalf("ожидали 1 запрос после resume, got %d", provider.calls)
+	}
+	// История resume передаётся как есть, без повторного добавления system/user.
+	got := provider.received[0]
+	if len(got) != len(saved) {
+		t.Fatalf("ожидали %d сообщений (история resume), got %d: %#v", len(saved), len(got), got)
+	}
+	for i := range saved {
+		if got[i].Role != saved[i].Role || got[i].Content != saved[i].Content {
+			t.Fatalf("сообщение %d не совпадает: %#v vs %#v", i, got[i], saved[i])
+		}
+	}
+
+	if resp.Truncated {
+		t.Fatal("resume не должен завершиться Truncated")
+	}
+	if resp.Rounds != 13 {
+		t.Fatalf("ожидали Rounds=13 (12 прошлых + 1 новый), got %d", resp.Rounds)
+	}
+	if resp.Content != "готово" {
+		t.Fatalf("ожидали content=готово, got %q", resp.Content)
+	}
+	last := resp.Messages[len(resp.Messages)-1]
+	if last.Role != "assistant" || last.Content != "готово" {
+		t.Fatalf("история должна включать финальный ответ модели, got %#v", last)
+	}
+}
+
 // Модель упорно не вызывает инструмент: после requiredRetries подсказок
 // цикл завершается с текстовым ответом (не зацикливается вечно).
 func TestGenerateGivesUpRequiredToolAfterRetries(t *testing.T) {

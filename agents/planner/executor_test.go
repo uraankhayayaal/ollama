@@ -206,3 +206,136 @@ func TestExecutorEmptyTruncatedCodingStepFails(t *testing.T) {
 type genErr string
 
 func (e genErr) Error() string { return string(e) }
+
+// roundStubProvider — провайдер, имитирующий лимит раундов агентского цикла:
+// первый запуск возвращает Truncated с историей диалога и потраченными
+// раундами, повторный (с resume-состоянием в контексте) — успех. Фиксирует,
+// видел ли resume-состояние и с какого раунда продолжил цикл.
+type roundStubProvider struct {
+	calls     int
+	sawResume bool
+	resumeAt  int
+}
+
+func (s *roundStubProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+	s.calls++
+	if st := runner.ResumeStateFromContext(ctx); st != nil {
+		s.sawResume = true
+		s.resumeAt = st.Rounds
+		return &runner.AgentResponse{Content: "сделано", Rounds: st.Rounds + 1}, nil
+	}
+	return &runner.AgentResponse{
+		Content:   "частично",
+		Truncated: true,
+		Rounds:    12,
+		Messages:  []runner.Message{{Role: "user", Content: "задача"}},
+	}, nil
+}
+
+func (s *roundStubProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+	return &runner.ModelReply{}, nil
+}
+
+// Шаг упёрся в лимит раундов агентского цикла: выполнение плана должно
+// остановиться с подсказкой --resume, а история диалога и потраченные раунды
+// должны сохраниться в чекпоинт (статус шага — failed).
+func TestExecutorTruncatedStepPersistsRoundState(t *testing.T) {
+	ctx := context.Background()
+	store := newExecutorStore(t, "checkpoint:roundpersist")
+	defer store.Close()
+
+	plan := &Plan{
+		ProjectName: "roundProj",
+		Summary:     "лимит раундов",
+		Steps: []Step{
+			{ID: "s1", Agent: AgentCodeGenerator, Prompt: "сделай", Description: "генерация"},
+		},
+	}
+	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
+
+	exec := NewExecutor(&roundStubProvider{}, plan).SetCheckpoint(store, false)
+	err := exec.Run(ctx)
+	if err == nil {
+		t.Fatal("ожидали ошибку: шаг упёрся в лимит раундов")
+	}
+	if !strings.Contains(err.Error(), "--resume") {
+		t.Fatalf("ошибка должна подсказывать запуск с --resume, got: %v", err)
+	}
+
+	snap, lerr := store.Load(ctx)
+	if lerr != nil {
+		t.Fatalf("Load: %v", lerr)
+	}
+	if snap.Statuses["s1"] != checkpoint.StatusFailed {
+		t.Fatalf("шаг должен иметь статус failed, got %q", snap.Statuses["s1"])
+	}
+	if snap.Completed["s1"] {
+		t.Fatal("шаг не должен быть помечен completed")
+	}
+	if snap.Rounds["s1"] != 12 {
+		t.Fatalf("сохранённые раунды: %d, ожидали 12", snap.Rounds["s1"])
+	}
+	if len(snap.Conversations["s1"]) == 0 {
+		t.Fatal("история диалога должна быть сохранена в чекпоинт")
+	}
+}
+
+// Resume продолжает прерванный шаг с потраченных раундов: провайдер должен
+// получить resume-состояние через контекст (раунд 13), шаг успешно
+// завершиться, а история агентского цикла — очиститься из чекпоинта.
+func TestExecutorResumeContinuesTruncatedStep(t *testing.T) {
+	ctx := context.Background()
+	store := newExecutorStore(t, "checkpoint:roundresume")
+	defer store.Close()
+
+	plan := &Plan{
+		ProjectName: "roundResumeProj",
+		Summary:     "продолжить с раунда 13",
+		Steps: []Step{
+			{ID: "s1", Agent: AgentCodeGenerator, Prompt: "сделай", Description: "генерация"},
+		},
+	}
+	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
+
+	planJSON, _ := json.Marshal(plan)
+	firstSnap := &checkpoint.Snapshot{
+		ProjectName:   plan.ProjectName,
+		Summary:       plan.Summary,
+		PlanJSON:      planJSON,
+		Completed:     map[string]bool{},
+		Statuses:      map[string]string{"s1": checkpoint.StatusFailed},
+		Rounds:        map[string]int{"s1": 12},
+		Conversations: map[string]json.RawMessage{"s1": json.RawMessage(`[{"Role":"user","Content":"задача"}]`)},
+	}
+	if err := store.Save(ctx, firstSnap); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	stub := &roundStubProvider{}
+	exec := NewExecutor(stub, plan).SetCheckpoint(store, true)
+	if err := exec.Run(ctx); err != nil {
+		t.Fatalf("Run с resume: %v", err)
+	}
+
+	if !stub.sawResume {
+		t.Fatal("провайдер должен был получить resume-состояние через контекст")
+	}
+	if stub.resumeAt != 12 {
+		t.Fatalf("цикл должен продолжиться с раунда 13 (resumeAt=12), got %d", stub.resumeAt)
+	}
+	if !exec.completed["s1"] {
+		t.Fatal("шаг должен успешно завершиться после resume")
+	}
+
+	// После успеха история агентского цикла удаляется из чекпоинта.
+	nsnap, lerr := store.Load(ctx)
+	if lerr != nil {
+		t.Fatalf("Load: %v", lerr)
+	}
+	if _, ok := nsnap.Conversations["s1"]; ok {
+		t.Fatal("история должна быть очищена после успешного завершения шага")
+	}
+	if !nsnap.Completed["s1"] {
+		t.Fatal("шаг должен быть помечен completed в чекпоинте")
+	}
+}
