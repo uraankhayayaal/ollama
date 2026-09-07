@@ -22,3 +22,26 @@ func TestDetectType(t *testing.T) {
 		}
 	}
 }
+
+func TestCommentSignature(t *testing.T) {
+	a := []ReviewComment{
+		{FilePath: "internal/config/config.go", Line: 10, Text: "x"},
+		{FilePath: "main.go", Line: 3, Text: "y"},
+	}
+	// Порядок и текст не влияют на сигнатуру — только file:line.
+	b := []ReviewComment{
+		{FilePath: "main.go", Line: 3, Text: "другой текст"},
+		{FilePath: "internal/config/config.go", Line: 10, Text: "z"},
+	}
+	if CommentSignature(a) != CommentSignature(b) {
+		t.Errorf("сигнатуры должны совпадать независимо от порядка/текста")
+	}
+
+	// Другое расположение — другая сигнатура.
+	c := []ReviewComment{
+		{FilePath: "internal/config/config.go", Line: 11, Text: "x"},
+	}
+	if CommentSignature(a) == CommentSignature(c) {
+		t.Errorf("сигнатуры должны различаться при изменении file:line")
+	}
+}

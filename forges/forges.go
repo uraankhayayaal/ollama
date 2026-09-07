@@ -2,6 +2,8 @@ package forges
 
 import (
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -66,4 +68,22 @@ func DetectType(prURL string) kind {
 	default:
 		return ""
 	}
+}
+
+// CommentSignature возвращает детерминированную сигнатуру набора замечаний
+// по их расположению (файл:строка). Используется циклами self-repair, чтобы
+// определить, продвинулось ли исправление: если замечания между раундами
+// приходятся на те же места, фикс не дал результата и цикл пора прерывать.
+func CommentSignature(comments []ReviewComment) string {
+	keys := make([]string, 0, len(comments))
+	for _, c := range comments {
+		keys = append(keys, commentKey(c))
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ";")
+}
+
+// commentKey строит стабильный ключ замечания "путь:строка".
+func commentKey(c ReviewComment) string {
+	return c.FilePath + ":" + strconv.Itoa(c.Line)
 }

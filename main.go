@@ -274,7 +274,13 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 
 	// Цикл исправления: исправить → снова проверить ревью → повторять,
 	// пока остаются замечания и не исчерпан бюджет раундов.
+	//
+	// Детект отсутствия прогресса: если замечания повторного ревью приходятся
+	// на те же места, что и до исправления (одинаковая сигнатура file:line),
+	// фикс не помог — прерываем цикл, а не крутимся до исчерпания бюджета.
 	pending := lf.Published
+	prevSig := ""
+	stuckRounds := 0
 	for round := 1; round <= maxRounds && len(pending) > 0; round++ {
 		log.Printf("Self-review: раунд %d/%d, замечаний: %d. Запускаю исправление.", round, maxRounds, len(pending))
 
@@ -304,6 +310,20 @@ func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfRevie
 			log.Printf("Self-review: ошибка повторного ревью: %v", rerr)
 			break
 		}
+
+		// Проверяем продвижение: не застряли ли мы на тех же местах.
+		sig := forges.CommentSignature(next)
+		if sig != "" && sig == prevSig {
+			stuckRounds++
+			if stuckRounds >= 2 {
+				log.Printf("Self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
+				pending = next
+				break
+			}
+		} else {
+			stuckRounds = 0
+		}
+		prevSig = sig
 		pending = next
 	}
 

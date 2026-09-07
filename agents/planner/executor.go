@@ -580,6 +580,11 @@ func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfRevi
 	}
 
 	pending := lf.Published
+	// Детект отсутствия прогресса: если замечания повторного ревью приходятся
+	// на те же места, что и до исправления (та же сигнатура file:line), фикс
+	// не помог — прерываем цикл, а не крутимся до исчерпания бюджета.
+	prevSig := ""
+	stuckRounds := 0
 	for round := 1; round <= maxRounds && len(pending) > 0; round++ {
 		log.Printf("[Plan] self-review: раунд %d/%d, замечаний: %d", round, maxRounds, len(pending))
 
@@ -617,6 +622,20 @@ func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfRevi
 		if !ok2 {
 			break
 		}
+
+		// Проверяем продвижение: не застряли ли мы на тех же местах.
+		sig := forges.CommentSignature(rl.Published)
+		if sig != "" && sig == prevSig {
+			stuckRounds++
+			if stuckRounds >= 2 {
+				log.Printf("[Plan] self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
+				pending = rl.Published
+				break
+			}
+		} else {
+			stuckRounds = 0
+		}
+		prevSig = sig
 		pending = rl.Published
 	}
 
