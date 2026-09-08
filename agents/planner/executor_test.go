@@ -64,7 +64,7 @@ func TestExecutorResumeSkipsCompleted(t *testing.T) {
 		Summary:     "тест resume",
 		Steps: []Step{
 			{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"},
-			{ID: "s2", Agent: AgentCodeReviewer, Prompt: "проверь", DependsOn: []string{"s1"}, Description: "ревью"},
+			{ID: "s2", Agent: AgentDevops, Prompt: "подними инфраструктуру", DependsOn: []string{"s1"}, Description: "инфраструктура"},
 		},
 	}
 
@@ -114,7 +114,7 @@ func TestExecutorFreshRunSavesSnapshot(t *testing.T) {
 		ProjectName: "freshProj",
 		Summary:     "тест свежего старта",
 		Steps: []Step{
-			{ID: "s1", Agent: AgentCodeReviewer, Prompt: "проверь", Description: "ревью"},
+			{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"},
 		},
 	}
 
@@ -158,7 +158,7 @@ func TestExecutorResumeNoSnapshotIsFresh(t *testing.T) {
 		ProjectName: "nosnapProj",
 		Summary:     "нет чекпоинта",
 		Steps: []Step{
-			{ID: "s1", Agent: AgentCodeReviewer, Prompt: "проверь", Description: "ревью"},
+			{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"},
 		},
 	}
 

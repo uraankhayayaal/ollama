@@ -11,7 +11,7 @@ func TestParsePlanJSON(t *testing.T) {
   "summary": "Создать микросервис",
   "steps": [
     {"id": "s1", "agent": "backend", "prompt": "Создай проект", "scope": ["src/main.go", "internal/order/"], "description": "Генерация"},
-    {"id": "s2", "agent": "codereviewer", "prompt": "Проверь код", "depends_on": ["s1"], "scope": ["src/main.go"], "description": "Ревью"}
+    {"id": "s2", "agent": "qa", "prompt": "Протестируй код", "depends_on": ["s1"], "scope": ["src/main.go"], "description": "Тестирование"}
   ]
 }`
 
@@ -96,7 +96,7 @@ func TestParsePlanToleratesControlCharsInStrings(t *testing.T) {
 
 func TestComputeWavesOrder(t *testing.T) {
 	plan := &Plan{Steps: []Step{
-		{ID: "s3", Agent: AgentCodeReviewer, DependsOn: []string{"s2"}},
+		{ID: "s3", Agent: AgentQAEngineer, DependsOn: []string{"s2"}},
 		{ID: "s1", Agent: AgentBackendDev},
 		{ID: "s2", Agent: AgentFrontendDev, DependsOn: []string{"s1"}},
 	}}

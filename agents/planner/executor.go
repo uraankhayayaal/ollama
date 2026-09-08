@@ -4,7 +4,6 @@ import (
 	"ai/agents"
 	"ai/agents/acceptor"
 	"ai/agents/backendlead"
-	"ai/agents/codereviewer"
 	"ai/agents/developer"
 	"ai/agents/devops"
 	"ai/agents/devopslead"
@@ -12,7 +11,6 @@ import (
 	"ai/agents/qaengineer"
 	"ai/agents/qalead"
 	"ai/checkpoint"
-	"ai/forges"
 	"ai/logging"
 	"ai/models"
 	"ai/projects"
@@ -22,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -221,11 +218,12 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 	}
 
 	switch step.Agent {
-	case AgentBackendDev, AgentFrontendDev, AgentDevops, AgentDevopsLead, AgentQAEngineer, AgentQALead, AgentFrontendLead, AgentBackendLead:
-		return e.runCodingAgent(ctx, step, projectName)
+	case AgentBackendDev, AgentFrontendDev, AgentDevops, AgentDevopsLead, AgentQALead, AgentFrontendLead, AgentBackendLead:
+		_, err := e.runCodingAgent(ctx, step, projectName)
+		return err
 
-	case AgentCodeReviewer:
-		return e.runReviewAgent(ctx, step, projectName)
+	case AgentQAEngineer:
+		return e.runQAEngineer(ctx, step, projectName)
 
 	case AgentAcceptor:
 		return e.runAcceptorAgent(ctx, step, projectName)
@@ -237,8 +235,9 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 
 // runCodingAgent запускает агента-разработчика (backend/frontend) или другого
 // специалиста (devops, qa, лиды). Все агенты ограничены областью работы scope:
-// пишут/читают только указанные файлы.
-func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName string) error {
+// пишут/читают только указанные файлы. Возвращает ответ модели (нужен циклу
+// QA-багрепортов: observable из него парсятся репорты дефектов).
+func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName string) (*runner.AgentResponse, error) {
 	var agent agents.Agent
 	switch step.Agent {
 	case AgentBackendDev:
@@ -284,7 +283,7 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 
 	resp, err := e.provider.Generate(genCtx, agent)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Цикл упёрся в лимит раундов (или модель обрезалась по лимиту токенов):
@@ -298,18 +297,18 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 			// Модель исчерпала лимит и вернула пустой ответ без вызовов
 			// инструментов — код не создан. Считаем шаг упавшим, чтобы
 			// чекпоинт пометил его failed и можно было повторить через resume.
-			return fmt.Errorf("агент %T не создал код: модель вернула пустой ответ (исчерпан лимит раундов: %d)", agent, resp.Rounds)
+			return nil, fmt.Errorf("агент %T не создал код: модель вернула пустой ответ (исчерпан лимит раундов: %d)", agent, resp.Rounds)
 		}
 		if e.store != nil {
 			// Чекпоинт подключён — останавливаем план: пользователь запустит
 			// следующий запуск с --resume, и шаг продолжится с раунда
 			// resp.Rounds+1 (например 13..24, затем снова resume — 25..36).
-			return fmt.Errorf("шаг %q: исчерпан лимит раундов (%d) агентского цикла, история сохранена — запустите с --resume, чтобы продолжить", step.ID, resp.Rounds)
+			return nil, fmt.Errorf("шаг %q: исчерпан лимит раундов (%d) агентского цикла, история сохранена — запустите с --resume, чтобы продолжить", step.ID, resp.Rounds)
 		}
 		logging.Warnf("[%s] шаг %s: цикл исчерпал лимит раундов (%d), но чекпоинт отключён, продолжаю с частичным результатом", agentLabel(step.Agent, step.Role), step.ID, resp.Rounds)
 	}
 
-	return nil
+	return resp, nil
 }
 
 // loadResumeState читает сохранённую историю агентского цикла шага из
@@ -358,194 +357,6 @@ func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *runn
 		return false
 	}
 	return true
-}
-
-// runReviewAgent запускает локальное ревью проекта (LocalForge) и печатает
-// найденные замечания. Не требует URL — работает с temp/<projectName>.
-// Дифф строится только по файлам из области работы шага, чтобы ревьювер
-// не смотрел на код, не затронутый работой.
-//
-// Если замечания найдены — включается цикл «ревью → исправление → ревью»
-// (бюджет REVIEW_FIX_ROUNDS): планировщик составляет шаги исправления
-// разработчиками backend/frontend, исполнитель их прогоняет, затем ревью
-// повторяется по обновлённому коду. Цикл завершается, когда замечаний
-// больше нет.
-func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName string) error {
-	dir := projects.ProjectDir(projectName)
-	cfg := codereviewer.LoadConfig()
-
-	// Область ревью расширяется между раундами только файлами исправлений,
-	// чтобы фиксы (вне исходного scope) тоже попадали в повторное ревью.
-	reviewScope := step.Scope
-
-	for round := 1; round <= cfg.MaxRounds; round++ {
-		comments, err := e.runReviewRound(ctx, step, projectName, dir, reviewScope)
-		if err != nil {
-			return err
-		}
-
-		logging.Infof("[код-ревьювер] ревью %q (раунд %d/%d, scope: %v): найдено замечаний: %d",
-			dir, round, cfg.MaxRounds, reviewScope, len(comments))
-
-		if len(comments) == 0 {
-			logging.Infof("[код-ревьювер] ревью %q: замечаний больше нет — ревью пройдено", dir)
-			return nil
-		}
-
-		if round >= cfg.MaxRounds {
-			return fmt.Errorf("ревью %q не пройдено после %d раунда(ов) — осталось замечаний: %d",
-				dir, cfg.MaxRounds, len(comments))
-		}
-
-		// Замечания найдены: планируем шаги исправления и прогоняем их.
-		fixes, err := e.planReviewFixes(ctx, dir, comments)
-		if err != nil {
-			return fmt.Errorf("раунд ревью %d: планирование исправлений: %w", round, err)
-		}
-		if len(fixes) == 0 {
-			logging.Warnf("[планировщик] раунд ревью %d: планировщик не вернул шагов исправлений", round)
-			continue
-		}
-
-		executed := 0
-		for _, fs := range fixes {
-			// Повторную приёмку и ревью запускают циклы исполнителя, а не
-			// планировщик исправлений.
-			if fs.Agent == AgentAcceptor || fs.Agent == AgentCodeReviewer {
-				logging.Detailf("[%s] раунд ревью %d: шаг %s в плане исправлений пропущен", agentLabel(fs.Agent, fs.Role), round, fs.Agent)
-				continue
-			}
-			fixStep := fs
-			fixStep.ID = reviewFixStepID(e, round, executed)
-			// Область исправления: если планировщик не указал scope —
-			// подставляем файлы, на которые указывают замечания ревью.
-			if len(fixStep.Scope) == 0 {
-				fixStep.Scope = commentFiles(comments)
-			}
-			e.plan.Steps = append(e.plan.Steps, fixStep)
-			logging.Infof("[%s] раунд ревью %d: шаг исправления %s: %s", agentLabel(fixStep.Agent, fixStep.Role), round, fixStep.ID, fixStep.Description)
-			e.markRunning(ctx, fixStep.ID)
-			if err := e.executeStep(ctx, &fixStep); err != nil {
-				e.markFailed(ctx, fixStep.ID)
-				return fmt.Errorf("раунд ревью %d, шаг исправления %q: %w", round, fixStep.ID, err)
-			}
-			e.markDone(ctx, fixStep.ID)
-			executed++
-			reviewScope = uniqueSlash(append(reviewScope, fixStep.Scope...))
-		}
-		if executed == 0 {
-			logging.Warnf("[планировщик] раунд ревью %d: планировщик не дал применимых шагов исправлений — повторяю ревью", round)
-			continue
-		}
-
-		logging.Infof("[код-ревьювер] раунд ревью %d: повторное ревью после исправлений", round)
-	}
-
-	return fmt.Errorf("ревью %q не пройдено после %d раундов исправлений", dir, cfg.MaxRounds)
-}
-
-// runReviewRound выполняет один проход локального ревью и возвращает
-// опубликованные замечания (пустой слайс — замечаний нет).
-func (e *Executor) runReviewRound(ctx context.Context, step *Step, projectName, dir string, scope []string) ([]forges.ReviewComment, error) {
-	lf, err := forges.NewLocalForge(dir)
-	if err != nil {
-		return nil, fmt.Errorf("локальное ревью: %v", err)
-	}
-	lf.SetScope(scope)
-
-	agent := codereviewer.NewCodereviewerWithForge(lf, step.Prompt)
-	resp, err := e.provider.Generate(ctx, agent)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(lf.Published) == 0 && resp != nil && resp.Content != "" {
-		agent.PublishParsedReview(resp.Content)
-	}
-
-	return lf.Published, nil
-}
-
-// planReviewFixes отдаёт планировщику замечания ревью и получает шаги
-// исправления. Формат — тот же JSON-план, но планировщику запрещено
-// добавлять acceptor и codereviewer: повторные ревью/приёмку запускают
-// циклы исполнителя.
-func (e *Executor) planReviewFixes(ctx context.Context, dir string, comments []forges.ReviewComment) ([]Step, error) {
-	issueFiles := uniqueSlash(commentFiles(comments))
-
-	var b strings.Builder
-	b.WriteString("Код-ревью выявило замечания к проекту. Директория: ")
-	b.WriteString(dir)
-	b.WriteString(".\n\nЗамечания:\n")
-	for _, c := range comments {
-		loc := strings.TrimSpace(c.FilePath)
-		if c.Line > 0 {
-			loc += ":" + strconv.Itoa(c.Line)
-		}
-		if loc != "" {
-			fmt.Fprintf(&b, "- %s %s\n", loc, strings.TrimSpace(c.Text))
-		} else {
-			fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(c.Text))
-		}
-	}
-
-	b.WriteString(`
-Составь план исправлений этих замечаний.
-Требования:
-- Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend).
-- НЕ добавляй шаги acceptor и codereviewer — повторные ревью и приёмку запустит исполнитель.
-- scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
-  `)
-	if len(issueFiles) > 0 {
-		b.WriteString(bullet(issueFiles))
-	} else {
-		b.WriteString("  (файлы из замечаний ревью)")
-	}
-	b.WriteString("\n- Каждый шаг — одно конкретное исправление.")
-
-	pa := NewPlanner(filepath.Base(dir), b.String())
-	resp, err := e.provider.Generate(ctx, pa)
-	if err != nil {
-		return nil, err
-	}
-	fixPlan, err := ParsePlan(resp.Content)
-	if err != nil {
-		logging.Warnf("[планировщик] не удалось разобрать план исправлений: %v", err)
-		logging.Detailf("[планировщик] Ответ планировщика:\n%s", resp.Content)
-		return nil, err
-	}
-	return fixPlan.Steps, nil
-}
-
-// commentFiles возвращает уникальные нормализованные файлы, на которые
-// указывают замечания ревью.
-func commentFiles(comments []forges.ReviewComment) []string {
-	seen := map[string]bool{}
-	var files []string
-	for _, c := range comments {
-		f := strings.TrimSpace(strings.TrimPrefix(c.FilePath, "./"))
-		if f == "" || seen[f] {
-			continue
-		}
-		seen[f] = true
-		files = append(files, f)
-	}
-	return files
-}
-
-// reviewFixStepID генерирует уникальный ID шага исправления ревью, чтобы не
-// пересекаться с ID шагов основного плана и других раундов.
-func reviewFixStepID(e *Executor, round, idx int) string {
-	base := fmt.Sprintf("review-r%d-%d", round, idx)
-	if e.findStep(base) == nil {
-		return base
-	}
-	for n := 1; ; n++ {
-		id := fmt.Sprintf("review-r%d-%d-%d", round, idx, n)
-		if e.findStep(id) == nil {
-			return id
-		}
-	}
 }
 
 // runAcceptorAgent выполняет детерминированную приёмку собранного приложения:
@@ -761,7 +572,7 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 
 Составь план исправлений этих ошибок.
 Требования:
-- Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend) (для проверки исправлений можно добавить codereviewer).
+- Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend) (для проверки исправлений можно добавить шаг qa с автотестами по контракту).
 - НЕ добавляй шаг acceptor — повторную приёмку запустит исполнитель.
 - scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
 %s

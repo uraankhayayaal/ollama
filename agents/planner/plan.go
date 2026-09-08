@@ -15,7 +15,6 @@ const (
 	AgentBackendDev AgentType = "backend"
 	// AgentFrontendDev — агент «Frontend разработчик»: клиентская часть проекта.
 	AgentFrontendDev  AgentType = "frontend"
-	AgentCodeReviewer AgentType = "codereviewer"
 	AgentAcceptor     AgentType = "acceptor"
 	AgentDevops       AgentType = "devops"
 	AgentDevopsLead   AgentType = "devops-lead"
@@ -46,8 +45,6 @@ func agentDisplayName(a AgentType) string {
 		return "бэкенд-разработчик"
 	case AgentFrontendDev:
 		return "фронтенд-разработчик"
-	case AgentCodeReviewer:
-		return "код-ревьювер"
 	case AgentAcceptor:
 		return "приёмка"
 	case AgentDevops:
