@@ -17,6 +17,15 @@ const (
 	AgentAcceptor      AgentType = "acceptor"
 )
 
+// Role — роль разработчика; применяется к шагам refactor для изоляции
+// фронтенда и бэкенда (scope ограничивает файлы, роль — промпт и стиль кода).
+type Role string
+
+const (
+	RoleFrontend Role = "frontend"
+	RoleBackend  Role = "backend"
+)
+
 // Step — один этап плана, делегируемый конкретному агенту.
 type Step struct {
 	ID          string    `json:"id"`
@@ -29,6 +38,10 @@ type Step struct {
 	// проекта, на которых сосредоточен этот шаг (например "src/main.go"
 	// или "internal/order/"). Пустой — агент работает со всем проектом.
 	Scope []string `json:"scope,omitempty"`
+	// Role — роль разработчика (frontend/backend). Задаётся планировщиком,
+	// когда работа делится на фронтенд и бэкенд. refactor-агент получает
+	// роль через SetRole и настраивает промпт под стек подпроекта.
+	Role Role `json:"role,omitempty"`
 }
 
 // Plan — структурированный план, возвращаемый планировщиком.

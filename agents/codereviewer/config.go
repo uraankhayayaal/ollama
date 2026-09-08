@@ -12,6 +12,13 @@ type Config struct {
 	// 0 или отрицательное — без лимита.
 	MaxComments int
 
+	// CriticalOnly — публиковать только критические замечания: ревьювер должен
+	// указывать лишь на реальные дефекты (баги, падения, уязвимости, гонки,
+	// утечки ресурсов), а несущественные/шумовые замечания («для заметки:»,
+	// «можно упростить», «стоит проверить» и т.п.) молча отсекаются.
+	// true — по умолчанию.
+	CriticalOnly bool
+
 	// BlockOnCritical запрещает апрув, если модель пометила хотя бы одно
 	// замечание как критичное ("критично:"). true — блокировать.
 	BlockOnCritical bool
@@ -36,6 +43,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		MaxComments:     10,
+		CriticalOnly:    true,
 		BlockOnCritical: true,
 		SkipGenerated:   true,
 		ChunkSize:       14000,
@@ -51,6 +59,11 @@ func LoadConfig() Config {
 	if v := os.Getenv("REVIEW_MAX_COMMENTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.MaxComments = n
+		}
+	}
+	if v := os.Getenv("REVIEW_CRITICAL_ONLY"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.CriticalOnly = b
 		}
 	}
 	if v := os.Getenv("REVIEW_BLOCK_ON_CRITICAL"); v != "" {

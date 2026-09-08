@@ -38,6 +38,39 @@ func TestGetSystemMessagesUsesRefactorPrompt(t *testing.T) {
 	}
 }
 
+// Роль разработчика попадает в системный промпт: фронтендер работает только
+// с клиентской частью, бэкендер — только с серверной. Без роли промпт нейтрален.
+func TestSetRoleChangesSystemPrompt(t *testing.T) {
+	cases := []struct {
+		role  string
+		want  string
+		notIn string
+	}{
+		{"frontend", "ФРОНТЕНД-РАЗРАБОТЧИК", "БЭКЕНД-РАЗРАБОТЧИК"},
+		{"backend", "БЭКЕНД-РАЗРАБОТЧИК", "ФРОНТЕНД-РАЗРАБОТЧИК"},
+		{"server", "БЭКЕНД-РАЗРАБОТЧИК", "ФРОНТЕНД-РАЗРАБОТЧИК"},
+		{"front", "ФРОНТЕНД-РАЗРАБОТЧИК", "БЭКЕНД-РАЗРАБОТЧИК"},
+	}
+	for _, tc := range cases {
+		ra := newTestRefactor(t)
+		ra.SetRole(tc.role)
+		text := ra.GetSystemMessages(nil)[0].Message
+		if !strings.Contains(text, tc.want) {
+			t.Errorf("роль %q: промпт не содержит %q", tc.role, tc.want)
+		}
+		if strings.Contains(text, tc.notIn) {
+			t.Errorf("роль %q: промпт не должен содержать %q", tc.role, tc.notIn)
+		}
+	}
+
+	// Без роли — ни фронтендер, ни бэкендер.
+	ra := newTestRefactor(t)
+	text := ra.GetSystemMessages(nil)[0].Message
+	if strings.Contains(text, "РАЗРАБОТЧИК") {
+		t.Errorf("без роли промпт не должен выделять роль, got: %s", text)
+	}
+}
+
 func TestNewRefactorAgentRejectsMissingProject(t *testing.T) {
 	name := "refactor-no-such-project-" + t.Name()
 	if _, err := NewRefactorAgent("задание", name); err == nil {

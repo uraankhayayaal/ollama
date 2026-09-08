@@ -38,6 +38,53 @@ func DetectKind(dir string) Kind {
 	}
 }
 
+// ProjectRoot — один обнаруживаемый проект (под)приёмки со своим типом.
+type ProjectRoot struct {
+	// Dir — абсолютный путь к проекту.
+	Dir string
+	// Rel — относительный путь от корня приёмки ("" для самого корня,
+	// "frontend", "server" — для подпроектов монорепозитория).
+	Rel string
+	// Kind — тип проекта (go/node/python).
+	Kind Kind
+}
+
+// DetectProjects находит проекты в директории приёмки:
+//   - если в корне есть маркер проекта (go.mod/package.json/…) — это один
+//     проект в корне (Rel == "");
+//   - иначе просматриваем прямые подкаталоги и возвращаем те, в которых
+//     есть собственные маркеры (фронтенд и бэкенд монорепозитория);
+//   - каталоги без маркеров и служебные (node_modules, dist, .git, …)
+//     игнорируются.
+//
+// Результат детерминирован: сортировка по имени подкаталога.
+func DetectProjects(dir string) []ProjectRoot {
+	if kind := DetectKind(dir); kind != KindUnknown {
+		return []ProjectRoot{{Dir: dir, Rel: "", Kind: kind}}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var roots []ProjectRoot
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || isIgnoredDir(name) {
+			continue
+		}
+		sub := filepath.Join(dir, name)
+		if kind := DetectKind(sub); kind != KindUnknown {
+			roots = append(roots, ProjectRoot{Dir: sub, Rel: name, Kind: kind})
+		}
+	}
+	sort.Slice(roots, func(i, j int) bool { return roots[i].Rel < roots[j].Rel })
+	return roots
+}
+
 func hasFile(dir, name string) bool {
 	info, err := os.Stat(filepath.Join(dir, name))
 	return err == nil && !info.IsDir()
@@ -87,7 +134,13 @@ func (k Kind) runCommand(dir string) string {
 		if m := nodeMain(dir); m != "" {
 			return "node " + m
 		}
-		return "node ."
+		if nodeHasEntryFile(dir) {
+			return "node ."
+		}
+		// Статический фронтенд (Vite/React/Vue и т.п.): есть build-скрипт,
+		// но нет серверной точки входа для запуска — приёмка по сборке
+		// достаточна, запуск не требуется.
+		return ""
 	case KindPython:
 		if hasFile(dir, "main.py") {
 			return pythonCmd() + " main.py"
@@ -234,6 +287,23 @@ func nodeMain(dir string) string {
 		}
 	}
 	return ""
+}
+
+// nodeHasEntryFile проверяет наличие исполнимой точки входа (файла, который
+// запускает сервер/приложение) в корне Node-проекта. Используется, чтобы
+// отличить серверное приложение от статического фронтенда, у которого есть
+// только build-скрипт (Vite/React/Vue): фронтенд принимать по сборке.
+func nodeHasEntryFile(dir string) bool {
+	for _, f := range []string{
+		"index.js", "index.mjs", "index.cjs",
+		"server.js", "server.mjs", "server.cjs",
+		"app.js", "app.mjs", "main.js", "main.mjs",
+	} {
+		if hasFile(dir, f) {
+			return true
+		}
+	}
+	return false
 }
 
 // findGoMainPkg ищет пакет с функцией main ниже корня (например, cmd/server/)

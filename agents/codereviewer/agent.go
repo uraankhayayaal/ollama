@@ -77,6 +77,7 @@ func NewCodereviewer(args []string) *Codereviewer {
 	ses := &tools.ReviewSession{
 		Forge:           forge,
 		MaxComments:     cfg.MaxComments,
+		CriticalOnly:    cfg.CriticalOnly,
 		BlockOnCritical: cfg.BlockOnCritical,
 		Focus:           focus,
 	}
@@ -91,6 +92,7 @@ func NewCodereviewerWithForge(forge forges.Forge, focus string) *Codereviewer {
 	ses := &tools.ReviewSession{
 		Forge:           forge,
 		MaxComments:     cfg.MaxComments,
+		CriticalOnly:    cfg.CriticalOnly,
 		BlockOnCritical: cfg.BlockOnCritical,
 		Focus:           focus,
 	}
@@ -286,8 +288,11 @@ func (cr *Codereviewer) GetSystemMessages(text []agents.Message) []agents.Messag
 			"Каждое замечание обязательно публикуется вызовом ReviewMr. " +
 			"После просмотра всех частей обязательно вызови ApproveMr (или верни отказ, если есть критичные). " +
 			"Если не вызвал ни одного инструмента до записи текстового ответа — ревью считается невыполненным." +
-			"\n\t\tФокусируйся только на технических ошибках и проблемах, а не на рекомендациях типа 'убедиться что' или 'стоит проверить'. " +
-			"Каждое замечание должно указывать на конкретную проблему в коде, а не на потенциальные улучшения."
+			"\n\t\tТолько критические места: публикуй замечание, только если код реально сломан " +
+			"(баг, падение, потеря данных) или небезопасен (инъекции, утечка секретов, гонки, утечки ресурсов). " +
+			"Стиль, именование, форматирование, «можно лучше», «стоит проверить», гипотетические улучшения — " +
+			"НЕ комментируй: это шум, с которым справятся линтеры. " +
+			"Если критичных дефектов нет — не выдумывай замечания, просто вызови ApproveMr."
 
 		return []agents.Message{
 			{

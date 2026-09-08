@@ -43,6 +43,11 @@ type Report struct {
 	Format  *CheckResult   `json:"format,omitempty"`
 	Analyze *CheckResult   `json:"analyze,omitempty"`
 	Issues  []Issue        `json:"issues"`
+	// Projects — отчёты подпроектов монорепозитория (frontend/, server/).
+	// Заполняется, когда корень проекта не имеет файловых маркеров, а его
+	// прямые подкаталоги — имеют: каждый подпроект принимается отдельно.
+	// Для одиночного проекта список пуст.
+	Projects []*Report `json:"projects,omitempty"`
 }
 
 // BuildResult — результат сборки проекта.
@@ -281,6 +286,24 @@ func (r *Report) IssuesText() string {
 // результат сборки/запуска и список замечаний. Вывод этапов обрезается, чтобы
 // не переполнять контекст.
 func (r *Report) FixPrompt() string {
+	// Монорепозиторий: заголовок и по одному блоку на подпроект, чтобы
+	// планировщик знал, где именно чинить (файлы в замечаниях уже имеют
+	// префикс подкаталога).
+	if len(r.Projects) > 0 {
+		var b strings.Builder
+		b.WriteString("Монорепозиторий из подпроектов (приёмка каждого отдельная):\n")
+		for _, pr := range r.Projects {
+			fmt.Fprintf(&b, "- %s (%s): %s\n", pr.Project, pr.Tool, pr.Summary)
+		}
+		for _, pr := range r.Projects {
+			b.WriteString("\n--- Подпроект: ")
+			b.WriteString(pr.Project)
+			b.WriteString(" ---\n")
+			b.WriteString(pr.FixPrompt())
+		}
+		return b.String()
+	}
+
 	var b strings.Builder
 	b.WriteString("Тип проекта: ")
 	b.WriteString(r.Tool)

@@ -423,6 +423,24 @@ func acceptReportText(rep *acceptor.Report) string {
 	fmt.Fprintf(&b, "Вердикт: %s\n", rep.Verdict)
 	fmt.Fprintf(&b, "Сводка: %s\n\n", rep.Summary)
 
+	// Монорепозиторий (frontend+backend): каждый подпроект принимался отдельно
+	// — печатаем его отчёт целиком, чтобы было видно, где что упало.
+	if len(rep.Projects) > 0 {
+		for i, pr := range rep.Projects {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("=== Подпроект: ")
+			b.WriteString(pr.Project)
+			b.WriteString(" (")
+			b.WriteString(pr.Tool)
+			b.WriteString(") ===\n")
+			b.WriteString(acceptReportText(pr))
+			b.WriteString("\n")
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+
 	if rep.Install != nil {
 		fmt.Fprintf(&b, "Установка зависимостей: %s\n", installStatusWord(rep.Install))
 		fmt.Fprintf(&b, "  команда: %s\n", rep.Install.Command)

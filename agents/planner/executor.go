@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -250,6 +251,13 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// сможет ни читать, ни писать, ни удалять файлы.
 	if scoper, ok := agent.(interface{ SetScope([]string) }); ok {
 		scoper.SetScope(step.Scope)
+	}
+
+	// Роль разработчика (frontend/backend): применяем к агенту, чтобы он не
+	// выходил за пределы своей части монорепозитория. Роль не влияет на scope
+	// (его задаёт планировщик), а уточняет промпт и стиль работы агента.
+	if rr, ok := agent.(interface{ SetRole(string) }); ok && step.Role != "" {
+		rr.SetRole(string(step.Role))
 	}
 
 	// Возобновление агентского цикла: если в чекпоинте сохранена история
@@ -538,8 +546,14 @@ func reviewFixStepID(e *Executor, round, idx int) string {
 // определяет тип проекта, собирает его, запускает на короткое время и
 // анализирует логи. Сам шаг никогда не «падает» — отрицательный вердикт
 // сохраняется в отчёт и обрабатывается циклом runAcceptanceLoop.
+//
+// Если scope шага указывает на один подкаталог (например frontend/ или
+// server/) — приёмка выполняется в нём отдельно: у фронтенда и бэкенда
+// собственная сборка и проверки. Пустой scope — приёмка всего корня
+// (acceptor сам найдёт подпроекты и примет каждый по отдельности).
 func (e *Executor) runAcceptorAgent(ctx context.Context, step *Step, projectName string) error {
-	dir := codegenerator.ProjectDir(projectName)
+	root := codegenerator.ProjectDir(projectName)
+	dir := acceptanceDir(root, step.Scope)
 	rep := acceptor.Accept(dir, acceptor.LoadConfig())
 	e.acceptReports[step.ID] = rep
 
@@ -560,6 +574,52 @@ func (e *Executor) runAcceptorAgent(ctx context.Context, step *Step, projectName
 		}
 	}
 	return nil
+}
+
+// acceptanceDir выбирает директорию приёмки для шага. Если scope шага сужается
+// до одного существующего подкаталога (например ["frontend/"]) — приёмка идёт
+// в нём; иначе — в корне проекта.
+func acceptanceDir(root string, scope []string) string {
+	top := topLevelScopeDir(scope)
+	if top == "" {
+		return root
+	}
+	candidate := filepath.Join(root, top)
+	if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+		return candidate
+	}
+	return root
+}
+
+// topLevelScopeDir возвращает общую старшую директорию всех записей scope,
+// если они все лежат в одном подкаталоге проекта ("frontend" для
+// ["frontend/src/App.tsx", "frontend/package.json"]). Возвращает "" при разных
+// подкаталогах, пустом scope или файле в корне.
+func topLevelScopeDir(scope []string) string {
+	seen := map[string]bool{}
+	var dirs []string
+	for _, s := range scope {
+		s = strings.TrimPrefix(strings.TrimSpace(strings.ReplaceAll(s, "\\", "/")), "./")
+		s = strings.Trim(strings.TrimSpace(s), "/")
+		if s == "" {
+			continue
+		}
+		first := s
+		if i := strings.IndexByte(s, '/'); i >= 0 {
+			first = s[:i]
+		}
+		if first == "." || first == ".." {
+			continue
+		}
+		if !seen[first] {
+			seen[first] = true
+			dirs = append(dirs, first)
+		}
+	}
+	if len(dirs) == 1 {
+		return dirs[0]
+	}
+	return ""
 }
 
 // runAcceptanceLoop — цикл «приёмка → планировщик исправлений → приёмка».

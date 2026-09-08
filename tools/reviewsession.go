@@ -16,6 +16,9 @@ type ReviewSession struct {
 	Forge forges.Forge
 	// MaxComments ограничивает число публикуемых замечаний за одно ревью.
 	MaxComments int
+	// CriticalOnly — публиковать только критические замечания: несущественные
+	// (стиль, «можно лучше», «стоит проверить» и т.п.) отсекаются.
+	CriticalOnly bool
 	// BlockOnCritical запрещает апрув при наличии критичных замечаний.
 	BlockOnCritical bool
 	// Focus — цель ревью из аргумента CLI (например "безопасность").
@@ -39,6 +42,9 @@ type ReviewSession struct {
 	RejectedCount int
 	// FilteredSuspiciousCount — сколько комментариев отфильтровано как нейрослопы
 	FilteredSuspiciousCount int
+	// MinorDroppedCount — сколько несущественных замечаний отсечено режимом
+	// CriticalOnly (стиль, «можно лучше», «стоит проверить»).
+	MinorDroppedCount int
 
 	// summaryPosted — публиковался ли уже итоговый отчёт в тред.
 	summaryPosted bool
@@ -83,6 +89,15 @@ func (s *ReviewSession) ReviewMr(args map[string]any) ([]byte, error) {
 	var filteredSuspicious int
 	comments, filteredSuspicious = filterSuspiciousCommentsWithCount(comments)
 	s.FilteredSuspiciousCount += filteredSuspicious
+
+	// Режим критичности: публикуем только замечания на реальные дефекты,
+	// молча отсекая шумовые («для заметки:», «можно упростить», «стоит
+	// проверить») — главный источник переизбытка комментариев.
+	if s.CriticalOnly {
+		var dropped int
+		comments, dropped = filterMinorCommentsWithCount(comments)
+		s.MinorDroppedCount += dropped
+	}
 
 	// Группируем и удаляем дубликаты по тексту замечания и файлам
 	if len(comments) > 0 {
@@ -129,6 +144,15 @@ func (s *ReviewSession) ReviewMr(args map[string]any) ([]byte, error) {
 		result = append(result, map[string]string{
 			"status":  "warning",
 			"message": fmt.Sprintf("отсечено галлюцинирующих замечаний: %d", len(rejected)),
+		})
+	}
+
+	// Сообщаем об отсечённых несущественных замечаниях, чтобы модель не
+	// тратила усилия на стиль/«можно лучше» в следующих раундах.
+	if s.CriticalOnly && s.MinorDroppedCount > 0 {
+		result = append(result, map[string]string{
+			"status":  "warning",
+			"message": fmt.Sprintf("отсечено несущественных замечаний (стиль/«можно лучше»): %d — публикуй только критические", s.MinorDroppedCount),
 		})
 	}
 
@@ -316,6 +340,72 @@ func filterSuspiciousCommentsWithCount(comments []forges.ReviewComment) ([]forge
 	return filtered, count
 }
 
+// minorReviewMarkers — маркеры несущественных (шумовых) замечаний: стиль,
+// «можно лучше», «стоит проверить» и т.п. В режиме CriticalOnly замечания,
+// содержащие такой маркер, не публикуются: ревьювер должен указывать только
+// на критические места, а не придираться к мелочам.
+var minorReviewMarkers = []string{
+	"для заметки:",
+	"стоит",
+	"можно",
+	"лучше",
+	"предлагаю",
+	"рекомендую",
+	"рекомендуется",
+	"совет",
+	"мелочь",
+	"улучшен",
+	"в идеале",
+	"хорошо бы",
+	"стоило бы",
+	"было бы",
+	"читаемост",
+	"наглядн",
+	"аккуратн",
+	"упрост",
+	"оптимальн",
+	"правильнее",
+	"магическ",
+	"наименован",
+	"потенциально",
+	"возможно стоит",
+	"на будущее",
+	"в будущем",
+	"неряшлив",
+}
+
+// filterMinorCommentsWithCount удаляет несущественные замечания (стиль,
+// рекомендации, «можно лучше»), оставляя только указания на реальные
+// дефекты. Возвращает отфильтрованный список и число удалённых.
+func filterMinorCommentsWithCount(comments []forges.ReviewComment) ([]forges.ReviewComment, int) {
+	var kept []forges.ReviewComment
+	count := 0
+
+	for _, comment := range comments {
+		// Критичные замечания не трогаем: блокируют апрув, их важно доносить.
+		if IsCritical(comment.Text) {
+			kept = append(kept, comment)
+			continue
+		}
+
+		low := strings.ToLower(strings.TrimSpace(comment.Text))
+		minor := false
+		for _, marker := range minorReviewMarkers {
+			if strings.Contains(low, marker) {
+				minor = true
+				break
+			}
+		}
+		if minor {
+			count++
+			continue
+		}
+		kept = append(kept, comment)
+	}
+
+	return kept, count
+}
+
 // PostSummaryToPR публикует итоговый отчёт-сводку в тред MR/PR.
 // Вызывается раннером после завершения цикла агента, чтобы команда видела
 // сводку ревью даже при частичном результате.
@@ -331,6 +421,9 @@ func (s *ReviewSession) PostSummaryToPR() error {
 	fmt.Fprintf(&b, "- Ошибок публикации: **%d**\n", len(s.PostErrors))
 	fmt.Fprintf(&b, "- Отсечено галлюцинирующих замечаний: **%d**\n", s.RejectedCount)
 	fmt.Fprintf(&b, "- Отфильтровано нейрослопов: **%d**\n", s.FilteredSuspiciousCount)  // Added this line
+	if s.CriticalOnly {
+		fmt.Fprintf(&b, "- Отсечено несущественных замечаний (стиль/«можно лучше»): **%d**\n", s.MinorDroppedCount)
+	}
 	if s.Focus != "" {
 		fmt.Fprintf(&b, "- Фокус ревью: **%s**\n", s.Focus)
 	}

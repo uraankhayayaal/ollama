@@ -14,14 +14,97 @@ import (
 // Приёмка полностью детерминирована: не требует вызова LLM. Если приложение
 // не проходит приёмку, исполнитель плана передаёт отчёт планировщику для
 // составления шагов исправления.
+//
+// Поддерживаются монорепозитории «фронтенд + бэкенд»: если в корне проекта
+// нет файловых маркеров (go.mod/package.json/…), а в прямых подкаталогах
+// (например frontend/ и server/) они есть — каждый подпроект принимается
+// отдельно, со своей сборкой и своими проверками, а результаты объединяются
+// в один отчёт (см. Report.Projects).
 func Accept(dir string, cfg Config) *Report {
+	projects := DetectProjects(dir)
+
+	// Явно заданные команды через конфиг позволяют принимать проект вообще
+	// без файловых маркеров (см. TestAcceptOverriddenCommands): такой каталог
+	// трактуем как одиночный (синтетический) проект в корне.
+	if len(projects) == 0 &&
+		(strings.TrimSpace(cfg.BuildCmd) != "" || strings.TrimSpace(cfg.RunCmd) != "") {
+		projects = []ProjectRoot{{Dir: dir, Kind: KindUnknown}}
+	}
+
+	switch {
+	case len(projects) == 0:
+		return unknownProjectReport(dir)
+	case len(projects) == 1:
+		return acceptOne(projects[0].Dir, projects[0].Kind, cfg)
+	default:
+		return acceptMany(dir, projects, cfg)
+	}
+}
+
+// unknownProjectReport собирает отчёт для каталога без опознанного типа
+// проекта и без явно заданных команд: принять такое нечего.
+func unknownProjectReport(dir string) *Report {
 	rep := &Report{
 		Project: filepath.Base(dir),
+		Verdict: VerdictReject,
+		Tool:    string(KindUnknown),
+	}
+	rep.Issues = append(rep.Issues, Issue{
+		Stage:    StageConfig,
+		Severity: "error",
+		Text:     "не удалось определить тип проекта (нет go.mod, package.json, requirements.txt и т.п.) — задайте ACCEPT_BUILD_CMD/ACCEPT_RUN_CMD",
+	})
+	rep.Summary = summarize(rep)
+	return rep
+}
+
+// acceptMany принимает монорепозиторий: каждый подпроект (фронтенд/бэкенд)
+// приёмка проходит по отдельности со своей сборкой и проверками. Итоговый
+// вердикт — approve только если приняты все подпроекты; замечания объединяются
+// с префиксом подкаталога (frontend/…, server/…), чтобы планировщик
+// исправлений знал, где чинить.
+func acceptMany(root string, projects []ProjectRoot, cfg Config) *Report {
+	rep := &Report{
+		Project: filepath.Base(root),
+		Tool:    "монорепозиторий",
 		Verdict: VerdictApprove,
 	}
 
-	kind := DetectKind(dir)
-	rep.Tool = string(kind)
+	for _, p := range projects {
+		sub := acceptOne(p.Dir, p.Kind, cfg)
+		sub.Project = p.Rel
+		rep.Projects = append(rep.Projects, sub)
+
+		if sub.Verdict == VerdictReject {
+			rep.Verdict = VerdictReject
+		}
+		for _, iss := range sub.Issues {
+			if iss.File != "" {
+				// Анализатор берёт файлы из вывода инструментов (например
+				// "./main.go") — нормализуем перед добавлением префикса
+				// подкаталога, чтобы получилось "server/main.go", а не
+				// "server/./main.go".
+				iss.File = p.Rel + "/" + strings.TrimPrefix(filepath.ToSlash(iss.File), "./")
+			}
+			rep.Issues = append(rep.Issues, iss)
+		}
+		logging.Infof("[Accept] %s: подпроект %q (%s): вердикт %s",
+			rep.Project, p.Rel, p.Kind, sub.Verdict)
+	}
+
+	rep.Summary = summarize(rep)
+	return rep
+}
+
+// acceptOne — приёмка одного проекта с известным типом (kind). Вся логика
+// одиночной приёмки: установка зависимостей, сборка, стилизатор, анализатор,
+// запуск и анализ логов.
+func acceptOne(dir string, kind Kind, cfg Config) *Report {
+	rep := &Report{
+		Project: filepath.Base(dir),
+		Verdict: VerdictApprove,
+		Tool:    string(kind),
+	}
 
 	buildCmd := cfg.BuildCmd
 	if strings.TrimSpace(buildCmd) == "" {
@@ -35,14 +118,7 @@ func Accept(dir string, cfg Config) *Report {
 	// Неизвестный тип проекта и нет явно заданных команд — принимать нечего:
 	// без маркеров (go.mod/package.json/…) приёмка бессмысленна.
 	if kind == KindUnknown && strings.TrimSpace(buildCmd) == "" && strings.TrimSpace(runCmd) == "" {
-		rep.Verdict = VerdictReject
-		rep.Issues = append(rep.Issues, Issue{
-			Stage:    StageConfig,
-			Severity: "error",
-			Text:     "не удалось определить тип проекта (нет go.mod, package.json, requirements.txt и т.п.) — задайте ACCEPT_BUILD_CMD/ACCEPT_RUN_CMD",
-		})
-		rep.Summary = summarize(rep)
-		return rep
+		return unknownProjectReport(dir)
 	}
 
 	// Установка зависимостей перед сборкой. Недоступный инструмент установки —
@@ -218,6 +294,16 @@ func Accept(dir string, cfg Config) *Report {
 
 // summarize составляет краткую однострочную сводку результата приёмки.
 func summarize(rep *Report) string {
+	// Монорепозиторий: сводка собирается из сводок подпроектов, каждый —
+	// со своим префиксом (frontend/server), чтобы было видно, где что упало.
+	if len(rep.Projects) > 0 {
+		var parts []string
+		for _, pr := range rep.Projects {
+			parts = append(parts, pr.Project+": "+pr.Summary)
+		}
+		return strings.Join(parts, "; ")
+	}
+
 	var parts []string
 	if rep.Install != nil {
 		switch {

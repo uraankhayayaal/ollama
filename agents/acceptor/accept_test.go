@@ -45,6 +45,172 @@ func TestDetectKind(t *testing.T) {
 	}
 }
 
+// Монорепозиторий «фронтенд + бэкенд»: корень без маркеров, подкаталоги со
+// своими маркерами. DetectProjects возвращает по одному подпроекту на маркер
+// в детерминированном порядке.
+func TestDetectProjectsMonorepo(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "frontend/package.json", `{"scripts": {"build": "echo ok"}}`)
+	writeTestFile(t, dir, "server/go.mod", "module server\n")
+	writeTestFile(t, dir, "server/main.go", "package main\nfunc main() {}\n")
+	writeTestFile(t, dir, "node_modules/whatever/index.js", "x")
+	writeTestFile(t, dir, ".git/config", "x")
+
+	roots := DetectProjects(dir)
+	if len(roots) != 2 {
+		t.Fatalf("ожидали 2 подпроекта, got %d: %#v", len(roots), roots)
+	}
+	if roots[0].Rel != "frontend" || roots[0].Kind != KindNode {
+		t.Fatalf("roots[0] = %#v, ожидали frontend/node", roots[0])
+	}
+	if roots[1].Rel != "server" || roots[1].Kind != KindGo {
+		t.Fatalf("roots[1] = %#v, ожидали server/go", roots[1])
+	}
+}
+
+// В корне есть маркер проекта — это одиночный проект, подкаталоги не
+// перечисляются как отдельные подпроекты.
+func TestDetectProjectsSingleRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module root\n")
+	writeTestFile(t, dir, "frontend/package.json", "{}")
+
+	roots := DetectProjects(dir)
+	if len(roots) != 1 || roots[0].Rel != "" {
+		t.Fatalf("ожидали один корневой проект, got %#v", roots)
+	}
+}
+
+// Монорепозиторий frontend (статика) + server (go, рабочий): приёмка проходит
+// каждый подпроект по отдельности, общий вердикт — approve.
+func TestAcceptMonorepoApproves(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "frontend/package.json", `{"scripts": {"build": "echo front build ok"}}`)
+	writeTestFile(t, dir, "server/go.mod", "module server\n")
+	writeTestFile(t, dir, "server/main.go", `package main
+
+func main() { println("привет") }
+`)
+
+	cfg := DefaultConfig()
+	cfg.InstallDeps = false
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Verdict != VerdictApprove {
+		t.Fatalf("монорепозиторий должен быть принят, got %s (%s)", rep.Verdict, rep.Summary)
+	}
+	if len(rep.Projects) != 2 {
+		t.Fatalf("ожидали 2 подпроекта в отчёте, got %d", len(rep.Projects))
+	}
+	if rep.Projects[0].Project != "frontend" || rep.Projects[1].Project != "server" {
+		t.Fatalf("подпроекты: got %q, %q", rep.Projects[0].Project, rep.Projects[1].Project)
+	}
+	for _, pr := range rep.Projects {
+		if pr.Verdict != VerdictApprove {
+			t.Fatalf("подпроект %q должен быть принят, got %s", pr.Project, pr.Verdict)
+		}
+	}
+	if !strings.Contains(rep.Summary, "frontend") || !strings.Contains(rep.Summary, "server") {
+		t.Fatalf("сводка должна упоминать оба подпроекта, got %q", rep.Summary)
+	}
+	// Статический фронтенд принимается по сборке (запуск не требуется).
+	if rep.Projects[0].Run != nil && !rep.Projects[0].Run.OK {
+		t.Fatalf("фронтенд должен приниматься без запуска, got %#v", rep.Projects[0].Run)
+	}
+}
+
+// Сломанный бэкенд в монорепозитории тянет вердикт вниз, а файлы замечаний
+// получают префикс подкаталога, чтобы планировщик чинил в правильном месте.
+func TestAcceptMonorepoRejectPrefixedIssues(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "frontend/package.json", `{"scripts": {"build": "echo ok"}}`)
+	writeTestFile(t, dir, "server/go.mod", "module broken\n")
+	writeTestFile(t, dir, "server/main.go", `package main
+
+func main() {
+	var x int
+	x = "не число"
+	_ = x
+}
+`)
+
+	cfg := DefaultConfig()
+	cfg.InstallDeps = false
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Verdict != VerdictReject {
+		t.Fatalf("сломанный бэкенд должен дать reject, got %s (%s)", rep.Verdict, rep.Summary)
+	}
+	found := false
+	for _, iss := range rep.Issues {
+		if iss.File == "server/main.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("замечание должно указывать на server/main.go, issues=%#v", rep.Issues)
+	}
+}
+
+// Статический фронтенд (Vite/React): есть build-скрипт, нет точки входа для
+// запуска — приёмка по сборке с предупреждением, вердикт approve.
+func TestAcceptNodeStaticFrontendByBuild(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "package.json", `{"scripts": {"build": "echo built"}}`)
+	writeTestFile(t, dir, "index.html", "<html></html>")
+
+	cfg := DefaultConfig()
+	cfg.InstallDeps = false
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Verdict != VerdictApprove {
+		t.Fatalf("статический фронтенд должен приниматься по сборке, got %s (%s)", rep.Verdict, rep.Summary)
+	}
+	if rep.Build.Skipped || !rep.Build.OK {
+		t.Fatalf("фронтенд должен собираться, got %#v", rep.Build)
+	}
+	if rep.Run != nil {
+		t.Fatalf("у статического фронтенда не должно быть запуска, got %#v", rep.Run)
+	}
+}
+
+// Проверка автодетекта точки входа Node: приложение с index.js запускается,
+// статический фронтенд без точки входа — возвращает пустую команду.
+func TestNodeRunCommandAutoDetect(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "package.json", `{"scripts": {"build": "echo ok"}}`)
+	if got := KindNode.runCommand(dir); got != "" {
+		t.Fatalf("статический фронтенд без точки входа: got %q, want ''", got)
+	}
+
+	writeTestFile(t, dir, "index.js", "console.log('hi')\n")
+	if got := KindNode.runCommand(dir); got != "node ." {
+		t.Fatalf("проект с index.js: got %q, want 'node .'", got)
+	}
+
+	os.Remove(filepath.Join(dir, "index.js"))
+	writeTestFile(t, dir, "package.json", `{"main": "server.js", "scripts": {"build": "echo ok"}}`)
+	writeTestFile(t, dir, "server.js", "console.log('hi')\n")
+	if got := KindNode.runCommand(dir); got != "node server.js" {
+		t.Fatalf("проект с main: got %q, want 'node server.js'", got)
+	}
+}
+
 func TestRunCommand(t *testing.T) {
 	out, code, timedOut, err := runCommand(t.TempDir(), `echo "hello word" && printf 'пока'`, DefaultConfig().BuildTimeout)
 	if err != nil {

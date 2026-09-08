@@ -2,10 +2,15 @@ package planner
 
 import (
 	"ai/agents"
+	"ai/agents/acceptor"
+	"ai/agents/codegenerator"
 	"ai/checkpoint"
 	"ai/runner"
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -206,6 +211,119 @@ func TestExecutorEmptyTruncatedCodingStepFails(t *testing.T) {
 type genErr string
 
 func (e genErr) Error() string { return string(e) }
+
+// topLevelScopeDir выделяет общий старший подкаталог всех записей scope.
+func TestTopLevelScopeDir(t *testing.T) {
+	cases := []struct {
+		scope []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{}, ""},
+		{[]string{"frontend/"}, "frontend"},
+		{[]string{"frontend/src/App.tsx", "frontend/package.json"}, "frontend"},
+		{[]string{"server/main.go", "server/internal/"}, "server"},
+		{[]string{"./frontend/src/App.tsx"}, "frontend"},
+		{[]string{"main.go"}, "main.go"},
+		{[]string{"frontend/", "server/"}, ""},
+		{[]string{"frontend/src/App.tsx", "server/main.go"}, ""},
+	}
+	for _, tc := range cases {
+		if got := topLevelScopeDir(tc.scope); got != tc.want {
+			t.Errorf("topLevelScopeDir(%v) = %q, want %q", tc.scope, got, tc.want)
+		}
+	}
+}
+
+// acceptanceDir выбирает подкаталог приёмки из scope: существующая директория
+// — её и принимаем, иначе корень.
+func TestAcceptanceDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "server"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := acceptanceDir(root, []string{"server/"}); got != filepath.Join(root, "server") {
+		t.Fatalf("scope server/: got %s", got)
+	}
+	if got := acceptanceDir(root, []string{"server/main.go"}); got != filepath.Join(root, "server") {
+		t.Fatalf("scope server/main.go: got %s", got)
+	}
+	if got := acceptanceDir(root, nil); got != root {
+		t.Fatalf("пустой scope: got %s, want корень", got)
+	}
+	if got := acceptanceDir(root, []string{"nonexistent/"}); got != root {
+		t.Fatalf("несуществующий подкаталог: got %s, want корень", got)
+	}
+	if got := acceptanceDir(root, []string{"frontend/", "server/"}); got != root {
+		t.Fatalf("два подкаталога: got %s, want корень", got)
+	}
+}
+
+// Шаг acceptor со scope на подкаталог принимает именно его: отчёт приёмки
+// отвечает проекту frontend, а не всему корню.
+func TestExecutorAcceptorScopedToSubproject(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	ctx := context.Background()
+	name := "AcceptorScopeTest"
+	root := codegenerator.ProjectDir(name)
+	defer os.RemoveAll(filepath.Clean(root))
+	if err := os.MkdirAll(filepath.Join(root, "frontend"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "frontend", "package.json"),
+		[]byte(`{"scripts": {"build": "echo ok"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "server"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "server", "go.mod"),
+		[]byte("module server\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "server", "main.go"),
+		[]byte("package main\nfunc main() { println(\"hi\") }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ACCEPT_INSTALL_DEPS", "false")
+	t.Setenv("ACCEPT_BUILD_TIMEOUT", "2m")
+
+	plan := &Plan{
+		ProjectName: name,
+		Summary:     "приёмка фронтенда",
+		Steps: []Step{
+			{ID: "a1", Agent: AgentAcceptor, Prompt: "приёмка фронтенда", Description: "приёмка frontend", Scope: []string{"frontend/"}},
+			{ID: "a2", Agent: AgentAcceptor, Prompt: "приёмка сервера", Description: "приёмка server", Scope: []string{"server/"}},
+		},
+	}
+
+	exec := NewExecutor(&fixPlanProvider{}, plan)
+	if err := exec.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rep := exec.acceptReports["a1"]
+	if rep == nil {
+		t.Fatal("не найден отчёт для шага a1")
+	}
+	if rep.Project != "frontend" {
+		t.Fatalf("отчёт a1: проект %q, ожидали frontend", rep.Project)
+	}
+	if rep.Verdict != acceptor.VerdictApprove {
+		t.Fatalf("отчёт a1: вердикт %s, ожидали approve", rep.Verdict)
+	}
+	if len(rep.Projects) != 0 {
+		t.Fatalf("одиночный подпроект не должен агрегироваться, got %d", len(rep.Projects))
+	}
+
+	rep2 := exec.acceptReports["a2"]
+	if rep2 == nil || rep2.Project != "server" {
+		t.Fatalf("отчёт a2: проект %q, ожидали server", rep2.Project)
+	}
+}
 
 // roundStubProvider — провайдер, имитирующий лимит раундов агентского цикла:
 // первый запуск возвращает Truncated с историей диалога и потраченными
