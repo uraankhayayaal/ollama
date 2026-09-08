@@ -1,8 +1,10 @@
 package codegenerator
 
+// Board required store imports.
 import (
 	"ai/agents"
 	"ai/agents/codereviewer"
+	"ai/board"
 	"ai/forges"
 	"ai/logging"
 	"ai/tools"
@@ -23,6 +25,13 @@ var codegenToolNames = []string{
 	"WriteFiles", "ReadFiles", "DeleteFiles", "Run", "List", "AppendFile",
 }
 
+// codegenBoardToolNames — инструменты общей Kanban-доски, добавляемые
+// генератору, когда оркестратор Kanban подключает доску (SetBoardStore):
+// чтение своей задачи и смена её статуса.
+var codegenBoardToolNames = []string{
+	tools.BoardGetTask, tools.BoardSetTaskStatus,
+}
+
 type Codegenerator struct {
 	// *tools.FileOps — разделяемый контекст файловых инструментов
 	// (OutputDir, MaxFiles, NoOverwrite). Поля и методы FileOps промотируются:
@@ -33,6 +42,21 @@ type Codegenerator struct {
 	// Tools — выбранные генератором инструменты из общего реестра
 	// (единый источник для GetTools/GetToolsForOllama и диспетчеризации вызовов).
 	Tools *tools.Set
+	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
+	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
+	Store *board.Store
+}
+
+// SetBoardStore подключает генератор к общей Kanban-доске проекта: добавляет
+// инструменты смены статуса задачи (Board*), передаёт Board-контекст в реестр.
+// Вызывается оркестратором Kanban при построении агента специалиста.
+func (cg *Codegenerator) SetBoardStore(s *board.Store) {
+	if s == nil {
+		return
+	}
+	cg.Store = s
+	names := append(append([]string{}, codegenToolNames...), codegenBoardToolNames...)
+	cg.Tools = tools.Select(names, tools.Deps{FileOps: cg.FileOps, Board: s})
 }
 
 // NewCodegenerator создаёт генератор в общей для всех агентов выходной папке

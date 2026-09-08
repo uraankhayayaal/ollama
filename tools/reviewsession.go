@@ -319,16 +319,16 @@ func filterSuspiciousCommentsWithCount(comments []forges.ReviewComment) ([]forge
 
 		// Проверяем, не соответствует ли текст русскому паттерну
 		// "это хорошо, но стоит убедиться, что ..."
-		if strings.Contains(strings.ToLower(text), "это хорошо") && 
-		   strings.Contains(strings.ToLower(text), "стоит убедиться, что") {
+		if strings.Contains(strings.ToLower(text), "это хорошо") &&
+			strings.Contains(strings.ToLower(text), "стоит убедиться, что") {
 			// Пропускаем такие комментарии
 			count++
 			continue
 		}
-		
+
 		// Также проверяем другие подобные конструкции
 		if strings.Contains(strings.ToLower(text), "это хорошо, но") &&
-		   strings.Contains(strings.ToLower(text), "стоит убедиться") {
+			strings.Contains(strings.ToLower(text), "стоит убедиться") {
 			// Пропускаем такие комментарии
 			count++
 			continue
@@ -420,7 +420,7 @@ func (s *ReviewSession) PostSummaryToPR() error {
 	fmt.Fprintf(&b, "- Критических замечаний: **%s**\n", yesNo(s.CriticalFound))
 	fmt.Fprintf(&b, "- Ошибок публикации: **%d**\n", len(s.PostErrors))
 	fmt.Fprintf(&b, "- Отсечено галлюцинирующих замечаний: **%d**\n", s.RejectedCount)
-	fmt.Fprintf(&b, "- Отфильтровано нейрослопов: **%d**\n", s.FilteredSuspiciousCount)  // Added this line
+	fmt.Fprintf(&b, "- Отфильтровано нейрослопов: **%d**\n", s.FilteredSuspiciousCount) // Added this line
 	if s.CriticalOnly {
 		fmt.Fprintf(&b, "- Отсечено несущественных замечаний (стиль/«можно лучше»): **%d**\n", s.MinorDroppedCount)
 	}

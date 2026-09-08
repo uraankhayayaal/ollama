@@ -12,10 +12,13 @@ type stubForge struct {
 	posted []forges.ReviewComment
 }
 
-func (s *stubForge) GetDiff() (string, error)                    { return "", nil }
-func (s *stubForge) PostComment(c forges.ReviewComment) error    { s.posted = append(s.posted, c); return nil }
-func (s *stubForge) PostSummary(string) error                    { return nil }
-func (s *stubForge) Approve(string) error                        { return nil }
+func (s *stubForge) GetDiff() (string, error) { return "", nil }
+func (s *stubForge) PostComment(c forges.ReviewComment) error {
+	s.posted = append(s.posted, c)
+	return nil
+}
+func (s *stubForge) PostSummary(string) error { return nil }
+func (s *stubForge) Approve(string) error     { return nil }
 
 // Режим CriticalOnly отсекает несущественные замечания (стиль, «можно
 // лучше», «стоит проверить»), оставляя только указания на реальные дефекты.

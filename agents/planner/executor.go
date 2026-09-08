@@ -3,8 +3,14 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
+	"ai/agents/backendlead"
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
+	"ai/agents/devops"
+	"ai/agents/devopslead"
+	"ai/agents/frontendlead"
+	"ai/agents/qaengineer"
+	"ai/agents/qalead"
 	"ai/agents/refactor"
 	"ai/checkpoint"
 	"ai/forges"
@@ -215,7 +221,7 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 	}
 
 	switch step.Agent {
-	case AgentCodeGenerator, AgentRefactor:
+	case AgentCodeGenerator, AgentRefactor, AgentDevops, AgentDevopsLead, AgentQAEngineer, AgentQALead, AgentFrontendLead, AgentBackendLead:
 		return e.runCodingAgent(ctx, step, projectName)
 
 	case AgentCodeReviewer:
@@ -245,6 +251,18 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 			return err
 		}
 		agent = ra
+	case AgentDevops:
+		agent = devops.NewDevops(projectName, step.Prompt)
+	case AgentDevopsLead:
+		agent = devopslead.NewDevopsLead(projectName, step.Prompt)
+	case AgentQAEngineer:
+		agent = qaengineer.NewQAEngineer(projectName, step.Prompt)
+	case AgentQALead:
+		agent = qalead.NewQALead(projectName, step.Prompt)
+	case AgentFrontendLead:
+		agent = frontendlead.NewFrontendLead(projectName, step.Prompt)
+	case AgentBackendLead:
+		agent = backendlead.NewBackendLead(projectName, step.Prompt)
 	}
 
 	// Ограничиваем инструменты агента областью работы шага: вне scope он не
@@ -266,8 +284,8 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// Контекст с resume-состоянием используется ТОЛЬКО для этого вызова,
 	// чтобы self-review ниже не подхватил чужую историю.
 	genCtx := ctx
-if rs, ok := e.loadResumeState(ctx, step.ID); ok {
-			logging.Detailf("[Plan] шаг %s: возобновляю агентский цикл с раунда %d (повторный запуск с --resume)", step.ID, rs.Rounds+1)
+	if rs, ok := e.loadResumeState(ctx, step.ID); ok {
+		logging.Detailf("[Plan] шаг %s: возобновляю агентский цикл с раунда %d (повторный запуск с --resume)", step.ID, rs.Rounds+1)
 		genCtx = runner.WithResumeState(ctx, rs)
 	}
 
@@ -676,7 +694,7 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 					return fmt.Errorf("раунд приёмки %d: отчёт приёмки всё ещё отсутствует для шага %q", round, s.Description)
 				}
 			}
-			
+
 			logging.Infof("[Accept] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, cfg.MaxRounds, s.Description)
 
 			fixes, err := e.planFixSteps(ctx, rep)

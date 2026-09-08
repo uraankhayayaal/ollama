@@ -73,6 +73,40 @@ func newTool(name string, deps Deps) Tool {
 		return &approveMrTool{ses: deps.Session}
 	case "NextChunk":
 		return &nextChunkTool{ses: deps.Session}
+	case BoardListEpics:
+		return &boardListEpicsTool{b: deps.Board}
+	case BoardGetEpic:
+		return &boardGetEpicTool{b: deps.Board}
+	case BoardListTasks:
+		return &boardListTasksTool{b: deps.Board}
+	case BoardGetTask:
+		return &boardGetTaskTool{b: deps.Board}
+	case BoardListBugs:
+		return &boardListBugsTool{b: deps.Board}
+	case BoardGetBug:
+		return &boardGetBugTool{b: deps.Board}
+	case BoardCreateEpic:
+		return &boardCreateEpicTool{b: deps.Board}
+	case BoardUpdateEpic:
+		return &boardUpdateEpicTool{b: deps.Board}
+	case BoardDeleteEpic:
+		return &boardDeleteEpicTool{b: deps.Board}
+	case BoardSetEpicStatus:
+		return &boardSetEpicStatusTool{b: deps.Board}
+	case BoardCreateTask:
+		return &boardCreateTaskTool{b: deps.Board}
+	case BoardUpdateTask:
+		return &boardUpdateTaskTool{b: deps.Board}
+	case BoardDeleteTask:
+		return &boardDeleteTaskTool{b: deps.Board}
+	case BoardSetTaskStatus:
+		return &boardSetTaskStatusTool{b: deps.Board}
+	case BoardCreateBug:
+		return &boardCreateBugReportTool{b: deps.Board}
+	case BoardSetBugStatus:
+		return &boardSetBugStatusTool{b: deps.Board}
+	case BoardReviewBug:
+		return &boardReviewBugReportTool{b: deps.Board}
 	}
 	// Неизвестное имя — ошибка на этапе конструирования агента (fail-fast).
 	panic(fmt.Sprintf("tools: инструмент %q не зарегистрирован в реестре", name))

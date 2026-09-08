@@ -15,6 +15,12 @@ const (
 	AgentRefactor      AgentType = "refactor"
 	AgentCodeReviewer  AgentType = "codereviewer"
 	AgentAcceptor      AgentType = "acceptor"
+	AgentDevops        AgentType = "devops"
+	AgentDevopsLead    AgentType = "devops-lead"
+	AgentQAEngineer    AgentType = "qa"
+	AgentQALead        AgentType = "qalead"
+	AgentFrontendLead  AgentType = "frontendlead"
+	AgentBackendLead   AgentType = "backendlead"
 )
 
 // Role — роль разработчика; применяется к шагам refactor для изоляции

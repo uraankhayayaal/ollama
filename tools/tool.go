@@ -1,5 +1,7 @@
 package tools
 
+import "ai/board"
+
 // Tool — общий интерфейс инструмента агента. Реализации живут в этом пакете
 // (registry.go), а агенты выбирают нужные по имени через Select.
 type Tool interface {
@@ -18,7 +20,9 @@ type Tool interface {
 //
 //	FileOps  — контекст файловых операций (генератор/рефакторинг кода).
 //	Session  — состояние цикла код-ревью (ReviewMr/ApproveMr/NextChunk).
+//	Board    — общая Kanban-доска проекта (инструменты Board*).
 type Deps struct {
 	FileOps *FileOps
 	Session *ReviewSession
+	Board   *board.Store
 }

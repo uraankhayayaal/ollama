@@ -3,10 +3,18 @@ package main
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
+	"ai/agents/architect"
+	"ai/agents/backendlead"
 	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
+	"ai/agents/devops"
+	"ai/agents/devopslead"
+	"ai/agents/frontendlead"
 	"ai/agents/planner"
+	"ai/agents/qaengineer"
+	"ai/agents/qalead"
 	"ai/agents/refactor"
+	"ai/board"
 	"ai/checkpoint"
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
@@ -132,6 +140,75 @@ func main() {
 		if err != nil {
 			logging.Fatalf("Ошибка: %v", err)
 		}
+	case "devops":
+		if len(agentArgs) < 2 {
+			logging.Fatalf("Использование: go run . devops <имя_проекта> <промпт>\n" +
+				"Пример: go run . devops billingService \"Подними Docker Compose с моками для QA и подготовь манифесты Kubernetes\"")
+		}
+		projectName := agentArgs[0]
+		prompt := strings.Join(agentArgs[1:], " ")
+		agent = devops.NewDevops(projectName, prompt)
+	case "devops-lead":
+		if len(agentArgs) < 2 {
+			logging.Fatalf("Использование: go run . devops-lead <имя_проекта> <промпт>\n" +
+				"Пример: go run . devops-lead billingService \"Декомпозируй инфраструктуру: Docker Compose локально, Kubernetes на проде, CI/CD с автотестами QA\"")
+		}
+		projectName := agentArgs[0]
+		prompt := strings.Join(agentArgs[1:], " ")
+		agent = devopslead.NewDevopsLead(projectName, prompt)
+	case "qa":
+		if len(agentArgs) < 2 {
+			logging.Fatalf("Использование: go run . qa <имя_проекта> <промпт>\n" +
+				"Пример: go run . qa billingService \"Проверь соответствие Backend и Frontend API-контрактам и напиши автотесты\"")
+		}
+		projectName := agentArgs[0]
+		prompt := strings.Join(agentArgs[1:], " ")
+		agent = qaengineer.NewQAEngineer(projectName, prompt)
+	case "qalead":
+		if len(agentArgs) < 2 {
+			logging.Fatalf("Использование: go run . qalead <имя_проекта> <промпт>\n" +
+				"Пример: go run . qalead billingService \"Сформируй тест-план по контрактам Архитектора и декомпозируй его на задачи для QA-инженеров\"")
+		}
+		projectName := agentArgs[0]
+		prompt := strings.Join(agentArgs[1:], " ")
+		agent = qalead.NewQALead(projectName, prompt)
+	case "frontendlead":
+		if len(agentArgs) < 2 {
+			logging.Fatalf("Использование: go run . frontendlead <имя_проекта> <промпт>\n" +
+				"Пример: go run . frontendlead billingService \"Декомпозируй интерфейс на UI-модули, спроектируй стейт и API-контракты\"")
+		}
+		projectName := agentArgs[0]
+		prompt := strings.Join(agentArgs[1:], " ")
+		agent = frontendlead.NewFrontendLead(projectName, prompt)
+	case "backendlead":
+		if len(agentArgs) < 2 {
+			logging.Fatalf("Использование: go run . backendlead <имя_проекта> <промпт>\n" +
+				"Пример: go run . backendlead billingService \"Декомпозируй сервисную часть на модули, спроектируй контракты API\"")
+		}
+		projectName := agentArgs[0]
+		prompt := strings.Join(agentArgs[1:], " ")
+		agent = backendlead.NewBackendLead(projectName, prompt)
+	case "kanban":
+		// Kanban-оркестрация: архитектор публикует эпики на Redis-доску,
+		// лиды декомпозируют их на JSON-задачи, специалисты выполняют —
+		// до полного решения задачи пользователя.
+		// go run . kanban <имя_проекта> <промпт>
+		if len(agentArgs) < 2 {
+			logging.Fatalf("Использование: go run . kanban <имя_проекта> <промпт>\n" +
+				"Пример: go run . kanban billingService \"Спроектируй и собери сервис: архитектура, контракты, DevOps, тесты\"")
+		}
+		kanbanProject := agentArgs[0]
+		kanbanPrompt := strings.Join(agentArgs[1:], " ")
+		store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(kanbanProject))
+		if err != nil {
+			logging.Fatalf("Ошибка доски проекта %s: %v", kanbanProject, err)
+		}
+		if err := planner.NewKanbanRunner(provider, store).Run(ctx, kanbanProject, kanbanPrompt); err != nil {
+			_ = store.Close()
+			logging.Fatalf("Kanban: %v", err)
+		}
+		_ = store.Close()
+		os.Exit(0)
 	case "review":
 		agent = codereviewer.NewCodereviewer(agentArgs)
 		if noChunk {
@@ -140,7 +217,7 @@ func main() {
 			}
 		}
 	default:
-		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . devops <имя> <промпт>', 'go run . devops-lead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Режим планировщика обрабатывается отдельно и до общего прогона:
@@ -242,7 +319,7 @@ func projectFromArgs(args []string) string {
 		return "unnamed"
 	}
 	switch args[1] {
-	case "generate", "refactor", "plan", "accept":
+	case "generate", "refactor", "devops", "devops-lead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept":
 		if len(args) >= 3 && args[2] != "" {
 			return args[2]
 		}
