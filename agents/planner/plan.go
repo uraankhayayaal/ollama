@@ -11,26 +11,71 @@ import (
 type AgentType string
 
 const (
-	AgentCodeGenerator AgentType = "codegenerator"
-	AgentRefactor      AgentType = "refactor"
-	AgentCodeReviewer  AgentType = "codereviewer"
-	AgentAcceptor      AgentType = "acceptor"
-	AgentDevops        AgentType = "devops"
-	AgentDevopsLead    AgentType = "devops-lead"
-	AgentQAEngineer    AgentType = "qa"
-	AgentQALead        AgentType = "qalead"
-	AgentFrontendLead  AgentType = "frontendlead"
-	AgentBackendLead   AgentType = "backendlead"
+	// AgentBackendDev — агент «Backend разработчик»: серверная часть проекта.
+	AgentBackendDev AgentType = "backend"
+	// AgentFrontendDev — агент «Frontend разработчик»: клиентская часть проекта.
+	AgentFrontendDev  AgentType = "frontend"
+	AgentCodeReviewer AgentType = "codereviewer"
+	AgentAcceptor     AgentType = "acceptor"
+	AgentDevops       AgentType = "devops"
+	AgentDevopsLead   AgentType = "devops-lead"
+	AgentQAEngineer   AgentType = "qa"
+	AgentQALead       AgentType = "qalead"
+	AgentFrontendLead AgentType = "frontendlead"
+	AgentBackendLead  AgentType = "backendlead"
 )
 
-// Role — роль разработчика; применяется к шагам refactor для изоляции
-// фронтенда и бэкенда (scope ограничивает файлы, роль — промпт и стиль кода).
+// Role — роль разработчика. Задаётся планировщиком, когда единый этап
+// генерации/доработки нужно выполнить под стек конкретного подпроекта:
+// фронтенд или бэкенд. Для шагов с отдельным агентом (AgentBackendDev/
+// AgentFrontendDev) роль фиксирована самим типом агента и хранится только
+// для журналирования (agentLabel); для шагов с generic-типами роль может
+// влиять на выбор агента исполнением.
 type Role string
 
 const (
 	RoleFrontend Role = "frontend"
 	RoleBackend  Role = "backend"
 )
+
+// agentDisplayName — человекочитаемое имя агента по типу шага. Используется
+// в префиксах логов (вместе с ролью — см. agentLabel).
+func agentDisplayName(a AgentType) string {
+	switch a {
+	case AgentBackendDev:
+		return "бэкенд-разработчик"
+	case AgentFrontendDev:
+		return "фронтенд-разработчик"
+	case AgentCodeReviewer:
+		return "код-ревьювер"
+	case AgentAcceptor:
+		return "приёмка"
+	case AgentDevops:
+		return "DevOps-инженер"
+	case AgentDevopsLead:
+		return "DevOps-лид"
+	case AgentQAEngineer:
+		return "QA-инженер"
+	case AgentQALead:
+		return "QA-лид"
+	case AgentFrontendLead:
+		return "Frontend-лид"
+	case AgentBackendLead:
+		return "Backend-лид"
+	default:
+		return string(a)
+	}
+}
+
+// agentLabel — префикс лога «имя агента / его роль» для шага плана.
+// Роль разработчика (frontend/backend) добавляется через слэш.
+func agentLabel(a AgentType, role Role) string {
+	name := agentDisplayName(a)
+	if role != "" {
+		name += "/" + string(role)
+	}
+	return name
+}
 
 // Step — один этап плана, делегируемый конкретному агенту.
 type Step struct {
@@ -45,8 +90,9 @@ type Step struct {
 	// или "internal/order/"). Пустой — агент работает со всем проектом.
 	Scope []string `json:"scope,omitempty"`
 	// Role — роль разработчика (frontend/backend). Задаётся планировщиком,
-	// когда работа делится на фронтенд и бэкенд. refactor-агент получает
-	// роль через SetRole и настраивает промпт под стек подпроекта.
+	// когда единая работа делится на фронтенд и бэкенд. Для шагов с типом
+	// AgentBackendDev/AgentFrontendDev роль уже зафиксирована агентом и
+	// хранится только для журналирования.
 	Role Role `json:"role,omitempty"`
 }
 

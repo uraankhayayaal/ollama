@@ -5,23 +5,22 @@ import (
 	"ai/agents/acceptor"
 	"ai/agents/architect"
 	"ai/agents/backendlead"
-	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
+	"ai/agents/developer"
 	"ai/agents/devops"
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/planner"
 	"ai/agents/qaengineer"
 	"ai/agents/qalead"
-	"ai/agents/refactor"
 	"ai/board"
 	"ai/checkpoint"
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
-	"ai/forges"
 	_ "ai/forges/all"
 	"ai/logging"
 	"ai/models"
+	"ai/projects"
 	"ai/services/mrlistener"
 	"context"
 	"fmt"
@@ -104,7 +103,7 @@ func main() {
 	noChunk := providerType == "trim"
 
 	// Выбор агента по первому аргументу:
-	// go run . generate <имя> [промпт] | refactor <имя> <промпт> | review <URL> | listen
+	// go run . generate <имя> [промпт] | backend <имя> [промпт] | frontend <имя> [промпт] | review <URL> | listen
 	agentName, agentArgs := agentCommand(os.Args)
 
 	var agent agents.Agent
@@ -112,14 +111,24 @@ func main() {
 	var planProject string
 	var planPrompt string
 	switch agentName {
-	case "generate":
+	case "generate", "backend":
+		// "generate" оставлен как алиас для обратной совместимости: новое
+		// имя — backend (агент «Backend разработчик»).
 		if len(agentArgs) < 1 {
-			logging.Fatalf("Использование: go run . generate <имя_проекта> [промпт]\n" +
-				"Пример: go run . generate storageService \"Напиши микросервис для хранения файлов\"")
+			logging.Fatalf("Использование: go run . backend <имя_проекта> [промпт]\n" +
+				"Пример: go run . backend storageService \"Напиши микросервис для хранения файлов\"")
 		}
 		projectName := agentArgs[0]
 		prompt := defaultPrompt(agentArgs[1:])
-		agent = codegenerator.NewCodegenerator(projectName, prompt)
+		agent = developer.NewBackendDeveloper(projectName, prompt)
+	case "frontend":
+		if len(agentArgs) < 1 {
+			logging.Fatalf("Использование: go run . frontend <имя_проекта> [промпт]\n" +
+				"Пример: go run . frontend storageService \"Напиши веб-интерфейс для просмотра файлов\"")
+		}
+		projectName := agentArgs[0]
+		prompt := defaultPrompt(agentArgs[1:])
+		agent = developer.NewFrontendDeveloper(projectName, prompt)
 	case "plan":
 		if len(agentArgs) < 2 {
 			logging.Fatalf("Использование: go run . plan <имя_проекта> <промпт> [--resume]\n" +
@@ -129,17 +138,6 @@ func main() {
 		planMode = true
 		planProject = agentArgs[0]
 		planPrompt = strings.Join(agentArgs[1:], " ")
-	case "refactor":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . refactor <имя_проекта> <промпт>\n" +
-				"Пример: go run . refactor storageService \"Добавить эндпоинт /health\"")
-		}
-		projectName := agentArgs[0]
-		prompt := strings.Join(agentArgs[1:], " ")
-		agent, err = refactor.NewRefactorAgent(prompt, projectName)
-		if err != nil {
-			logging.Fatalf("Ошибка: %v", err)
-		}
 	case "devops":
 		if len(agentArgs) < 2 {
 			logging.Fatalf("Использование: go run . devops <имя_проекта> <промпт>\n" +
@@ -217,7 +215,7 @@ func main() {
 			}
 		}
 	default:
-		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . refactor <имя> <промпт>', 'go run . devops <имя> <промпт>', 'go run . devops-lead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devops-lead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Режим планировщика обрабатывается отдельно и до общего прогона:
@@ -238,13 +236,6 @@ func main() {
 		logging.Warnf("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
 	}
 
-	// 5. Цикл генерации/само-ревью для агента-генератора: после первого
-	// прогона код проверяется локально (LocalForge), найденные замечания
-	// передаются модели, и она исправляет код в той же OutputDir.
-	if sr, ok := agent.(selfReviewer); ok {
-		doSelfReview(ctx, provider, sr, "", defaultPrompt(agentArgs), noChunk)
-	}
-
 	// 6b. Запасной путь: если модель вернула ревью текстом, а не вызовами
 	// инструментов (характерно для YandexGPT), а замечаний ещё не
 	// опубликовано — пытаемся распарсить текст в комментарии и опубликовать.
@@ -262,7 +253,7 @@ func main() {
 		}
 	}
 
-	// 8. Финальный отчёт агента (например, SUMMARY.md у генератора кода).
+	// 8. Финальный отчёт агента (например, SUMMARY.md у агента-разработчика).
 	if r, ok := agent.(finalizer); ok {
 		r.Finalize()
 	}
@@ -277,20 +268,6 @@ type reviewParser interface {
 	PublishParsedReview(content string) int
 }
 
-// selfReviewer — опциональный интерфейс агента-генератора, поддерживающего
-// цикл self-repair: после первой генерации код прогоняется через локальное
-// ревью, а найденные замечания передаются модели для исправления.
-type selfReviewer interface {
-	// SelfReviewDir возвращает путь к сгенерированному коду для ревью.
-	SelfReviewDir() string
-	// NewReviewAgentFor создаёт агента код-ревью для директории и возвращает
-	// и агента, и его forge (чтобы извлечь собранные замечания).
-	NewReviewAgentFor(dir string, focus string) (agents.Agent, forges.Forge, error)
-	// FixPromptFor собирает текст задания для исправления кода на основе
-	// замечаний ревью. Первый аргумент — текущее задание, второй — замечания.
-	FixPromptFor(original string, comments []forges.ReviewComment) string
-}
-
 // summarizer — опциональный интерфейс агента, умеющего публиковать
 // итоговую сводку ревью в тред MR/PR после завершения цикла.
 type summarizer interface {
@@ -298,7 +275,7 @@ type summarizer interface {
 }
 
 // finalizer — опциональный интерфейс агента, выполняющего финализацию
-// после завершения цикла (например, генератор кода пишет SUMMARY.md).
+// после завершения цикла (например, агент-разработчик пишет SUMMARY.md).
 type finalizer interface {
 	Finalize()
 }
@@ -313,13 +290,13 @@ func defaultPrompt(args []string) string {
 }
 
 // projectFromArgs определяет имя проекта (имя лог-файла) по аргументам:
-// generate/refactor/plan/accept <имя> → имя; review → "review"; listen → "mrlistener".
+// generate/backend/frontend/plan/accept <имя> → имя; review → "review"; listen → "mrlistener".
 func projectFromArgs(args []string) string {
 	if len(args) < 2 {
 		return "unnamed"
 	}
 	switch args[1] {
-	case "generate", "refactor", "devops", "devops-lead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept":
+	case "generate", "backend", "frontend", "devops", "devops-lead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept":
 		if len(args) >= 3 && args[2] != "" {
 			return args[2]
 		}
@@ -329,131 +306,6 @@ func projectFromArgs(args []string) string {
 		return "mrlistener"
 	}
 	return "unnamed"
-}
-
-// doSelfReview запускает цикл self-repair для агента-генератора: генерация →
-// локальное ревью сгенерированного кода → исправление по замечаниям ревью →
-// повтор до схождения (нет замечаний) или исчерпания бюджета раундов.
-// focus — цель ревью (может быть "" для общего обзора).
-func doSelfReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, focus string, originalPrompt string, noChunk bool) {
-	dir := sr.SelfReviewDir()
-
-	// Узнаём бюджет раундов исправления из конфига генератора.
-	maxRounds := codegenerator.LoadConfig().MaxRepairRounds
-	if maxRounds <= 0 {
-		logging.Infof("Self-review: исправление отключено (CODEGEN_MAX_REPAIR_ROUNDS<=0)")
-		return
-	}
-	logging.Infof("Self-review: ревью кода в %s (бюджет исправлений: %d)", dir, maxRounds)
-
-	reviewAgent, forge, err := sr.NewReviewAgentFor(dir, focus)
-	if err != nil {
-		logging.Warnf("Self-review: не удалось создать агента ревью: %v", err)
-		return
-	}
-	if noChunk {
-		if cw, ok := reviewAgent.(*codereviewer.Codereviewer); ok {
-			cw.NoChunk = true
-		}
-	}
-
-	if _, err := provider.Generate(ctx, reviewAgent); err != nil {
-		logging.Warnf("Self-review: ошибка ревью: %v", err)
-	}
-
-	lf, ok := forge.(*forges.LocalForge)
-	if !ok {
-		logging.Warnf("Self-review: неожиданный тип forge, пропускаю исправление")
-		return
-	}
-
-	if len(lf.Published) == 0 {
-		logging.Infof("Self-review: замечаний не найдено, исправление не требуется")
-		return
-	}
-
-	// Цикл исправления: исправить → снова проверить ревью → повторять,
-	// пока остаются замечания и не исчерпан бюджет раундов.
-	//
-	// Детект отсутствия прогресса: если замечания повторного ревью приходятся
-	// на те же места, что и до исправления (одинаковая сигнатура file:line),
-	// фикс не помог — прерываем цикл, а не крутимся до исчерпания бюджета.
-	pending := lf.Published
-	prevSig := ""
-	stuckRounds := 0
-	for round := 1; round <= maxRounds && len(pending) > 0; round++ {
-		logging.Infof("Self-review: раунд %d/%d, замечаний: %d. Запускаю исправление.", round, maxRounds, len(pending))
-
-		fixPrompt := sr.FixPromptFor(originalPrompt, pending)
-
-		fixAgent, ferr := codegenerator.NewCodegeneratorInDir(fixPrompt, dir)
-		if ferr != nil {
-			logging.Warnf("Self-review: не удалось создать агента исправления: %v", ferr)
-			break
-		}
-
-		if _, err := provider.Generate(ctx, fixAgent); err != nil {
-			logging.Warnf("Self-review: ошибка на этапе исправления: %v", err)
-			break
-		}
-
-		// После исправления финализируем: обновляем SUMMARY и гарантируем README.md.
-		fixAgent.Finalize()
-
-		if round >= maxRounds {
-			break
-		}
-
-		// Перечитываем код после правок и смотрим, остались ли замечания.
-		next, rerr := reReview(ctx, provider, sr, dir, focus, noChunk)
-		if rerr != nil {
-			logging.Warnf("Self-review: ошибка повторного ревью: %v", rerr)
-			break
-		}
-
-		// Проверяем продвижение: не застряли ли мы на тех же местах.
-		sig := forges.CommentSignature(next)
-		if sig != "" && sig == prevSig {
-			stuckRounds++
-			if stuckRounds >= 2 {
-				logging.Warnf("Self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
-				pending = next
-				break
-			}
-		} else {
-			stuckRounds = 0
-		}
-		prevSig = sig
-		pending = next
-	}
-
-	if len(pending) > 0 {
-		logging.Infof("Self-review: цикл завершён, осталось неисправленных замечаний: %d", len(pending))
-	} else {
-		logging.Infof("Self-review: цикл завершён, замечаний больше нет")
-	}
-}
-
-// reReview создаёт свежий LocalForge для той же директории, прогоняет ревью
-// и возвращает новые замечания. Используется между раундами исправления.
-func reReview(ctx context.Context, provider models.LLMProvider, sr selfReviewer, dir string, focus string, noChunk bool) ([]forges.ReviewComment, error) {
-	newAgent, newForge, err := sr.NewReviewAgentFor(dir, focus)
-	if err != nil {
-		return nil, err
-	}
-	if noChunk {
-		if cw, ok := newAgent.(*codereviewer.Codereviewer); ok {
-			cw.NoChunk = true
-		}
-	}
-	if _, err := provider.Generate(ctx, newAgent); err != nil {
-		return nil, err
-	}
-	lf, ok := newForge.(*forges.LocalForge)
-	if !ok {
-		return nil, fmt.Errorf("неожиданный тип forge при повторном ревью")
-	}
-	return lf.Published, nil
 }
 
 // agentCommand возвращает имя агента (первый аргумент) и оставшиеся
@@ -485,7 +337,7 @@ func parseTimeout(raw string) time.Duration {
 // логи на ошибки. Печатает отчёт и завершается с кодом 0 при успехе, 1 — при
 // обнаруженных ошибках.
 func runAcceptCommand(projectName string) {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	rep := acceptor.Accept(dir, acceptor.LoadConfig())
 	logging.Infof("%s", acceptReportText(rep))
 	if rep.Verdict == acceptor.VerdictReject {

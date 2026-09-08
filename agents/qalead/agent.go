@@ -2,8 +2,8 @@ package qalead
 
 import (
 	"ai/agents"
-	"ai/agents/codegenerator"
 	"ai/board"
+	"ai/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"
@@ -50,7 +50,7 @@ type QALead struct {
 // пользователем. prompt — текст задания от Системного архитектора (может быть
 // пустым — тогда используется задание по умолчанию).
 func NewQALead(projectName, prompt string) *QALead {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	return newQALead(dir, prompt, LoadConfig())
 }

@@ -2,8 +2,8 @@ package backendlead
 
 import (
 	"ai/agents"
-	"ai/agents/codegenerator"
 	"ai/board"
+	"ai/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"
@@ -48,7 +48,7 @@ type BackendLead struct {
 // пользователем. prompt — текст задания от Агента-Архитектора (может быть
 // пустым — тогда используется задание по умолчанию).
 func NewBackendLead(projectName, prompt string) *BackendLead {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	return newBackendLead(dir, prompt, LoadConfig())
 }

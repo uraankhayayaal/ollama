@@ -4,20 +4,18 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/backendlead"
-	"ai/agents/codegenerator"
+	"ai/agents/developer"
 	"ai/agents/devops"
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/agents/qalead"
-	"ai/agents/refactor"
 	"ai/board"
 	"ai/logging"
 	"ai/models"
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -65,7 +63,7 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 				meta.Status = board.StatusDone
 				_ = k.store.SaveMeta(ctx, meta)
 			}
-			logging.Infof("[Kanban] задача пользователя решена: все эпики и задачи выполнены")
+			logging.Infof("[доска] задача пользователя решена: все эпики и задачи выполнены")
 			return nil
 		}
 
@@ -105,7 +103,7 @@ func (k *KanbanRunner) ensureMeta(ctx context.Context, projectName, taskText str
 		if err := k.store.SaveMeta(ctx, meta); err != nil {
 			return err
 		}
-		logging.Infof("[Kanban] доска проекта %q создана: %s", projectName, truncateText(taskText, 80))
+		logging.Infof("[доска] проект %q создан: %s", projectName, truncateText(taskText, 80))
 	}
 	if meta.Status != board.StatusDone {
 		meta.Status = board.StatusInProgress
@@ -146,7 +144,7 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 	if len(epics) == 0 {
 		return false, fmt.Errorf("фаза архитектора: модель не опубликовала эпики (submit_architecture_backlog не вызван)")
 	}
-	logging.Infof("[Kanban] архитектор опубликовал %d эпиков: %s", len(epics), epicList(epics))
+	logging.Infof("[Системный архитектор] опубликованы эпики: %s", epicList(epics))
 	return true, nil
 }
 
@@ -189,8 +187,8 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 				return false, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err)
 			}
 		}
-		logging.Infof("[Kanban] декомпозиция/ревизия эпика %s (%s) лидом %s (нужна ревизия: %v)",
-			epic.TaskID, epic.Title, leadName(epic), needResync)
+		logging.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
+			leadName(epic), epic.TaskID, truncateText(epic.Title, 60), needResync)
 
 		resp, err := k.provider.Generate(ctx, lead)
 		if err != nil {
@@ -226,9 +224,9 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 						return false, fmt.Errorf("эпик %s: создание задачи %s: %w", epic.TaskID, ts.TaskID, err)
 					}
 				}
-				logging.Infof("[Kanban] эпик %s декомпозирован на %d задач (JSON-fallback)", epic.TaskID, len(dec))
+				logging.Infof("[эпик %s] декомпозирован на %d задач (JSON-fallback)", epic.TaskID, len(dec))
 			} else {
-				logging.Infof("[Kanban] эпик %s декомпозирован на %d задач (инструменты доски)", epic.TaskID, len(tasks))
+				logging.Infof("[эпик %s] декомпозирован на %d задач (инструменты доски)", epic.TaskID, len(tasks))
 			}
 		}
 
@@ -253,7 +251,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 				}
 			}
 		}
-		logging.Infof("[Kanban] эпик %s готов (ревизия %d, синхронизировано лидом %d)", epic.TaskID, synced.Revision, synced.LeadSyncedRev)
+		logging.Infof("[эпик %s] готов (ревизия %d, синхронизировано лидом %d)", epic.TaskID, synced.Revision, synced.LeadSyncedRev)
 		return true, nil
 	}
 	return false, nil
@@ -291,6 +289,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusAnalysis); err != nil {
 			return false, fmt.Errorf("задача %s: новая -> в анализе: %w", t.TaskID, err)
 		}
+		logging.Infof("[задача %s] новая → в анализе", t.TaskID)
 		progress = true
 	}
 
@@ -314,6 +313,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
 			return false, fmt.Errorf("задача %s: в анализе -> готова к работе: %w", t.TaskID, err)
 		}
+		logging.Infof("[задача %s] в анализе → готова к работе", t.TaskID)
 		progress = true
 	}
 	return progress, nil
@@ -337,7 +337,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 	for _, t := range ready {
 		// Одна задача на одного специалиста за цикл.
 		if busy[t.Assignee] {
-			logging.Detailf("[Kanban] специалист %s уже занят в этом цикле — задача %s ждёт", t.Assignee, t.TaskID)
+			logging.Detailf("[задача %s] ждёт: специалист %s уже занят в этом цикле", t.TaskID, t.Assignee)
 			continue
 		}
 		busy[t.Assignee] = true
@@ -358,8 +358,8 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			sb.SetBoardStore(k.store)
 		}
 
-		logging.Infof("[Kanban] выполняю задачу %s (%s) специалистом %s",
-			t.TaskID, truncateText(t.Title, 60), t.Assignee)
+		logging.Infof("[задача %s] специалист %s выполняет: %s",
+			t.TaskID, t.Assignee, truncateText(t.Title, 60))
 		resp, err := k.provider.Generate(ctx, specialist)
 		if err != nil {
 			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
@@ -368,10 +368,22 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("задача %s: цикл остановлен по лимиту раундов", t.TaskID)
 		}
 
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
-			return false, fmt.Errorf("задача %s: в работе -> выполнена: %w", t.TaskID, err)
+		// Разработчик сам переводит задачу в done по завершении работы
+		// (BoardSetTaskStatus). Проверяем фактический статус и, если агент
+		// не сменил его, — страхуем fallback-ом оркестратора, чтобы задача
+		// не зависла и канал не зацикливался.
+		current, err := k.store.GetTask(ctx, t.TaskID)
+		if err != nil {
+			return false, fmt.Errorf("задача %s: чтение статуса после работы: %w", t.TaskID, err)
 		}
-		logging.Infof("[Kanban] задача %s выполнена", t.TaskID)
+		if current.Status == board.StatusDone {
+			logging.Infof("[задача %s] в работе → выполнена (агент подтвердил сам)", t.TaskID)
+		} else {
+			if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
+				return false, fmt.Errorf("задача %s: в работе -> выполнена: %w", t.TaskID, err)
+			}
+			logging.Infof("[задача %s] в работе → выполнена (fallback: агент не сменил статус)", t.TaskID)
+		}
 		progress = true
 	}
 	return progress, nil
@@ -413,7 +425,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if resp != nil && resp.Truncated {
 			return false, fmt.Errorf("фаза триажа багрепортов: цикл остановлен по лимиту раундов")
 		}
-		logging.Infof("[Kanban] триаж %d багрепортов QA Lead", len(newBugs))
+		logging.Infof("[QA Lead] триаж %d багрепортов", len(newBugs))
 		progress = true
 	}
 
@@ -428,7 +440,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if resp != nil && resp.Truncated {
 			return false, fmt.Errorf("фаза экспертизы багрепортов: цикл остановлен по лимиту раундов")
 		}
-		logging.Infof("[Kanban] экспертиза %d багрепортов архитектором", len(confirmedBugs))
+		logging.Infof("[Системный архитектор] экспертиза %d багрепортов", len(confirmedBugs))
 		progress = true
 	}
 
@@ -481,14 +493,14 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 				}
 			}
 			if advanced {
-				logging.Infof("[Kanban] эпик %s (%s) выполнен", epic.TaskID, epic.Title)
+				logging.Infof("[эпик %s] выполнен: %s", epic.TaskID, truncateText(epic.Title, 60))
 				progress = true
 				// Багрепорты, направленные на эпик исправления, закрываются
 				// (fix -> fixed): исправление поставлено и проверено.
 				if n, err := k.store.MarkBugsFixedForEpic(ctx, epic.TaskID); err != nil {
 					return false, fmt.Errorf("эпик %s: закрытие багрепортов: %w", epic.TaskID, err)
 				} else if n > 0 {
-					logging.Infof("[Kanban] эпик %s закрыл %d багрепортов", epic.TaskID, n)
+					logging.Infof("[эпик %s] закрыты багрепорты: %d", epic.TaskID, n)
 					progress = true
 				}
 			}
@@ -505,7 +517,7 @@ func (k *KanbanRunner) noteEpicProgress(ctx context.Context, epicID string) {
 		return
 	}
 	if err := k.store.SetEpicStatus(ctx, epicID, board.StatusInProgress); err != nil {
-		logging.Detailf("[Kanban] эпик %s: в работу: %v", epicID, err)
+		logging.Detailf("[эпик %s] в работу: %v", epicID, err)
 	}
 }
 
@@ -699,8 +711,10 @@ func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
 }
 
 // specialistFor создаёт агента-специалиста для задачи: QA/DevOps или
-// разработчик (backend/frontend). Для пустого проекта используется генератор
-// кода, для существующего — рефактор с ролью.
+// разработчик (backend/frontend). Разработчик-агент создаёт недостающую
+// структуру подпроекта с нуля и дорабатывает существующий код; выбор
+// специализации (frontend/backend) идёт по роли задачи (маркеры фронтенда)
+// либо по умолчанию — backend.
 func (k *KanbanRunner) specialistFor(t *board.Task) (agents.Agent, error) {
 	project := k.store.Project()
 	prompt := k.taskPrompt(t)
@@ -712,22 +726,14 @@ func (k *KanbanRunner) specialistFor(t *board.Task) (agents.Agent, error) {
 		return devops.NewDevops(project, prompt), nil
 	}
 
-	// Разработка кода: пустой проект создаёт генератор, существующий
-	// дорабатывает рефактор с ролью (frontend/backend), чтобы изолировать
-	// монорепозиторий.
-	if projectDirEmpty(project) {
-		return codegenerator.NewCodegenerator(project, prompt), nil
+	// Разработка кода: задача с фронтенд-маркерами отдаётся Frontend-агенту,
+	// всё остальное (включая смешанные/backend/универсальные задачи) — Backend-
+	// агенту. Оба агента работают в temp/<project> в корне модуля и сами
+	// создают недостающую структуру подпроекта.
+	if isRole(t.AssignedRole, "front", "react", "ui", "client", "фронт", "js", "ts", "vue") {
+		return developer.NewFrontendDeveloper(project, prompt), nil
 	}
-	ra, err := refactor.NewRefactorAgent(prompt, project)
-	if err != nil {
-		return nil, err
-	}
-	if isRole(t.AssignedRole, "front", "react", "ui", "client", "фронт") {
-		ra.SetRole("frontend")
-	} else {
-		ra.SetRole("backend")
-	}
-	return ra, nil
+	return developer.NewBackendDeveloper(project, prompt), nil
 }
 
 // taskPrompt формирует задание специалисту по задаче с Kanban-доски.
@@ -742,7 +748,7 @@ func (k *KanbanRunner) taskPrompt(t *board.Task) string {
 	b.WriteString("- Работай в своей выходной директории (OutputDir): учи структуру через List, читай контракты через ReadFiles.\n")
 	b.WriteString("- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n")
 	b.WriteString("- Не выходи за пределы своей части монорепозитория (роль задана промптом).\n")
-	fmt.Fprintf(&b, "- Если у тебя есть инструменты доски: идентификатор задачи %s. Ты можешь читать её контракт (BoardGetTask) и обновлять статус (BoardSetTaskStatus); о завершении задачи оркестратор позаботится сам.\n", t.TaskID)
+	fmt.Fprintf(&b, "- Если у тебя есть инструменты доски: идентификатор задачи %s. Ты можешь читать её контракт (BoardGetTask); когда работа полностью выполнена (сборка и проверки зелёные) — ОБЯЗАТЕЛЬНО переведи задачу в статус done вызовом BoardSetTaskStatus.\n", t.TaskID)
 	b.WriteString("- Если ты QA-инженер и нашёл дефект по контракту — оформи багрепорт инструментом BoardCreateBugReport (статус new), его разберут QA Lead и архитектор.")
 	return b.String()
 }
@@ -763,16 +769,6 @@ func isRole(role string, markers ...string) bool {
 		if strings.Contains(role, m) {
 			return true
 		}
-	}
-	return false
-}
-
-// projectDirEmpty сообщает, существует ли уже проект temp/<name> с файлами.
-func projectDirEmpty(project string) bool {
-	dir := codegenerator.ProjectDir(project)
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) == 0 {
-		return true
 	}
 	return false
 }

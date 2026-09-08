@@ -88,7 +88,7 @@ func acceptMany(root string, projects []ProjectRoot, cfg Config) *Report {
 			}
 			rep.Issues = append(rep.Issues, iss)
 		}
-		logging.Infof("[Accept] %s: подпроект %q (%s): вердикт %s",
+		logging.Infof("[приёмка] %s: подпроект %q (%s): вердикт %s",
 			rep.Project, p.Rel, p.Kind, sub.Verdict)
 	}
 
@@ -142,7 +142,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 					Severity: "warning",
 					Text:     "инструмент установки зависимостей недоступен — шаг пропущен",
 				})
-				logging.Detailf("[Accept] %s: установка %q пропущена (инструмент недоступен)", rep.Project, installCmd)
+				logging.Detailf("[приёмка] %s: установка %q пропущена (инструмент недоступен)", rep.Project, installCmd)
 			} else if timedOut || code != 0 {
 				msg := "установка зависимостей завершилась с ошибкой"
 				if timedOut {
@@ -150,17 +150,17 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 				}
 				rep.Verdict = VerdictReject
 				rep.Issues = append(rep.Issues, Issue{Stage: StageInstall, Severity: "error", Text: msg})
-				logging.Warnf("[Accept] %s: установка %q -> ошибка (code=%d timedout=%v)", rep.Project, installCmd, code, timedOut)
+				logging.Warnf("[приёмка] %s: установка %q -> ошибка (code=%d timedout=%v)", rep.Project, installCmd, code, timedOut)
 			} else {
 				rep.Install.OK = true
-				logging.Detailf("[Accept] %s: установка %q -> OK", rep.Project, installCmd)
+				logging.Detailf("[приёмка] %s: установка %q -> OK", rep.Project, installCmd)
 			}
 		}
 	}
 
 	if strings.TrimSpace(buildCmd) == "" {
 		rep.Build.Skipped = true
-		logging.Detailf("[Accept] %s: сборка не требуется (%s)", rep.Project, rep.Tool)
+		logging.Detailf("[приёмка] %s: сборка не требуется (%s)", rep.Project, rep.Tool)
 	} else {
 		out, code, timedOut, err := runCommand(dir, buildCmd, cfg.BuildTimeout)
 		rep.Build = BuildResult{
@@ -182,7 +182,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 				rep.Issues = append(rep.Issues, Issue{Stage: StageBuild, Severity: "error", Text: msg})
 			}
 		}
-		logging.Infof("[Accept] %s: сборка %q -> ok=%v", rep.Project, buildCmd, rep.Build.OK)
+		logging.Infof("[приёмка] %s: сборка %q -> ok=%v", rep.Project, buildCmd, rep.Build.OK)
 	}
 
 	// Если сборка уже упала — запуск не имеет смысла: фиксируем вердикт и
@@ -207,7 +207,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 		formatted, fmtIssues := runFormatCheck(dir, cfg, formatCmd, tool)
 		rep.Format = formatted
 		rep.Issues = append(rep.Issues, fmtIssues...)
-		logging.Detailf("[Accept] %s: стилизатор %q -> %s", rep.Project, formatCmd, formatStatus(rep.Format))
+		logging.Detailf("[приёмка] %s: стилизатор %q -> %s", rep.Project, formatCmd, formatStatus(rep.Format))
 	}
 
 	// Проверка анализатора (go vet/eslint/ruff). Находки — ошибки: ведут к
@@ -226,7 +226,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 		if !rep.Analyze.OK && !rep.Analyze.Skipped {
 			rep.Verdict = VerdictReject
 		}
-		logging.Detailf("[Accept] %s: анализатор %q -> %s", rep.Project, analyzeCmd, formatStatus(rep.Analyze))
+		logging.Detailf("[приёмка] %s: анализатор %q -> %s", rep.Project, analyzeCmd, formatStatus(rep.Analyze))
 	}
 
 	if strings.TrimSpace(runCmd) == "" {
@@ -237,7 +237,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 			Severity: "warning",
 			Text:     "точка входа для запуска не найдена — приёмка выполнена только по сборке",
 		})
-		logging.Warnf("[Accept] %s: точка входа для запуска не найдена, приёмка по сборке", rep.Project)
+		logging.Warnf("[приёмка] %s: точка входа для запуска не найдена, приёмка по сборке", rep.Project)
 		rep.Summary = summarize(rep)
 		return rep
 	}
@@ -274,7 +274,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 	rep.Run = run
 	rep.Issues = append(rep.Issues, issues...)
 
-	logging.Infof("[Accept] %s: запуск %q -> ok=%v code=%d timedout=%v issues=%d",
+	logging.Infof("[приёмка] %s: запуск %q -> ok=%v code=%d timedout=%v issues=%d",
 		rep.Project, runCmd, run.OK, run.ExitCode, timedOut, len(issues))
 
 	if !run.OK {

@@ -3,7 +3,7 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
-	"ai/agents/codegenerator"
+	"ai/projects"
 	"ai/runner"
 	"context"
 	"os"
@@ -14,7 +14,7 @@ import (
 )
 
 // fixPlanProvider — фейковый провайдер: для планировщика возвращает план
-// исправлений (один шаг refactor), для остальных агентов — пустой успех.
+// исправлений (один шаг backend), для остальных агентов — пустой успех.
 type fixPlanProvider struct {
 	plans  int // сколько раз вызывался планировщик
 	fixIDs int
@@ -32,7 +32,7 @@ func (s *fixPlanProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 			"project_name": "` + project + `",
 			"summary": "исправление по приёмке",
 			"steps": [
-			  {"id": "fix` + strconv.Itoa(s.fixIDs) + `", "agent": "refactor", "prompt": "исправь проблему сборки", "project_name": "` + project + `", "depends_on": [], "description": "исправление", "scope": []}
+			  {"id": "fix` + strconv.Itoa(s.fixIDs) + `", "agent": "backend", "prompt": "исправь проблему сборки", "project_name": "` + project + `", "depends_on": [], "description": "исправление", "scope": []}
 			]
 		}`}, nil
 	}
@@ -47,7 +47,7 @@ func (s *fixPlanProvider) ChatOnce(context.Context, agents.Agent, []runner.Messa
 // регистрирует её очистку после теста.
 func makeAcceptProject(t *testing.T, name string) string {
 	t.Helper()
-	dir := codegenerator.ProjectDir(name)
+	dir := projects.ProjectDir(name)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -64,7 +64,6 @@ func TestAcceptanceLoopApprove(t *testing.T) {
 	t.Setenv("ACCEPT_BUILD_CMD", "true")
 	t.Setenv("ACCEPT_RUN_CMD", "true")
 	t.Setenv("ACCEPT_MAX_ROUNDS", "3")
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	plan := &Plan{
 		ProjectName: "AcceptLoopHappy",
@@ -88,7 +87,7 @@ func TestAcceptanceLoopApprove(t *testing.T) {
 }
 
 // План, в котором приёмка падает по сборке: исполнитель передаёт отчёт
-// планировщику, тот возвращает шаг refactor, а повторная приёмка по-прежнему
+// планировщику, тот возвращает шаг backend, а повторная приёмка по-прежнему
 // падает. С бюджетом в 1 раунд Run должен завершиться ошибкой «не пройдена».
 func TestAcceptanceLoopRejectsAfterRound(t *testing.T) {
 	ctx := context.Background()
@@ -96,7 +95,6 @@ func TestAcceptanceLoopRejectsAfterRound(t *testing.T) {
 
 	t.Setenv("ACCEPT_BUILD_CMD", "false")
 	t.Setenv("ACCEPT_MAX_ROUNDS", "1")
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	plan := &Plan{
 		ProjectName: "AcceptLoopFix",
@@ -132,7 +130,6 @@ func TestAcceptanceLoopEmptyFixPlan(t *testing.T) {
 
 	t.Setenv("ACCEPT_BUILD_CMD", "false")
 	t.Setenv("ACCEPT_MAX_ROUNDS", "3")
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	plan := &Plan{
 		ProjectName: "AcceptLoopEmpty",

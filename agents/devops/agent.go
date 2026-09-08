@@ -2,8 +2,8 @@ package devops
 
 import (
 	"ai/agents"
-	"ai/agents/codegenerator"
 	"ai/board"
+	"ai/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"
@@ -63,7 +63,7 @@ func (d *Devops) SetBoardStore(s *board.Store) {
 // пользователем. prompt — текст задания для модели (может быть пустым — тогда
 // используется задание по умолчанию).
 func NewDevops(projectName, prompt string) *Devops {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	return newDevops(dir, prompt, LoadConfig())
 }

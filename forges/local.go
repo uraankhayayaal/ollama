@@ -46,9 +46,9 @@ type LocalForge struct {
 	// Scope — области работы (файлы/директории), по которым строится дифф.
 	// Пустой — весь проект. Используется, чтобы ревьювер не смотрел на
 	// файлы, не затронутые шагом плана.
-	Scope       []string
-	scopeMatch  *ScopeMatcher
-	expanded    map[string]string
+	Scope      []string
+	scopeMatch *ScopeMatcher
+	expanded   map[string]string
 	// maxDiffSize — жёсткое ограничение суммарного размера диффа в байтах.
 	// Защита от переполнения контекста модели на больших проектах: дифф
 	// обрезается по бюджету, а файлы, не попавшие в дифф, перечисляются
@@ -194,14 +194,14 @@ func (lf *LocalForge) PostComment(c ReviewComment) error {
 // PostSummary сохраняет сводку.
 func (lf *LocalForge) PostSummary(summary string) error {
 	lf.Summary = summary
-	logging.Infof("[LocalForge] сводка:\n%s", summary)
+	logging.Infof("[локальное ревью] сводка:\n%s", summary)
 	return nil
 }
 
 // Approve фиксирует одобрение.
 func (lf *LocalForge) Approve(summary string) error {
 	lf.Approved = true
-	logging.Infof("[LocalForge] апрув: %s", summary)
+	logging.Infof("[локальное ревью] апрув: %s", summary)
 	return nil
 }
 

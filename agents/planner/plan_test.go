@@ -10,7 +10,7 @@ func TestParsePlanJSON(t *testing.T) {
   "project_name": "storageService",
   "summary": "Создать микросервис",
   "steps": [
-    {"id": "s1", "agent": "codegenerator", "prompt": "Создай проект", "scope": ["src/main.go", "internal/order/"], "description": "Генерация"},
+    {"id": "s1", "agent": "backend", "prompt": "Создай проект", "scope": ["src/main.go", "internal/order/"], "description": "Генерация"},
     {"id": "s2", "agent": "codereviewer", "prompt": "Проверь код", "depends_on": ["s1"], "scope": ["src/main.go"], "description": "Ревью"}
   ]
 }`
@@ -25,7 +25,7 @@ func TestParsePlanJSON(t *testing.T) {
 	if len(plan.Steps) != 2 {
 		t.Fatalf("steps: got %d", len(plan.Steps))
 	}
-	if plan.Steps[0].Agent != AgentCodeGenerator {
+	if plan.Steps[0].Agent != AgentBackendDev {
 		t.Fatalf("step[0].agent: got %q", plan.Steps[0].Agent)
 	}
 	if len(plan.Steps[1].DependsOn) != 1 || plan.Steps[1].DependsOn[0] != "s1" {
@@ -40,7 +40,7 @@ func TestParsePlanJSON(t *testing.T) {
 }
 
 func TestParsePlanMarkdownWrapper(t *testing.T) {
-	raw := "```json\n{\"project_name\":\"x\",\"summary\":\"s\",\"steps\":[{\"id\":\"a\",\"agent\":\"refactor\",\"prompt\":\"p\",\"description\":\"d\"}]}\n```"
+	raw := "```json\n{\"project_name\":\"x\",\"summary\":\"s\",\"steps\":[{\"id\":\"a\",\"agent\":\"frontend\",\"prompt\":\"p\",\"description\":\"d\"}]}\n```"
 
 	plan, err := ParsePlan(raw)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestParsePlanToleratesControlCharsInStrings(t *testing.T) {
 		"  \"project_name\": \"todo\"," +
 		"  \"summary\": \"Создать апи\"\r\n," +
 		"  \"steps\": [\n" +
-		"    {\"id\": \"s1\", \"agent\": \"codegenerator\", \"prompt\": \"Создай структуру: go.mod\r\nСодержимое:\n1. main.go\n2. go.mod\", \"description\": \"Генерация\"}\n" +
+		"    {\"id\": \"s1\", \"agent\": \"backend\", \"prompt\": \"Создай структуру: go.mod\r\nСодержимое:\n1. main.go\n2. go.mod\", \"description\": \"Генерация\"}\n" +
 		"  ]\n" +
 		"}\n" +
 		"```"
@@ -97,8 +97,8 @@ func TestParsePlanToleratesControlCharsInStrings(t *testing.T) {
 func TestComputeWavesOrder(t *testing.T) {
 	plan := &Plan{Steps: []Step{
 		{ID: "s3", Agent: AgentCodeReviewer, DependsOn: []string{"s2"}},
-		{ID: "s1", Agent: AgentCodeGenerator},
-		{ID: "s2", Agent: AgentRefactor, DependsOn: []string{"s1"}},
+		{ID: "s1", Agent: AgentBackendDev},
+		{ID: "s2", Agent: AgentFrontendDev, DependsOn: []string{"s1"}},
 	}}
 
 	waves, err := plan.ComputeWaves()
@@ -122,9 +122,9 @@ func TestComputeWavesOrder(t *testing.T) {
 
 func TestComputeWavesParallel(t *testing.T) {
 	plan := &Plan{Steps: []Step{
-		{ID: "a", Agent: AgentCodeGenerator},
-		{ID: "b", Agent: AgentCodeGenerator},
-		{ID: "c", Agent: AgentRefactor, DependsOn: []string{"a", "b"}},
+		{ID: "a", Agent: AgentBackendDev},
+		{ID: "b", Agent: AgentFrontendDev},
+		{ID: "c", Agent: AgentBackendDev, DependsOn: []string{"a", "b"}},
 	}}
 
 	waves, err := plan.ComputeWaves()

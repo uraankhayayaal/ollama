@@ -10,7 +10,7 @@
 # поэтому:
 #   - контекст держи в 16-32K (в Ollama: OLLAMA_CONTEXT_LENGTH=16384, в LM
 #     Studio: Context Length 16384; 16K быстрее и надёжнее 32K);
-#   - для быстрых итераций (генератор/self-repair) держи под рукой лёгкий
+#   - для быстрых итераций (генератор) держи под рукой лёгкий
 #     8B-конфиг (.env.macbook.air) и подставляй 30B для сложных задач.
 
 LLM_PROVIDER=ollama
@@ -40,8 +40,6 @@ CODEGEN_MODULE=
 CODEGEN_MAX_FILES=0
 CODEGEN_NO_OVERWRITE=false
 CODEGEN_SUMMARY_FILE=SUMMARY.md
-# Богатый бюджет self-repair — модель сильная, можно дать 3-4 раунда
-CODEGEN_MAX_REPAIR_ROUNDS=3
 
 # --- Прочее ---
 # Подробный лог запросов/ответов моделей

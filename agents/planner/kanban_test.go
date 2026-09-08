@@ -3,10 +3,10 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/architect"
-	"ai/agents/codegenerator"
 	"ai/agents/qaengineer"
 	"ai/agents/qalead"
 	"ai/board"
+	"ai/projects"
 	"ai/runner"
 	"ai/tools"
 	"context"
@@ -102,7 +102,7 @@ func newKanbanRunner(t *testing.T) (*KanbanRunner, *board.Store) {
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-test"})
 
-	projectDir := codegenerator.ProjectDir("kanban-test")
+	projectDir := projects.ProjectDir("kanban-test")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
 	return NewKanbanRunner(&kanbanProvider{}, store), store
@@ -162,7 +162,7 @@ func TestKanbanResumes(t *testing.T) {
 	ctx := context.Background()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-test"})
-	projectDir := codegenerator.ProjectDir("kanban-test")
+	projectDir := projects.ProjectDir("kanban-test")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
 	if err := store.SaveMeta(ctx, &board.Meta{
@@ -382,7 +382,7 @@ func TestKanbanPhaseGating(t *testing.T) {
 	ctx := context.Background()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-gating"})
-	projectDir := codegenerator.ProjectDir("kanban-gating")
+	projectDir := projects.ProjectDir("kanban-gating")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
 	kr := NewKanbanRunner(&kanbanProvider{}, store)
@@ -477,7 +477,7 @@ func TestKanbanBugFlow(t *testing.T) {
 	ctx := context.Background()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-bug"})
-	projectDir := codegenerator.ProjectDir("kanban-bug")
+	projectDir := projects.ProjectDir("kanban-bug")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
 	kr := NewKanbanRunner(&bugFlowProvider{}, store)

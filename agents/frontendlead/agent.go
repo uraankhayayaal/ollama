@@ -2,8 +2,8 @@ package frontendlead
 
 import (
 	"ai/agents"
-	"ai/agents/codegenerator"
 	"ai/board"
+	"ai/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"
@@ -48,7 +48,7 @@ type FrontendLead struct {
 // пользователем. prompt — текст задания от Архитектора (может быть пустым —
 // тогда используется задание по умолчанию).
 func NewFrontendLead(projectName, prompt string) *FrontendLead {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	return newFrontendLead(dir, prompt, LoadConfig())
 }

@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/agents/codegenerator"
+	"ai/projects"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,7 +12,7 @@ import (
 
 func TestBuildProjectMapExisting(t *testing.T) {
 	name := "testmap_" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	dir := codegenerator.ProjectDir(name)
+	dir := projects.ProjectDir(name)
 	if err := os.MkdirAll(filepath.Join(dir, "internal", "order"), 0755); err != nil {
 		t.Fatal(err)
 	}

@@ -2,8 +2,8 @@ package devopslead
 
 import (
 	"ai/agents"
-	"ai/agents/codegenerator"
 	"ai/board"
+	"ai/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"
@@ -49,7 +49,7 @@ type DevopsLead struct {
 // пользователем. prompt — текст задания от Системного архитектора (может быть
 // пустым — тогда используется задание по умолчанию).
 func NewDevopsLead(projectName, prompt string) *DevopsLead {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	return newDevopsLead(dir, prompt, LoadConfig())
 }

@@ -7,6 +7,7 @@ package tools
 
 import (
 	"ai/board"
+	"ai/logging"
 	"context"
 	"encoding/json"
 	"errors"
@@ -115,6 +116,15 @@ func boardErr(action string, err error) ([]byte, error) {
 func boardOK(body map[string]any) ([]byte, error) {
 	body["status"] = "success"
 	return json.Marshal(body)
+}
+
+// boardTitle обрезает название записи доски для логов.
+func boardTitle(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= 60 {
+		return s
+	}
+	return s[:60] + "…"
 }
 
 // --- Чтение ---
@@ -330,6 +340,7 @@ func (t *boardCreateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	if err := t.b.CreateEpic(ctx, epic); err != nil {
 		return boardErr(BoardCreateEpic, err)
 	}
+	logging.Infof("[эпик %s] создан: %s", epic.TaskID, boardTitle(epic.Title))
 	return boardOK(map[string]any{"epic_id": epic.TaskID})
 }
 
@@ -409,6 +420,7 @@ func (t *boardUpdateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	if err := t.b.SaveEpic(ctx, e); err != nil {
 		return boardErr(BoardUpdateEpic, err)
 	}
+	logging.Infof("[эпик %s] обновлён (ревизия %d): %s", e.TaskID, e.Revision, boardTitle(e.Title))
 	return boardOK(map[string]any{"epic_id": e.TaskID, "revision": e.Revision})
 }
 
@@ -433,10 +445,12 @@ func (t *boardDeleteEpicTool) Execute(args map[string]any) ([]byte, error) {
 	if t.b == nil {
 		return boardErr(BoardDeleteEpic, fmt.Errorf("доска не подключена"))
 	}
-	if err := t.b.DeleteEpic(context.Background(), strArg(args, "epic_id")); err != nil {
+	id := strArg(args, "epic_id")
+	if err := t.b.DeleteEpic(context.Background(), id); err != nil {
 		return boardErr(BoardDeleteEpic, err)
 	}
-	return boardOK(map[string]any{"deleted": strArg(args, "epic_id")})
+	logging.Infof("[эпик %s] удалён", id)
+	return boardOK(map[string]any{"deleted": id})
 }
 
 type boardSetEpicStatusTool struct{ b *board.Store }
@@ -464,9 +478,14 @@ func (t *boardSetEpicStatusTool) Execute(args map[string]any) ([]byte, error) {
 	ctx := context.Background()
 	id := strArg(args, "epic_id")
 	st := board.Status(strArg(args, "status"))
+	e, err := t.b.GetEpic(ctx, id)
+	if err != nil {
+		return boardErr(BoardSetEpicStatus, err)
+	}
 	if err := t.b.SetEpicStatus(ctx, id, st); err != nil {
 		return boardErr(BoardSetEpicStatus, err)
 	}
+	logging.Infof("[эпик %s] статус: %s → %s", id, e.Status.Label(), st.Label())
 	return boardOK(map[string]any{"epic_id": id, "status": string(st)})
 }
 
@@ -509,6 +528,7 @@ func (t *boardCreateTaskTool) Execute(args map[string]any) ([]byte, error) {
 	if err := t.b.CreateTask(ctx, task); err != nil {
 		return boardErr(BoardCreateTask, err)
 	}
+	logging.Infof("[задача %s] создана в эпике %s: %s", task.TaskID, epicID, boardTitle(task.Title))
 	return boardOK(map[string]any{"task_id": task.TaskID, "epic_id": epicID})
 }
 
@@ -593,11 +613,13 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 		if err := t.b.MoveTask(ctx, tk.TaskID, epicID); err != nil {
 			return boardErr(BoardUpdateTask, err)
 		}
+		logging.Infof("[задача %s] перенесена в эпик %s", tk.TaskID, epicID)
 		return boardOK(map[string]any{"task_id": tk.TaskID, "epic_id": epicID})
 	}
 	if err := t.b.SaveTask(ctx, tk); err != nil {
 		return boardErr(BoardUpdateTask, err)
 	}
+	logging.Infof("[задача %s] обновлена: %s", tk.TaskID, boardTitle(tk.Title))
 	return boardOK(map[string]any{"task_id": tk.TaskID})
 }
 
@@ -622,10 +644,12 @@ func (t *boardDeleteTaskTool) Execute(args map[string]any) ([]byte, error) {
 	if t.b == nil {
 		return boardErr(BoardDeleteTask, fmt.Errorf("доска не подключена"))
 	}
-	if err := t.b.DeleteTask(context.Background(), strArg(args, "task_id")); err != nil {
+	id := strArg(args, "task_id")
+	if err := t.b.DeleteTask(context.Background(), id); err != nil {
 		return boardErr(BoardDeleteTask, err)
 	}
-	return boardOK(map[string]any{"deleted": strArg(args, "task_id")})
+	logging.Infof("[задача %s] удалена", id)
+	return boardOK(map[string]any{"deleted": id})
 }
 
 type boardSetTaskStatusTool struct{ b *board.Store }
@@ -653,9 +677,14 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 	ctx := context.Background()
 	id := strArg(args, "task_id")
 	st := board.Status(strArg(args, "status"))
+	tk, err := t.b.GetTask(ctx, id)
+	if err != nil {
+		return boardErr(BoardSetTaskStatus, err)
+	}
 	if err := t.b.SetTaskStatus(ctx, id, st); err != nil {
 		return boardErr(BoardSetTaskStatus, err)
 	}
+	logging.Infof("[задача %s] статус: %s → %s", id, tk.Status.Label(), st.Label())
 	return boardOK(map[string]any{"task_id": id, "status": string(st)})
 }
 
@@ -698,6 +727,7 @@ func (t *boardCreateBugReportTool) Execute(args map[string]any) ([]byte, error) 
 	if err := t.b.CreateBugReport(context.Background(), r); err != nil {
 		return boardErr(BoardCreateBug, err)
 	}
+	logging.Infof("[багрепорт %s] создан: %s (задача %s, эпик %s)", r.BugID, boardTitle(r.Title), r.TaskID, r.EpicID)
 	return boardOK(map[string]any{"bug_id": r.BugID})
 }
 
@@ -737,6 +767,7 @@ func (t *boardSetBugStatusTool) Execute(args map[string]any) ([]byte, error) {
 	if err := t.b.SetBugStatus(ctx, id, st); err != nil {
 		return boardErr(BoardSetBugStatus, err)
 	}
+	logging.Infof("[багрепорт %s] статус: %s → %s", id, r.Status.Label(), st.Label())
 	return boardOK(map[string]any{"bug_id": id, "status": string(st), "old_status": string(r.Status)})
 }
 
@@ -819,6 +850,11 @@ func (t *boardReviewBugReportTool) Execute(args map[string]any) ([]byte, error) 
 	r.Status = board.BugStatus(verdict)
 	if err := t.b.SaveBugReport(ctx, r); err != nil {
 		return boardErr(BoardReviewBug, err)
+	}
+	if r.FixEpicID != "" {
+		logging.Infof("[багрепорт %s] вердикт архитектора: fix — создан эпик исправления %s", id, r.FixEpicID)
+	} else {
+		logging.Infof("[багрепорт %s] вердикт архитектора: %s", id, r.Verdict)
 	}
 	return boardOK(map[string]any{"bug_id": id, "status": r.Status, "verdict": r.Verdict, "fix_epic_id": r.FixEpicID})
 }

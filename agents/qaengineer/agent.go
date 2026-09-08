@@ -2,8 +2,8 @@ package qaengineer
 
 import (
 	"ai/agents"
-	"ai/agents/codegenerator"
 	"ai/board"
+	"ai/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"
@@ -65,7 +65,7 @@ func (q *QAEngineer) SetBoardStore(s *board.Store) {
 // пользователем. prompt — текст задания от QA Lead (может быть пустым — тогда
 // используется задание по умолчанию).
 func NewQAEngineer(projectName, prompt string) *QAEngineer {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	return newQAEngineer(dir, prompt, LoadConfig())
 }

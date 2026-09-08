@@ -1,12 +1,14 @@
-package codegenerator
+package projects
 
 import (
 	"os"
 	"strconv"
 )
 
-// Config — настраиваемые параметры агента-генератора кода.
-// Значения берутся из переменных окружения (см. .env.example).
+// Config — настраиваемые параметры агента-разработчика.
+// Значения берутся из переменных окружения (см. .env.example). Префикс
+// переменных (CODEGEN_*) сохранён от агента-генератора кода для обратной
+// совместимости существующих окружений.
 type Config struct {
 	// Language — целевой язык программирования. Влияет на промпт агента.
 	Language string
@@ -23,23 +25,17 @@ type Config struct {
 	// true — вместо перезаписи инструмент вернёт ошибку.
 	NoOverwrite bool
 
-	// SummaryFile — имя файла-отчёта, который пишется после генерации.
+	// SummaryFile — имя файла-отчёта, который пишется после работы.
 	// Пусто — файл не создаётся.
 	SummaryFile string
-
-	// MaxRepairRounds — сколько раундов self-repair (исправление по
-	// замечаниям ревью) допустимо выполнить. 1 — один проход fix
-	// (как раньше), 0 или отрицательное — ремонт отключён (без фикса).
-	MaxRepairRounds int
 }
 
 // DefaultConfig возвращает конфиг со значениями по умолчанию.
 func DefaultConfig() Config {
 	return Config{
-		Language:        "Go",
-		NoOverwrite:     false,
-		SummaryFile:     "SUMMARY.md",
-		MaxRepairRounds: 3,
+		Language:    "Go",
+		NoOverwrite: false,
+		SummaryFile: "SUMMARY.md",
 	}
 }
 
@@ -66,11 +62,6 @@ func LoadConfig() Config {
 	}
 	if v := os.Getenv("CODEGEN_SUMMARY_FILE"); v != "" {
 		cfg.SummaryFile = v
-	}
-	if v := os.Getenv("CODEGEN_MAX_REPAIR_ROUNDS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.MaxRepairRounds = n
-		}
 	}
 
 	return cfg

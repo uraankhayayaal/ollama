@@ -3,8 +3,8 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
-	"ai/agents/codegenerator"
 	"ai/checkpoint"
+	"ai/projects"
 	"ai/runner"
 	"context"
 	"encoding/json"
@@ -63,7 +63,7 @@ func TestExecutorResumeSkipsCompleted(t *testing.T) {
 		ProjectName: "resumeProj",
 		Summary:     "тест resume",
 		Steps: []Step{
-			{ID: "s1", Agent: AgentCodeGenerator, Prompt: "сделай", Description: "генерация"},
+			{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"},
 			{ID: "s2", Agent: AgentCodeReviewer, Prompt: "проверь", DependsOn: []string{"s1"}, Description: "ревью"},
 		},
 	}
@@ -182,7 +182,7 @@ func TestExecutorEmptyTruncatedCodingStepFails(t *testing.T) {
 		ProjectName: "emptyProj",
 		Summary:     "модель обрезалась",
 		Steps: []Step{
-			{ID: "s1", Agent: AgentCodeGenerator, Prompt: "создай файлы", Description: "генерация"},
+			{ID: "s1", Agent: AgentBackendDev, Prompt: "создай файлы", Description: "генерация"},
 		},
 	}
 
@@ -268,7 +268,7 @@ func TestExecutorAcceptorScopedToSubproject(t *testing.T) {
 	}
 	ctx := context.Background()
 	name := "AcceptorScopeTest"
-	root := codegenerator.ProjectDir(name)
+	root := projects.ProjectDir(name)
 	defer os.RemoveAll(filepath.Clean(root))
 	if err := os.MkdirAll(filepath.Join(root, "frontend"), 0755); err != nil {
 		t.Fatal(err)
@@ -366,10 +366,9 @@ func TestExecutorTruncatedStepPersistsRoundState(t *testing.T) {
 		ProjectName: "roundProj",
 		Summary:     "лимит раундов",
 		Steps: []Step{
-			{ID: "s1", Agent: AgentCodeGenerator, Prompt: "сделай", Description: "генерация"},
+			{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"},
 		},
 	}
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	exec := NewExecutor(&roundStubProvider{}, plan).SetCheckpoint(store, false)
 	err := exec.Run(ctx)
@@ -410,10 +409,9 @@ func TestExecutorResumeContinuesTruncatedStep(t *testing.T) {
 		ProjectName: "roundResumeProj",
 		Summary:     "продолжить с раунда 13",
 		Steps: []Step{
-			{ID: "s1", Agent: AgentCodeGenerator, Prompt: "сделай", Description: "генерация"},
+			{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"},
 		},
 	}
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	planJSON, _ := json.Marshal(plan)
 	firstSnap := &checkpoint.Snapshot{

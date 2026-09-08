@@ -1,8 +1,8 @@
 package planner
 
 import (
-	"ai/agents/codegenerator"
 	"ai/forges"
+	"ai/projects"
 	"fmt"
 	"io/fs"
 	"os"
@@ -25,7 +25,7 @@ const (
 //
 // Если проект ещё не создан — возвращает соответствующую пометку.
 func BuildProjectMap(projectName string) string {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {

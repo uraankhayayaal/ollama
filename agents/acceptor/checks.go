@@ -46,7 +46,7 @@ func runFormatCheck(dir string, cfg Config, command, tool string) (*CheckResult,
 	}
 	if timedOut {
 		res.Output += "\n[... превышен таймаут ...]"
-		logging.Warnf("[Accept] стилизатор %q превысил таймаут", command)
+		logging.Warnf("[приёмка] стилизатор %q превысил таймаут", command)
 		return res, []Issue{
 			{Stage: StageFormat, Severity: "warning", Text: "проверка стилизатора превысила таймаут"},
 		}

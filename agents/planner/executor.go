@@ -4,18 +4,18 @@ import (
 	"ai/agents"
 	"ai/agents/acceptor"
 	"ai/agents/backendlead"
-	"ai/agents/codegenerator"
 	"ai/agents/codereviewer"
+	"ai/agents/developer"
 	"ai/agents/devops"
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/agents/qalead"
-	"ai/agents/refactor"
 	"ai/checkpoint"
 	"ai/forges"
 	"ai/logging"
 	"ai/models"
+	"ai/projects"
 	"ai/runner"
 	"context"
 	"encoding/json"
@@ -98,18 +98,18 @@ func (e *Executor) Run(ctx context.Context) error {
 
 			// Resume: шаг уже завершён в прошлом запуске — пропускаем.
 			if e.completed[stepID] {
-				logging.Detailf("[Plan] шаг %s уже выполнен ранее, пропускаю (resume)", stepID)
+				logging.Detailf("[%s] шаг %s уже выполнен ранее, пропускаю (resume)", agentLabel(step.Agent, step.Role), stepID)
 				continue
 			}
 
-			logging.Infof("[Plan] шаг %s: %s (агент: %s)", step.ID, step.Description, step.Agent)
+			logging.Infof("[%s] шаг %s: %s", agentLabel(step.Agent, step.Role), step.ID, step.Description)
 			e.markRunning(ctx, stepID)
 			if err := e.executeStep(ctx, step); err != nil {
 				e.markFailed(ctx, stepID)
 				return fmt.Errorf("шаг %q: %w", step.ID, err)
 			}
 			e.markDone(ctx, stepID)
-			logging.Infof("[Plan] шаг %s завершён", step.ID)
+			logging.Infof("[%s] шаг %s завершён", agentLabel(step.Agent, step.Role), step.ID)
 		}
 	}
 
@@ -221,7 +221,7 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 	}
 
 	switch step.Agent {
-	case AgentCodeGenerator, AgentRefactor, AgentDevops, AgentDevopsLead, AgentQAEngineer, AgentQALead, AgentFrontendLead, AgentBackendLead:
+	case AgentBackendDev, AgentFrontendDev, AgentDevops, AgentDevopsLead, AgentQAEngineer, AgentQALead, AgentFrontendLead, AgentBackendLead:
 		return e.runCodingAgent(ctx, step, projectName)
 
 	case AgentCodeReviewer:
@@ -235,22 +235,16 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 	}
 }
 
-// runCodingAgent запускает генератор или рефактор с последующим self-review
-// (если включено конфигом). Оба агента ограничены областью работы scope:
-// пишут/читают только указанные файлы, и ревью тоже идёт только по ним.
-// refactor встраивает codegenerator, поэтому интерфейс selfReviewer
-// доступен обоим.
+// runCodingAgent запускает агента-разработчика (backend/frontend) или другого
+// специалиста (devops, qa, лиды). Все агенты ограничены областью работы scope:
+// пишут/читают только указанные файлы.
 func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName string) error {
 	var agent agents.Agent
 	switch step.Agent {
-	case AgentCodeGenerator:
-		agent = codegenerator.NewCodegenerator(projectName, step.Prompt)
-	case AgentRefactor:
-		ra, err := refactor.NewRefactorAgent(step.Prompt, projectName)
-		if err != nil {
-			return err
-		}
-		agent = ra
+	case AgentBackendDev:
+		agent = developer.NewBackendDeveloper(projectName, step.Prompt)
+	case AgentFrontendDev:
+		agent = developer.NewFrontendDeveloper(projectName, step.Prompt)
 	case AgentDevops:
 		agent = devops.NewDevops(projectName, step.Prompt)
 	case AgentDevopsLead:
@@ -271,9 +265,10 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 		scoper.SetScope(step.Scope)
 	}
 
-	// Роль разработчика (frontend/backend): применяем к агенту, чтобы он не
-	// выходил за пределы своей части монорепозитория. Роль не влияет на scope
-	// (его задаёт планировщик), а уточняет промпт и стиль работы агента.
+	// Роль разработчика (frontend/backend): для backend/frontend-агентов она
+	// определяется самим типом агента (роль в шаге хранится для журналирования);
+	// если шаг несёт роль generic-агента, способному её применить — передаём
+	// её агенту. Ограничивает промпт и стиль работы, но не заменяет scope.
 	if rr, ok := agent.(interface{ SetRole(string) }); ok && step.Role != "" {
 		rr.SetRole(string(step.Role))
 	}
@@ -281,11 +276,9 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// Возобновление агентского цикла: если в чекпоинте сохранена история
 	// диалога (в прошлом запуске шаг упёрся в лимит раундов), передаём её
 	// в цикл, чтобы продолжить с места остановки, а не начинать заново.
-	// Контекст с resume-состоянием используется ТОЛЬКО для этого вызова,
-	// чтобы self-review ниже не подхватил чужую историю.
 	genCtx := ctx
 	if rs, ok := e.loadResumeState(ctx, step.ID); ok {
-		logging.Detailf("[Plan] шаг %s: возобновляю агентский цикл с раунда %d (повторный запуск с --resume)", step.ID, rs.Rounds+1)
+		logging.Detailf("[%s] шаг %s: возобновляю агентский цикл с раунда %d (повторный запуск с --resume)", agentLabel(step.Agent, step.Role), step.ID, rs.Rounds+1)
 		genCtx = runner.WithResumeState(ctx, rs)
 	}
 
@@ -299,7 +292,7 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// продолжил шаг с раунда resp.Rounds+1, и останавливаем выполнение плана.
 	if resp != nil && resp.Truncated {
 		if e.persistRoundState(ctx, step, resp) {
-			logging.Warnf("[Plan] шаг %s: истощён лимит раундов (%d), история сохранена в чекпоинт", step.ID, resp.Rounds)
+			logging.Warnf("[%s] шаг %s: истощён лимит раундов (%d), история сохранена в чекпоинт", agentLabel(step.Agent, step.Role), step.ID, resp.Rounds)
 		}
 		if strings.TrimSpace(resp.Content) == "" {
 			// Модель исчерпала лимит и вернула пустой ответ без вызовов
@@ -313,13 +306,7 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 			// resp.Rounds+1 (например 13..24, затем снова resume — 25..36).
 			return fmt.Errorf("шаг %q: исчерпан лимит раундов (%d) агентского цикла, история сохранена — запустите с --resume, чтобы продолжить", step.ID, resp.Rounds)
 		}
-		logging.Warnf("[Plan] шаг %s: цикл исчерпал лимит раундов (%d), но чекпоинт отключён, продолжаю с частичным результатом", step.ID, resp.Rounds)
-	}
-
-	// Self-review сгенерированного/рефакторенного кода — тоже только по
-	// файлам из области работы шага.
-	if sr, ok := agent.(selfReviewer); ok {
-		runRepairLoop(ctx, e.provider, sr, step.Scope, step.Prompt)
+		logging.Warnf("[%s] шаг %s: цикл исчерпал лимит раундов (%d), но чекпоинт отключён, продолжаю с частичным результатом", agentLabel(step.Agent, step.Role), step.ID, resp.Rounds)
 	}
 
 	return nil
@@ -379,11 +366,12 @@ func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *runn
 // не смотрел на код, не затронутый работой.
 //
 // Если замечания найдены — включается цикл «ревью → исправление → ревью»
-// (бюджет REVIEW_FIX_ROUNDS): планировщик составляет шаги refactor,
-// исполнитель их прогоняет, затем ревью повторяется по обновлённому коду.
-// Цикл завершается, когда замечаний больше нет.
+// (бюджет REVIEW_FIX_ROUNDS): планировщик составляет шаги исправления
+// разработчиками backend/frontend, исполнитель их прогоняет, затем ревью
+// повторяется по обновлённому коду. Цикл завершается, когда замечаний
+// больше нет.
 func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName string) error {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	cfg := codereviewer.LoadConfig()
 
 	// Область ревью расширяется между раундами только файлами исправлений,
@@ -396,11 +384,11 @@ func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName s
 			return err
 		}
 
-		logging.Infof("[Plan] ревью %q (раунд %d/%d, scope: %v): найдено замечаний: %d",
+		logging.Infof("[код-ревьювер] ревью %q (раунд %d/%d, scope: %v): найдено замечаний: %d",
 			dir, round, cfg.MaxRounds, reviewScope, len(comments))
 
 		if len(comments) == 0 {
-			logging.Infof("[Plan] ревью %q: замечаний больше нет — ревью пройдено", dir)
+			logging.Infof("[код-ревьювер] ревью %q: замечаний больше нет — ревью пройдено", dir)
 			return nil
 		}
 
@@ -415,7 +403,7 @@ func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName s
 			return fmt.Errorf("раунд ревью %d: планирование исправлений: %w", round, err)
 		}
 		if len(fixes) == 0 {
-			logging.Warnf("[Plan] раунд ревью %d: планировщик не вернул шагов исправлений", round)
+			logging.Warnf("[планировщик] раунд ревью %d: планировщик не вернул шагов исправлений", round)
 			continue
 		}
 
@@ -424,7 +412,7 @@ func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName s
 			// Повторную приёмку и ревью запускают циклы исполнителя, а не
 			// планировщик исправлений.
 			if fs.Agent == AgentAcceptor || fs.Agent == AgentCodeReviewer {
-				logging.Detailf("[Plan] раунд ревью %d: шаг %s в плане исправлений пропущен", round, fs.Agent)
+				logging.Detailf("[%s] раунд ревью %d: шаг %s в плане исправлений пропущен", agentLabel(fs.Agent, fs.Role), round, fs.Agent)
 				continue
 			}
 			fixStep := fs
@@ -435,7 +423,7 @@ func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName s
 				fixStep.Scope = commentFiles(comments)
 			}
 			e.plan.Steps = append(e.plan.Steps, fixStep)
-			logging.Infof("[Plan] раунд ревью %d: шаг исправления %s: %s (агент: %s)", round, fixStep.ID, fixStep.Description, fixStep.Agent)
+			logging.Infof("[%s] раунд ревью %d: шаг исправления %s: %s", agentLabel(fixStep.Agent, fixStep.Role), round, fixStep.ID, fixStep.Description)
 			e.markRunning(ctx, fixStep.ID)
 			if err := e.executeStep(ctx, &fixStep); err != nil {
 				e.markFailed(ctx, fixStep.ID)
@@ -446,11 +434,11 @@ func (e *Executor) runReviewAgent(ctx context.Context, step *Step, projectName s
 			reviewScope = uniqueSlash(append(reviewScope, fixStep.Scope...))
 		}
 		if executed == 0 {
-			logging.Warnf("[Plan] раунд ревью %d: планировщик не дал применимых шагов исправлений — повторяю ревью", round)
+			logging.Warnf("[планировщик] раунд ревью %d: планировщик не дал применимых шагов исправлений — повторяю ревью", round)
 			continue
 		}
 
-		logging.Infof("[Plan] раунд ревью %d: повторное ревью после исправлений", round)
+		logging.Infof("[код-ревьювер] раунд ревью %d: повторное ревью после исправлений", round)
 	}
 
 	return fmt.Errorf("ревью %q не пройдено после %d раундов исправлений", dir, cfg.MaxRounds)
@@ -504,7 +492,7 @@ func (e *Executor) planReviewFixes(ctx context.Context, dir string, comments []f
 	b.WriteString(`
 Составь план исправлений этих замечаний.
 Требования:
-- Все шаги — только refactor (по одному исправлению на шаг).
+- Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend).
 - НЕ добавляй шаги acceptor и codereviewer — повторные ревью и приёмку запустит исполнитель.
 - scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
   `)
@@ -522,8 +510,8 @@ func (e *Executor) planReviewFixes(ctx context.Context, dir string, comments []f
 	}
 	fixPlan, err := ParsePlan(resp.Content)
 	if err != nil {
-		logging.Warnf("[Plan] не удалось разобрать план исправлений ревью: %v", err)
-		logging.Detailf("[Plan] Ответ планировщика:\n%s", resp.Content)
+		logging.Warnf("[планировщик] не удалось разобрать план исправлений: %v", err)
+		logging.Detailf("[планировщик] Ответ планировщика:\n%s", resp.Content)
 		return nil, err
 	}
 	return fixPlan.Steps, nil
@@ -570,24 +558,24 @@ func reviewFixStepID(e *Executor, round, idx int) string {
 // собственная сборка и проверки. Пустой scope — приёмка всего корня
 // (acceptor сам найдёт подпроекты и примет каждый по отдельности).
 func (e *Executor) runAcceptorAgent(ctx context.Context, step *Step, projectName string) error {
-	root := codegenerator.ProjectDir(projectName)
+	root := projects.ProjectDir(projectName)
 	dir := acceptanceDir(root, step.Scope)
 	rep := acceptor.Accept(dir, acceptor.LoadConfig())
 	e.acceptReports[step.ID] = rep
 
 	if rep.Verdict == acceptor.VerdictApprove {
-		logging.Infof("[Accept] шаг %s: приёмка %q пройдена (%s)", step.ID, dir, rep.Summary)
+		logging.Infof("[приёмка] шаг %s: приёмка %q пройдена (%s)", step.ID, dir, rep.Summary)
 	} else {
-		logging.Infof("[Accept] шаг %s: приёмка %q НЕ пройдена (%s)", step.ID, dir, rep.Summary)
+		logging.Infof("[приёмка] шаг %s: приёмка %q НЕ пройдена (%s)", step.ID, dir, rep.Summary)
 		for _, iss := range rep.Issues {
 			loc := iss.File
 			if iss.Line > 0 {
 				loc = fmt.Sprintf("%s:%d", loc, iss.Line)
 			}
 			if loc != "" {
-				logging.Detailf("[Accept]   - [%s] %s %s", iss.Severity, loc, iss.Text)
+				logging.Detailf("[приёмка]   - [%s] %s %s", iss.Severity, loc, iss.Text)
 			} else {
-				logging.Detailf("[Accept]   - [%s] %s", iss.Severity, iss.Text)
+				logging.Detailf("[приёмка]   - [%s] %s", iss.Severity, iss.Text)
 			}
 		}
 	}
@@ -643,8 +631,8 @@ func topLevelScopeDir(scope []string) string {
 // runAcceptanceLoop — цикл «приёмка → планировщик исправлений → приёмка».
 // Пока хотя бы один шаг acceptor плана не прошёл приёмку (и не исчерпан
 // бюджет раундов ACCEPT_MAX_ROUNDS): отчёт приёмки передаётся планировщику,
-// тот составляет шаги исправления (refactor), исполнитель их прогоняет и
-// повторяет приёмку.
+// тот составляет шаги исправления разработчиками backend/frontend,
+// исполнитель их прогоняет и повторяет приёмку.
 func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 	cfg := acceptor.LoadConfig()
 	if cfg.MaxRounds <= 0 {
@@ -674,7 +662,7 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			}
 		}
 		if len(failing) == 0 {
-			logging.Infof("[Accept] приёмка пройдена: все проекты соответствуют требованиям")
+			logging.Infof("[приёмка] приёмка пройдена: все проекты соответствуют требованиям")
 			return nil
 		}
 
@@ -682,9 +670,9 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			rep := e.acceptReports[s.ID]
 			// Check if report is nil before proceeding with fixes
 			if rep == nil {
-				logging.Warnf("[Accept] раунд %d/%d: отчёт приёмки отсутствует для шага %q", round, cfg.MaxRounds, s.Description)
+				logging.Warnf("[приёмка] раунд %d/%d: отчёт приёмки отсутствует для шага %q", round, cfg.MaxRounds, s.Description)
 				// Try to re-run acceptor for this step
-				logging.Infof("[Accept] раунд %d/%d: повторный запуск приёмки для шага %q", round, cfg.MaxRounds, s.Description)
+				logging.Infof("[приёмка] раунд %d/%d: повторный запуск приёмки для шага %q", round, cfg.MaxRounds, s.Description)
 				if err := e.runAcceptorAgent(ctx, s, e.plan.ProjectName); err != nil {
 					return fmt.Errorf("раунд приёмки %d: повторный запуск приёмки для шага %q: %w", round, s.Description, err)
 				}
@@ -695,14 +683,14 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 				}
 			}
 
-			logging.Infof("[Accept] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, cfg.MaxRounds, s.Description)
+			logging.Infof("[приёмка] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, cfg.MaxRounds, s.Description)
 
 			fixes, err := e.planFixSteps(ctx, rep)
 			if err != nil {
 				return fmt.Errorf("раунд приёмки %d: планирование исправлений: %w", round, err)
 			}
 			if len(fixes) == 0 {
-				logging.Warnf("[Accept] раунд %d: планировщик не вернул шагов исправлений", round)
+				logging.Warnf("[приёмка] раунд %d: планировщик не вернул шагов исправлений", round)
 				return fmt.Errorf("раунд приёмки %d: планировщик не составил план исправлений для %q", round, s.Description)
 			}
 
@@ -712,7 +700,7 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			for _, fs := range fixes {
 				if fs.Agent == AgentAcceptor {
 					// Модель проигнорировала запрет: приёмку запускает цикл ниже.
-					logging.Detailf("[Accept] раунд %d: шаг acceptor в плане исправлений пропущен", round)
+					logging.Detailf("[приёмка] раунд %d: шаг acceptor в плане исправлений пропущен", round)
 					continue
 				}
 				step := fs
@@ -728,7 +716,7 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 				// становится частью плана (findStep/чекпоинт/resume), а её
 				// scope — обновлённый (файлы из отчёта приёмки).
 				e.plan.Steps = append(e.plan.Steps, step)
-				logging.Infof("[Accept] раунд %d: шаг исправления %s: %s (агент: %s)", round, step.ID, step.Description, step.Agent)
+				logging.Infof("[%s] раунд %d: шаг исправления %s: %s", agentLabel(step.Agent, step.Role), round, step.ID, step.Description)
 				e.markRunning(ctx, step.ID)
 				if err := e.executeStep(ctx, &step); err != nil {
 					e.markFailed(ctx, step.ID)
@@ -742,15 +730,15 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			}
 
 			// Повторная приёмка после исправлений.
-			logging.Infof("[Accept] раунд %d: повторная приёмка после исправлений", round)
+			logging.Infof("[приёмка] раунд %d: повторная приёмка после исправлений", round)
 			if err := e.runAcceptorAgent(ctx, s, e.plan.ProjectName); err != nil {
 				return err
 			}
 		}
 	}
 
-	logging.Warnf("[Accept] исчерпан бюджет раундов приёмки (%d) — остались неисправленные замечания", cfg.MaxRounds)
-	return fmt.Errorf("приёмка не пройдена после %d раундов исправлений, см. лог [Accept]", cfg.MaxRounds)
+	logging.Warnf("[приёмка] исчерпан бюджет раундов приёмки (%d) — остались неисправленные замечания", cfg.MaxRounds)
+	return fmt.Errorf("приёмка не пройдена после %d раундов исправлений, см. лог приёмки", cfg.MaxRounds)
 }
 
 // planFixSteps отдаёт планировщику отчёт приёмки и получает шаги исправления.
@@ -773,7 +761,7 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 
 Составь план исправлений этих ошибок.
 Требования:
-- Все шаги — только refactor (для проверки исправлений можно добавить codereviewer).
+- Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend) (для проверки исправлений можно добавить codereviewer).
 - НЕ добавляй шаг acceptor — повторную приёмку запустит исполнитель.
 - scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
 %s
@@ -787,8 +775,8 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 	}
 	fixPlan, err := ParsePlan(resp.Content)
 	if err != nil {
-		logging.Warnf("[Accept] не удалось разобрать план исправлений: %v", err)
-		logging.Detailf("[Accept] Ответ планировщика:\n%s", resp.Content)
+		logging.Warnf("[планировщик] не удалось разобрать план исправлений: %v", err)
+		logging.Detailf("[планировщик] Ответ планировщика:\n%s", resp.Content)
 		return nil, err
 	}
 	return fixPlan.Steps, nil
@@ -847,118 +835,4 @@ func (e *Executor) findStep(id string) *Step {
 		}
 	}
 	return nil
-}
-
-// selfReviewer — интерфейс агента с self-review (без циклического импорта
-// из main): SelfReviewDir + NewReviewAgentFor + FixPromptFor.
-type selfReviewer interface {
-	SelfReviewDir() string
-	NewReviewAgentFor(dir string, focus string) (agents.Agent, forges.Forge, error)
-	FixPromptFor(original string, comments []forges.ReviewComment) string
-}
-
-// runRepairLoop — цикл исправления кода по замечаниям локального ревью.
-// Аналогичен doSelfReview в main.go, но живёт в пакете планировщика.
-// И ревью, и исправления ограничены областью работ scope: замечания
-// собираются только по файлам шага, а фиксы не трогают остальной код.
-func runRepairLoop(ctx context.Context, provider models.LLMProvider, sr selfReviewer, scope []string, originalPrompt string) {
-	dir := sr.SelfReviewDir()
-	if dir == "" {
-		return
-	}
-
-	maxRounds := codegenerator.LoadConfig().MaxRepairRounds
-	if maxRounds <= 0 {
-		return
-	}
-
-	reviewAgent, forge, err := sr.NewReviewAgentFor(dir, "")
-	if err != nil {
-		logging.Warnf("[Plan] self-review: не удалось создать агента ревью: %v", err)
-		return
-	}
-	applyForgeScope(forge, scope)
-
-	if _, err := provider.Generate(ctx, reviewAgent); err != nil {
-		logging.Warnf("[Plan] self-review: ошибка ревью: %v", err)
-		return
-	}
-
-	lf, ok := forge.(*forges.LocalForge)
-	if !ok || len(lf.Published) == 0 {
-		return
-	}
-
-	pending := lf.Published
-	// Детект отсутствия прогресса: если замечания повторного ревью приходятся
-	// на те же места, что и до исправления (та же сигнатура file:line), фикс
-	// не помог — прерываем цикл, а не крутимся до исчерпания бюджета.
-	prevSig := ""
-	stuckRounds := 0
-	for round := 1; round <= maxRounds && len(pending) > 0; round++ {
-		logging.Infof("[Plan] self-review: раунд %d/%d, замечаний: %d", round, maxRounds, len(pending))
-
-		fixPrompt := sr.FixPromptFor(originalPrompt, pending)
-		fixAgent, ferr := codegenerator.NewCodegeneratorInDir(fixPrompt, dir)
-		if ferr != nil {
-			logging.Warnf("[Plan] self-review: ошибка создания агента исправления: %v", ferr)
-			break
-		}
-		// Фикс тоже работает только в рамках области шага.
-		fixAgent.SetScope(scope)
-
-		if _, err := provider.Generate(ctx, fixAgent); err != nil {
-			logging.Warnf("[Plan] self-review: ошибка на этапе исправления: %v", err)
-			break
-		}
-		fixAgent.Finalize()
-
-		if round >= maxRounds {
-			break
-		}
-
-		// Перечитываем код после правок и смотрим, остались ли замечания.
-		newAgent, newForge, rerr := sr.NewReviewAgentFor(dir, "")
-		if rerr != nil {
-			logging.Warnf("[Plan] self-review: ошибка повторного ревью: %v", rerr)
-			break
-		}
-		applyForgeScope(newForge, scope)
-		if _, err := provider.Generate(ctx, newAgent); err != nil {
-			logging.Warnf("[Plan] self-review: ошибка повторного ревью: %v", err)
-			break
-		}
-		rl, ok2 := newForge.(*forges.LocalForge)
-		if !ok2 {
-			break
-		}
-
-		// Проверяем продвижение: не застряли ли мы на тех же местах.
-		sig := forges.CommentSignature(rl.Published)
-		if sig != "" && sig == prevSig {
-			stuckRounds++
-			if stuckRounds >= 2 {
-				logging.Warnf("[Plan] self-review: исправление не продвигается (%d раунда(ов) те же места), прерываю цикл", stuckRounds)
-				pending = rl.Published
-				break
-			}
-		} else {
-			stuckRounds = 0
-		}
-		prevSig = sig
-		pending = rl.Published
-	}
-
-	if len(pending) > 0 {
-		logging.Infof("[Plan] self-review: завершён, осталось замечаний: %d", len(pending))
-	} else {
-		logging.Infof("[Plan] self-review: завершён, замечаний больше нет")
-	}
-}
-
-// applyForgeScope ограничивает локальный фордж ревью областью работ.
-func applyForgeScope(f forges.Forge, scope []string) {
-	if lf, ok := f.(*forges.LocalForge); ok {
-		lf.SetScope(scope)
-	}
 }

@@ -14,11 +14,11 @@ import (
 // reviewLoopProvider — фейковый провайдер цикла «ревью → исправление → ревью».
 // codereviewer: первый вызов возвращает текстовое ревью с псевдо-вызовом
 // ReviewMr (публикует замечания через ParseTextReview), последующие — пустой
-// ответ (замечаний нет). Планировщик возвращает план исправлений (refactor).
+// ответ (замечаний нет). Планировщик возвращает план исправлений (backend).
 // Остальные агенты — пустой успех.
 type reviewLoopProvider struct {
 	reviews      int    // сколько раз вызывался codereviewer
-	fixStepAgent string // тип агента в плане исправлений (обычно "refactor")
+	fixStepAgent string // тип агента в плане исправлений (обычно "backend")
 	fixScope     []string
 }
 
@@ -34,7 +34,7 @@ func (s *reviewLoopProvider) Generate(ctx context.Context, agent agents.Agent) (
 	case *Planner:
 		fixAgent := s.fixStepAgent
 		if fixAgent == "" {
-			fixAgent = "refactor"
+			fixAgent = "backend"
 		}
 		scopeJSON := "[]"
 		if len(s.fixScope) > 0 {
@@ -70,14 +70,13 @@ func (s *reviewAlwaysCommentsProvider) ChatOnce(context.Context, agents.Agent, [
 	return &runner.ModelReply{}, nil
 }
 
-// codereviewer находит замечание → планировщик даёт шаг refactor → исправление
+// codereviewer находит замечание → планировщик даёт шаг backend → исправление
 // выполняется → повторное ревью замечаний не находит. Ревью пройдено.
 func TestReviewLoopFixesAndPasses(t *testing.T) {
 	ctx := context.Background()
 	makeAcceptProject(t, "ReviewLoopFix")
 
 	t.Setenv("REVIEW_FIX_ROUNDS", "3")
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	plan := &Plan{
 		ProjectName: "ReviewLoopFix",
@@ -101,7 +100,7 @@ func TestReviewLoopFixesAndPasses(t *testing.T) {
 	// Шаг исправления добавлен в план и пройден.
 	found := false
 	for _, s := range exec.plan.Steps {
-		if s.Agent == AgentRefactor && strings.HasPrefix(s.ID, "review-r") {
+		if s.Agent == AgentBackendDev && strings.HasPrefix(s.ID, "review-r") {
 			found = true
 			if !exec.completed[s.ID] {
 				t.Fatalf("шаг исправления %s должен быть завершён", s.ID)
@@ -109,18 +108,17 @@ func TestReviewLoopFixesAndPasses(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("не найден добавленный шаг исправления (refactor) в плане")
+		t.Fatal("не найден добавленный шаг исправления (backend) в плане")
 	}
 }
 
 // Планировщик исправлений вернул шаг acceptor — цикл ревью должен его
 // проигнорировать и повторить ревью, а не упасть на неподходящем типе агента.
-func TestReviewLoopSkipsNonRefactorFixes(t *testing.T) {
+func TestReviewLoopSkipsNonBackendFixes(t *testing.T) {
 	ctx := context.Background()
 	makeAcceptProject(t, "ReviewLoopFix")
 
 	t.Setenv("REVIEW_FIX_ROUNDS", "3")
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	plan := &Plan{
 		ProjectName: "ReviewLoopFix",
@@ -146,7 +144,6 @@ func TestReviewLoopExhaustsRounds(t *testing.T) {
 	makeAcceptProject(t, "ReviewLoopFix")
 
 	t.Setenv("REVIEW_FIX_ROUNDS", "1")
-	t.Setenv("CODEGEN_MAX_REPAIR_ROUNDS", "0")
 
 	plan := &Plan{
 		ProjectName: "ReviewLoopFix",

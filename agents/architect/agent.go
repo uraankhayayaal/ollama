@@ -14,8 +14,8 @@ package architect
 
 import (
 	"ai/agents"
-	"ai/agents/codegenerator"
 	"ai/board"
+	"ai/projects"
 	"ai/tools"
 	"context"
 	"encoding/json"
@@ -74,7 +74,7 @@ func NewArchitect(projectName, prompt string) (*Architect, error) {
 // NewArchitectWithStore создаёт архитектора с уже сконфигурированным
 // хранилищем доски (используется оркестратором Kanban).
 func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Architect {
-	dir := codegenerator.ProjectDir(projectName)
+	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	ops := &tools.FileOps{OutputDir: dir}
 	return &Architect{
