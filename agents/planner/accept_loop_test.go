@@ -55,8 +55,8 @@ func makeAcceptProject(t *testing.T, name string) string {
 	return dir
 }
 
-// План, состоящий только из шага acceptor, должен успешно пройти приёмку,
-// если сборка и запуск зелёные (вердикт approve, без цикла исправлений).
+// План, состоящий только из шага qa (сборка+приёмка), должен успешно пройти
+// приёмку, если сборка и запуск зелёные (вердикт approve, без цикла исправлений).
 func TestAcceptanceLoopApprove(t *testing.T) {
 	ctx := context.Background()
 	makeAcceptProject(t, "AcceptLoopHappy")
@@ -69,7 +69,7 @@ func TestAcceptanceLoopApprove(t *testing.T) {
 		ProjectName: "AcceptLoopHappy",
 		Summary:     "приёмка",
 		Steps: []Step{
-			{ID: "a1", Agent: AgentAcceptor, Prompt: "приёмка", Description: "приёмка"},
+			{ID: "a1", Agent: AgentQAEngineer, Prompt: "приёмка", Description: "приёмка"},
 		},
 	}
 
@@ -100,7 +100,7 @@ func TestAcceptanceLoopRejectsAfterRound(t *testing.T) {
 		ProjectName: "AcceptLoopFix",
 		Summary:     "приёмка с падающей сборкой",
 		Steps: []Step{
-			{ID: "a1", Agent: AgentAcceptor, Prompt: "приёмка", Description: "приёмка"},
+			{ID: "a1", Agent: AgentQAEngineer, Prompt: "приёмка", Description: "приёмка"},
 		},
 	}
 
@@ -122,6 +122,57 @@ func TestAcceptanceLoopRejectsAfterRound(t *testing.T) {
 	}
 }
 
+// Если планировщик исправлений вернул лид-шаг (backendlead/frontendlead)
+// вместо direct developer — исполнитель должен нормализовать его в developer,
+// иначе шаг исправления пытается декомпозировать и падает на не-JSON.
+func TestAcceptanceLoopNormalizesLeadFixStep(t *testing.T) {
+	ctx := context.Background()
+	makeAcceptProject(t, "AcceptLoopLeadFix")
+
+	t.Setenv("ACCEPT_BUILD_CMD", "false")
+	t.Setenv("ACCEPT_MAX_ROUNDS", "1")
+
+	plan := &Plan{
+		ProjectName: "AcceptLoopLeadFix",
+		Summary:     "фикс-шаг лида",
+		Steps: []Step{
+			{ID: "a1", Agent: AgentQAEngineer, Prompt: "приёмка", Description: "приёмка"},
+		},
+	}
+
+	leadFix := &fixPlanLeadProvider{}
+	exec := NewExecutor(leadFix, plan)
+	err := exec.Run(ctx)
+	if err == nil {
+		t.Fatal("ожидали ошибку: приёмка не пройдена")
+	}
+	if strings.Contains(err.Error(), "JSON-декомпозици") {
+		t.Fatalf("лид-шаг не был нормализован в developer и упал на декомпозиции: %v", err)
+	}
+	if !strings.Contains(err.Error(), "не пройдена") {
+		t.Fatalf("ошибка должна говорить о непройденной приёмке, got: %v", err)
+	}
+}
+
+// fixPlanLeadProvider — как fixPlanProvider, но плановый фикс-шаг имеет
+// лид-тип "backendlead", чтобы проверить нормализацию в цикле приёмки.
+type fixPlanLeadProvider struct {
+	fixPlanProvider
+}
+
+func (s *fixPlanLeadProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+	if _, ok := agent.(*Planner); ok {
+		return &runner.AgentResponse{Content: `{
+			"project_name": "AcceptLoopLeadFix",
+			"summary": "исправление по приёмке",
+			"steps": [
+			  {"id": "fix1", "agent": "backendlead", "prompt": "исправь проблему сборки", "project_name": "AcceptLoopLeadFix", "depends_on": [], "description": "исправление", "scope": []}
+			]
+		}`}, nil
+	}
+	return &runner.AgentResponse{}, nil
+}
+
 // Если планировщик исправлений не вернул план — цикл приёмки падает с
 // понятной ошибкой, а не молча продолжает.
 func TestAcceptanceLoopEmptyFixPlan(t *testing.T) {
@@ -135,7 +186,7 @@ func TestAcceptanceLoopEmptyFixPlan(t *testing.T) {
 		ProjectName: "AcceptLoopEmpty",
 		Summary:     "пустой план исправлений",
 		Steps: []Step{
-			{ID: "a1", Agent: AgentAcceptor, Prompt: "приёмка", Description: "приёмка"},
+			{ID: "a1", Agent: AgentQAEngineer, Prompt: "приёмка", Description: "приёмка"},
 		},
 	}
 

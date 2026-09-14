@@ -49,3 +49,33 @@ func mustMkAll(t *testing.T, root, rel string) {
 		t.Fatal(err)
 	}
 }
+
+// leadStepScope: специалистов шага-декомпозиции лида нельзя сужать до точечного
+// scope из плана (конкретных новых файлов) — лид раздаёт задачи на произвольные
+// файлы области, и специалист упрётся в «вне области работы», не записав своё.
+// Специалистам выдаётся корневая директория шага (frontend/, server/) и всегда
+// доступен README проекта (там лид документирует план работ).
+func TestLeadStepScopeUsesTopLevelDir(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		scope []string
+		want  []string
+	}{
+		// Точечный scope (новые файлы) → корневая директория области + README.
+		{[]string{"frontend/package.json"}, []string{"frontend/", "README.md"}},
+		{[]string{"server/internal/handler/rate.go", "server/internal/service/rate.go"}, []string{"server/", "README.md"}},
+		// Scope-директории — без изменения вышестоящей директории.
+		{[]string{"server/"}, []string{"server/", "README.md"}},
+		{[]string{"frontend/"}, []string{"frontend/", "README.md"}},
+		// Пустой scope — только README (план работ читается всем).
+		{nil, []string{"README.md"}},
+		{[]string{}, []string{"README.md"}},
+	}
+
+	for i, c := range cases {
+		got := leadStepScope(dir, &Step{Scope: c.scope})
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("case %d: leadStepScope(%v) = %v, want %v", i, c.scope, got, c.want)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package qalead
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,12 +33,14 @@ func TestLeadToolsAreSelected(t *testing.T) {
 	for _, td := range got {
 		names[td.Name] = true
 	}
-	for _, want := range []string{"List", "ReadFiles"} {
+	// Лид документирует план в readme (WriteFiles/AppendFile), но не пишет код
+	// (DeleteFiles/Run запрещены).
+	for _, want := range []string{"List", "ReadFiles", "WriteFiles", "AppendFile"} {
 		if !names[want] {
 			t.Errorf("агент не включает инструмент %q", want)
 		}
 	}
-	for _, disallowed := range []string{"WriteFiles", "DeleteFiles", "AppendFile", "Run"} {
+	for _, disallowed := range []string{"DeleteFiles", "Run"} {
 		if names[disallowed] {
 			t.Errorf("агент не должен включать инструмент %q (лид не пишет код и не запускает команды)", disallowed)
 		}
@@ -46,23 +49,37 @@ func TestLeadToolsAreSelected(t *testing.T) {
 
 func TestLeadCannotWriteThroughTools(t *testing.T) {
 	l := newTestLead(t)
-	if _, err := l.CallFunction("WriteFiles", map[string]any{
+	// Запись вне readme через инструменты запрещена (readme-only scope):
+	// WriteFiles возвращает статус "error" внутри JSON-результата.
+	out, err := l.CallFunction("WriteFiles", map[string]any{
 		"files": []map[string]string{{"filename": "x.json", "content": "{}"}},
-	}); err == nil {
-		t.Fatal("лид не должен уметь писать файлы через инструменты")
+	})
+	if err != nil {
+		t.Fatalf("неожиданная ошибка инструмента: %v", err)
+	}
+	if !strings.Contains(string(out), `"status":"error"`) {
+		t.Fatalf("запись не-readme файла должна вернуть статус error, got: %s", out)
 	}
 	if _, err := l.CallFunction("Run", map[string]any{"command": "pwd"}); err == nil {
 		t.Fatal("лид не должен уметь запускать консольные команды через инструменты")
 	}
 }
 
-func TestLeadConstrainScopePreventsWriteOutsideScope(t *testing.T) {
+// TestLeadWriteOnlyReadme: запись лида разрешена ТОЛЬКО в файлы readme* в корне
+// проекта (документирование плана работ); код лид писать не должен.
+func TestLeadWriteOnlyReadme(t *testing.T) {
 	l := newTestLead(t)
 	l.SetScope([]string{"tests/"})
-	if err := l.Write("tests/api_test.go", "package api\n"); err != nil {
-		t.Fatalf("запись внутри области работы должна быть разрешена: %v", err)
+	if err := l.Write("README.md", "# План работ\n"); err != nil {
+		t.Fatalf("запись в readme должна быть разрешена: %v", err)
+	}
+	if err := l.Write("readme.md", "# План работ\n"); err != nil {
+		t.Fatalf("запись в readme* без учёта регистра должна быть разрешена: %v", err)
+	}
+	if err := l.Write("tests/api_test.go", "package api\n"); err == nil {
+		t.Fatal("запись вне readme должна быть отклонена (лид ведёт только readme)")
 	}
 	if err := l.Write("main.go", "package main\n"); err == nil {
-		t.Fatal("запись вне области работы должна быть отклонена")
+		t.Fatal("запись вне readme должна быть отклонена")
 	}
 }

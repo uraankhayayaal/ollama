@@ -16,6 +16,7 @@ import (
 	"ai/models"
 	"ai/projects"
 	"ai/runner"
+	"ai/tools"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,6 +24,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/ollama/ollama/api"
 )
 
 // Executor выполняет план поэтапно, создавая нужных агентов.
@@ -228,9 +231,7 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 		return e.runLeadStep(ctx, step, projectName)
 
 	case AgentQAEngineer:
-		return e.runQAEngineer(ctx, step, projectName)
-
-	case AgentAcceptor:
+		// Объединённый агент QA: сборка → автотесты → приёмка (детерминированная).
 		return e.runAcceptorAgent(ctx, step, projectName)
 
 	default:
@@ -342,14 +343,12 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		return fmt.Errorf("неизвестный тип агента-лида: %s", step.Agent)
 	}
 
-	// Лиды, как и остальные агенты, ограничены областью работы шага.
-	scope := effectiveCreationScope(projects.ProjectDir(projectName), step.Scope)
-	if len(scope) != len(step.Scope) {
-		logging.Detailf("[%s] шаг %s: scope шага расширен для создания: %v -> %v", agentLabel(step.Agent, step.Role), step.ID, step.Scope, scope)
-	}
-	if scoper, ok := lead.(interface{ SetScope([]string) }); ok {
-		scoper.SetScope(scope)
-	}
+	// Лид scope НЕ ограничиваем: он только читает проект (List/ReadFiles) и
+	// ведёт декомпозицию, пишущих инструментов у него нет. Сужать чтение до
+	// step.Scope вредно — лиду нужно видеть проект целиком (в т.ч. корневой
+	// README, соседние подпроекты монорепозитория), а «файл вне области
+	// работы» на чтении лишь зацикливало шаг на ошибках. Специалистам, которые
+	// выполняют задачи декомпозиции, scope ниже всё равно устанавливается.
 	if rr, ok := lead.(interface{ SetRole(string) }); ok && step.Role != "" {
 		rr.SetRole(string(step.Role))
 	}
@@ -379,16 +378,41 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	}
 
 	tasks, err := board.UnmarshalTasks(resp.Content)
+	if (err != nil || len(tasks) == 0) && !resp.Truncated {
+		// Модель вместо JSON-декомпозиции вернула текст (пути, рассуждения): 
+		// не фаталим сразу — один раз спрашиваем ещё раз с чёткой инструкцией.
+		// Повторный ответ обрабатываем как основной (петля «переспросить»
+		// ограничена ровно одной попыткой, чтобы не растить токен-бюджет).
+		logging.Warnf("[%s] шаг %s: лид не вернул JSON-декомпозицию (%v), переспрашиваю один раз",
+			agentLabel(step.Agent, step.Role), step.ID, err)
+		if retryResp, rerr := e.provider.Generate(ctx, leadWithHint(lead, resp.Content)); rerr == nil {
+			resp = retryResp
+			tasks, err = board.UnmarshalTasks(resp.Content)
+		}
+	}
 	if err != nil || len(tasks) == 0 {
 		return fmt.Errorf("лид не вернул JSON-декомпозицию задач (задач: %d, ошибка: %v)", len(tasks), err)
 	}
 	printDecomposedTasks(tasks)
 	sortTaskSpecs(tasks)
 
+	// Раздел «План работ» в README: лид уже задокументировал свой план
+	// (промптом), а оркестратор детерминированно ведёт статусы каждой задачи,
+	// чтобы следующий разработчик знал этап и объём реализованных работ.
+	doneTasks := map[string]bool{}
+	if err := e.syncPlanReadme(projectName, step.ID, tasks, doneTasks); err != nil {
+		logging.Warnf("[%s] шаг %s: не удалось записать план работ в README: %v", agentLabel(step.Agent, step.Role), step.ID, err)
+	}
+
 	for _, ts := range tasks {
 		spec := specialistForRole(projectName, ts.AssignedRole, leadTaskPrompt(projectName, ts))
+		// Специалисты, в отличие от лида, пишут код: ограничиваем их корневой
+		// директорией шага (leadStepScope), а не точечным scope из плана —
+		// планировщик указывает конкретные новые файлы (например,
+		// frontend/package.json), а лид декомпозирует шаг на задачи, которые
+		// трогают произвольные файлы всей области (компоненты, стили, сервисы).
 		if scoper, ok := spec.(interface{ SetScope([]string) }); ok {
-			scoper.SetScope(scope)
+			scoper.SetScope(leadStepScope(projects.ProjectDir(projectName), step))
 		}
 		logging.Infof("[задача %s] специалист %s выполняет: %s", ts.TaskID, truncateText(ts.AssignedRole, 30), truncateText(ts.Title, 60))
 		resp, err := e.provider.Generate(ctx, spec)
@@ -400,9 +424,75 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 				return err
 			}
 		}
+		doneTasks[ts.TaskID] = true
+		if err := e.syncPlanReadme(projectName, step.ID, tasks, doneTasks); err != nil {
+			logging.Warnf("[%s] шаг %s: не удалось обновить статус задачи %s в README: %v", agentLabel(step.Agent, step.Role), step.ID, ts.TaskID, err)
+		}
 		logging.Infof("[задача %s] выполнена специалистом %s", ts.TaskID, truncateText(ts.AssignedRole, 30))
 	}
 	return nil
+}
+
+// syncPlanReadme детерминированно ведёт раздел «План работ» в README проекта:
+// список задач декомпозиции лида с их статусами и прогрессом. Раздел
+// ограничен HTML-комментариями-маркерами и перезаписывается целиком, поэтому
+// оркестратор не конфликтует с текстом, который лиды/разработчики добавляют
+// в README. doneTasks — множество task_id, уже выполненных специалистами.
+func (e *Executor) syncPlanReadme(projectName, stepID string, tasks []board.TaskSpec, doneTasks map[string]bool) error {
+	projectDir := projects.ProjectDir(projectName)
+	readme := filepath.Join(projectDir, readmePlanName(projectDir))
+
+	openMarker := "<!-- plan-status:" + stepID + " -->"
+	closeMarker := "<!-- /plan-status:" + stepID + " -->"
+
+	var body strings.Builder
+	doneCount, total := 0, len(tasks)
+	for _, t := range tasks {
+		if doneTasks[t.TaskID] {
+			doneCount++
+		}
+	}
+	fmt.Fprintf(&body, "## План работ (шаг %s)\n\n", stepID)
+	fmt.Fprintf(&body, "Объём реализованных работ плана: %d из %d задач.\n\n", doneCount, total)
+	body.WriteString("| Задача | Название | Роль | Статус |\n")
+	body.WriteString("|---|---|---|---|\n")
+	for _, t := range tasks {
+		status := "запланировано"
+		if doneTasks[t.TaskID] {
+			status = "выполнено"
+		}
+		fmt.Fprintf(&body, "| %s | %s | %s | %s |\n", escapeCell(t.TaskID), escapeCell(truncateText(t.Title, 50)), escapeCell(truncateText(t.AssignedRole, 30)), status)
+	}
+	fmt.Fprintf(&body, "\nРеализовано: %d из %d задач (%.0f%%).\n", doneCount, total, float64(doneCount)*100/float64(max(total, 1)))
+
+	block := openMarker + "\n" + body.String() + closeMarker + "\n"
+
+	existing, err := os.ReadFile(readme)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	content := string(existing)
+	if start := strings.Index(content, openMarker); start >= 0 {
+		if end := strings.Index(content[start:], closeMarker); end >= 0 {
+			replaced := content[:start] + block + content[start+end+len(closeMarker):]
+			return os.WriteFile(readme, []byte(replaced), 0644)
+		}
+	}
+	// Секции ещё нет — добавляем в конец (или создаём README).
+	updated := content
+	if updated != "" && !strings.HasSuffix(updated, "\n") {
+		updated += "\n"
+	}
+	updated += "\n" + block
+	return os.WriteFile(readme, []byte(updated), 0644)
+}
+
+// escapeCell экранирует содержимое ячейки markdown-таблицы (вертикальные
+// пайпы и переводы строк, ломающие разметку).
+func escapeCell(s string) string {
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
 }
 
 // truncatedStepError обрабатывает исчерпание лимита раундов в шаге-декомпозиции
@@ -583,6 +673,50 @@ func topLevelScopeDir(scope []string) string {
 	return ""
 }
 
+// leadStepScope возвращает scope специалистов шага-декомпозиции лида.
+// Планировщик даёт шагу точечный scope (конкретные новые файлы, например
+// frontend/package.json), но лид декомпозирует шаг на задачи, затрагивающие
+// произвольные файлы всей области (компоненты, стили, сервисы). Сужать
+// специалистов до одного файла из плана нельзя — они не смогут писать свои
+// файлы («вне области работы»). Поэтому специалистам выставляется корневая
+// директория шага (первый сегмент: frontend/, server/), а не перечень файлов.
+func leadStepScope(projectDir string, step *Step) []string {
+	var scope []string
+	if len(step.Scope) > 0 {
+		if top := topLevelScopeDir(step.Scope); top != "" {
+			scope = []string{top + "/"}
+		} else {
+			scope = effectiveCreationScope(projectDir, step.Scope)
+		}
+	}
+	// README проекта всегда доступен специалистам: лид документирует в нём
+	// план работ, и каждый следующий разработчик должен прочитать раздел
+	// «План работ», чтобы понять, что уже реализовано.
+	if readme := readmePlanName(projectDir); readme != "" {
+		scope = append(scope, readme)
+	}
+	return scope
+}
+
+// readmePlanName возвращает имя файла README в корне проекта (реально
+// существующий, без учёта регистра), либо "README.md", если его ещё нет.
+// Используется лидами и оркестратором для ведения раздела «План работ».
+func readmePlanName(projectDir string) string {
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return "README.md"
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(e.Name()), "readme") {
+			return e.Name()
+		}
+	}
+	return "README.md"
+}
+
 // effectiveCreationScope расширяет scope шага для СОЗДАНИЯ файлов. Если запись
 // scope указывает на конкретный файл, которого ещё нет на диске, шаг создаёт
 // его с нуля, и модель может выбрать фактическое имя (например, .js вместо
@@ -635,7 +769,7 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 	// в волны: план остаётся неизменным.
 	var acceptSteps []*Step
 	for i := range e.plan.Steps {
-		if e.plan.Steps[i].Agent == AgentAcceptor {
+		if e.plan.Steps[i].Agent == AgentQAEngineer {
 			acceptSteps = append(acceptSteps, &e.plan.Steps[i])
 		}
 	}
@@ -690,10 +824,22 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			// неприменимые/лишние типы агентов.
 			executed := 0
 			for _, fs := range fixes {
-				if fs.Agent == AgentAcceptor {
+				if fs.Agent == AgentQAEngineer {
 					// Модель проигнорировала запрет: приёмку запускает цикл ниже.
-					logging.Detailf("[приёмка] раунд %d: шаг acceptor в плане исправлений пропущен", round)
+					logging.Detailf("[приёмка] раунд %d: шаг qa в плане исправлений пропущен", round)
 					continue
+				}
+				// Фикс-шаг не должен быть лид-типа: лид декомпозирует задачи, а в
+				// цикле исправлений нужен один точечный правщик кода. Модель часто
+				// возвращает backendlead/frontendlead — нормализуем в developer
+				// соответствующей специализации по роли/подпроекту.
+				switch fs.Agent {
+				case AgentFrontendLead:
+					logging.Detailf("[приёмка] раунд %d: лид-шаг %s приведён к frontend-developer", round, fs.Agent)
+					fs.Agent = AgentFrontendDev
+				case AgentBackendLead:
+					logging.Detailf("[приёмка] раунд %d: лид-шаг %s приведён к backend-developer", round, fs.Agent)
+					fs.Agent = AgentBackendDev
 				}
 				step := fs
 				step.ID = fixStepID(e, round, executed)
@@ -761,8 +907,8 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 
 Составь план исправлений этих ошибок.
 Требования:
-- Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend) (для проверки исправлений можно добавить шаг qa с автотестами по контракту).
-- НЕ добавляй шаг acceptor — повторную приёмку запустит исполнитель.
+- Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend).
+- НЕ добавляй шаг qa — повторную сборку, тестирование и приёмку запустит исполнитель.
 - scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
 %s
   (а не весь проект и не узкую догадку вроде только [go.mod], если правка нужна в исходниках).
@@ -780,6 +926,38 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 		return nil, err
 	}
 	return fixPlan.Steps, nil
+}
+
+// leadWithHint оборачивает агента-лида для повторного запроса декомпозиции:
+// одна попытка на тот же промпт, но с подсказкой, что предыдущий ответ не был
+// JSON. Новый контекст (чистый), поэтому подсказка кладётся в системные
+// сообщения, чтобы модель сразу её видела.
+func leadWithHint(lead agents.Agent, prevContent string) agents.Agent {
+	hint := "Ваш предыдущий ответ не был распознан как JSON-декомпозиция задач.\n" +
+		"Верните ТОЛЬКО допустимый JSON — массив объектов вида:\n" +
+		`[{"title":"...","description":"...","role":"backend|frontend","files":["..."]}]` + "\n" +
+		"без пояснений, markdown-обёрток и путей. Роль — одна из: backend, frontend, devops." +
+		"\n\nВаш предыдущий ответ, чтобы не повторять его ошибки:\n" + prevContent
+	return &leadHintAgent{inner: lead, hint: hint}
+}
+
+// leadHintAgent — декоратор agents.Agent, добавляющий подсказку к системным
+// сообщениям лида (остальное делегирует внутреннему агенту).
+type leadHintAgent struct {
+	inner agents.Agent
+	hint  string
+}
+
+func (h *leadHintAgent) GetSystemMessages(text []agents.Message) []agents.Message {
+	base := h.inner.GetSystemMessages(text)
+	return append(base, agents.Message{Type: agents.MessageTypeSystem, Message: h.hint})
+}
+
+func (h *leadHintAgent) GetUserMessages() []agents.Message       { return h.inner.GetUserMessages() }
+func (h *leadHintAgent) GetTools() []tools.ToolDefinition        { return h.inner.GetTools() }
+func (h *leadHintAgent) GetToolsForOllama() []api.Tool           { return h.inner.GetToolsForOllama() }
+func (h *leadHintAgent) CallFunction(name string, args map[string]any) ([]byte, error) {
+	return h.inner.CallFunction(name, args)
 }
 
 // fixStepID генерирует уникальный ID шага исправления приёмки, чтобы не

@@ -4,6 +4,7 @@ import (
 	"ai/forges"
 	"ai/logging"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // FileOps — разделяемое состояние файловых инструментов генератора кода
@@ -32,6 +35,11 @@ type FileOps struct {
 	Scope []string
 	// scopeMatch — скомпилированный matcher областей; nil — без ограничений.
 	scopeMatch *forges.ScopeMatcher
+	// WriteReadmeOnly — true: записывающие инструменты (Write/Append/Delete)
+	// разрешены ТОЛЬКО для файлов readme* в корне OutputDir. Чтение (ReadFiles,
+	// List) не ограничивается. Ставится лидам, чтобы они могли вести план
+	// проекта в readme, но не могли писать/удалять код.
+	WriteReadmeOnly bool
 	// written — счётчик записанных файлов (разделяется инструментами).
 	written int
 }
@@ -60,6 +68,23 @@ func (ops *FileOps) dirHasScope(rel string) bool {
 		return true
 	}
 	return ops.scopeMatch.HasInside(rel)
+}
+
+// writeAllowed проверяет, разрешена ли ЗАПИСЬ файла (относительный
+// slash-путь). В режиме «только readme» (WriteReadmeOnly) разрешены ТОЛЬКО
+// файлы readme* в корне OutputDir независимо от Scope (чтение при этом
+// продолжает ограничиваться Scope). Иначе применяется обычная область работы.
+func (ops *FileOps) writeAllowed(rel string) bool {
+	if ops.WriteReadmeOnly {
+		// Разрешён только файл readme* в корне проекта (без вложенных
+		// каталогов), независимо от регистра (README.md, readme.md, ...).
+		slug := filepath.ToSlash(filepath.Clean(rel))
+		if slug == "." || slug == "" || strings.Contains(slug, "/") {
+			return false
+		}
+		return strings.HasPrefix(strings.ToLower(slug), "readme")
+	}
+	return ops.allowed(rel)
 }
 
 // relPath возвращает относительный slash-путь файла внутри OutputDir.
@@ -92,7 +117,7 @@ func (ops *FileOps) Write(name, content string) error {
 	if err != nil {
 		return err
 	}
-	if !ops.allowed(ops.relPath(full)) {
+	if !ops.writeAllowed(ops.relPath(full)) {
 		return fmt.Errorf("файл %q вне области работы (scope: %v)", name, ops.Scope)
 	}
 
@@ -125,7 +150,7 @@ func (ops *FileOps) AppendTo(name, content string) error {
 	if err != nil {
 		return err
 	}
-	if !ops.allowed(ops.relPath(full)) {
+	if !ops.writeAllowed(ops.relPath(full)) {
 		return fmt.Errorf("файл %q вне области работы (scope: %v)", name, ops.Scope)
 	}
 	f, err := os.OpenFile(full, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
@@ -162,7 +187,7 @@ func (ops *FileOps) Remove(name string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !ops.allowed(ops.relPath(full)) {
+	if !ops.writeAllowed(ops.relPath(full)) {
 		return map[string]string{"path": name, "status": "error", "message": "файл вне области работы (scope)"}, nil
 	}
 	if _, err := os.Stat(full); os.IsNotExist(err) {
@@ -240,6 +265,15 @@ func parseFileMap(raw any) []FileItem {
 	}
 }
 
+// repairEscapedQuotes убирает лишнее экранирование кавычек из содержимого
+// файла: qwen при сериализации массива в JSON-строку пишет \" вместо ".
+// В корректно сформированном коде последовательность \" в исходниках
+// встречается редко (только внутри строковых литералов/регулярок), поэтому
+// замена безопасна для сгенерированного кода.
+func repairEscapedQuotes(s string) string {
+	return strings.ReplaceAll(s, `\"`, `"`)
+}
+
 func mapToFileItems(m map[string]string) []FileItem {
 	items := make([]FileItem, 0, len(m))
 	for path, content := range m {
@@ -295,6 +329,12 @@ func parseDecodedFiles(raw string) []FileItem {
 			found = true
 		}
 		if found {
+			// Модели (qwen и др.) при сериализации массива файлов в JSON-строку
+			// иногда двойжды экранируют содержимое: после разбора аргументов в
+			// коде остаются лишние символы \" вместо ". Убираем их только у
+			// содержимого (не у имени файла), чтобы Go/TS-код не содержал
+			// битых экранированных кавычек.
+			it.Content = repairEscapedQuotes(it.Content)
 			items = append(items, it)
 		}
 	}
@@ -693,6 +733,71 @@ type RunParams struct {
 }
 
 // Run запускает команду в OutputDir (например, go build) и возвращает вывод ИИ-агенту.
+// runTimeout возвращает таймаут исполнения команды инструмента Run.
+// Значение берётся из CODEGEN_RUN_TIMEOUT (например "90s"), по умолчанию 60s.
+// Таймаут важен: агент может запустить долгоживущую команду (npm run dev,
+// сервер, интерактивная утилита) — без ограничения шаг завис бы навсегда,
+// а у модели не было бы информации, что команда не завершается.
+func runTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("CODEGEN_RUN_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
+}
+
+// runCommand запускает команду и возвращает её результат выполнения.
+// Команда ограничена по времени runTimeout: если она не завершается (например,
+// агент запустил дев-сервер), процесс и его группа убиваются, а в результате
+// появляется понятное сообщение о таймауте — шаг продолжается, а не виснет.
+func runCommand(command, workdir string) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = workdir
+	// День: команда может порождать детей (серверы, npm). Отдельная группа
+	// процессов позволяет при таймауте убить их всех, а не только шелл.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	pgid := cmd.Process.Pid
+	runErr := cmd.Wait()
+
+	// При таймауте (или ошибке) добиваем группу процессов: CommandContext
+	// убивает только прямого потомка, а его дети (сервер) могли выжить.
+	if ctx.Err() == context.DeadlineExceeded || runErr != nil {
+		if pgid > 0 {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+	}
+
+	result := map[string]string{
+		"command":    command,
+		"workdir":    workdir,
+		"exit_error": "",
+		"stdout":     stdout.String(),
+		"stderr":     stderr.String(),
+	}
+	if runErr != nil {
+		result["exit_error"] = runErr.Error()
+		result["status"] = "error"
+		if ctx.Err() == context.DeadlineExceeded {
+			result["message"] = fmt.Sprintf("команда не завершилась за %s и была остановлена (timeout)", runTimeout())
+		}
+	} else {
+		result["status"] = "success"
+	}
+	return result, nil
+}
+
 func (ops *FileOps) Run(args map[string]any) ([]byte, error) {
 	var params RunParams
 
@@ -709,27 +814,9 @@ func (ops *FileOps) Run(args map[string]any) ([]byte, error) {
 		return resultJSON, nil
 	}
 
-	workdir := ops.OutputDir
-	cmd := exec.Command("sh", "-c", params.Command)
-	cmd.Dir = workdir
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-
-	result := map[string]string{
-		"command":    params.Command,
-		"workdir":    workdir,
-		"exit_error": "",
-		"stdout":     stdout.String(),
-		"stderr":     stderr.String(),
-	}
-	if runErr != nil {
-		result["exit_error"] = runErr.Error()
-		result["status"] = "error"
-	} else {
-		result["status"] = "success"
+	result, err := runCommand(params.Command, ops.OutputDir)
+	if err != nil {
+		return nil, err
 	}
 
 	resultJSON, _ := json.Marshal(result)

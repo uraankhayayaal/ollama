@@ -5,10 +5,12 @@ import (
 	"ai/tools"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // AgentResponse содержит ответ модели и все выполненные вызовы функций.
@@ -130,6 +132,30 @@ func retryMessage(toolName string) string {
 	return fmt.Sprintf("Инструмент %q вернул ошибки (вероятно, некорректные аргументы или действие вне допустимого). Проверь и повтори вызов %q ДО успешного результата. Не отвечай текстом.", toolName, toolName)
 }
 
+// maxRepeatedToolCalls — порог повторения одного и того же вызова инструмента
+// (имя + аргументы), после которого раннер подсказывает модели остановить
+// цикл. Защищает от бесконечного «исследования»: модель, не получив ничего
+// нового (например, лид в пустом проекте), начинает в цикле звать одни и те
+// же инструменты, сжигая раунды до лимита (REVIEW_MAX_ROUNDS) и роняя шаг
+// «исчерпан лимит раундов» вместо завершения декомпозицией.
+const maxRepeatedToolCalls = 4
+
+// callSignature строит нормализованный ключ вызова инструмента (имя +
+// нормализованные аргументы) для детекции повторяющихся циклов. encoding/json
+// сортирует ключи map, поэтому одинаковые по смыслу аргументы дают тот же ключ.
+func callSignature(name string, args map[string]any) string {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return name
+	}
+	return name + " " + string(b)
+}
+
+// loopMessage — подсказка модели при детекции повторяющихся вызовов.
+func loopMessage(toolName string, n int) string {
+	return fmt.Sprintf("Ты уже %d раз вызвал инструмент %q с одинаковыми аргументами — это повторяющийся цикл. Прекрати его: опирайся на уже полученные результаты и заверши работу итоговым ответом по требуемой схеме (не вызывая повторно те же инструменты).", n, toolName)
+}
+
 // toolResultFailed признаёт выполнение инструмента неудачным, если результат
 // помечен ошибкой ("status":"error"). Пустой результат ("status":"empty") —
 // неудача ТОЛЬКО для пишущих инструментов (WriteFiles и др.), где это
@@ -137,8 +163,19 @@ func retryMessage(toolName string) string {
 // ReadFiles) пустой каталог/файл — нормальный успешный результат чтения,
 // иначе раннер будет вечно подсказывать «вызови List ДО успешного результата»
 // при работе на пустом проекте.
+//
+// Аналогично, пер-файловые ошибки ReadFiles/List ("файл вне области работы
+// (scope)", "файл не существует") — не неудача инструмента, а информативный
+// результат: scope шага фиксирован, «успешного» повторного чтения не
+// существует, а принудительные повторы лишь сжигают раунды и роняют шаг по
+// лимиту. Для пишущих инструментов такие ошибки по-прежнему означают
+// «ничего не сделано» и требуют повтора.
 func toolResultFailed(toolName string, result []byte) bool {
 	if bytes.Contains(result, []byte(`"status":"error"`)) {
+		switch toolName {
+		case "List", "ReadFiles":
+			return false
+		}
 		return true
 	}
 	if bytes.Contains(result, []byte(`"status":"empty"`)) {
@@ -230,6 +267,13 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	}
 	requiredAttempts := 0
 
+	// Детекция повторяющихся вызовов (защита от зацикливания модели):
+	// callCounts — сколько раз встретился конкретный вызов (имя+аргументы),
+	// loopNudged — для каких вызовов уже была отправлена подсказка (не более
+	// одной на сигнатуру, чтобы не спамить модель).
+	callCounts := make(map[string]int)
+	loopNudged := make(map[string]bool)
+
 	// pendingRequired возвращает имя первого ещё не выполненного обязательного
 	// инструмента — им runner подсказывает модели в подсказках.
 	pendingRequired := func() string {
@@ -307,6 +351,8 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				return nil, fmt.Errorf("разбор аргументов инструмента %s: %w", tc.Name, err)
 			}
 
+			callCounts[callSignature(tc.Name, args)]++
+
 			result, err := agent.CallFunction(tc.Name, args)
 			if err != nil {
 				Debugf("RUNNER: инструмент %q вернул ошибку: %v", tc.Name, err)
@@ -331,6 +377,23 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				ToolCallID: tc.ID,
 				Content:    string(result),
 			})
+		}
+
+		// Защита от зацикливания: если какой-то вызов был повторён
+		// maxRepeatedToolCalls раз, подсказываем модели остановиться и
+		// завершить работу итоговым ответом (сжигать раунды до лимита
+		// впустую не нужно). Подсказка отправляется один раз на сигнатуру.
+		for sig, n := range callCounts {
+			if n >= maxRepeatedToolCalls && !loopNudged[sig] {
+				loopNudged[sig] = true
+				toolName := sig
+				if i := strings.Index(toolName, " "); i >= 0 {
+					toolName = toolName[:i]
+				}
+				Debugf("RUNNER: раунд %d: детектировал повторяющийся вызов %q (%d раз), подсказываю завершить цикл", round+1, toolName, n)
+				messages = append(messages, Message{Role: "user", Content: loopMessage(toolName, n)})
+				break
+			}
 		}
 	}
 

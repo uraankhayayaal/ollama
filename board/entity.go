@@ -128,6 +128,7 @@ type TaskSpec struct {
 	SequenceOrder  FlexInt  `json:"sequence_order"`
 	CanRunParallel FlexBool `json:"can_run_parallel"`
 	Dependencies   []string `json:"dependencies"`
+	Contracts      []string `json:"contracts,omitempty"`
 }
 
 // Backlog — аргументы функции submit_architecture_backlog Системного
@@ -358,14 +359,28 @@ func UnmarshalBacklog(data string) (*Backlog, error) {
 // (frontend_lead_summary, backend_lead_summary и т.п.), поэтому разбираем их
 // толерантно, извлекая только массив tasks.
 func UnmarshalTasks(data string) ([]TaskSpec, error) {
-	data = extractJSON(data)
-	var root struct {
+	root := struct {
 		Tasks []TaskSpec `json:"tasks"`
+	}{}
+	// Объект-обёртка проходит только если в нём есть реальные задачи: объекты
+	// без ключа "tasks" (например, элемент декомпозиции без обёртки) парсятся
+	// lenient'но в пустой список, и такой ответ не должен считаться успехом.
+	if err := json.Unmarshal([]byte(sanitizeJSON(extractJSON(data))), &root); err == nil && len(root.Tasks) > 0 {
+		return root.Tasks, nil
 	}
-	if err := json.Unmarshal([]byte(sanitizeJSON(data)), &root); err != nil {
-		return nil, err
+	// Некоторые модели возвращают голый массив задач вместо объекта
+	// {"tasks":[...]} — пробуем извлечь JSON-массив от первой "[" до
+	// последней "]" и разобрать задачи напрямую.
+	if arr := extractJSONArray(data); arr != nil {
+		var tasks []TaskSpec
+		if err := json.Unmarshal(arr, &tasks); err == nil && len(tasks) > 0 {
+			return tasks, nil
+		}
 	}
-	return root.Tasks, nil
+	// Оба варианта не прошли — возвращаем ошибку разбора объекта
+	// (для диагностики модели), а не отвлечённую ошибку второго шага.
+	rootErr := json.Unmarshal([]byte(sanitizeJSON(extractJSON(data))), &root)
+	return nil, rootErr
 }
 
 // extractJSON вырезает из текста модели первый JSON-объект (открывающаяся
@@ -392,6 +407,33 @@ func extractJSON(s string) string {
 		return s
 	}
 	return s[start : end+1]
+}
+
+// extractJSONArray вырезает из текста модели первый JSON-массив (от первой
+// '[' до последней ']'), отбрасывая markdown-обёртки и лишний текст. Возвращает
+// nil, если в тексте нет символа '['.
+func extractJSONArray(s string) []byte {
+	start := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '[' {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	end := -1
+	for i := len(s) - 1; i >= start; i-- {
+		if s[i] == ']' {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		return nil
+	}
+	return []byte(sanitizeJSON(s[start : end+1]))
 }
 
 // sanitizeJSON чинит типовые ошибки модели: реальные управляющие символы внутри

@@ -160,8 +160,9 @@ func main() {
 			logging.Fatalf("Использование: go run . qa <имя_проекта> <промпт>\n" +
 				"Пример: go run . qa billingService \"Проверь соответствие Backend и Frontend API-контрактам и напиши автотесты\"")
 		}
-		projectName := agentArgs[0]
+projectName := agentArgs[0]
 		prompt := strings.Join(agentArgs[1:], " ")
+		// Объединённый агент QA-приёмки: сборка → автотесты → приёмка.
 		agent = qaengineer.NewQAEngineer(projectName, prompt)
 	case "qalead":
 		if len(agentArgs) < 2 {
@@ -219,12 +220,18 @@ func main() {
 		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devopslead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
-	// Режим планировщика обрабатывается отдельно и до общего прогона:
+// Режим планировщика обрабатывается отдельно и до общего прогона:
 	// при resume план восстанавливается из чекпоинта без повторного вызова
 	// планировщика (экономим токены), иначе планировщик строит план,
 	// а затем исполнитель выполняет шаги по волнам параллельности.
 	if planMode {
-		runPlanMode(ctx, provider, planProject, planPrompt)
+		// План выполняется долго — каждый шаг это отдельный агентский цикл,
+		// и всё это вписывается в REVIEW_TIMEOUT нельзя: после истечения общего
+		// дедлайна все Chat-вызовы падают с "context deadline exceeded" (на
+		// практике — примерно на 15-й минуте). Зависания и так защищены
+		// чекпоинтами на каждый шаг и таймаутами отдельных запросов провайдера,
+		// поэтому лимит на весь план не накладываем (context без дедлайна).
+		runPlanMode(context.Background(), provider, planProject, planPrompt)
 		os.Exit(0)
 	}
 

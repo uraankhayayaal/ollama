@@ -46,6 +46,29 @@ func TestUnmarshalTasksTolerantToLeadRootKey(t *testing.T) {
 	}
 }
 
+// TestUnmarshalTasksBareArray — модель вместо {"tasks":[...]} вернула голый
+// массив задач (возможно, с маркдаун-обёрткой): разбор должен пройти.
+func TestUnmarshalTasksBareArray(t *testing.T) {
+	raw := "```json\n[{\"task_id\": \"RL-01\", \"title\": \"Правка\", \"description\": \"Исправить\", \"assigned_role\": \"Backend Dev\", \"sequence_order\": 1, \"can_run_parallel\": true, \"dependencies\": []}]\n```"
+	tasks, err := UnmarshalTasks(raw)
+	if err != nil {
+		t.Fatalf("UnmarshalTasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].TaskID != "RL-01" {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+}
+
+// TestUnmarshalTasksPathPrefixProse — лид вместо JSON вернул текст с путями
+// (например, /private/...): разбор не должен ни упасть, ни вернуть часть
+// выдуманных задач — возвращается ошибка (исполнитель затем переспрашивает).
+func TestUnmarshalTasksPathPrefixProse(t *testing.T) {
+	raw := "/private/var/www/ollama/temp/calc2/frontend/src/App.tsx\nнужно исправить сборку, см. лог приёмки"
+	if _, err := UnmarshalTasks(raw); err == nil {
+		t.Fatal("ожидалась ошибка разбора для прозы с путями")
+	}
+}
+
 func TestValidateTransition(t *testing.T) {
 	valid := []struct{ from, to Status }{
 		{StatusNew, StatusAnalysis},

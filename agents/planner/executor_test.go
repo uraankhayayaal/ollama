@@ -260,7 +260,7 @@ func TestAcceptanceDir(t *testing.T) {
 	}
 }
 
-// Шаг acceptor со scope на подкаталог принимает именно его: отчёт приёмки
+// Шаг qa со scope на подкаталог принимает именно его: отчёт приёмки
 // отвечает проекту frontend, а не всему корню.
 func TestExecutorAcceptorScopedToSubproject(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
@@ -296,8 +296,8 @@ func TestExecutorAcceptorScopedToSubproject(t *testing.T) {
 		ProjectName: name,
 		Summary:     "приёмка фронтенда",
 		Steps: []Step{
-			{ID: "a1", Agent: AgentAcceptor, Prompt: "приёмка фронтенда", Description: "приёмка frontend", Scope: []string{"frontend/"}},
-			{ID: "a2", Agent: AgentAcceptor, Prompt: "приёмка сервера", Description: "приёмка server", Scope: []string{"server/"}},
+			{ID: "a1", Agent: AgentQAEngineer, Prompt: "приёмка фронтенда", Description: "приёмка frontend", Scope: []string{"frontend/"}},
+			{ID: "a2", Agent: AgentQAEngineer, Prompt: "приёмка сервера", Description: "приёмка server", Scope: []string{"server/"}},
 		},
 	}
 

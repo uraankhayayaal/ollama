@@ -37,6 +37,26 @@ const (
 	BoardReviewBug     = "BoardReviewBugReport"
 )
 
+// boardToolNames — все инструменты доски (одна точка правды для Select:
+// без подключённого board.Store они недоступны агенту).
+var boardToolNames = []string{
+	BoardListEpics, BoardGetEpic, BoardListTasks, BoardGetTask,
+	BoardListBugs, BoardGetBug, BoardCreateEpic, BoardUpdateEpic,
+	BoardDeleteEpic, BoardSetEpicStatus, BoardCreateTask, BoardUpdateTask,
+	BoardDeleteTask, BoardSetTaskStatus, BoardCreateBug, BoardSetBugStatus,
+	BoardReviewBug,
+}
+
+// IsBoardTool сообщает, является ли инструмент инструментом Kanban-доски.
+func IsBoardTool(name string) bool {
+	for _, b := range boardToolNames {
+		if name == b {
+			return true
+		}
+	}
+	return false
+}
+
 // taskSpecProps — свойства JSON-схемы задачи/эпика (общие для многих типов).
 func taskSpecProps() map[string]any {
 	return map[string]any{

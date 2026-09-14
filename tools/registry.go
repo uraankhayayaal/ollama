@@ -9,6 +9,13 @@ import "fmt"
 type Set struct {
 	byName map[string]Tool
 	order  []string
+	// boardConnected — был ли board.Store подключён при построении набора
+	// (deps.Board != nil). Позволяет различить в Execute два случая вызова
+	// board-инструмента, отсутствующего в наборе: доска не подключена
+	// (standalone/plan — мягкая ошибка «доска не подключена») и доска
+	// подключена, но инструмент сознательно не выдан (read-only участник —
+	// жёсткая ошибка not in tool set).
+	boardConnected bool
 }
 
 // Select собирает набор инструментов по именам из общего реестра.
@@ -17,9 +24,16 @@ type Set struct {
 //
 // deps передаёт агенту-контекст: инструменты генератора кода получают
 // *FileOps, инструменты ревью — *ReviewSession (разделяемое состояние цикла).
+// Инструменты Kanban-доски (Board*) включаются только при подключённом
+// board.Store: без доски их вызов заведомо завершится «доска не подключена»,
+// а модель бесполезно будет жечь раунды, пробуя доступные, но мёртвые
+// инструменты (например, лид в standalone-режиме plan).
 func Select(names []string, deps Deps) *Set {
-	s := &Set{byName: make(map[string]Tool, len(names))}
+	s := &Set{byName: make(map[string]Tool, len(names)), boardConnected: deps.Board != nil}
 	for _, n := range names {
+		if IsBoardTool(n) && deps.Board == nil {
+			continue
+		}
 		s.byName[n] = newTool(n, deps)
 		s.order = append(s.order, n)
 	}
@@ -36,6 +50,15 @@ func (s *Set) Get(name string) (Tool, bool) {
 func (s *Set) Execute(name string, args map[string]any) ([]byte, error) {
 	t, ok := s.byName[name]
 	if !ok {
+		// Известный инструмент доски, но доска не подключена (standalone/plan):
+		// Select его не включил, а модель позвала (промпт лидов упоминает Board*).
+		// Возвращаем мягкую ошибку «доска не подключена» — по промпту лид в этом
+		// случае переходит к JSON-декомпозиции. При подключённой доске вызов
+		// инструмента, сознательно не выданного агенту (read-only участник),
+		// — по-прежнему жёсткая ошибка not in tool set.
+		if IsBoardTool(name) && !s.boardConnected {
+			return boardErr(name, fmt.Errorf("доска не подключена"))
+		}
 		return nil, fmt.Errorf("function %s not in tool set", name)
 	}
 	return t.Execute(args)

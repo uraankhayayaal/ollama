@@ -178,6 +178,44 @@ func TestGenerateLengthMarksTruncated(t *testing.T) {
 	}
 }
 
+// Чтение вне scope (например, лид пытается прочитать корневой файл, а его
+// шаг ограничен server/): пер-файловая ошибка ReadFiles — это информация,
+// а не неудача. Раннер не должен бесконечно подсказывать «вызови ReadFiles
+// ДО успешного результата» — обязательная группа считается выполненной,
+// и модель может завершить цикл итоговым текстом (JSON-декомпозицией).
+func TestGenerateReadScopeErrorSatisfiesRequiredGroup(t *testing.T) {
+	agent := &fakeAgent{
+		requiredGroups: [][]string{{"List"}, {"ReadFiles"}},
+		callResults: [][]byte{
+			[]byte(`{"message":"В каталоге пока нет файлов.","status":"empty"}`),
+			[]byte(`[{"filename":"README.md","message":"файл вне области работы (scope)","status":"error"}]`),
+		},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			{ToolCalls: []tools.ToolCall{{Name: "List", Arguments: `{}`}}, FinishReason: "tool_calls"},                                                                       // раунд 1: List (пусто)
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: `{"filenames":["README.md"]}`}}, FinishReason: "tool_calls"},                                         // раунд 2: scope-ошибка
+			{Content: `{"tasks":[]}`, FinishReason: "stop"},                                                                                                                  // раунд 3: итоговая декомпозиция
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	// Никаких ретрай-подсказок: ошибка чтения засчитана как выполнение группы.
+	if provider.calls != 3 {
+		t.Fatalf("ожидали 3 запроса (List + ReadFiles + финал), got %d", provider.calls)
+	}
+	if len(resp.ToolCalls) != 2 || resp.ToolCalls[1].Name != "ReadFiles" {
+		t.Fatalf("ожидали вызовы List и ReadFiles, got %#v", resp.ToolCalls)
+	}
+	if resp.Content != `{"tasks":[]}` {
+		t.Fatalf("ожидали итоговую декомпозицию, got %q", resp.Content)
+	}
+	if resp.Truncated {
+		t.Fatal("цикл не должен упереться в лимит раундов")
+	}
+}
+
 // recordingProvider записывает сообщения, которые получает модель, дополнительно
 // к поведению fakeChatProvider.
 type recordingProvider struct {
@@ -465,4 +503,61 @@ func containsToolCall(calls []tools.ToolCall, name string) bool {
 		}
 	}
 	return false
+}
+
+// Модель зациклилась: одинаковый вызов ReadFiles (одни и те же аргументы)
+// повторяется снова и снова (лид «исследует» пустой проект). Раннер должен
+// детектировать повтор и подсказать модели завершить работу итоговым ответом,
+// а не сжигать раунды до лимита.
+func TestGenerateLoopGuardNudgesAfterRepeatedCalls(t *testing.T) {
+	agent := &fakeAgent{
+		requiredGroups: [][]string{{"List"}, {"ReadFiles"}},
+		callResults: [][]byte{
+			[]byte(`{"status":"empty","message":"В каталоге пока нет файлов."}`),
+			[]byte(`[{"filename":"README.md","message":"файл вне области работы (scope)","status":"error"}]`),
+			[]byte(`[{"filename":"README.md","message":"файл вне области работы (scope)","status":"error"}]`),
+			[]byte(`[{"filename":"README.md","message":"файл вне области работы (scope)","status":"error"}]`),
+			[]byte(`[{"filename":"README.md","message":"файл вне области работы (scope)","status":"error"}]`),
+		},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			// раунд 1: List (пусто) + первый ReadFiles
+			{ToolCalls: []tools.ToolCall{
+				{Name: "List", Arguments: `{}`},
+				{Name: "ReadFiles", Arguments: `{"filenames":["README.md"]}`},
+			}, FinishReason: "tool_calls"},
+			// раунды 2-4: повторяющийся ReadFiles — защита сработает на 4-м повторе
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: `{"filenames":["README.md"]}`}}, FinishReason: "tool_calls"},
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: `{"filenames":["README.md"]}`}}, FinishReason: "tool_calls"},
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: `{"filenames":["README.md"]}`}}, FinishReason: "tool_calls"},
+			// раунд 5: модель (после подсказки) завершает итоговым ответом
+			{Content: `{"tasks":[]}`, FinishReason: "stop"},
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	if provider.calls != 5 {
+		t.Fatalf("ожидали 5 запросов (List+ReadFiles, 3 повтора, финал после подсказки), got %d", provider.calls)
+	}
+	if resp.Content != `{"tasks":[]}` {
+		t.Fatalf("ожидали итоговый ответ после подсказки о цикле, got %q", resp.Content)
+	}
+	if resp.Truncated {
+		t.Fatal("цикл не должен упереться в лимит раундов: защита должна была прервать повтор")
+	}
+	// Подсказка о зацикливании должна попасть в историю (и упоминать ReadFiles).
+	seenLoop := false
+	for _, m := range resp.Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "повторяющийся цикл") {
+			seenLoop = true
+			if !strings.Contains(m.Content, "ReadFiles") {
+				t.Fatalf("подсказка о цикле должна упоминать ReadFiles, got %q", m.Content)
+			}
+		}
+	}
+	if !seenLoop {
+		t.Fatalf("ожидали подсказку о повторяющемся цикле в истории, got %#v", resp.Messages)
+	}
 }

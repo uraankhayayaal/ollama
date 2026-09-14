@@ -3,6 +3,7 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/backendlead"
+	"ai/agents/frontendlead"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -117,6 +118,26 @@ func TestExecutorLeadStepRequiresDecomposition(t *testing.T) {
 	}
 	if exec.completed["s1"] {
 		t.Fatal("шаг без декомпозиции не должен быть завершён")
+	}
+}
+
+// TestLeadWithHintSystemMessage — подсказка повторного запроса попадает в
+// системные сообщения обёрнутого лида (и включает предыдущий ответ).
+func TestLeadWithHintSystemMessage(t *testing.T) {
+	lead := frontendlead.NewFrontendLead("proj", "Декомпозируй")
+	wrapped := leadWithHint(lead, "раньше я ответил путями")
+	msgs := wrapped.GetSystemMessages(nil)
+	found := false
+	for _, m := range msgs {
+		if m.Type == agents.MessageTypeSystem && strings.Contains(m.Message, "JSON-декомпозиц") && strings.Contains(m.Message, "раньше я ответил путями") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("в системных сообщениях нет подсказки с предыдущим ответом: %+v", msgs)
+	}
+	if got := wrapped.GetTools(); got == nil {
+		t.Error("делегирование GetTools сломалось")
 	}
 }
 

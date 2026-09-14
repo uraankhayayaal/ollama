@@ -27,10 +27,10 @@ func TestLeadResolvePathRejectsTraversal(t *testing.T) {
 
 func TestLeadWriteWritesIntoOutputDir(t *testing.T) {
 	l := newTestLead(t)
-	if err := l.Write("BACKEND_PLAN.json", "{}\n"); err != nil {
+	if err := l.Write("README.md", "{}\n"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	want := filepath.Join(l.OutputDir, "BACKEND_PLAN.json")
+	want := filepath.Join(l.OutputDir, "README.md")
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("файл %q не создан: %v", want, err)
 	}
@@ -43,25 +43,35 @@ func TestLeadToolsAreSelected(t *testing.T) {
 	for _, td := range got {
 		names[td.Name] = true
 	}
-	for _, want := range []string{"List", "ReadFiles"} {
+	// Лид документирует план в readme (WriteFiles/AppendFile), но не пишет код
+	// (DeleteFiles/Run запрещены).
+	for _, want := range []string{"List", "ReadFiles", "WriteFiles", "AppendFile"} {
 		if !names[want] {
 			t.Errorf("агент не включает инструмент %q", want)
 		}
 	}
-	for _, disallowed := range []string{"WriteFiles", "DeleteFiles", "AppendFile", "Run"} {
+	for _, disallowed := range []string{"DeleteFiles", "Run"} {
 		if names[disallowed] {
 			t.Errorf("агент не должен включать инструмент %q (лид не пишет код и не запускает команды)", disallowed)
 		}
 	}
 }
 
-func TestLeadConstrainScopePreventsWriteOutsideScope(t *testing.T) {
+// TestLeadWriteOnlyReadme: запись лида разрешена ТОЛЬКО в файлы readme* в корне
+// проекта (документирование плана работ); код лид писать не должен.
+func TestLeadWriteOnlyReadme(t *testing.T) {
 	l := newTestLead(t)
 	l.SetScope([]string{"internal/"})
-	if err := l.Write("internal/plan.json", "{}\n"); err != nil {
-		t.Fatalf("запись внутри области работы должна быть разрешена: %v", err)
+	if err := l.Write("README.md", "# План работ\n"); err != nil {
+		t.Fatalf("запись в readme должна быть разрешена: %v", err)
+	}
+	if err := l.Write("readme.md", "# План работ\n"); err != nil {
+		t.Fatalf("запись в readme* без учёта регистра должна быть разрешена: %v", err)
+	}
+	if err := l.Write("internal/plan.json", "{}\n"); err == nil {
+		t.Fatal("запись вне readme должна быть отклонена (лид ведёт только readme)")
 	}
 	if err := l.Write("main.go", "package main\n"); err == nil {
-		t.Fatal("запись вне области работы должна быть отклонена")
+		t.Fatal("запись вне readme должна быть отклонена")
 	}
 }

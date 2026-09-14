@@ -9,14 +9,6 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-// boardToolNames — все board-инструменты для тестового набора.
-var boardToolNames = []string{
-	BoardListEpics, BoardGetEpic, BoardListTasks, BoardGetTask, BoardListBugs, BoardGetBug,
-	BoardCreateEpic, BoardUpdateEpic, BoardDeleteEpic, BoardSetEpicStatus,
-	BoardCreateTask, BoardUpdateTask, BoardDeleteTask, BoardSetTaskStatus,
-	BoardCreateBug, BoardSetBugStatus, BoardReviewBug,
-}
-
 // newBoardToolSet создаёт полный набор board-инструментов поверх in-memory Redis.
 func newBoardToolSet(t *testing.T) (*Set, *board.Store) {
 	t.Helper()
@@ -237,6 +229,51 @@ func TestBoardToolsReadOnlyScope(t *testing.T) {
 	set.marshalExec(t, BoardListEpics, nil, &epics)
 	if len(epics) != 0 {
 		t.Fatalf("пустая доска должна вернуть [], получено %v", epics)
+	}
+}
+
+// TestSelectSkipsBoardToolsWithoutStore — без подключённого board.Store
+// (например, лид в standalone-режиме plan) board-инструменты не попадают
+// в набор: их вызов заведомо вернёт «доска не подключена», а модель лишь
+// бесполезно жжёт раунды.
+func TestSelectSkipsBoardToolsWithoutStore(t *testing.T) {
+	set := Select(boardToolNames, Deps{})
+	if len(set.byName) != 0 {
+		t.Fatalf("без доски board-инструменты не должны попасть в набор, got %d", len(set.byName))
+	}
+	if _, ok := set.Get(BoardListEpics); ok {
+		t.Fatal("BoardListEpics не должно быть в наборе без доски")
+	}
+}
+
+// TestBoardToolCallWithoutStoreSoftError — модель (например, лид, чей промпт
+// упоминает доску) всё равно вызывает board-инструмент, которого нет в наборе
+// (план-режим): Execute должен вернуть мягкую ошибку «доска не подключена»,
+// а не фатал "function ... not in tool set". По промпту лид переходит к
+// JSON-декомпозиции. По-настоящему неизвестный инструмент по-прежнему падает.
+func TestBoardToolCallWithoutStoreSoftError(t *testing.T) {
+	set := Select([]string{"List", "ReadFiles"}, Deps{})
+
+	out, err := set.Execute(BoardCreateTask, map[string]any{
+		"task_id": "BEL-01", "title": "X", "description": "y", "epic_id": "E-1",
+		"assigned_role": "Senior Go Developer",
+	})
+	if err != nil {
+		t.Fatalf("board-инструмент без доски должен вернуть мягкую ошибку, а не фатал: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("не JSON: %v (%s)", err, out)
+	}
+	if m["status"] != "error" {
+		t.Fatalf("ожидался статус error, got %s", out)
+	}
+	if msg, _ := m["message"].(string); msg != "доска не подключена" {
+		t.Fatalf("ожидалось «доска не подключена», got %q", msg)
+	}
+
+	if _, err := set.Execute("NopeTool", nil); err == nil {
+		t.Fatal("неизвестный инструмент должен возвращать фатал not in tool set")
 	}
 }
 
