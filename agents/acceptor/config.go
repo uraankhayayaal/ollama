@@ -35,6 +35,11 @@ type Config struct {
 	// Нарушения формата — предупреждения, вердикт не меняют. По умолчанию true.
 	CheckFormat bool
 
+	// AutoFormat — автоматически исправлять нарушения gofmt (gofmt -w) с
+	// последующей перепроверкой, чтобы цикл исправлений не крутился на стиле.
+	// Применяется только к детерминированному форматированию Go. По умолчанию true.
+	AutoFormat bool
+
 	// CheckAnalyze — выполнять ли проверку анализатора (go vet/eslint/ruff).
 	// Находки анализатора — ошибки: ведут к вердикту reject. По умолчанию true.
 	CheckAnalyze bool
@@ -72,6 +77,7 @@ func DefaultConfig() Config {
 		RunTimeout:     10 * time.Second,
 		MaxRounds:      3,
 		CheckFormat:    true,
+		AutoFormat:     true,
 		CheckAnalyze:   true,
 		InstallDeps:    true,
 		InstallTimeout: 5 * time.Minute,
@@ -109,6 +115,9 @@ func LoadConfig() Config {
 	}
 	if v := os.Getenv("ACCEPT_FORMAT"); v != "" {
 		cfg.CheckFormat = parseBool(v, true)
+	}
+	if v := os.Getenv("ACCEPT_AUTOFORMAT"); v != "" {
+		cfg.AutoFormat = parseBool(v, true)
 	}
 	if v := os.Getenv("ACCEPT_ANALYZE"); v != "" {
 		cfg.CheckAnalyze = parseBool(v, true)

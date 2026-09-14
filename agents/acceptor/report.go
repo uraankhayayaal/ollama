@@ -68,6 +68,9 @@ type RunResult struct {
 	// ServerMode — true, если процесс был прерван по таймауту (долгоживущий
 	// сервис) и при этом не упал — запуск считается успешным.
 	ServerMode bool `json:"server_mode"`
+	// Skipped — true, если инструмент запуска отсутствует в окружении
+	// (например, node не установлен) — это не дефект кода, шаг пропускается.
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // InstallResult — результат установки зависимостей проекта.

@@ -3,9 +3,11 @@ package runner
 import (
 	"ai/agents"
 	"ai/tools"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 )
 
@@ -57,6 +59,20 @@ type ToolRequiringAgent interface {
 	RequiredToolFirstRound() (string, bool)
 }
 
+// RequiredToolGroupsAgent — необязательный интерфейс агента, который требует,
+// чтобы за цикл успешно выполнился хотя бы ОДИН инструмент из КАЖДОЙ
+// обязательной группы. Используется лидами направлений: они обязаны изучить
+// существующий код (List, ReadFiles) и опубликовать задачи для подчинённых
+// (BoardCreateTask/BoardUpdateTask/BoardDeleteTask). Если модель ответила
+// текстом, не выполнив очередную группу, — раннер подскажет недостающий
+// инструмент и повторит запрос.
+type RequiredToolGroupsAgent interface {
+	// RequiredToolGroups возвращает группы инструментов, обязательных к
+	// успешному вызову за цикл. Каждая группа выполняется, если успешно
+	// вызван хотя бы один её инструмент. Пустой список — требований нет.
+	RequiredToolGroups() [][]string
+}
+
 // ResumeState — точка возобновления агентского цикла после лимита раундов:
 // полная история диалога и количество уже потраченных раундов. Собирается
 // вызывающим кодом из чекпоинта и передаётся в цикл через контекст.
@@ -100,10 +116,39 @@ func maxRounds() int {
 	return defaultMaxRounds
 }
 
-// nudgeMessage формулирует подсказку модели, если она не вызвала
-// обязательный инструмент в первом раунде и ответила текстом.
+// nudgeMessage формулирует подсказку модели, если она не выполнила
+// обязательное действие (не вызвала обязательный инструмент) и ответила
+// текстом.
 func nudgeMessage(toolName string) string {
-	return fmt.Sprintf("Ты ответил текстом, но по заданию обязан вызвать инструмент %q для создания файлов. Немедленно вызови %q с нужными аргументами (файлы/код проекта). Не отвечай текстом.", toolName, toolName)
+	return fmt.Sprintf("Ты ответил текстом, но не выполнил обязательное действие: инструмент %q не был успешно вызван. Немедленно вызови %q с нужными аргументами. Не отвечай текстом.", toolName, toolName)
+}
+
+// retryMessage — подсказка после неудачной попытки обязательного инструмента
+// (например, инструмент вернул ошибки аргументов/доступа). Модель должна
+// повторить вызов, пока он не завершится успешно.
+func retryMessage(toolName string) string {
+	return fmt.Sprintf("Инструмент %q вернул ошибки (вероятно, некорректные аргументы или действие вне допустимого). Проверь и повтори вызов %q ДО успешного результата. Не отвечай текстом.", toolName, toolName)
+}
+
+// toolResultFailed признаёт выполнение инструмента неудачным, если результат
+// помечен ошибкой ("status":"error"). Пустой результат ("status":"empty") —
+// неудача ТОЛЬКО для пишущих инструментов (WriteFiles и др.), где это
+// означает «ничего не создано». Для исследовательских инструментов (List,
+// ReadFiles) пустой каталог/файл — нормальный успешный результат чтения,
+// иначе раннер будет вечно подсказывать «вызови List ДО успешного результата»
+// при работе на пустом проекте.
+func toolResultFailed(toolName string, result []byte) bool {
+	if bytes.Contains(result, []byte(`"status":"error"`)) {
+		return true
+	}
+	if bytes.Contains(result, []byte(`"status":"empty"`)) {
+		switch toolName {
+		case "List", "ReadFiles":
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 // Generate выполняет агентский цикл: отправляет диалог модели, исполняет
@@ -156,14 +201,45 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	content := ""
 	mx := maxRounds()
 
-	// Если агент требует обязательный инструмент в первом раунде — узнаём его.
-	requiredTool := ""
+	// Обязательные инструменты собираем из двух источников: обобщённые группы
+	// RequiredToolGroups (например, лиды: исследование кода + публикация задач)
+	// и классический RequiredToolFirstRound (одна группа из одного инструмента).
+	var requiredGroups [][]string
+	if rg, ok := agent.(RequiredToolGroupsAgent); ok {
+		requiredGroups = rg.RequiredToolGroups()
+	}
 	if req, ok := agent.(ToolRequiringAgent); ok {
-		if n, yes := req.RequiredToolFirstRound(); yes {
-			requiredTool = n
+		if n, yes := req.RequiredToolFirstRound(); yes && n != "" {
+			requiredGroups = append(requiredGroups, []string{n})
+		}
+	}
+
+	// Группа считается выполненной, когда успешно вызван хотя бы один её
+	// инструмент. При resume уже вызванные в истории инструменты засчитываются,
+	// чтобы проверка не сработала для уже продвинутого диалога.
+	requiredDone := make([]bool, len(requiredGroups))
+	for _, tc := range allToolCalls {
+		for gi, grp := range requiredGroups {
+			if requiredDone[gi] {
+				continue
+			}
+			if slices.Contains(grp, tc.Name) {
+				requiredDone[gi] = true
+			}
 		}
 	}
 	requiredAttempts := 0
+
+	// pendingRequired возвращает имя первого ещё не выполненного обязательного
+	// инструмента — им runner подсказывает модели в подсказках.
+	pendingRequired := func() string {
+		for gi, grp := range requiredGroups {
+			if !requiredDone[gi] {
+				return grp[0]
+			}
+		}
+		return ""
+	}
 
 	for round := startRound; round < startRound+mx; round++ {
 		if err := ctx.Err(); err != nil {
@@ -176,15 +252,20 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		}
 
 		if len(reply.ToolCalls) == 0 {
-			// Если обязательный инструмент ещё ни разу не вызван (конец = первый
-			// раунд генерации), а модель ответила текстом — подскажем и повторим
-			// (с ограничением), чтобы не завершить цикл без действия.
-			if requiredTool != "" && len(allToolCalls) == 0 && requiredAttempts < requiredRetries {
+			// Если не выполнена хотя бы одна группа обязательных инструментов
+			// (модель ответила текстом вместо вызова ИЛИ вызов вернул ошибки),
+			// а лимит подсказок не исчерпан — подсказываем и повторяем, чтобы
+			// не завершить цикл без реального результата.
+			if pending := pendingRequired(); pending != "" && requiredAttempts < requiredRetries {
 				requiredAttempts++
-				Debugf("RUNNER: раунд %d: требуемый инструмент %q не вызван, подсказываю (%d/%d) и повторяю", round+1, requiredTool, requiredAttempts, requiredRetries)
+				msg := nudgeMessage(pending)
+				if len(allToolCalls) > 0 {
+					msg = retryMessage(pending)
+				}
+				Debugf("RUNNER: раунд %d: обязательный инструмент %q не сработал успешно, подсказываю (%d/%d) и повторяю", round+1, pending, requiredAttempts, requiredRetries)
 				messages = append(messages, Message{
 					Role:    "user",
-					Content: nudgeMessage(requiredTool),
+					Content: msg,
 				})
 				continue
 			}
@@ -233,6 +314,17 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			}
 
 			Debugf("RUNNER: результат инструмента %q: %s", tc.Name, Truncate(string(result), 500))
+			// Отмечаем успешность обязательных инструментов: ошибки/пустые
+			// результаты считаются неудачей, при которой нужна повторная подсказка.
+			for gi, grp := range requiredGroups {
+				if requiredDone[gi] {
+					continue
+				}
+				if slices.Contains(grp, tc.Name) && !toolResultFailed(tc.Name, result) {
+					requiredDone[gi] = true
+					Debugf("RUNNER: обязательный инструмент %q выполнен успешно", tc.Name)
+				}
+			}
 			messages = append(messages, Message{
 				Role:       "tool",
 				ToolName:   tc.Name,

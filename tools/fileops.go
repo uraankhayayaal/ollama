@@ -214,6 +214,40 @@ func parseFileItems(raw any) []FileItem {
 	return items
 }
 
+// parseFileMap нормализует объектную форму поля files {"путь": "контент"},
+// которую модели иногда используют вместо массива объектов с filename/content.
+// Принимает map, JSON-строку объекта или []byte.
+func parseFileMap(raw any) []FileItem {
+	switch v := raw.(type) {
+	case map[string]string:
+		return mapToFileItems(v)
+	case []byte:
+		return parseFileMap(string(v))
+	case string:
+		var m map[string]string
+		if json.Unmarshal([]byte(v), &m) == nil && len(m) > 0 {
+			return mapToFileItems(m)
+		}
+		return nil
+	default:
+		if b, err := json.Marshal(v); err == nil {
+			var m map[string]string
+			if json.Unmarshal(b, &m) == nil && len(m) > 0 {
+				return mapToFileItems(m)
+			}
+		}
+		return nil
+	}
+}
+
+func mapToFileItems(m map[string]string) []FileItem {
+	items := make([]FileItem, 0, len(m))
+	for path, content := range m {
+		items = append(items, FileItem{Filename: path, Content: content})
+	}
+	return items
+}
+
 // parseDecodedFiles разбирает «расшифрованную» JSON-строку поля files: модели
 // (например, qwen) сериализуют массив файлов в JSON-строку, а после разбора
 // аргументов (Ollama structpb + ParseArguments) экранирование внутри содержимого
@@ -387,6 +421,19 @@ func (ops *FileOps) WriteFiles(args map[string]any) ([]byte, error) {
 			// Не вышло напрямую — пробуем через поле "files" как JSON-строку
 			// (или иной строковый вид), следуя общему паттерну parseComments.
 			params = BulkParams{Files: parseFileItems(args["files"])}
+		}
+	}
+
+	if len(params.Files) == 0 {
+		// Объектная форма {"путь": "контент"} — модели записывают файлы и так.
+		if items := parseFileMap(args["files"]); len(items) > 0 {
+			params.Files = items
+		}
+	}
+	if len(params.Files) == 0 {
+		// Одиночный объект {"filename": "путь", "content": "код"} без "files".
+		if fn, ok := args["filename"]; ok {
+			params.Files = []FileItem{{Filename: fmt.Sprint(fn), Content: fmt.Sprint(args["content"])}}
 		}
 	}
 

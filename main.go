@@ -15,6 +15,7 @@ import (
 	"ai/agents/qalead"
 	"ai/board"
 	"ai/checkpoint"
+
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	_ "ai/forges/all"
@@ -146,10 +147,10 @@ func main() {
 		projectName := agentArgs[0]
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent = devops.NewDevops(projectName, prompt)
-	case "devops-lead":
+	case "devopslead":
 		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . devops-lead <имя_проекта> <промпт>\n" +
-				"Пример: go run . devops-lead billingService \"Декомпозируй инфраструктуру: Docker Compose локально, Kubernetes на проде, CI/CD с автотестами QA\"")
+			logging.Fatalf("Использование: go run . devopslead <имя_проекта> <промпт>\n" +
+				"Пример: go run . devopslead billingService \"Декомпозируй инфраструктуру: Docker Compose локально, Kubernetes на проде, CI/CD с автотестами QA\"")
 		}
 		projectName := agentArgs[0]
 		prompt := strings.Join(agentArgs[1:], " ")
@@ -215,7 +216,7 @@ func main() {
 			}
 		}
 	default:
-		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devops-lead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devopslead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Режим планировщика обрабатывается отдельно и до общего прогона:
@@ -234,6 +235,14 @@ func main() {
 
 	if resp.Truncated {
 		logging.Warnf("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
+	}
+
+	// Standalone-запуск лида (без подключённой Kanban-доски): модель вернула
+	// JSON-декомпозицию. Печатаем в консоль список спроектированных задач,
+	// чтобы результат работы лида был виден сразу, до передачи исполнителям.
+	switch agent.(type) {
+	case *backendlead.BackendLead, *frontendlead.FrontendLead, *devopslead.DevopsLead, *qalead.QALead:
+		printLeadDecomposition(resp.Content)
 	}
 
 	// 6b. Запасной путь: если модель вернула ревью текстом, а не вызовами
@@ -280,6 +289,30 @@ type finalizer interface {
 	Finalize()
 }
 
+// printLeadDecomposition выводит в консоль список задач из JSON-декомпозиции
+// лида направления (standalone-режим без Kanban-доски). Формат tolerant:
+// board.UnmarshalTasks извлекает массив tasks из любого корневого ключа лида.
+func printLeadDecomposition(content string) {
+	tasks, err := board.UnmarshalTasks(content)
+	if err != nil || len(tasks) == 0 {
+		logging.Warnf("Лид не вернул JSON-декомпозицию задач (задач: %d, ошибка: %v)", len(tasks), err)
+		return
+	}
+	logging.Infof("[Список задач лида] %d задач:", len(tasks))
+	for _, t := range tasks {
+		logging.Infof("  - %s [%s] | %s (порядок %d, параллельно: %v)",
+			t.TaskID, t.AssignedRole, clipText(t.Title, 60), t.SequenceOrder.Int(), t.CanRunParallel.Bool())
+	}
+}
+
+// clipText обрезает длинный текст до n символов для читаемых логов.
+func clipText(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 // defaultPrompt возвращает текст задания для генератора. Если промпт не
 // передан в командной строке, используется заданное по умолчанию значение.
 func defaultPrompt(args []string) string {
@@ -296,7 +329,7 @@ func projectFromArgs(args []string) string {
 		return "unnamed"
 	}
 	switch args[1] {
-	case "generate", "backend", "frontend", "devops", "devops-lead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept":
+	case "generate", "backend", "frontend", "devops", "devopslead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept":
 		if len(args) >= 3 && args[2] != "" {
 			return args[2]
 		}

@@ -10,6 +10,7 @@ import (
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/agents/qalead"
+	"ai/board"
 	"ai/checkpoint"
 	"ai/logging"
 	"ai/models"
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -218,9 +220,12 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 	}
 
 	switch step.Agent {
-	case AgentBackendDev, AgentFrontendDev, AgentDevops, AgentDevopsLead, AgentQALead, AgentFrontendLead, AgentBackendLead:
+	case AgentBackendDev, AgentFrontendDev, AgentDevops:
 		_, err := e.runCodingAgent(ctx, step, projectName)
 		return err
+
+	case AgentDevopsLead, AgentQALead, AgentFrontendLead, AgentBackendLead:
+		return e.runLeadStep(ctx, step, projectName)
 
 	case AgentQAEngineer:
 		return e.runQAEngineer(ctx, step, projectName)
@@ -233,35 +238,49 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 	}
 }
 
+// newStepAgent создаёт агента шага по его типу (разработчик, специалист или
+// лид направления). Возвращает nil для неизвестного типа.
+func newStepAgent(step *Step, projectName string) agents.Agent {
+	switch step.Agent {
+	case AgentBackendDev:
+		return developer.NewBackendDeveloper(projectName, step.Prompt)
+	case AgentFrontendDev:
+		return developer.NewFrontendDeveloper(projectName, step.Prompt)
+	case AgentDevops:
+		return devops.NewDevops(projectName, step.Prompt)
+	case AgentDevopsLead:
+		return devopslead.NewDevopsLead(projectName, step.Prompt)
+	case AgentQAEngineer:
+		return qaengineer.NewQAEngineer(projectName, step.Prompt)
+	case AgentQALead:
+		return qalead.NewQALead(projectName, step.Prompt)
+	case AgentFrontendLead:
+		return frontendlead.NewFrontendLead(projectName, step.Prompt)
+	case AgentBackendLead:
+		return backendlead.NewBackendLead(projectName, step.Prompt)
+	}
+	return nil
+}
+
 // runCodingAgent запускает агента-разработчика (backend/frontend) или другого
 // специалиста (devops, qa, лиды). Все агенты ограничены областью работы scope:
 // пишут/читают только указанные файлы. Возвращает ответ модели (нужен циклу
 // QA-багрепортов: observable из него парсятся репорты дефектов).
 func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName string) (*runner.AgentResponse, error) {
-	var agent agents.Agent
-	switch step.Agent {
-	case AgentBackendDev:
-		agent = developer.NewBackendDeveloper(projectName, step.Prompt)
-	case AgentFrontendDev:
-		agent = developer.NewFrontendDeveloper(projectName, step.Prompt)
-	case AgentDevops:
-		agent = devops.NewDevops(projectName, step.Prompt)
-	case AgentDevopsLead:
-		agent = devopslead.NewDevopsLead(projectName, step.Prompt)
-	case AgentQAEngineer:
-		agent = qaengineer.NewQAEngineer(projectName, step.Prompt)
-	case AgentQALead:
-		agent = qalead.NewQALead(projectName, step.Prompt)
-	case AgentFrontendLead:
-		agent = frontendlead.NewFrontendLead(projectName, step.Prompt)
-	case AgentBackendLead:
-		agent = backendlead.NewBackendLead(projectName, step.Prompt)
+	agent := newStepAgent(step, projectName)
+	if agent == nil {
+		return nil, fmt.Errorf("неизвестный тип агента: %s", step.Agent)
 	}
 
 	// Ограничиваем инструменты агента областью работы шага: вне scope он не
-	// сможет ни читать, ни писать, ни удалять файлы.
+	// сможет ни читать, ни писать, ни удалять файлы. Для шагов создания scope
+	// предварительно расширяется до директорий (см. effectiveCreationScope).
+	scope := effectiveCreationScope(projects.ProjectDir(projectName), step.Scope)
+	if len(scope) != len(step.Scope) {
+		logging.Detailf("[%s] шаг %s: scope шага расширен для создания: %v -> %v", agentLabel(step.Agent, step.Role), step.ID, step.Scope, scope)
+	}
 	if scoper, ok := agent.(interface{ SetScope([]string) }); ok {
-		scoper.SetScope(step.Scope)
+		scoper.SetScope(scope)
 	}
 
 	// Роль разработчика (frontend/backend): для backend/frontend-агентов она
@@ -309,6 +328,131 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	}
 
 	return resp, nil
+}
+
+// runLeadStep выполняет шаг-декомпозицию лида направления и сразу реализует
+// её: лид возвращает JSON-декомпозицию эпика на задачи (в plan-режиме доска
+// не подключена, поэтому публикация необязательна), исполнитель печатает в
+// консоль «Список задач лида» и выполняет каждую задачу агентом-специалистом
+// (QA/DevOps или разработчик backend/frontend) строго в рамках scope шага.
+// Так план, делегирующий разработку лидам, снова реально создаёт файлы.
+func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName string) error {
+	lead := newStepAgent(step, projectName)
+	if lead == nil {
+		return fmt.Errorf("неизвестный тип агента-лида: %s", step.Agent)
+	}
+
+	// Лиды, как и остальные агенты, ограничены областью работы шага.
+	scope := effectiveCreationScope(projects.ProjectDir(projectName), step.Scope)
+	if len(scope) != len(step.Scope) {
+		logging.Detailf("[%s] шаг %s: scope шага расширен для создания: %v -> %v", agentLabel(step.Agent, step.Role), step.ID, step.Scope, scope)
+	}
+	if scoper, ok := lead.(interface{ SetScope([]string) }); ok {
+		scoper.SetScope(scope)
+	}
+	if rr, ok := lead.(interface{ SetRole(string) }); ok && step.Role != "" {
+		rr.SetRole(string(step.Role))
+	}
+
+	// Шаг лида атомарен (декомпозиция + реализация): сохранённую историю
+	// прошлого цикла отбрасываем, чтобы при resume шаг выполнился целиком,
+	// а история лида не подменилась историей специалиста.
+	if _, ok := e.loadResumeState(ctx, step.ID); ok {
+		logging.Infof("[%s] шаг %s: сбрасываю устаревшую историю resume, шаг выполнится заново", agentLabel(step.Agent, step.Role), step.ID)
+	}
+	if e.store != nil {
+		if snap, err := e.store.Load(ctx); err == nil {
+			if _, ok := snap.Conversations[step.ID]; ok {
+				_ = e.store.ClearRoundState(ctx, snap, step.ID)
+			}
+		}
+	}
+
+	resp, err := e.provider.Generate(ctx, lead)
+	if err != nil {
+		return fmt.Errorf("декомпозиция эпика %q: %w", step.ID, err)
+	}
+	if resp != nil && resp.Truncated {
+		if err := e.truncatedStepError(ctx, step, resp); err != nil {
+			return err
+		}
+	}
+
+	tasks, err := board.UnmarshalTasks(resp.Content)
+	if err != nil || len(tasks) == 0 {
+		return fmt.Errorf("лид не вернул JSON-декомпозицию задач (задач: %d, ошибка: %v)", len(tasks), err)
+	}
+	printDecomposedTasks(tasks)
+	sortTaskSpecs(tasks)
+
+	for _, ts := range tasks {
+		spec := specialistForRole(projectName, ts.AssignedRole, leadTaskPrompt(projectName, ts))
+		if scoper, ok := spec.(interface{ SetScope([]string) }); ok {
+			scoper.SetScope(scope)
+		}
+		logging.Infof("[задача %s] специалист %s выполняет: %s", ts.TaskID, truncateText(ts.AssignedRole, 30), truncateText(ts.Title, 60))
+		resp, err := e.provider.Generate(ctx, spec)
+		if err != nil {
+			return fmt.Errorf("шаг %q, задача %s: %w", step.ID, ts.TaskID, err)
+		}
+		if resp != nil && resp.Truncated {
+			if err := e.truncatedStepError(ctx, step, resp); err != nil {
+				return err
+			}
+		}
+		logging.Infof("[задача %s] выполнена специалистом %s", ts.TaskID, truncateText(ts.AssignedRole, 30))
+	}
+	return nil
+}
+
+// truncatedStepError обрабатывает исчерпание лимита раундов в шаге-декомпозиции
+// лида. Шаг атомарен и при resume выполняется заново целиком, поэтому
+// сохранённая история очищается; при отключённом чекпоинте допускается
+// продолжить с частичным результатом (вернёт nil).
+func (e *Executor) truncatedStepError(ctx context.Context, step *Step, resp *runner.AgentResponse) error {
+	if e.store != nil {
+		if snap, err := e.store.Load(ctx); err == nil {
+			_ = e.store.ClearRoundState(ctx, snap, step.ID)
+		}
+		return fmt.Errorf("шаг %q: исчерпан лимит раундов (%d) агентского цикла — запустите с --resume, шаг выполнится заново", step.ID, resp.Rounds)
+	}
+	if strings.TrimSpace(resp.Content) == "" {
+		return fmt.Errorf("шаг %q: модель вернула пустой ответ (исчерпан лимит раундов: %d)", step.ID, resp.Rounds)
+	}
+	logging.Warnf("[%s] шаг %s: цикл исчерпал лимит раундов (%d), но чекпоинт отключён, продолжаю с частичным результатом", agentLabel(step.Agent, step.Role), step.ID, resp.Rounds)
+	return nil
+}
+
+// leadTaskPrompt формирует задание специалисту по задаче из JSON-декомпозиции
+// лида (plan-режим). В отличие от Kanban-задач, в plan-режиме доска не
+// подключена, поэтому подсказки про статусы доски отсутствуют.
+func leadTaskPrompt(project string, t board.TaskSpec) string {
+	return fmt.Sprintf("Ты — специалист (%s), выполняешь задачу из декомпозиции лида проекта %q.\n\nЗадача: %s — %s\n\nПостановка задачи:\n%s\n\nПравила:\n- Работай в своей выходной директории (OutputDir): учи структуру через List, читай контракты через ReadFiles.\n- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n- Не выходи за пределы своей части монорепозитория (роль задана промптом).",
+		t.AssignedRole, project, t.TaskID, t.Title, t.Description)
+}
+
+// printDecomposedTasks выводит в консоль список задач из JSON-декомпозиции
+// лида (plan-режим), чтобы человек видел итог декомпозиции до реализации.
+func printDecomposedTasks(tasks []board.TaskSpec) {
+	logging.Infof("[Список задач лида] %d задач:", len(tasks))
+	for _, t := range tasks {
+		logging.Infof("  - %s [%s] -> %s (порядок %d, параллельно: %v)",
+			t.TaskID, truncateText(t.Title, 60), truncateText(t.AssignedRole, 30),
+			t.SequenceOrder.Int(), t.CanRunParallel.Bool())
+	}
+}
+
+// sortTaskSpecs сортирует задачи декомпозиции по sequence_order, затем по
+// TaskID (детерминизм). Порядок последовательный: сначала выполняются
+// инфраструктурные и базовые задачи, затем зависимые.
+func sortTaskSpecs(tasks []board.TaskSpec) {
+	sort.SliceStable(tasks, func(i, j int) bool {
+		a, b := tasks[i].SequenceOrder.Int(), tasks[j].SequenceOrder.Int()
+		if a != b {
+			return a < b
+		}
+		return tasks[i].TaskID < tasks[j].TaskID
+	})
 }
 
 // loadResumeState читает сохранённую историю агентского цикла шага из
@@ -439,6 +583,43 @@ func topLevelScopeDir(scope []string) string {
 	return ""
 }
 
+// effectiveCreationScope расширяет scope шага для СОЗДАНИЯ файлов. Если запись
+// scope указывает на конкретный файл, которого ещё нет на диске, шаг создаёт
+// его с нуля, и модель может выбрать фактическое имя (например, .js вместо
+// .tsx из плана). Точное имя из плана в этом случае лишь зацикливает шаг на
+// ошибках «вне области работы», и файлы не появляются. Поэтому для новых
+// файлов scope расширяется до родительской директории; существующие файлы
+// (шаги правки) остаются точечными, как задал планировщик.
+func effectiveCreationScope(projectDir string, scope []string) []string {
+	if len(scope) == 0 {
+		return scope
+	}
+	out := make([]string, 0, len(scope))
+	changed := false
+	for _, s := range scope {
+		normalized := strings.TrimSpace(strings.ReplaceAll(s, "\\", "/"))
+		trimmed := strings.TrimSuffix(normalized, "/")
+		// Директории (со слэшем на конце) не трогаем.
+		if trimmed != normalized || trimmed == "" {
+			out = append(out, s)
+			continue
+		}
+		full := filepath.Join(projectDir, filepath.FromSlash(trimmed))
+		if _, err := os.Stat(full); os.IsNotExist(err) {
+			if dir := filepath.ToSlash(filepath.Dir(trimmed)); dir != "." && dir != "" {
+				out = append(out, dir+"/")
+				changed = true
+				continue
+			}
+		}
+		out = append(out, s)
+	}
+	if !changed {
+		return scope
+	}
+	return out
+}
+
 // runAcceptanceLoop — цикл «приёмка → планировщик исправлений → приёмка».
 // Пока хотя бы один шаг acceptor плана не прошёл приёмку (и не исчерпан
 // бюджет раундов ACCEPT_MAX_ROUNDS): отчёт приёмки передаётся планировщику,
@@ -516,12 +697,20 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 				}
 				step := fs
 				step.ID = fixStepID(e, round, executed)
-				// Обновлённая область видимости: если планировщик не указал
-				// scope (или указал только «мусорный» узкий), подставляем
-				// файлы из отчёта приёмки, чтобы фикс-агента не заблокировала
-				// запись нужных исходников.
-				if len(step.Scope) == 0 {
-					step.Scope = rep.IssueFiles()
+				// Обновлённая область видимости: используем файлы из отчёта
+				// приёмки, чтобы фикс-агента не заблокировала запись нужных
+				// исходников. Если планировщик не указал scope — подставляем
+				// файлы из отчёта.
+				// Если приёмка вовсе не смогла указать конкретные файлы
+				// (например, тип проекта ещё не определён — нет go.mod или
+				// package.json, замечания без файлов) — scope принудительно
+				// обнуляем: сужать область догадками планировщика нельзя,
+				// иначе исправление упрётся в «вне области работы» и не
+				// сможет записать нужные файлы.
+				if files := rep.IssueFiles(); len(files) == 0 {
+					step.Scope = nil
+				} else if len(step.Scope) == 0 {
+					step.Scope = files
 				}
 				// Переланировка добавляет задачу исправления в план: она
 				// становится частью плана (findStep/чекпоинт/resume), а её

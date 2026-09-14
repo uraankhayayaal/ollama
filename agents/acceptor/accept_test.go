@@ -618,7 +618,9 @@ func main() {
 }
 
 // Проект собирается и запускается, но gofmt находит неотформатированный файл.
-// Нарушения формата — предупреждения: вердикт остаётся approve.
+// Нарушения формата — предупреждения: вердикт остаётся approve. С автофиксом
+// (AutoFormat) нарушения исправляются автоматически и в отчёт не попадают;
+// здесь автофикс отключён, чтобы проверить именно предупреждение.
 func TestAcceptFormatWarning(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go не установлен")
@@ -628,6 +630,7 @@ func TestAcceptFormatWarning(t *testing.T) {
 	writeTestFile(t, dir, "main.go", "package main\n\nfunc main(){\tprintln(\"a\",\"b\") }\n")
 
 	cfg := DefaultConfig()
+	cfg.AutoFormat = false
 	cfg.BuildTimeout = 2 * testTimeout(t)
 	cfg.RunTimeout = testTimeout(t)
 
@@ -649,6 +652,39 @@ func TestAcceptFormatWarning(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("предупреждение формата не попало в отчёт, issues=%#v", rep.Issues)
+	}
+}
+
+// Нарушения gofmt автоматически исправляются (gofmt -w): после приёмки
+// стиль считается пройденным, предупреждение в отчёт не попадает.
+func TestAcceptAutoFormatsGoFile(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module fmtgood\n")
+	writeTestFile(t, dir, "main.go", "package main\n\nfunc main(){\tprintln(\"a\",\"b\") }\n")
+
+	cfg := DefaultConfig()
+	cfg.AutoFormat = true
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Format == nil || rep.Format.Skipped || !rep.Format.OK {
+		t.Fatalf("стиль должен быть пройден после автоформатирования, got %#v", rep.Format)
+	}
+	for _, iss := range rep.Issues {
+		if iss.Stage == StageFormat {
+			t.Fatalf("после автофикса предупреждения формата быть не должно, got %#v", iss)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "\tprintln") {
+		t.Fatalf("файл должен быть отформатирован gofmt -w, got:\n%s", string(b))
 	}
 }
 

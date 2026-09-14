@@ -4,14 +4,19 @@ import (
 	"ai/agents"
 	"ai/tools"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ollama/ollama/api"
 )
 
 // fakeAgent — минимальная реализация agents.Agent для тестов.
+// callResults задаёт результаты инструментов по очереди (последний повторяется).
 type fakeAgent struct {
-	requiredTool string
+	requiredTool   string
+	requiredGroups [][]string
+	callResults    [][]byte
+	callIdx        int
 }
 
 func (f *fakeAgent) GetUserMessages() []agents.Message {
@@ -25,7 +30,15 @@ func (f *fakeAgent) GetTools() []tools.ToolDefinition {
 }
 func (f *fakeAgent) GetToolsForOllama() []api.Tool { return nil }
 func (f *fakeAgent) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
-	return []byte("ok"), nil
+	if len(f.callResults) == 0 {
+		return []byte("ok"), nil
+	}
+	idx := f.callIdx
+	if idx >= len(f.callResults) {
+		idx = len(f.callResults) - 1
+	}
+	f.callIdx++
+	return f.callResults[idx], nil
 }
 func (f *fakeAgent) RequiredToolFirstRound() (string, bool) {
 	if f.requiredTool == "" {
@@ -33,6 +46,7 @@ func (f *fakeAgent) RequiredToolFirstRound() (string, bool) {
 	}
 	return f.requiredTool, true
 }
+func (f *fakeAgent) RequiredToolGroups() [][]string { return f.requiredGroups }
 
 // fakeChatProvider отдаёт ответы по порядку; если ответы закончились —
 // повторяет последний. Счётчик calls растёт на каждый запрос.
@@ -101,6 +115,40 @@ func TestGenerateNudgesRequiredTool(t *testing.T) {
 	}
 	if resp.Content != "готово" {
 		t.Fatalf("ожидали финальный текст после вызова инструмента, got %q", resp.Content)
+	}
+}
+
+// Обязательный инструмент вызван, но вернул ошибки (например, файлы вне
+// области работы scope): раннер не завершает цикл текстовым ответом модели,
+// а подсказывает повторить вызов ДО успешного результата.
+func TestGenerateRetriesRequiredToolAfterErrors(t *testing.T) {
+	agent := &fakeAgent{
+		requiredTool: "WriteFiles",
+		callResults: [][]byte{
+			[]byte(`{"files":[{"filename":"frontend/src/App.js","status":"error","message":"файл вне области работы (scope: [frontend/src/App.tsx])"}]}`),
+			[]byte(`{"files":[{"filename":"frontend/src/App.tsx","status":"success"}]}`),
+		},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			{ToolCalls: []tools.ToolCall{{Name: "WriteFiles", Arguments: `{"files":[{"filename":"frontend/src/App.js"}]}`}}, FinishReason: "tool_calls"},  // раунд 1: scope-ошибка
+			{Content: "извини, не вышло", FinishReason: "stop"},                                                                                           // раунд 2: сдался текстом
+			{ToolCalls: []tools.ToolCall{{Name: "WriteFiles", Arguments: `{"files":[{"filename":"frontend/src/App.tsx"}]}`}}, FinishReason: "tool_calls"}, // раунд 3: повторил успешно
+			{Content: "готово", FinishReason: "stop"},                                                                                                     // раунд 4: завершил
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	// Ошибка scope -> модель сдаётся текстом -> retry-подсказка -> успех -> финал.
+	if provider.calls != 4 {
+		t.Fatalf("ожидали 4 запроса (ошибка + ретрай-подсказка после текста + успех + завершение), got %d", provider.calls)
+	}
+	if len(resp.ToolCalls) != 2 || resp.ToolCalls[1].Name != "WriteFiles" {
+		t.Fatalf("ожидали 2 вызова WriteFiles, got %#v", resp.ToolCalls)
+	}
+	if resp.Content != "готово" {
+		t.Fatalf("ожидали завершение текстом после успешного вызова, got %q", resp.Content)
 	}
 }
 
@@ -245,4 +293,176 @@ func TestGenerateGivesUpRequiredToolAfterRetries(t *testing.T) {
 	if resp.Content != "текст" {
 		t.Fatalf("после исчерпания ретраев должен вернуться последний текст, got %q", resp.Content)
 	}
+}
+
+// Агент с несколькими обязательными группами инструментов: каждая группа
+// должна успешно выполниться. Пока модель не выполнила очередную группу и
+// отвечает текстом — runner подсказывает недостающий инструмент.
+func TestGenerateRequiresEachToolGroup(t *testing.T) {
+	agent := &fakeAgent{
+		requiredGroups: [][]string{
+			{"List"}, {"ReadFiles"}, {"BoardCreateTask", "BoardUpdateTask", "BoardDeleteTask"},
+		},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			{ToolCalls: []tools.ToolCall{{Name: "List", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			// Изучение кода выполнено, но задачи на доске не опубликованы.
+			{Content: "задачи потом", FinishReason: "stop"},
+			{ToolCalls: []tools.ToolCall{{Name: "BoardCreateTask", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{Content: "задачи опубликованы", FinishReason: "stop"},
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	if provider.calls != 5 {
+		t.Fatalf("ожидали 5 запросов (List, ReadFiles, текст, подсказка+BoardCreateTask, финал), got %d", provider.calls)
+	}
+	names := []string{}
+	for _, tc := range resp.ToolCalls {
+		names = append(names, tc.Name)
+	}
+	if len(resp.ToolCalls) != 3 {
+		t.Fatalf("ожидали 3 вызова инструментов, got %#v", resp.ToolCalls)
+	}
+	if resp.Content != "задачи опубликованы" {
+		t.Fatalf("ожидали финальный текст после выполнения всех групп, got %q", resp.Content)
+	}
+}
+
+// Группа считается выполненной, если успешно вызван хотя бы один её
+// инструмент (например, лид применяет либо BoardCreateTask для новых задач,
+// либо BoardUpdateTask для ревизии).
+func TestGenerateGroupSatisfiedByAnyInstrument(t *testing.T) {
+	agent := &fakeAgent{
+		requiredGroups: [][]string{
+			{"List"}, {"ReadFiles"}, {"BoardCreateTask", "BoardUpdateTask", "BoardDeleteTask"},
+		},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			{ToolCalls: []tools.ToolCall{{Name: "List", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			// Ревизия: боремся не созданием, а обновлением существующих задач.
+			{ToolCalls: []tools.ToolCall{{Name: "BoardUpdateTask", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{Content: "задачи обновлены", FinishReason: "stop"},
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	if provider.calls != 4 {
+		t.Fatalf("ожидали 4 запроса (все группы закрыты одним инструментом группы), got %d", provider.calls)
+	}
+	if resp.Content != "задачи обновлены" {
+		t.Fatalf("ожидали завершение без подсказок после BoardUpdateTask, got %q", resp.Content)
+	}
+}
+
+// Невыполненная обязательная группа не даёт завершить цикл текстом, но после
+// исчерпания подсказок runner всё равно возвращает последний ответ модели
+// (не зацикливается вечно).
+func TestGenerateGivesUpToolGroupAfterRetries(t *testing.T) {
+	agent := &fakeAgent{
+		requiredGroups: [][]string{
+			{"List"}, {"ReadFiles"}, {"BoardCreateTask", "BoardUpdateTask", "BoardDeleteTask"},
+		},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			{ToolCalls: []tools.ToolCall{{Name: "List", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{Content: "нет доски, отвечаю JSON-декомпозицией", FinishReason: "stop"},
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	expect := 3 + requiredRetries
+	if provider.calls != expect {
+		t.Fatalf("ожидали %d запросов (две группы + %d подсказок), got %d", expect, requiredRetries, provider.calls)
+	}
+	if resp.Content != "нет доски, отвечаю JSON-декомпозицией" {
+		t.Fatalf("после исчерпания ретраев должен вернуться последний текст, got %q", resp.Content)
+	}
+	if resp.Truncated {
+		t.Fatal("исчерпание обязательной группы не должно помечать ответ как Truncated")
+	}
+}
+
+// Пустой каталог (List вернул "status":"empty") — успешное исследование кода:
+// группа List засчитывается, runner НЕ должен вечно подсказывать «вызови List».
+// Это воспроизводит зацикливание на пустом новом проекте (план-режим).
+func TestGenerateEmptyListCountsAsSatisfied(t *testing.T) {
+	agent := &fakeAgent{
+		requiredGroups: [][]string{{"List"}, {"ReadFiles"}},
+		// List на пустом каталоге легитимно вернул "empty": не ошибка.
+		callResults: [][]byte{[]byte(`{"status":"empty","message":"В каталоге пока нет файлов."}`)},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			{ToolCalls: []tools.ToolCall{{Name: "List", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{Content: "каталог пуст, отвечаю декомпозицией", FinishReason: "stop"},
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+
+	// List успешен (empty = ок), ReadFiles так и не вызван — после 2 ретраев
+	// runner завершает последним текстом; подсказок «List не сработал» быть
+	// НЕ должно (иначе чекпоинт раундов/сообщений разъехался), список вызовов
+	// ровно: List + текст + подсказка ReadFiles + текст + подсказка ReadFiles.
+	// Ключевое: подсказка обязана указывать на "ReadFiles", а не на "List".
+	seenNudge := false
+	for _, m := range resp.Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "List") {
+			seenNudge = true
+		}
+	}
+	if seenNudge {
+		t.Fatalf("runner подсказал про List, хотя List успешно выполнен (empty = ок): %#v", resp.Messages)
+	}
+	if resp.Content != "каталог пуст, отвечаю декомпозицией" {
+		t.Fatalf("ожидали завершение текстом без подсказки List, got %q", resp.Content)
+	}
+}
+
+// Пустой результат пишущего инструмента — всё ещё неудача: WriteFiles,
+// вернувший "status":"empty" (ничего не создано), не закрывает обязательную
+// группу и требует повтора.
+func TestGenerateEmptyWriteStillFails(t *testing.T) {
+	agent := &fakeAgent{
+		requiredTool: "WriteFiles",
+		callResults:  [][]byte{[]byte(`{"status":"empty","message":"ничего не записано"}`)},
+	}
+	provider := &fakeChatProvider{
+		replies: []*ModelReply{
+			{ToolCalls: []tools.ToolCall{{Name: "WriteFiles", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{Content: "готово", FinishReason: "stop"},
+			{ToolCalls: []tools.ToolCall{{Name: "WriteFiles", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{Content: "готово", FinishReason: "stop"},
+			{ToolCalls: []tools.ToolCall{{Name: "WriteFiles", Arguments: "{}"}}, FinishReason: "tool_calls"},
+			{Content: "сдаюсь", FinishReason: "stop"},
+		},
+	}
+
+	resp := testGenerate(t, agent, provider)
+	if resp.Content != "сдаюсь" {
+		t.Fatalf("empty-результат WriteFiles должен трактоваться как неудача, got %q", resp.Content)
+	}
+	if !containsToolCall(resp.ToolCalls, "WriteFiles") {
+		t.Fatal("WriteFiles должен быть вызван")
+	}
+}
+
+// containsToolCall сообщает, есть ли вызов инструмента с таким именем в списке.
+func containsToolCall(calls []tools.ToolCall, name string) bool {
+	for _, c := range calls {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }

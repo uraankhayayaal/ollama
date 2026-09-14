@@ -15,6 +15,13 @@ import (
 type OllamaProvider struct {
 	client *api.Client
 	model  string
+	// numCtx задаёт размер окна контекста (num_ctx) для запросов к Ollama.
+	// По умолчанию Ollama использует 4096 токенов, а история nudge-цикла
+	// (подсказки + результаты инструментов) может раздуваться до десятков
+	// тысяч токенов, из-за чего модель возвращает 400 exceeded_context_size
+	// и шаг срывается. Размер окна задаётся переменной окружения
+	// OLLAMA_NUM_CTX (по умолчанию 16384).
+	numCtx int
 }
 
 func NewOllamaProvider(model string) (*OllamaProvider, error) {
@@ -24,7 +31,7 @@ func NewOllamaProvider(model string) (*OllamaProvider, error) {
 		logging.Fatalf("Ошибка инициализации клиента: %v", err)
 	}
 
-	return &OllamaProvider{client: client, model: model}, nil
+	return &OllamaProvider{client: client, model: model, numCtx: 32000}, nil
 }
 
 func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
@@ -79,6 +86,7 @@ func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 		Messages: messages,
 		Tools:    ollamaTools,
 		Stream:   &stream,
+		Options:  map[string]any{"num_ctx": o.numCtx},
 	}
 
 	runner.Debugf("OLLAMA: запрос к модели %q (сообщений: %d, инструментов: %d)", o.model, len(messages), len(ollamaTools))

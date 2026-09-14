@@ -74,3 +74,54 @@ func TestFileOpsScopeListNested(t *testing.T) {
 		t.Errorf("List не должен показывать root.go (вне scope), got: %s", s)
 	}
 }
+
+// TestWriteFilesAcceptsFileMap проверяет, что WriteFiles принимает объектную
+// форму {"files": {"путь": "контент"}} (а не только массив объектов) — модели
+// иногда записывают файлы именно так, и вызов не должен пропадать впустую.
+func TestWriteFilesAcceptsFileMap(t *testing.T) {
+	dir := t.TempDir()
+	ops := &FileOps{OutputDir: dir}
+
+	result, err := ops.WriteFiles(map[string]any{
+		"files": map[string]string{
+			"server/go.mod":    "module test",
+			"frontend/App.tsx": "export default 1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteFiles: %v", err)
+	}
+	s := string(result)
+	if strings.Contains(s, `"status":"error"`) {
+		t.Fatalf("все файлы должны записаться, got: %s", s)
+	}
+	if !strings.Contains(s, `"filename":"server/go.mod"`) || !strings.Contains(s, `"filename":"frontend/App.tsx"`) {
+		t.Fatalf("ожидались оба файла, got: %s", s)
+	}
+	for _, f := range []string{"server/go.mod", "frontend/App.tsx"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Fatalf("файл %s не записан: %v", f, err)
+		}
+	}
+}
+
+// TestWriteFilesAcceptsSingleObject проверяет форму вызова без обёртки "files":
+// {"filename": "путь", "content": "код"}.
+func TestWriteFilesAcceptsSingleObject(t *testing.T) {
+	dir := t.TempDir()
+	ops := &FileOps{OutputDir: dir}
+
+	result, err := ops.WriteFiles(map[string]any{
+		"filename": "README.md",
+		"content":  "# hello",
+	})
+	if err != nil {
+		t.Fatalf("WriteFiles: %v", err)
+	}
+	if strings.Contains(string(result), `"status":"error"`) {
+		t.Fatalf("файл должен записаться, got: %s", string(result))
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "README.md")); err != nil || string(b) != "# hello" {
+		t.Fatalf("README.md должен содержать код, content=%q err=%v", b, err)
+	}
+}

@@ -42,6 +42,10 @@ type DevopsLead struct {
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
 	Store *board.Store
+	// requireTaskPublishing — обязательна ли публикация задач на доске:
+	// лид не считается отработавшим, пока не создал/обновил задачи для
+	// подчинённых (false — для сценариев, не связанных с декомпозицией).
+	requireTaskPublishing bool
 }
 
 // NewDevopsLead создаёт DevOps Lead в общей для всех агентов выходной папке
@@ -74,10 +78,11 @@ func NewDevopsLeadInDir(prompt, dir string) (*DevopsLead, error) {
 func newDevopsLead(dir, prompt string, cfg Config) *DevopsLead {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
 	return &DevopsLead{
-		FileOps: ops,
-		Prompt:  prompt,
-		Config:  cfg,
-		Tools:   tools.Select(leadToolNames, tools.Deps{FileOps: ops}),
+		FileOps:               ops,
+		Prompt:                prompt,
+		Config:                cfg,
+		Tools:                 tools.Select(leadToolNames, tools.Deps{FileOps: ops}),
+		requireTaskPublishing: true,
 	}
 }
 
@@ -102,11 +107,27 @@ func (d *DevopsLead) GetUserMessages() []agents.Message {
 }
 
 // RequiredToolFirstRound — DevOps Lead не обязан обязательно вызывать
-// конкретный инструмент в первом раунде: модель может начать с изучения
-// существующих манифестов (List/ReadFiles) или сразу записать декомпозицию.
+// конкретный инструмент в первом раунде: обязательные действия задаются
+// обобщённо через RequiredToolGroups (изучить код + опубликовать задачи).
 func (d *DevopsLead) RequiredToolFirstRound() (string, bool) {
 	return "", false
 }
+
+// RequiredToolGroups — обязательные действия DevOps Lead за цикл:
+// изучить состояние инфраструктуры (List, ReadFiles) и опубликовать/обновить
+// задачи для подчинённых на доске (BoardCreateTask/BoardUpdateTask/BoardDeleteTask).
+func (d *DevopsLead) RequiredToolGroups() [][]string {
+	groups := [][]string{{"List"}, {"ReadFiles"}}
+	if d.requireTaskPublishing && d.Store != nil {
+		groups = append(groups, []string{
+			tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask,
+		})
+	}
+	return groups
+}
+
+// SetTaskPublishing включает/отключает требование публикации задач на доске.
+func (d *DevopsLead) SetTaskPublishing(flag bool) { d.requireTaskPublishing = flag }
 
 func (d *DevopsLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 	return []agents.Message{
@@ -127,6 +148,10 @@ func (d *DevopsLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 2. Задачи создавай инструментом BoardCreateTask с полным контрактом в description. Переприоритезируй (sequence_order), обновляй условия и удаляй лишние задачи через BoardUpdateTask/BoardDeleteTask (удалять нельзя задачи, которые специалист уже взял в работу или выполнил).
 3. Следи за эпиками: если Системный архитектор изменил эпик (контракты/приоритеты) — пересмотри свои задачи: создай новые, скорректируй или удали текущие (пока они не в работе).
 4. После создания/ревизии задач ответь кратко текстом, что задачи опубликованы/обновлены. Если доска не подключена — верни итоговую JSON-декомпозицию по схеме ниже.
+
+### ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК РАБОТЫ (нарушение недопустимо):
+1. СНАЧАЛА ОБЯЗАТЕЛЬНО изучи состояние проекта: List (структура), затем ReadFiles (Docker Compose, Kubernetes-манифесты, CI/CD-конфиги, существующая инфраструктура). Без изучения кода задачи не публикуются.
+2. ЗАТЕМ ОБЯЗАТЕЛЬНО опубликуй задачи для своих подчинённых: новые — BoardCreateTask, ревизия — BoardUpdateTask/BoardDeleteTask. Текстовый ответ без создания/обновления задач считается НЕудачной работой: цикл повторится, пока задачи не появятся на доске.
 
 ### ТРЕБУЕМЫЙ ФОРМАТ ВЫХОДНЫХ ДАННЫХ (JSON SCHEMA):
 {

@@ -104,11 +104,12 @@ func (d *Devops) GetUserMessages() []agents.Message {
 	}
 }
 
-// RequiredToolFirstRound — DevOps-инженер не обязан обязательно вызывать
-// конкретный инструмент в первом раунде: модель может начать с изучения
-// существующих манифестов (List/ReadFiles) или сразу записать новый код.
+// RequiredToolFirstRound — DevOps-инженер обязан создать артефакты
+// (Dockerfile, docker-compose, манифесты) вызовом WriteFiles. Иначе слабая
+// модель «завершает» шаг, вставив содержимое Dockerfile текстом в ответ, и
+// файлы не появляются на диске. Runner подскажет, если модель ответила текстом.
 func (d *Devops) RequiredToolFirstRound() (string, bool) {
-	return "", false
+	return "WriteFiles", true
 }
 
 func (d *Devops) GetSystemMessages(_ []agents.Message) []agents.Message {

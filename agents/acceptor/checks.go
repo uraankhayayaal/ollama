@@ -58,6 +58,23 @@ func runFormatCheck(dir string, cfg Config, command, tool string) (*CheckResult,
 		return res, nil
 	}
 
+	// Автоформатирование Go: нарушения gofmt можно исправить детерминированно
+	// (gofmt -w). Чтобы цикл исправлений не крутился только на стиле, применяем
+	// форматирование и перепроверяем: если после этого нарушений нет — стиль
+	// считается пройденным с пометкой об автоисправлении.
+	if tool == "gofmt" && code == 0 && files != "" && isGoFormatLoopSafe(command) && cfg.AutoFormat {
+		fixCmd := "find . -name '*.go' -not -path './vendor/*' -print0 | xargs -0 -r gofmt -w"
+		if fixOut, fixCode, fixTimedOut, fixErr := runCommand(dir, fixCmd, cfg.BuildTimeout); fixErr == nil && !fixTimedOut && fixCode == 0 && !isToolMissing(fixOut, fixCode) {
+			if reOut, reCode, reTimedOut, reErr := runCommand(dir, command, cfg.BuildTimeout); reErr == nil && !reTimedOut && reCode == 0 && strings.TrimSpace(reOut) == "" {
+				res.OK = true
+				res.Output = "нарушения форматирования автоматически исправлены (gofmt -w)"
+				logging.Infof("[приёмка] %s: gofmt: нарушения автоматически исправлены", dir)
+				return res, nil
+			}
+		}
+		res.Output += "\n[... автоформатирование gofmt не устранило нарушения ...]"
+	}
+
 	res.Output = trimOutput(out, cfg.MaxLog)
 	var issues []Issue
 	for _, line := range strings.Split(files, "\n") {
@@ -140,6 +157,13 @@ func runAnalyzeCheck(dir string, cfg Config, command, tool string) (*CheckResult
 		issues = append(issues, Issue{Stage: StageAnalyze, Severity: "error", Text: msg})
 	}
 	return res, issues
+}
+
+// isGoFormatLoopSafe проверяет, что команда стиля — стандартный поиск
+// неотформатированных go-файлов (gofmt -l). Только для такой команды автофикс
+// gofmt -w безопасен: он не переписывает проект произвольный командой.
+func isGoFormatLoopSafe(command string) bool {
+	return strings.Contains(command, "gofmt") && strings.Contains(command, "-l")
 }
 
 // isToolMissing определяет, что команда была не найдена/недоступна в

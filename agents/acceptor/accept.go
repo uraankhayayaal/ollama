@@ -169,7 +169,19 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 			Output:   trimOutput(out, cfg.MaxLog),
 			TimedOut: timedOut,
 		}
-		if !rep.Build.OK {
+		if !rep.Build.OK && isToolMissing(out, code) {
+			// Инструмент сборки (npm/go/pip) отсутствует в окружении: это не
+			// дефект кода, а свойство хоста — шаг пропускается с предупреждением
+			// по той же конвенции, что и для установки зависимостей.
+			rep.Build.Skipped = true
+			rep.Build.Output = "инструмент сборки недоступен в окружении — шаг пропущен"
+			rep.Issues = append(rep.Issues, Issue{
+				Stage:    StageBuild,
+				Severity: "warning",
+				Text:     "инструмент сборки недоступен — шаг пропущен",
+			})
+			logging.Warnf("[приёмка] %s: сборка %q пропущена (инструмент недоступен)", rep.Project, buildCmd)
+		} else if !rep.Build.OK {
 			issues, _ := analyzeOutput(StageBuild, out)
 			rep.Issues = append(rep.Issues, issues...)
 			msg := "сборка завершилась с ошибкой"
@@ -182,7 +194,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 				rep.Issues = append(rep.Issues, Issue{Stage: StageBuild, Severity: "error", Text: msg})
 			}
 		}
-		logging.Infof("[приёмка] %s: сборка %q -> ok=%v", rep.Project, buildCmd, rep.Build.OK)
+		logging.Infof("[приёмка] %s: сборка %q -> ok=%v skipped=%v", rep.Project, buildCmd, rep.Build.OK, rep.Build.Skipped)
 	}
 
 	// Если сборка уже упала — запуск не имеет смысла: фиксируем вердикт и
@@ -249,6 +261,22 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 		ExitCode:   code,
 		ServerMode: timedOut,
 		OK:         false,
+	}
+	if isToolMissing(out, code) {
+		// Инструмент запуска (node/npm) отсутствует в окружении: пропускаем
+		// запуск с предупреждением, как и для установки/сборки.
+		run.Skipped = true
+		run.OK = true
+		run.Output = "инструмент запуска недоступен в окружении — шаг пропущен"
+		rep.Run = run
+		rep.Issues = append(rep.Issues, Issue{
+			Stage:    StageRun,
+			Severity: "warning",
+			Text:     "инструмент запуска недоступен — шаг пропущен",
+		})
+		logging.Warnf("[приёмка] %s: запуск %q пропущен (инструмент недоступен)", rep.Project, runCmd)
+		rep.Summary = summarize(rep)
+		return rep
 	}
 	if timedOut {
 		// Долгоживущий процесс (сервер) жив дольше таймаута и завершён

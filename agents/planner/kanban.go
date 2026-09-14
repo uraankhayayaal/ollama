@@ -34,8 +34,10 @@ const maxKanbanRounds = 100
 // в работе -> выполнена (или отменена). Переходы валидирует board.ValidateTransition.
 //
 // Лиды направлений (frontendlead/backendlead/devopslead/qalead) НЕ пишут код и
-// НЕ запускают консольные команды — они только генерируют JSON-декомпозицию
-// эпика на задачи (read-only инструменты List/ReadFiles).
+// НЕ запускают консольные команды: они исследуют существующий код (List/ReadFiles),
+// декомпозируют эпик на задачи для подчинённых (publication через общую доску
+// BoardCreateTask/BoardUpdateTask/BoardDeleteTask) и ревизуют задачи при
+// изменении содержимого эпика.
 type KanbanRunner struct {
 	provider models.LLMProvider
 	store    *board.Store
@@ -148,10 +150,13 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// phaseLeads: декомпозиция и ревизия эпиков лидами направлений. За один цикл
-// обрабатываем один эпик (дорогой вызов модели). Лид работает инструментами
-// доски (BoardCreateTask и др., если они доступны); при недоступности доски —
-// JSON-декомпозицией (fallback). Эпик переводится в «в анализе»; после ревизии
+// phaseLeads: декомпозиция и ревизия эпиков лидами направлений. Работа идёт
+// по очереди (сериализация): лид декомпозирует следующий эпик только после
+// завершения текущей волны задач — лиды не проектируют всё подряд на пустой
+// проект. Порядок очереди: инфраструктура (DevOps) -> приложение
+// (backend/frontend) -> тестирование (QA Last); внутри фазы — sequence_order,
+// затем task_id. Лид работает инструментами доски (BoardCreateTask и др.);
+// при недоступности доски — JSON-декомпозицией (fallback). После ревизии
 // LeadSyncedRev синхронизируется с ревизией эпика (пересмотр задач при
 // изменении контрактов архитектором, Revision > LeadSyncedRev).
 func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
@@ -159,6 +164,196 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
+	// Пока на доске есть незавершённые задачи (новая / в анализе / готова к
+	// работе / в работе), следующий эпик лиду не выдаётся: сначала должен
+	// выполниться уже запланированный объём работы.
+	idle, err := k.pipelineIdle(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !idle {
+		return false, nil
+	}
+
+	// Следующий эпик очереди лидов, которому нужна декомпозиция/ревизия.
+	epic, needDecompose, needResync, err := k.nextLeadEpic(epics)
+	if err != nil {
+		return false, err
+	}
+	if epic == nil {
+		return false, nil
+	}
+
+	lead, err := k.leadFor(epic)
+	if err != nil {
+		return false, fmt.Errorf("фаза лидов, эпик %s: %w", epic.TaskID, err)
+	}
+	if sb, ok := lead.(interface{ SetBoardStore(*board.Store) }); ok {
+		sb.SetBoardStore(k.store)
+	}
+	// Декомпозиция/ревизия всегда требует публикации задач на доске:
+	// лид обязан создать/обновить/удалить задачи для подчинённых.
+	if tp, ok := lead.(interface{ SetTaskPublishing(bool) }); ok {
+		tp.SetTaskPublishing(true)
+	}
+
+	// «В анализе»: для новой декомпозиции обязателен; при ревизии эпик может
+	// находиться дальше по цепочке — некритично (переход в анализ не требуется).
+	if err := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusAnalysis); err != nil {
+		if _, ok := err.(*board.StatusError); !ok {
+			return false, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err)
+		}
+	}
+	logging.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
+		leadName(epic), epic.TaskID, truncateText(epic.Title, 60), needResync)
+
+	resp, err := k.provider.Generate(ctx, lead)
+	if err != nil {
+		return false, fmt.Errorf("декомпозиция эпика %s: %w", epic.TaskID, err)
+	}
+	if resp != nil && resp.Truncated {
+		return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов", epic.TaskID)
+	}
+
+	// Инструментный путь: лид мог создать/изменить задачи прямо на доске
+	// (BoardCreateTask/BoardUpdateTask/BoardDeleteTask). Задачи уже в эпике.
+	if !needDecompose {
+		// Ревизия: доводим до «готова к работе», задачи мог обновить лид.
+		// LeadSyncedRev синхронизируем ниже.
+	} else {
+		// Падение на JSON-декомпозицию, если лид не создал задачи
+		// инструментами доски (fallback для тестов и standalone-режима).
+		tasks, err := k.store.TasksByEpic(ctx, epic.TaskID)
+		if err != nil {
+			return false, err
+		}
+		if len(tasks) == 0 {
+			dec, err := board.UnmarshalTasks(resp.Content)
+			if err != nil {
+				return false, fmt.Errorf("декомпозиция эпика %s: лид не создал задач ни доской, ни JSON: %w", epic.TaskID, err)
+			}
+			if len(dec) == 0 {
+				return false, fmt.Errorf("декомпозиция эпика %s: лид вернул пустой список tasks", epic.TaskID)
+			}
+			for i := range dec {
+				ts := dec[i]
+				if err := k.store.CreateTask(ctx, &board.Task{TaskSpec: ts, EpicID: epic.TaskID, Assignee: assignee(ts)}); err != nil {
+					return false, fmt.Errorf("эпик %s: создание задачи %s: %w", epic.TaskID, ts.TaskID, err)
+				}
+			}
+			logging.Infof("[эпик %s] декомпозирован на %d задач (JSON-fallback)", epic.TaskID, len(dec))
+		} else {
+			logging.Infof("[эпик %s] декомпозирован на %d задач (инструменты доски)", epic.TaskID, len(tasks))
+		}
+	}
+
+	// Синхронизация ревизии: с этой ревизии доски лид больше не обязан
+	// пересматривать задачи, пока архитектор не изменит эпик снова.
+	synced, err := k.store.GetEpic(ctx, epic.TaskID)
+	if err != nil {
+		return false, fmt.Errorf("эпик %s: чтение после декомпозиции: %w", epic.TaskID, err)
+	}
+	synced.LeadSyncedRev = synced.Revision
+	if err := k.store.SaveEpic(ctx, synced); err != nil {
+		return false, fmt.Errorf("эпик %s: сохранение ревизии: %w", epic.TaskID, err)
+	}
+
+	if !needDecompose && needResync {
+		// Ревизия: статус «в работе» уже не откатываем; доводим эпик к работе,
+		// если он стоит «в анализе» или «готова к работе».
+	} else if !needResync {
+		if err := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusReady); err != nil {
+			if _, ok := err.(*board.StatusError); !ok {
+				return false, fmt.Errorf("эпик %s: перевод в «готов к работе»: %w", epic.TaskID, err)
+			}
+		}
+	}
+	logging.Infof("[эпик %s] готов (ревизия %d, синхронизировано лидом %d)", epic.TaskID, synced.Revision, synced.LeadSyncedRev)
+	// «Список обновлённых задач»: после декомпозиции/ревизии лида печатаем
+	// в консоль актуальный состав задач эпика, чтобы человек видел итог.
+	published, listErr := k.store.TasksByEpic(ctx, synced.TaskID)
+	if listErr != nil {
+		return false, fmt.Errorf("эпик %s: чтение задач после декомпозиции: %w", synced.TaskID, listErr)
+	}
+	printLeadTasks(synced, published)
+	return true, nil
+}
+
+// printLeadTasks выводит в консоль (через logging.Infof) текущие задачи эпика
+// после работы лида: ID, статус, исполнитель, заголовок и приоритет/параллельность.
+func printLeadTasks(epic *board.Epic, tasks []*board.Task) {
+	logging.Infof("[Список обновлённых задач] эпик %s (%s) — %d задач:", epic.TaskID, truncateText(epic.Title, 60), len(tasks))
+	for _, t := range tasks {
+		logging.Infof("  - %s [%s] -> %s | %s (порядок %d, параллельно: %v)",
+			t.TaskID, t.Status.Label(), t.Assignee, truncateText(t.Title, 60), t.SequenceOrder.Int(), t.CanRunParallel.Bool())
+	}
+}
+
+// pipelineIdle сообщает, что на доске нет незавершённых задач (все предыдущие
+// декомпозиции выполнены или отменены). Только в этом состоянии лиду выдаётся
+// следующая декомпозиция: сначала выполняется уже запланированный объём работы.
+func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
+	tasks, err := k.store.ListTasks(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, t := range tasks {
+		if t.Status != board.StatusDone && t.Status != board.StatusCancelled {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// epicPhase классифицирует эпик по фазе разработки (аналог taskPhase для задач):
+// инфраструктура (DevOps) -> приложение (backend/frontend) -> тестирование (QA).
+func epicPhase(e *board.Epic) string {
+	switch {
+	case isRole(e.AssignedRole, "qa", "тест", "testing"):
+		return "test"
+	case isRole(e.AssignedRole, "devops", "инфра", "infra", "sre", "docker", "k8s", "ci"):
+		return "infra"
+	default:
+		return "app"
+	}
+}
+
+// epicPhaseRank — приоритет фазы эпика в очереди лидов: инфраструктура раньше
+// приложения, тестирование (в т.ч. qalead) — после всех задач разработки.
+func epicPhaseRank(phase string) int {
+	switch phase {
+	case "infra":
+		return 0
+	case "app":
+		return 1
+	default: // test
+		return 2
+	}
+}
+
+// epicLess — приоритет эпиков в очереди лидов: сначала фаза разработки
+// (инфраструктура -> приложение -> тестирование, QA Last), затем
+// sequence_order и, для детерминизма, task_id.
+func epicLess(a, b *board.Epic) bool {
+	ar, br := epicPhaseRank(epicPhase(a)), epicPhaseRank(epicPhase(b))
+	if ar != br {
+		return ar < br
+	}
+	ao, bo := a.SequenceOrder.Int(), b.SequenceOrder.Int()
+	if ao != bo {
+		return ao < bo
+	}
+	return a.TaskID < b.TaskID
+}
+
+// nextLeadEpic выбирает следующий эпик для декомпозиции/ревизии лидом по
+// приоритету очереди: инфраструктура -> приложение -> тестирование (QA Last),
+// внутри фазы — sequence_order, затем task_id. Возвращает (nil, false, false),
+// если ни одному эпику декомпозиция/ревизия не требуется.
+func (k *KanbanRunner) nextLeadEpic(epics []*board.Epic) (*board.Epic, bool, bool, error) {
+	var best *board.Epic
+	bestDecompose := false
 	for _, epic := range epics {
 		// Терминальные эпики не трогаем.
 		if epic.Status.Terminal() {
@@ -171,90 +366,15 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 		if !needDecompose && !needResync {
 			continue
 		}
-
-		lead, err := k.leadFor(epic)
-		if err != nil {
-			return false, fmt.Errorf("фаза лидов, эпик %s: %w", epic.TaskID, err)
+		if best == nil || epicLess(epic, best) {
+			best = epic
+			bestDecompose = needDecompose
 		}
-		if sb, ok := lead.(interface{ SetBoardStore(*board.Store) }); ok {
-			sb.SetBoardStore(k.store)
-		}
-
-		// «В анализе»: для новой декомпозиции обязателен; при ревизии эпис может
-		// находиться дальше по цепочке — некритично (переход в анализ не требуется).
-		if err := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusAnalysis); err != nil {
-			if _, ok := err.(*board.StatusError); !ok {
-				return false, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err)
-			}
-		}
-		logging.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
-			leadName(epic), epic.TaskID, truncateText(epic.Title, 60), needResync)
-
-		resp, err := k.provider.Generate(ctx, lead)
-		if err != nil {
-			return false, fmt.Errorf("декомпозиция эпика %s: %w", epic.TaskID, err)
-		}
-		if resp != nil && resp.Truncated {
-			return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов", epic.TaskID)
-		}
-
-		// Инструментный путь: лид мог создать/изменить задачи прямо на доске
-		// (BoardCreateTask/BoardUpdateTask/BoardDeleteTask). Задачи уже в эпике.
-		if !needDecompose {
-			// Ревизия: доводим до «готова к работе», задачи мог обновить лид.
-			// LeadSyncedRev синхронизируем ниже.
-		} else {
-			// Падение на JSON-декомпозицию, если лид не создал задачи
-			// инструментами доски (fallback для тестов и standalone-режима).
-			tasks, err := k.store.TasksByEpic(ctx, epic.TaskID)
-			if err != nil {
-				return false, err
-			}
-			if len(tasks) == 0 {
-				dec, err := board.UnmarshalTasks(resp.Content)
-				if err != nil {
-					return false, fmt.Errorf("декомпозиция эпика %s: лид не создал задач ни доской, ни JSON: %w", epic.TaskID, err)
-				}
-				if len(dec) == 0 {
-					return false, fmt.Errorf("декомпозиция эпика %s: лид вернул пустой список tasks", epic.TaskID)
-				}
-				for i := range dec {
-					ts := dec[i]
-					if err := k.store.CreateTask(ctx, &board.Task{TaskSpec: ts, EpicID: epic.TaskID, Assignee: assignee(ts)}); err != nil {
-						return false, fmt.Errorf("эпик %s: создание задачи %s: %w", epic.TaskID, ts.TaskID, err)
-					}
-				}
-				logging.Infof("[эпик %s] декомпозирован на %d задач (JSON-fallback)", epic.TaskID, len(dec))
-			} else {
-				logging.Infof("[эпик %s] декомпозирован на %d задач (инструменты доски)", epic.TaskID, len(tasks))
-			}
-		}
-
-		// Синхронизация ревизии: с этой ревизии доски лид больше не обязан
-		// пересматривать задачи, пока архитектор не изменит эпик снова.
-		synced, err := k.store.GetEpic(ctx, epic.TaskID)
-		if err != nil {
-			return false, fmt.Errorf("эпик %s: чтение после декомпозиции: %w", epic.TaskID, err)
-		}
-		synced.LeadSyncedRev = synced.Revision
-		if err := k.store.SaveEpic(ctx, synced); err != nil {
-			return false, fmt.Errorf("эпик %s: сохранение ревизии: %w", epic.TaskID, err)
-		}
-
-		if !needDecompose && needResync {
-			// Ревизия: статус «в работе» уже не откатываем; доводим эпик к работе,
-			// если он стоит «в анализе» или «готова к работе».
-		} else if !needResync {
-			if err := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusReady); err != nil {
-				if _, ok := err.(*board.StatusError); !ok {
-					return false, fmt.Errorf("эпик %s: перевод в «готов к работе»: %w", epic.TaskID, err)
-				}
-			}
-		}
-		logging.Infof("[эпик %s] готов (ревизия %d, синхронизировано лидом %d)", epic.TaskID, synced.Revision, synced.LeadSyncedRev)
-		return true, nil
 	}
-	return false, nil
+	if best == nil {
+		return nil, false, false, nil
+	}
+	return best, bestDecompose, !bestDecompose, nil
 }
 
 // phaseReady: задачи, у которых выполнены все зависимости и фаза-гейт
@@ -417,6 +537,11 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		qa := qalead.NewQALead(k.store.Project(), k.bugTriagePrompt(k.store.Project(), newBugs))
 		if sb, ok := any(qa).(interface{ SetBoardStore(*board.Store) }); ok {
 			sb.SetBoardStore(k.store)
+		}
+		// Триаж багрепортов — не декомпозиция: QA Lead работает статусами
+		// багрепортов (BoardSetBugStatus), публиковать задачи не обязан.
+		if tp, ok := any(qa).(interface{ SetTaskPublishing(bool) }); ok {
+			tp.SetTaskPublishing(false)
 		}
 		resp, err := k.provider.Generate(ctx, qa)
 		if err != nil {
@@ -716,24 +841,28 @@ func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
 // специализации (frontend/backend) идёт по роли задачи (маркеры фронтенда)
 // либо по умолчанию — backend.
 func (k *KanbanRunner) specialistFor(t *board.Task) (agents.Agent, error) {
-	project := k.store.Project()
-	prompt := k.taskPrompt(t)
+	return specialistForRole(k.store.Project(), t.AssignedRole, k.taskPrompt(t)), nil
+}
 
+// specialistForRole создаёт агента-специалиста по роли задачи: QA/DevOps или
+// разработчик (backend/frontend). Общий для Kanban- и plan-исполнителей:
+// выбор специализации (QA/DevOps/frontend/backend) идёт по роли задачи.
+func specialistForRole(project, role, prompt string) agents.Agent {
 	switch {
-	case isRole(t.AssignedRole, "qa", "тест", "testing"):
-		return qaengineer.NewQAEngineer(project, prompt), nil
-	case isRole(t.AssignedRole, "devops", "инфра", "infra", "sre", "docker", "k8s", "ci"):
-		return devops.NewDevops(project, prompt), nil
+	case isRole(role, "qa", "тест", "testing"):
+		return qaengineer.NewQAEngineer(project, prompt)
+	case isRole(role, "devops", "инфра", "infra", "sre", "docker", "k8s", "ci"):
+		return devops.NewDevops(project, prompt)
 	}
 
 	// Разработка кода: задача с фронтенд-маркерами отдаётся Frontend-агенту,
 	// всё остальное (включая смешанные/backend/универсальные задачи) — Backend-
 	// агенту. Оба агента работают в temp/<project> в корне модуля и сами
 	// создают недостающую структуру подпроекта.
-	if isRole(t.AssignedRole, "front", "react", "ui", "client", "фронт", "js", "ts", "vue") {
-		return developer.NewFrontendDeveloper(project, prompt), nil
+	if isRole(role, "front", "react", "ui", "client", "фронт", "js", "ts", "vue") {
+		return developer.NewFrontendDeveloper(project, prompt)
 	}
-	return developer.NewBackendDeveloper(project, prompt), nil
+	return developer.NewBackendDeveloper(project, prompt)
 }
 
 // taskPrompt формирует задание специалисту по задаче с Kanban-доски.

@@ -34,6 +34,21 @@ func TestScopeMatcherEmptyAllowed(t *testing.T) {
 	if !m.Allow("anything.go") {
 		t.Fatal("без области всё должно быть разрешено")
 	}
+	// Пустая область — как и Allow, HasInside должен разрешать обход любых
+	// директорий: иначе List при scope=[]/nil скрывает все директории.
+	if !m.HasInside("src") {
+		t.Fatal("при пустой области нужно заходить в любую директорию")
+	}
+	if !m.HasInside("frontend") {
+		t.Fatal("при пустой области нужно показывать любую директорию")
+	}
+	compiled := CompileScope([]string{"", ".", " \t "})
+	if !compiled.Empty() {
+		t.Fatal("мусорный срез должен быть Empty")
+	}
+	if !compiled.HasInside("sub") {
+		t.Fatal("мусорный срез трактуется как пустой — заходить нужно")
+	}
 }
 
 func TestScopeMatcherNormalizesEntries(t *testing.T) {

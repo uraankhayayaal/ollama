@@ -17,7 +17,7 @@ const (
 	AgentFrontendDev  AgentType = "frontend"
 	AgentAcceptor     AgentType = "acceptor"
 	AgentDevops       AgentType = "devops"
-	AgentDevopsLead   AgentType = "devops-lead"
+	AgentDevopsLead   AgentType = "devopslead"
 	AgentQAEngineer   AgentType = "qa"
 	AgentQALead       AgentType = "qalead"
 	AgentFrontendLead AgentType = "frontendlead"

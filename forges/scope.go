@@ -67,9 +67,12 @@ func (m *ScopeMatcher) Allow(rel string) bool {
 // HasInside возвращает true, если директория rel (slash-путь) сама является
 // областью работы или внутри неё (в листьях) есть область — т.е. при обходе
 // в неё стоит заходить, даже если сама директория формально вне области.
+// Для пустой области (всё разрешено) возвращает true: иначе List при
+// scope=[]/nil скрывал бы все директории, и модель не видела бы структуру
+// проекта.
 func (m *ScopeMatcher) HasInside(dir string) bool {
 	if m.Empty() {
-		return false
+		return true
 	}
 	dir = filepath.ToSlash(filepath.Clean(dir))
 	if dir == "." || dir == "" {

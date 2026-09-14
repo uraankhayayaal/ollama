@@ -162,11 +162,11 @@ func (d *base) GetUserMessages() []agents.Message {
 	}
 }
 
-// RequiredToolFirstRound — разработчик не обязан вызывать конкретный инструмент
-// в первом раунде: модель может начать с изучения существующего кода (List,
-// ReadFiles) или сразу записать недостающие файлы.
+// RequiredToolFirstRound — разработчик обязан вызвать WriteFiles в первом
+// раунде, чтобы гарантированно создать/обновить файлы. Если модель ответила
+// текстом-описанием без вызова инструмента, runner подскажет и повторит запрос.
 func (d *base) RequiredToolFirstRound() (string, bool) {
-	return "", false
+	return "WriteFiles", true
 }
 
 func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {

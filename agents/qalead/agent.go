@@ -43,6 +43,11 @@ type QALead struct {
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
 	Store *board.Store
+	// requireTaskPublishing — обязательна ли публикация задач на доске:
+	// лид не считается отработавшим, пока не создал/обновил задачи для
+	// подчинённых. Отключается для триажа багрепортов (там работа идёт
+	// инструментами BoardSetBugStatus, а не декомпозицией на задачи).
+	requireTaskPublishing bool
 }
 
 // NewQALead создаёт QA Lead в общей для всех агентов выходной папке
@@ -74,10 +79,11 @@ func NewQALeadInDir(prompt, dir string) (*QALead, error) {
 func newQALead(dir, prompt string, cfg Config) *QALead {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
 	return &QALead{
-		FileOps: ops,
-		Prompt:  prompt,
-		Config:  cfg,
-		Tools:   tools.Select(leadToolNames, tools.Deps{FileOps: ops}),
+		FileOps:               ops,
+		Prompt:                prompt,
+		Config:                cfg,
+		Tools:                 tools.Select(leadToolNames, tools.Deps{FileOps: ops}),
+		requireTaskPublishing: true,
 	}
 }
 
@@ -102,11 +108,30 @@ func (l *QALead) GetUserMessages() []agents.Message {
 }
 
 // RequiredToolFirstRound — QA Lead не обязан обязательно вызывать конкретный
-// инструмент в первом раунде: модель может начать с изучения контрактов и
-// тестов (List/ReadFiles) или сразу записать тест-план.
+// инструмент в первом раунде: обязательные действия задаются обобщённо через
+// RequiredToolGroups (изучить код + опубликовать задачи).
 func (l *QALead) RequiredToolFirstRound() (string, bool) {
 	return "", false
 }
+
+// RequiredToolGroups — обязательные действия QA Lead за цикл: изучить код и
+// контракты (List, ReadFiles) и опубликовать/обновить задачи для подчинённых
+// на доске (BoardCreateTask/BoardUpdateTask/BoardDeleteTask). При триаже
+// багрепортов публикация задач не требуется (SetTaskPublishing(false)).
+func (l *QALead) RequiredToolGroups() [][]string {
+	groups := [][]string{{"List"}, {"ReadFiles"}}
+	if l.requireTaskPublishing && l.Store != nil {
+		groups = append(groups, []string{
+			tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask,
+		})
+	}
+	return groups
+}
+
+// SetTaskPublishing включает/отключает требование публикации задач на доске.
+// Оркестратор выключает его для триажа багрепортов (QA Lead там не создаёт
+// задачи, а подтверждает/отсекает дефекты инструментом BoardSetBugStatus).
+func (l *QALead) SetTaskPublishing(flag bool) { l.requireTaskPublishing = flag }
 
 func (l *QALead) GetSystemMessages(_ []agents.Message) []agents.Message {
 	return []agents.Message{
@@ -127,6 +152,10 @@ func (l *QALead) GetSystemMessages(_ []agents.Message) []agents.Message {
 2. Задачи создавай инструментом BoardCreateTask с полным контрактом в description. Переприоритезируй (sequence_order), обновляй условия и удаляй лишние задачи через BoardUpdateTask/BoardDeleteTask (удалять нельзя задачи, которые специалист уже взял в работу или выполнил).
 3. Следи за эпиками: если Системный архитектор изменил эпик (контракты/приоритеты) — пересмотри свои задачи: создай новые, скорректируй или удали текущие (пока они не в работе).
 4. После создания/ревизии задач ответь кратко текстом, что задачи опубликованы/обновлены. Если доска не подключена — верни итоговую JSON-декомпозицию по схеме ниже.
+
+### ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК РАБОТЫ (нарушение недопустимо):
+1. СНАЧАЛА ОБЯЗАТЕЛЬНО изучи существующий код: List (структура), затем ReadFiles (контракты Архитектора, схемы API/JSON/DTO, существующие тесты). Без изучения кода задачи не публикуются.
+2. ЗАТЕМ ОБЯЗАТЕЛЬНО опубликуй задачи для своих подчинённых: новые — BoardCreateTask, ревизия — BoardUpdateTask/BoardDeleteTask. Текстовый ответ без создания/обновления задач считается НЕудачной работой: цикл повторится, пока задачи не появятся на доске. Исключение — режим триажа багрепортов, где работа идёт инструментом BoardSetBugStatus (без публикации задач).
 
 ### ТРИАЖ БАГРЕПОРТОВ (QA-специалисты присылают их через BoardCreateBugReport):
 1. Следи за багрепортами в статусе new через BoardListBugs. Для каждого оцени: описана ли проблема по делу, воспроизводима ли, есть ли привязка к контракту/задаче.

@@ -12,15 +12,20 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-func TestRequiredToolFirstRoundDisabled(t *testing.T) {
+// Разработчик обязан первым делом вызвать WriteFiles: если модель ответила
+// текстом-описанием без вызова инструмента, runner подскажет ей (nudge).
+func TestRequiredToolFirstRound(t *testing.T) {
 	for name, mk := range map[string]func(string, string) *base{
 		"backend":  func(p, d string) *base { return newBackendDeveloperInDir(p, d).base },
 		"frontend": func(p, d string) *base { return newFrontendDeveloperInDir(p, d).base },
 	} {
 		d := mk("тестовое задание", t.TempDir())
 		toolName, ok := d.RequiredToolFirstRound()
-		if ok {
-			t.Errorf("%s: не должен требовать инструмент в первом раунде, got %q", name, toolName)
+		if !ok {
+			t.Errorf("%s: должен требовать инструмент в первом раунде", name)
+		}
+		if toolName != "WriteFiles" {
+			t.Errorf("%s: обязательный инструмент должен быть WriteFiles, got %q", name, toolName)
 		}
 	}
 }
