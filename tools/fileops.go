@@ -768,15 +768,29 @@ func runCommand(command, workdir string) (map[string]string, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	pgid := cmd.Process.Pid
-	runErr := cmd.Wait()
 
-	// При таймауте (или ошибке) добиваем группу процессов: CommandContext
-	// убивает только прямого потомка, а его дети (сервер) могли выжить.
-	if ctx.Err() == context.DeadlineExceeded || runErr != nil {
-		if pgid > 0 {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	// Ждём завершения в отдельной горутине: при таймауте необходимо убить
+	// ВСЮ группу процессов — выживший потомок (go run → бинарь, npm → сервер,
+	// sleep) держит каналы stdout/stderr открытыми, и прямой cmd.Wait()
+	// блокируется навсегда, игнорируя таймаут.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	var runErr error
+	timedOut := false
+	select {
+	case <-ctx.Done():
+		// Превышен таймаут: процесс (и его потомки) ещё живы — принудительно
+		// завершаем всю группу, чтобы закрылись унаследованные каналы вывода
+		// и cmd.Wait() (в done) разблокировался.
+		if cmd.Process != nil && cmd.Process.Pid > 0 {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
+		<-done
+		timedOut = true
+		runErr = ctx.Err()
+	case werr := <-done:
+		runErr = werr
 	}
 
 	result := map[string]string{
@@ -786,12 +800,13 @@ func runCommand(command, workdir string) (map[string]string, error) {
 		"stdout":     stdout.String(),
 		"stderr":     stderr.String(),
 	}
-	if runErr != nil {
+	if timedOut {
+		result["exit_error"] = "signal: killed (timeout)"
+		result["status"] = "error"
+		result["message"] = fmt.Sprintf("команда не завершилась за %s и была остановлена (timeout)", runTimeout())
+	} else if runErr != nil {
 		result["exit_error"] = runErr.Error()
 		result["status"] = "error"
-		if ctx.Err() == context.DeadlineExceeded {
-			result["message"] = fmt.Sprintf("команда не завершилась за %s и была остановлена (timeout)", runTimeout())
-		}
 	} else {
 		result["status"] = "success"
 	}
@@ -814,6 +829,17 @@ func (ops *FileOps) Run(args map[string]any) ([]byte, error) {
 		return resultJSON, nil
 	}
 
+	// Защита от зависания: долгоживущие серверные команды (go run server/main.go,
+	// npm run dev и т.п.) не завершаются сами — вместо ожидания таймаута сразу
+	// возвращаем ошибку с инструкцией верифицировать через сборку и автотесты.
+	if hint, ok := longRunningHint(params.Command); ok {
+		resultJSON, _ := json.Marshal(map[string]string{
+			"status":  "error",
+			"message": hint,
+		})
+		return resultJSON, nil
+	}
+
 	result, err := runCommand(params.Command, ops.OutputDir)
 	if err != nil {
 		return nil, err
@@ -821,4 +847,89 @@ func (ops *FileOps) Run(args map[string]any) ([]byte, error) {
 
 	resultJSON, _ := json.Marshal(result)
 	return resultJSON, nil
+}
+
+// longRunningHint определяет, похожа ли команда на запуск долгоживущего
+// процесса (сервер/дев-режим), и возвращает пояснение для модели. Длинные
+// команды «запуска приложения» не завершаются до таймаута, и агент виснет на
+// 60+ секунд в ожидании вывода; для проверки правильности кода достаточно
+// сборки и автотестов.
+func longRunningHint(command string) (string, bool) {
+	cmd := strings.TrimSpace(command)
+	lower := strings.ToLower(cmd)
+	// Команды для фонового запуска/быстрой проверки (с sleep-овым прогревом и
+	// последующим curl) не блокируют шаг — пропускаем хинт.
+	if strings.Contains(lower, "&") || strings.Contains(lower, "sleep") && strings.Contains(lower, "curl") {
+		return "", false
+	}
+	// Запуск приложения/сервера через go run (server/main.go, ./, cmd/server
+	// и т.п.) не завершается — блокируем, оставляя go run только для быстрых
+	// утилит/скриптов, которые не ведут себя как серверы.
+	if idx := strings.Index(lower, "go run"); idx >= 0 {
+		rest := strings.TrimSpace(lower[idx+len("go run"):])
+		target := rest
+		if i := strings.IndexAny(rest, " \t\n"); i >= 0 {
+			target = rest[:i]
+		}
+		blocked := target == "." || target == "./" || target == "./main" || target == "./app"
+		for _, marker := range []string{"server", "cmd/", "main.go", "/app", "app/"} {
+			if strings.Contains(target, marker) {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			return "Команда похожа на запуск приложения/сервера через go run (например, go run server/main.go) — процесс не завершается сам, и шаг завис бы на таймауте. Не запускай приложение: вместо этого проверь код через сборку и автотесты (go build ./... и go test ./...), а поднятие сервисов опиши в README.", true
+		}
+		return "", false
+	}
+	fragments := []string{
+		"npm run dev",
+		"npm start",
+		"npm run start",
+		"npm run serve",
+		"yarn start",
+		"yarn run start",
+		"yarn dev",
+		"yarn run dev",
+		"pnpm dev",
+		"pnpm start",
+		"bun dev",
+		"bun run dev",
+		"bun start",
+		"npx dev",
+		"npx run dev",
+		"vite dev",
+		"next dev",
+		"nuxt dev",
+		"ng serve",
+		"quasar dev",
+		"uvicorn",
+		"gunicorn",
+		"flask run",
+		"fastapi dev",
+		"python app",
+		"python3 app",
+		"python main",
+		"node server",
+		"node index",
+		"deno run",
+		"docker compose up",
+		"docker-compose up",
+		"docker-compose -f up",
+		"kubectl port-forward",
+		"helm install",
+		"dotnet run",
+		"java -jar",
+		"rails server",
+		"python manage.py runserver",
+		"python manage.py migrate",
+		"celery worker",
+	}
+	for _, f := range fragments {
+		if strings.Contains(lower, f) {
+			return "Команда похожа на запуск долгоживущего фронтенд-процесса/сервера в дев-режиме (npm/pnpm/yarn run dev|start и аналоги), который не завершается сам — шаг завис бы на таймауте. Не запускай приложение: для фронтенда проверь через сборку и тесты (npm run build / pnpm build / yarn build и npm test / pnpm test / yarn test по аналогии), для бэкенда — go build ./... и go test ./....", true
+		}
+	}
+	return "", false
 }

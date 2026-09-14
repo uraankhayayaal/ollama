@@ -50,3 +50,48 @@ func TestRunCommandSuccess(t *testing.T) {
 		t.Fatalf("успешная команда не должна нести сообщение о таймауте, got %q", out["message"])
 	}
 }
+
+// TestLongRunningHintBlocked — запуск приложения/сервера распознаётся как
+// долгоживущая команда и возвращает хинт; сборка и автотесты — проходят.
+func TestLongRunningHintBlocked(t *testing.T) {
+	blocked := []string{
+		"go run server/main.go",
+		"go run .",
+		"go run ./cmd/server",
+		"npm run dev",
+		"npm start",
+		"pnpm run dev",
+		"yarn dev",
+		"yarn start",
+		"next dev",
+		"vite dev",
+		"ng serve",
+		"uvicorn app:app --host 0.0.0.0",
+		"python main.py",
+		"docker compose up -d",
+	}
+	for _, cmd := range blocked {
+		hint, ok := longRunningHint(cmd)
+		if !ok || !strings.Contains(hint, "завис") {
+			t.Errorf("команда должно быть заблокирована: %q (hint=%q)", cmd, hint)
+		}
+	}
+
+	allowed := []string{
+		"go build ./...",
+		"go vet ./...",
+		"go test ./...",
+		"go run ./scripts/check.go",
+		"npm run build",
+		"yarn build",
+		"pnpm build",
+		"npm test",
+		"docker compose config",
+		"go run server/main.go & sleep 2 && curl localhost:8080",
+	}
+	for _, cmd := range allowed {
+		if hint, ok := longRunningHint(cmd); ok {
+			t.Errorf("команда не должна блокироваться: %q (hint=%q)", cmd, hint)
+		}
+	}
+}

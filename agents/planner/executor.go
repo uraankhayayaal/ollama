@@ -91,6 +91,12 @@ func (e *Executor) Run(ctx context.Context) error {
 		}
 	}
 
+	// PLAN.md: пишем начальный план работ (без декомпозиций — они появятся
+	// после шагов лидов), чтобы документ существовал с самого начала.
+	if err := writePlanDoc(e.plan.ProjectName, e.plan); err != nil {
+		logging.Warnf("[Plan] не удалось записать PLAN.md: %v", err)
+	}
+
 	for _, wave := range waves {
 		for _, stepID := range wave {
 			step := e.findStep(stepID)
@@ -118,7 +124,16 @@ func (e *Executor) Run(ctx context.Context) error {
 	// Цикл приёмки: после выполнения всех шагов плана принимаем собранное
 	// приложение. Если приёмка выявила ошибки — планировщик составляет шаги
 	// исправления, они выполняются, и приёмка повторяется (бюджет ACCEPT_MAX_ROUNDS).
-	return e.runAcceptanceLoop(ctx)
+	if err := e.runAcceptanceLoop(ctx); err != nil {
+		return err
+	}
+
+	// Финальная запись PLAN.md после полного выполнения (включая шаги
+	// исправлений цикла приёмки).
+	if err := writePlanDoc(e.plan.ProjectName, e.plan); err != nil {
+		logging.Warnf("[Plan] не удалось записать PLAN.md (финал): %v", err)
+	}
+	return nil
 }
 
 // initCheckpoint восстанавливает состояние при resume или создаёт новый
@@ -395,13 +410,13 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	}
 	printDecomposedTasks(tasks)
 	sortTaskSpecs(tasks)
+	step.Tasks = tasks
+	e.persistPlan(ctx)
 
-	// Раздел «План работ» в README: лид уже задокументировал свой план
-	// (промптом), а оркестратор детерминированно ведёт статусы каждой задачи,
-	// чтобы следующий разработчик знал этап и объём реализованных работ.
-	doneTasks := map[string]bool{}
-	if err := e.syncPlanReadme(projectName, step.ID, tasks, doneTasks); err != nil {
-		logging.Warnf("[%s] шаг %s: не удалось записать план работ в README: %v", agentLabel(step.Agent, step.Role), step.ID, err)
+	// PLAN.md: детерминированно записываем полный план работ с декомпозицией
+	// лидов — следующий разработчик видит все задачи и их контракты.
+	if err := writePlanDoc(projectName, e.plan); err != nil {
+		logging.Warnf("[%s] шаг %s: не удалось записать PLAN.md: %v", agentLabel(step.Agent, step.Role), step.ID, err)
 	}
 
 	for _, ts := range tasks {
@@ -424,75 +439,35 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 				return err
 			}
 		}
-		doneTasks[ts.TaskID] = true
-		if err := e.syncPlanReadme(projectName, step.ID, tasks, doneTasks); err != nil {
-			logging.Warnf("[%s] шаг %s: не удалось обновить статус задачи %s в README: %v", agentLabel(step.Agent, step.Role), step.ID, ts.TaskID, err)
-		}
 		logging.Infof("[задача %s] выполнена специалистом %s", ts.TaskID, truncateText(ts.AssignedRole, 30))
+	}
+	// Финальная запись PLAN.md после выполнения всех задач шага.
+	if err := writePlanDoc(projectName, e.plan); err != nil {
+		logging.Warnf("[%s] шаг %s: не удалось записать PLAN.md (финальная): %v", agentLabel(step.Agent, step.Role), step.ID, err)
 	}
 	return nil
 }
 
-// syncPlanReadme детерминированно ведёт раздел «План работ» в README проекта:
-// список задач декомпозиции лида с их статусами и прогрессом. Раздел
-// ограничен HTML-комментариями-маркерами и перезаписывается целиком, поэтому
-// оркестратор не конфликтует с текстом, который лиды/разработчики добавляют
-// в README. doneTasks — множество task_id, уже выполненных специалистами.
-func (e *Executor) syncPlanReadme(projectName, stepID string, tasks []board.TaskSpec, doneTasks map[string]bool) error {
-	projectDir := projects.ProjectDir(projectName)
-	readme := filepath.Join(projectDir, readmePlanName(projectDir))
-
-	openMarker := "<!-- plan-status:" + stepID + " -->"
-	closeMarker := "<!-- /plan-status:" + stepID + " -->"
-
-	var body strings.Builder
-	doneCount, total := 0, len(tasks)
-	for _, t := range tasks {
-		if doneTasks[t.TaskID] {
-			doneCount++
-		}
+// persistPlan обновляет PlanJSON в чекпоинте, чтобы декомпозиции лидов
+// (Step.Tasks с контрактами) переживали resume. Без чекпоинта — no-op.
+func (e *Executor) persistPlan(ctx context.Context) {
+	if e.store == nil {
+		return
 	}
-	fmt.Fprintf(&body, "## План работ (шаг %s)\n\n", stepID)
-	fmt.Fprintf(&body, "Объём реализованных работ плана: %d из %d задач.\n\n", doneCount, total)
-	body.WriteString("| Задача | Название | Роль | Статус |\n")
-	body.WriteString("|---|---|---|---|\n")
-	for _, t := range tasks {
-		status := "запланировано"
-		if doneTasks[t.TaskID] {
-			status = "выполнено"
-		}
-		fmt.Fprintf(&body, "| %s | %s | %s | %s |\n", escapeCell(t.TaskID), escapeCell(truncateText(t.Title, 50)), escapeCell(truncateText(t.AssignedRole, 30)), status)
+	planJSON, err := json.Marshal(e.plan)
+	if err != nil {
+		logging.Warnf("[Checkpoint] не удалось сериализовать план с декомпозицией: %v", err)
+		return
 	}
-	fmt.Fprintf(&body, "\nРеализовано: %d из %d задач (%.0f%%).\n", doneCount, total, float64(doneCount)*100/float64(max(total, 1)))
-
-	block := openMarker + "\n" + body.String() + closeMarker + "\n"
-
-	existing, err := os.ReadFile(readme)
-	if err != nil && !os.IsNotExist(err) {
-		return err
+	snap, err := e.store.Load(ctx)
+	if err != nil {
+		logging.Warnf("[Checkpoint] не удалось обновить PLAN.json (Load: %v)", err)
+		return
 	}
-	content := string(existing)
-	if start := strings.Index(content, openMarker); start >= 0 {
-		if end := strings.Index(content[start:], closeMarker); end >= 0 {
-			replaced := content[:start] + block + content[start+end+len(closeMarker):]
-			return os.WriteFile(readme, []byte(replaced), 0644)
-		}
+	snap.PlanJSON = planJSON
+	if err := e.store.Save(ctx, snap); err != nil {
+		logging.Warnf("[Checkpoint] не удалось обновить PLAN.json (Save: %v)", err)
 	}
-	// Секции ещё нет — добавляем в конец (или создаём README).
-	updated := content
-	if updated != "" && !strings.HasSuffix(updated, "\n") {
-		updated += "\n"
-	}
-	updated += "\n" + block
-	return os.WriteFile(readme, []byte(updated), 0644)
-}
-
-// escapeCell экранирует содержимое ячейки markdown-таблицы (вертикальные
-// пайпы и переводы строк, ломающие разметку).
-func escapeCell(s string) string {
-	s = strings.ReplaceAll(s, "|", "\\|")
-	s = strings.ReplaceAll(s, "\n", " ")
-	return strings.TrimSpace(s)
 }
 
 // truncatedStepError обрабатывает исчерпание лимита раундов в шаге-декомпозиции
@@ -517,7 +492,7 @@ func (e *Executor) truncatedStepError(ctx context.Context, step *Step, resp *run
 // лида (plan-режим). В отличие от Kanban-задач, в plan-режиме доска не
 // подключена, поэтому подсказки про статусы доски отсутствуют.
 func leadTaskPrompt(project string, t board.TaskSpec) string {
-	return fmt.Sprintf("Ты — специалист (%s), выполняешь задачу из декомпозиции лида проекта %q.\n\nЗадача: %s — %s\n\nПостановка задачи:\n%s\n\nПравила:\n- Работай в своей выходной директории (OutputDir): учи структуру через List, читай контракты через ReadFiles.\n- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n- Не выходи за пределы своей части монорепозитория (роль задана промптом).",
+	return fmt.Sprintf("Ты — специалист (%s), выполняешь задачу из декомпозиции лида проекта %q.\n\nЗадача: %s — %s\n\nПостановка задачи (полный контракт):\n%s\n\nПравила:\n- Работай в своей выходной директории (OutputDir): учи структуру через List, читай контракты через ReadFiles (в т.ч. PLAN.md в корне проекта — там полный план работ с контрактами всех задач лида).\n- Выполни задачу строго по описанному контракту: не меняй публичные сигнатуры, типы, интерфейсы и API-схемы из постановки.\n- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n- Не выходи за пределы своей части монорепозитория (роль задана промптом).",
 		t.AssignedRole, project, t.TaskID, t.Title, t.Description)
 }
 
@@ -689,33 +664,12 @@ func leadStepScope(projectDir string, step *Step) []string {
 			scope = effectiveCreationScope(projectDir, step.Scope)
 		}
 	}
-	// README проекта всегда доступен специалистам: лид документирует в нём
-	// план работ, и каждый следующий разработчик должен прочитать раздел
-	// «План работ», чтобы понять, что уже реализовано.
-	if readme := readmePlanName(projectDir); readme != "" {
-		scope = append(scope, readme)
-	}
+	// PLAN.md всегда доступен специалистам: в нём полный план работ с
+	// контрактами задач лидов, и каждый следующий разработчик должен его
+	// прочитать, чтобы понять план и объём уже реализованного.
+	scope = append(scope, planDocName)
 	return scope
-}
-
-// readmePlanName возвращает имя файла README в корне проекта (реально
-// существующий, без учёта регистра), либо "README.md", если его ещё нет.
-// Используется лидами и оркестратором для ведения раздела «План работ».
-func readmePlanName(projectDir string) string {
-	entries, err := os.ReadDir(projectDir)
-	if err != nil {
-		return "README.md"
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(e.Name()), "readme") {
-			return e.Name()
-		}
-	}
-	return "README.md"
-}
+} 
 
 // effectiveCreationScope расширяет scope шага для СОЗДАНИЯ файлов. Если запись
 // scope указывает на конкретный файл, которого ещё нет на диске, шаг создаёт

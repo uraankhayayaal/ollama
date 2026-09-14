@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"ai/board"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -88,6 +89,12 @@ type Step struct {
 	// AgentBackendDev/AgentFrontendDev роль уже зафиксирована агентом и
 	// хранится только для журналирования.
 	Role Role `json:"role,omitempty"`
+	// Tasks — подзадачи, декомпозированные лидом направления для этого шага
+	// (JSON-декомпозиция лида в plan-режиме). Заполняются исполнителем при
+	// выполнении лид-шага и сериализуются в чекпоинт вместе с планом, чтобы
+	// PLAN.md переживал resume. Каждая задача несёт полный контракт в
+	// Description (типы, интерфейсы, сигнатуры методов, API).
+	Tasks []board.TaskSpec `json:"tasks,omitempty"`
 }
 
 // Plan — структурированный план, возвращаемый планировщиком.

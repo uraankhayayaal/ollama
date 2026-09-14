@@ -90,6 +90,27 @@ func TestExecutorLeadStepImplementsDecomposition(t *testing.T) {
 	if !exec.completed["s1"] {
 		t.Fatal("шаг должен быть отмечен завершённым")
 	}
+	// Декомпозиция фиксируется в шаге плана и попадает в PLAN.md проекта
+	// с полными описаниями-контрактами задач.
+	step := exec.findStep("s1")
+	if step == nil || len(step.Tasks) != 2 {
+		t.Fatalf("шаг должен хранить декомпозицию лида, got %+v", step)
+	}
+	planDoc := planDocPath(name)
+	data, err := os.ReadFile(planDoc)
+	if err != nil {
+		t.Fatalf("PLAN.md должен быть создан: %v", err)
+	}
+	doc := string(data)
+	if !strings.Contains(doc, "## Шаг 1 [Backend-лид] — декомпозиция бэкенда") {
+		t.Errorf("PLAN.md не содержит шаг планировщика:\n%s", doc)
+	}
+	if !strings.Contains(doc, "#### 1.1 BEL-01 — базовая структура") {
+		t.Errorf("PLAN.md не содержит задачу лида внутри шага:\n%s", doc)
+	}
+	if !strings.Contains(doc, "go.mod") || !strings.Contains(doc, "/health") {
+		t.Errorf("PLAN.md не содержит контракт задачи:\n%s", doc)
+	}
 }
 
 // Лид не вернул JSON-декомпозицию — шаг падает, а не «успешно завершается».

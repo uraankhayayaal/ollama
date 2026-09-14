@@ -54,22 +54,22 @@ func mustMkAll(t *testing.T, root, rel string) {
 // scope из плана (конкретных новых файлов) — лид раздаёт задачи на произвольные
 // файлы области, и специалист упрётся в «вне области работы», не записав своё.
 // Специалистам выдаётся корневая директория шага (frontend/, server/) и всегда
-// доступен README проекта (там лид документирует план работ).
+// доступен PLAN.md (там оркестратор ведёт план работ с контрактами).
 func TestLeadStepScopeUsesTopLevelDir(t *testing.T) {
 	dir := t.TempDir()
 	cases := []struct {
 		scope []string
 		want  []string
 	}{
-		// Точечный scope (новые файлы) → корневая директория области + README.
-		{[]string{"frontend/package.json"}, []string{"frontend/", "README.md"}},
-		{[]string{"server/internal/handler/rate.go", "server/internal/service/rate.go"}, []string{"server/", "README.md"}},
+		// Точечный scope (новые файлы) → корневая директория области + PLAN.md.
+		{[]string{"frontend/package.json"}, []string{"frontend/", "PLAN.md"}},
+		{[]string{"server/internal/handler/rate.go", "server/internal/service/rate.go"}, []string{"server/", "PLAN.md"}},
 		// Scope-директории — без изменения вышестоящей директории.
-		{[]string{"server/"}, []string{"server/", "README.md"}},
-		{[]string{"frontend/"}, []string{"frontend/", "README.md"}},
-		// Пустой scope — только README (план работ читается всем).
-		{nil, []string{"README.md"}},
-		{[]string{}, []string{"README.md"}},
+		{[]string{"server/"}, []string{"server/", "PLAN.md"}},
+		{[]string{"frontend/"}, []string{"frontend/", "PLAN.md"}},
+		// Пустой scope — только PLAN.md (план работ читается всем).
+		{nil, []string{"PLAN.md"}},
+		{[]string{}, []string{"PLAN.md"}},
 	}
 
 	for i, c := range cases {
