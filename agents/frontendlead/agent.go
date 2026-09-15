@@ -19,7 +19,7 @@ import (
 // (WriteFiles/AppendFile — запись ограничена только файлами readme*).
 // НЕ пишет код и не запускает консольные команды.
 var frontendLeadToolNames = []string{
-	"List", "ReadFiles", "WriteFiles", "AppendFile",
+	"List", "ReadFiles", "ReadMap", "WriteFiles", "AppendFile",
 	tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
 	tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask, tools.BoardSetTaskStatus,
 }
@@ -118,7 +118,7 @@ func (l *FrontendLead) RequiredToolFirstRound() (string, bool) {
 // изучить существующий фронтенд (List, ReadFiles) и опубликовать/обновить
 // задачи для подчинённых на доске (BoardCreateTask/BoardUpdateTask/BoardDeleteTask).
 func (l *FrontendLead) RequiredToolGroups() [][]string {
-	groups := [][]string{{"List"}, {"ReadFiles"}}
+	groups := [][]string{{"List"}, {"ReadFiles", "ReadMap"}}
 	if l.requireTaskPublishing && l.Store != nil {
 		groups = append(groups, []string{
 			tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask,
@@ -165,10 +165,17 @@ func (l *FrontendLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 - ВСЕ ПУБЛИЧНЫЕ СИГНАТУРЫ: props-контракты компонентов (имена пропсов, типы, обязательные/опциональные), сигнатуры функций/хуков — имя, параметры с типами, возвращаемые типы.
 - КОНТРАКТЫ С API: эндпоинты, которые вызывает модуль, типы запроса/ответа, обработка ошибок.
 - КОНТРАКТЫ СТЕЙТА: структура данных в Store (поля + типы), действия/редьюсеры с сигнатурами.
+- ТОЧЕЧНЫЕ ТОЧКИ ВНЕДРЕНИЯ: путь к файлу, а где возможно — диапазон строк («хирургическое окно») или имя компонента/функции (номер строки виден в карте кода ReadMap). По таким задачам разработчик читает фрагмент, а не файл целиком.
+- ТРЕБОВАНИЕ К ТЕСТАМ: для вычислимой и сервисной логики вшивай в задачу требование unit-тестов (TS/JS: тесты по конвенции проекта) и прогона их через Run.
 Требование к разработчику: реализует задачу строго по контракту из описания; публичные типы, props и сигнатуры менять нельзя.
 
+### КОМПАКТНОЕ ИЗУЧЕНИЕ КОДА (экономия токенов — критично):
+1. Для ориентации используй ReadMap: карту кода файла (интерфейсы/типы целиком, функции/компоненты — сигнатуры, с номерами строк) вместо ReadFiles целого файла.
+2. ReadFiles применяй только точечно — когда нужен конкретный фрагмент состояния/компонента (можно с параметром lines).
+3. Номера строк из карты кода используй в описаниях задач: разработчик возьмёт «хирургическое окно» и не будет тянуть в контекст весь файл.
+
 ### ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК РАБОТЫ (нарушение недопустимо):
-1. СНАЧАЛА ОБЯЗАТЕЛЬНО изучи существующий фронтенд: List (структура), затем ReadFiles (компоненты, стейт, API-контракты, существующие страницы). Без изучения кода задачи не публикуются.
+1. СНАЧАЛА ОБЯЗАТЕЛЬНО изучи существующий фронтенд: List (структура), затем ReadMap («карты кода» — интерфейсы и сигнатуры без тел) и при необходимости ReadFiles точечно (компоненты, стейт, API-контракты, страницы). Без изучения кода задачи не публикуются.
 2. ЗАТЕМ ОБЯЗАТЕЛЬНО опубликуй задачи для своих подчинённых: новые — BoardCreateTask, ревизия — BoardUpdateTask/BoardDeleteTask. Текстовый ответ без создания/обновления задач считается НЕудачной работой: цикл повторится, пока задачи не появятся на доске.
 
 ### АРХИТЕКТУРНЫЙ ПОДХОД К ДЕКОМПОЗИЦИИ:
@@ -203,7 +210,8 @@ func (l *FrontendLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 Правила:
 - Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты (Board* и List/ReadFiles).
 - Итоговый ответ — либо подтверждение публикации задач на доске, либо (без доски) ТОЛЬКО JSON по схеме, без markdown-обёрток.
-- Нельзя писать файлы вне OutputDir и запускать консольные команды (доступны только List, ReadFiles и инструменты доски Board*).`,
+- Выполняй ВСЮ работу в ОДНОМ ответе: после изучения кода (List/ReadMap/ReadFiles) НЕ останавливайся и не присылай промежуточных итогов — сразу публикуй задачи на доске (BoardCreateTask/BoardUpdateTask) либо в этом же ответе верни финальный JSON по схеме.
+- Нельзя писать файлы вне OutputDir и запускать консольные команды (доступны только List, ReadFiles, ReadMap и инструменты доски Board*).`,
 		},
 	}
 }
@@ -233,3 +241,7 @@ func (l *FrontendLead) ReadFiles(args map[string]any) ([]byte, error) {
 func (l *FrontendLead) List(args map[string]any) ([]byte, error) {
 	return l.Tools.Execute("List", args)
 }
+
+// NeedsHeavyModel — лид декомпозирует эпики на задачи с контрактами,
+// поэтому по умолчанию маршрутизируется на большую модель (см. LayeredProvider).
+func (l *FrontendLead) NeedsHeavyModel() bool { return true }

@@ -18,7 +18,7 @@ import (
 // в readme проекта (WriteFiles/AppendFile — запись ограничена только
 // файлами readme*). НЕ пишет код и не запускает консольные команды.
 var leadToolNames = []string{
-	"List", "ReadFiles", "WriteFiles", "AppendFile",
+	"List", "ReadFiles", "ReadMap", "WriteFiles", "AppendFile",
 	tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
 	tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask, tools.BoardSetTaskStatus,
 }
@@ -118,7 +118,7 @@ func (d *DevopsLead) RequiredToolFirstRound() (string, bool) {
 // изучить состояние инфраструктуры (List, ReadFiles) и опубликовать/обновить
 // задачи для подчинённых на доске (BoardCreateTask/BoardUpdateTask/BoardDeleteTask).
 func (d *DevopsLead) RequiredToolGroups() [][]string {
-	groups := [][]string{{"List"}, {"ReadFiles"}}
+	groups := [][]string{{"List"}, {"ReadFiles", "ReadMap"}}
 	if d.requireTaskPublishing && d.Store != nil {
 		groups = append(groups, []string{
 			tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask,
@@ -164,10 +164,17 @@ func (d *DevopsLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 - КОНКРЕТНЫЕ ЗНАЧЕНИЯ: переменные окружения с значениями по умолчанию, порты и их маппинг, протоколы.
 - ПАЙПЛАЙНЫ CI/CD: стадии, шаги, триггеры, артефакты, секреты (имена).
 - СОВМЕСТИМОСТЬ: требования по поддержке стека автотестов QA.
+- ТОЧЕЧНЫЕ ТОЧКИ ВНЕДРЕНИЯ: путь к манифесту/конфигу, а где возможно — диапазон строк («хирургическое окно») или имя сервиса/блока (номер строки виден в карте кода ReadMap). По таким задачам инженер читает фрагмент, а не файл целиком.
+- ТРЕБОВАНИЕ К ТЕСТАМ: для проверяемой логики (скрипты, CI-шаги, генераторы конфигов) вшивай в задачу требование автоматических проверок (pytest/shell/bash) и прогона их через Run.
 Требование к инженеру: реализует задачу строго по контракту из описания; публичные имена сервисов, сетей, портов и env менять нельзя.
 
+### КОМПАКТНОЕ ИЗУЧЕНИЕ КОДА (экономия токенов — критично):
+1. Для ориентации используй ReadMap: карту кода файла (для манифестов/конфигов — первые строки с нумерацией и индексами блоков) вместо ReadFiles целого файла.
+2. ReadFiles применяй только точечно — когда нужен конкретный блок конфигурации (можно с параметром lines).
+3. Номера строк из карты кода используй в описаниях задач: инженер возьмёт «хирургическое окно» и не будет тянуть в контекст весь манифест.
+
 ### ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК РАБОТЫ (нарушение недопустимо):
-1. СНАЧАЛА ОБЯЗАТЕЛЬНО изучи состояние проекта: List (структура), затем ReadFiles (Docker Compose, Kubernetes-манифесты, CI/CD-конфиги, существующая инфраструктура). Без изучения кода задачи не публикуются.
+1. СНАЧАЛА ОБЯЗАТЕЛЬНО изучи состояние проекта: List (структура), затем ReadMap («карты кода») и при необходимости ReadFiles точечно (Docker Compose, Kubernetes-манифесты, CI/CD-конфиги, существующая инфраструктура). Без изучения кода задачи не публикуются.
 2. ЗАТЕМ ОБЯЗАТЕЛЬНО опубликуй задачи для своих подчинённых: новые — BoardCreateTask, ревизия — BoardUpdateTask/BoardDeleteTask. Текстовый ответ без создания/обновления задач считается НЕудачной работой: цикл повторится, пока задачи не появятся на доске.
 
 ### ТРЕБУЕМЫЙ ФОРМАТ ВЫХОДНЫХ ДАННЫХ (JSON SCHEMA):
@@ -200,7 +207,8 @@ func (d *DevopsLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 Правила:
 - Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты (Board* и List/ReadFiles).
 - Итоговый ответ — либо подтверждение публикации задач на доске, либо (без доски) ТОЛЬКО JSON по схеме, без markdown-обёрток.
-- Нельзя писать файлы и запускать консольные команды (доступны только List, ReadFiles и инструменты доски Board*).`,
+- Выполняй ВСЮ работу в ОДНОМ ответе: после изучения кода (List/ReadMap/ReadFiles) НЕ останавливайся и не присылай промежуточных итогов — сразу публикуй задачи на доске (BoardCreateTask/BoardUpdateTask) либо в этом же ответе верни финальный JSON по схеме.
+- Нельзя писать файлы и запускать консольные команды (доступны только List, ReadFiles, ReadMap и инструменты доски Board*).`,
 		},
 	}
 }
@@ -230,3 +238,7 @@ func (d *DevopsLead) ReadFiles(args map[string]any) ([]byte, error) {
 func (d *DevopsLead) List(args map[string]any) ([]byte, error) {
 	return d.Tools.Execute("List", args)
 }
+
+// NeedsHeavyModel — лид декомпозирует эпики на задачи с контрактами,
+// поэтому по умолчанию маршрутизируется на большую модель (см. LayeredProvider).
+func (d *DevopsLead) NeedsHeavyModel() bool { return true }

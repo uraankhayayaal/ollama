@@ -83,7 +83,18 @@ func main() {
 		if model == "" {
 			model = "llama3"
 		}
-		provider, err = models.NewOllamaProvider(model)
+		// Двухслойная маршрутизация по размеру модели (Скорость 2): если задан
+		// OLLAMA_MODEL_LARGE — быстрые шаги идут на OLLAMA_MODEL, тяжёлые
+		// (лиды/ревью) и эскалации — на большую модель. Без OLLAMA_MODEL_LARGE
+		// поведение не меняется.
+		var smallProvider, largeProvider models.LLMProvider
+		smallProvider, err = models.NewOllamaProvider(model)
+		if largeModel := os.Getenv("OLLAMA_MODEL_LARGE"); largeModel != "" && largeModel != model {
+			largeProvider, err = models.NewOllamaProvider(largeModel)
+		}
+		if err == nil {
+			provider = models.NewLayeredProvider(smallProvider, largeProvider)
+		}
 
 	case "yandex":
 		provider = models.NewAlisaProvider()

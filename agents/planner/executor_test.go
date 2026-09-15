@@ -8,11 +8,14 @@ import (
 	"ai/runner"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -453,5 +456,199 @@ func TestExecutorResumeContinuesTruncatedStep(t *testing.T) {
 	}
 	if !nsnap.Completed["s1"] {
 		t.Fatal("шаг должен быть помечен completed в чекпоинте")
+	}
+}
+
+// rollbackProvider — провайдер, который сначала РЕАЛЬНО создаёт файл через
+// инструменты агента (WriteFiles), а затем «падает» с ошибкой. Нужен, чтобы
+// проверить защитный откат: после падения шага созданные субагентом файлы
+// должны исчезнуть, а чужие — остаться нетронутыми.
+type rollbackProvider struct {
+	filename  string
+	content   string
+	wroteAny  bool
+	chatCalls int
+}
+
+func (p *rollbackProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+	res, err := agent.CallFunction("WriteFiles", map[string]any{
+		"files": []map[string]any{
+			{"filename": p.filename, "content": p.content},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	p.wroteAny = strings.Contains(string(res), `"status":"ok"`) || string(res) == ""
+	return nil, fmt.Errorf("агент упал после записи файла")
+}
+
+func (p *rollbackProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+	p.chatCalls++
+	return &runner.ModelReply{}, nil
+}
+
+// Упавший шаг откатывает директорию проекта: созданный субагентом файл
+// удаляется, «чужой» код предыдущих шагов — восстанавливается в целости.
+func TestExecutorStepFailureRollsBackProject(t *testing.T) {
+	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "1")
+	ctx := context.Background()
+	name := "RollbackTest"
+	root := projects.ProjectDir(name)
+	defer os.RemoveAll(filepath.Clean(root))
+
+	// В репозитории уже есть функционал, реализованный более ранними шагами.
+	if err := os.MkdirAll(filepath.Join(root, "server"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "server", "existing.go"),
+		[]byte("package main\nfunc Existing() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := &Plan{
+		ProjectName: name,
+		Summary:     "проверка отката",
+		Steps:       []Step{{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"}},
+	}
+	exec := NewExecutor(&rollbackProvider{filename: "server/hack.go", content: "package main\nfunc Hack() {}\n"}, plan)
+	if err := exec.Run(ctx); err == nil {
+		t.Fatal("шаг должен завершиться ошибкой")
+	}
+
+	// Файл, созданный упавшим субагентом, удалён.
+	if _, serr := os.Stat(filepath.Join(root, "server", "hack.go")); serr == nil {
+		t.Fatal("файл упавшего субагента не откачен (hack.go остался)")
+	}
+	// Чужой функционал не тронут.
+	got, rerr := os.ReadFile(filepath.Join(root, "server", "existing.go"))
+	if rerr != nil || !strings.Contains(string(got), "func Existing()") {
+		t.Fatalf("чужой файл повреждён при откате: %v %q", rerr, got)
+	}
+	// Шаг помечен failed, а не completed.
+	if exec.completed["s1"] {
+		t.Fatal("упавший шаг не может быть completed")
+	}
+}
+
+// При отключённом откате (CODEGEN_ROLLBACK_ON_FAIL=0) файлы упавшего субагента
+// сохраняются — они пригодятся для ручной отладки или resume.
+func TestExecutorStepFailureKeepsFilesWhenRollbackDisabled(t *testing.T) {
+	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "0")
+	ctx := context.Background()
+	name := "RollbackDisabledTest"
+	root := projects.ProjectDir(name)
+	defer os.RemoveAll(filepath.Clean(root))
+
+	plan := &Plan{
+		ProjectName: name,
+		Summary:     "проверка выключенного отката",
+		Steps:       []Step{{ID: "s1", Agent: AgentBackendDev, Prompt: "сделай", Description: "генерация"}},
+	}
+	exec := NewExecutor(&rollbackProvider{filename: "kept.go", content: "package kept\n"}, plan)
+	if err := exec.Run(ctx); err == nil {
+		t.Fatal("шаг должен завершиться ошибкой")
+	}
+
+	if _, serr := os.Stat(filepath.Join(root, "kept.go")); serr != nil {
+		t.Fatal("при выключенном откате файл упавшего субагента должен сохраниться")
+	}
+}
+
+// overlapProvider фиксирует максимальное число ОДНОВРЕМЕННО выполняющихся
+// шагов (Generate), чтобы доказывать параллельность волны либо её отсутствие.
+type overlapProvider struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	sleep     time.Duration
+}
+
+func (p *overlapProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+	p.mu.Lock()
+	p.active++
+	if p.active > p.maxActive {
+		p.maxActive = p.active
+	}
+	p.mu.Unlock()
+	time.Sleep(p.sleep)
+	p.mu.Lock()
+	p.active--
+	p.mu.Unlock()
+	return &runner.AgentResponse{}, nil
+}
+
+func (p *overlapProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+	return &runner.ModelReply{}, nil
+}
+
+// Шаги одной волны (без зависимостей) при CODEGEN_PARALLEL выполняются
+// одновременно: вызовы Generate двух шагов перекрываются во времени, а оба
+// шага успешно помечаются completed (чекпоинт при этом живёт без потерь —
+// состояния сериализуются e.mu).
+func TestExecutorParallelWaveRunsConcurrently(t *testing.T) {
+	t.Setenv("CODEGEN_PARALLEL", "1")
+	ctx := context.Background()
+	store := newExecutorStore(t, "checkpoint:parallel")
+	defer store.Close()
+
+	plan := &Plan{
+		ProjectName: "parProj",
+		Summary:     "параллельная волна",
+		Steps: []Step{
+			{ID: "p1", Agent: AgentBackendDev, Prompt: "сделай", Description: "бэкенд часть"},
+			{ID: "p2", Agent: AgentBackendDev, Prompt: "сделай ещё", DependsOn: []string{}, Description: "бэкенд часть 2"},
+		},
+	}
+
+	prov := &overlapProvider{sleep: 80 * time.Millisecond}
+	exec := NewExecutor(prov, plan).SetCheckpoint(store, false)
+	if err := exec.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if prov.maxActive != 2 {
+		t.Fatalf("шаги волны должны были выполняться параллельно (maxActive=2), got %d", prov.maxActive)
+	}
+	if !exec.completed["p1"] || !exec.completed["p2"] {
+		t.Fatalf("оба шага должны быть completed, got %v", exec.completed)
+	}
+	snap, lerr := store.Load(ctx)
+	if lerr != nil {
+		t.Fatalf("Load: %v", lerr)
+	}
+	if !snap.Completed["p1"] || !snap.Completed["p2"] {
+		t.Fatalf("чекпоинт потерял шаги параллельной волны: %v", snap.Completed)
+	}
+	if snap.Statuses["p1"] != checkpoint.StatusDone || snap.Statuses["p2"] != checkpoint.StatusDone {
+		t.Fatalf("статусы параллельных шагов в чекпоинте: %v", snap.Statuses)
+	}
+}
+
+// При CODEGEN_PARALLEL=0 та же волна выполняется строго последовательно —
+// вызовы Generate шагов никогда не пересекаются во времени.
+func TestExecutorSequentialWhenParallelDisabled(t *testing.T) {
+	t.Setenv("CODEGEN_PARALLEL", "0")
+	ctx := context.Background()
+
+	plan := &Plan{
+		ProjectName: "seqProj",
+		Summary:     "последовательная волна",
+		Steps: []Step{
+			{ID: "q1", Agent: AgentBackendDev, Prompt: "сделай", Description: "бэкенд часть"},
+			{ID: "q2", Agent: AgentBackendDev, Prompt: "сделай ещё", Description: "бэкенд часть 2"},
+		},
+	}
+
+	prov := &overlapProvider{sleep: 40 * time.Millisecond}
+	exec := NewExecutor(prov, plan)
+	if err := exec.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if prov.maxActive != 1 {
+		t.Fatalf("при выключенной параллельности шаги не должны пересекаться, got maxActive=%d", prov.maxActive)
+	}
+	if !exec.completed["q1"] || !exec.completed["q2"] {
+		t.Fatalf("оба шага должны быть completed, got %v", exec.completed)
 	}
 }

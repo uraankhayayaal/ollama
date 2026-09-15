@@ -177,3 +177,49 @@ func TestSaveClearRoundState(t *testing.T) {
 		t.Fatal("Rounds[s1] должна быть удалена после ClearRoundState")
 	}
 }
+
+func TestTrackMetric(t *testing.T) {
+	store := newTestStore(t, "checkpoint:metrics")
+	defer store.Close()
+	ctx := context.Background()
+
+	if err := store.Save(ctx, &Snapshot{ProjectName: "test"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	snap, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if err := store.TrackMetric(ctx, snap, "s1", map[string]any{"rounds": 7, "verdict": "approve"}); err != nil {
+		t.Fatalf("TrackMetric: %v", err)
+	}
+	// Второй вызов обновляет отдельные ключи шага, не затирая остальные.
+	if err := store.TrackMetric(ctx, snap, "s1", map[string]any{"contract_changes": 3}); err != nil {
+		t.Fatalf("TrackMetric второй: %v", err)
+	}
+	// Разные шаги хранятся отдельно.
+	if err := store.TrackMetric(ctx, snap, "s2", map[string]any{"rounds": 1}); err != nil {
+		t.Fatalf("TrackMetric s2: %v", err)
+	}
+
+	loaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Metrics["s1"] == nil {
+		t.Fatal("Metrics[s1] должна существовать")
+	}
+	if got := loaded.Metrics["s1"]["rounds"]; got != float64(7) {
+		t.Fatalf("Metrics[s1].rounds: got %v, ожидали 7", got)
+	}
+	if got := loaded.Metrics["s1"]["verdict"]; got != "approve" {
+		t.Fatalf("Metrics[s1].verdict: got %v", got)
+	}
+	if got := loaded.Metrics["s1"]["contract_changes"]; got != float64(3) {
+		t.Fatalf("Metrics[s1].contract_changes: got %v, ожидали 3", got)
+	}
+	if loaded.Metrics["s2"] == nil || loaded.Metrics["s2"]["rounds"] != float64(1) {
+		t.Fatalf("Metrics[s2].rounds: got %v", loaded.Metrics["s2"])
+	}
+}

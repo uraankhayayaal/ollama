@@ -49,6 +49,10 @@ func (t *readFilesTool) Definition() ToolDefinition {
 						"type": "string",
 					},
 				},
+				"lines": map[string]any{
+					"type":        "string",
+					"description": "Опционально: интервал строк для точечного чтения («хирургическое окно»), 1-based включительно, например '20-45' или '40'. Вместо файла целиком возвращаются только эти строки с номерами.",
+				},
 			},
 			"required":             []string{"filenames"},
 			"additionalProperties": false,
@@ -139,6 +143,81 @@ func (t *appendFileTool) Definition() ToolDefinition {
 	}
 }
 func (t *appendFileTool) Execute(args map[string]any) ([]byte, error) { return t.ops.AppendFile(args) }
+
+type patchGoFunctionTool struct{ ops *FileOps }
+
+func (t *patchGoFunctionTool) Name() string { return "PatchGoFunction" }
+func (t *patchGoFunctionTool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name:        "PatchGoFunction",
+		Description: "Заменяет ТОЛЬКО одну функцию в существующем Go-файле (семантически, через go/ast): находит функцию function_name (методы — по receiver) и заменяет её узел на код из body, остальное в файле не трогается. Используй для ТОЧЕЧНЫХ правок Go-кода вместо перезаписи файла целиком.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"target_file":   map[string]any{"type": "string", "description": "Относительный путь к .go-файлу внутри OutputDir, например 'server/internal/user/service.go'"},
+				"function_name": map[string]any{"type": "string", "description": "Имя заменяемой функции/метода, например 'CreateUser'"},
+				"receiver":      map[string]any{"type": "string", "description": "Имя типа ресивера метода (например 'Service'). Обязательно, если в файле несколько функций с одинаковым именем (методы разных типов). Для обычных функций не указывай."},
+				"body":          map[string]any{"type": "string", "description": "ПОЛНЫЙ исходник заменяющей функции, начиная с 'func': 'func (s *Service) CreateUser(ctx context.Context, u *User) error { ... }'. Имя функции в body обязано совпадать с function_name."},
+				"imports": map[string]any{
+					"type":        "array",
+					"description": "Опционально: импорт-пути, которые нужно ДОБАВИТЬ в файл, если их ещё нет ('errors', 'fmt', 'alias \"path\"'). Существующие импорты не трогаются.",
+					"items":       map[string]any{"type": "string"},
+				},
+			},
+			"required":             []string{"target_file", "function_name", "body"},
+			"additionalProperties": false,
+		},
+	}
+}
+func (t *patchGoFunctionTool) Execute(args map[string]any) ([]byte, error) {
+	return t.ops.PatchGoFunction(args)
+}
+
+type searchReplaceTool struct{ ops *FileOps }
+
+func (t *searchReplaceTool) Name() string { return "SearchReplace" }
+func (t *searchReplaceTool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name:        "SearchReplace",
+		Description: "Точечная правка кода любого языка (Go, TypeScript/TSX, CSS) через блоки SEARCH/REPLACE: каждый SEARCH должен дословно совпасть с уже существующим кодом (включая отступы). Несовпадение — ошибка без записи; заменяется строго первое вхождение. Используй вместо перезаписи файла, когда правишь фрагмент внутри большого файла.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"files": map[string]any{
+					"type":        "array",
+					"description": "Список файлов с блоками замены",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"filename": map[string]any{"type": "string", "description": "Путь к файлу, например 'frontend/src/App.tsx'"},
+							"patches": map[string]any{
+								"type":        "array",
+								"description": "Блоки замены; применяются по порядку",
+								"items": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"search":  map[string]any{"type": "string", "description": "ТОЧНЫЙ кусок существующего кода, включая все отступы и переводы строк"},
+										"replace": map[string]any{"type": "string", "description": "Изменённый/новый код на место search"},
+									},
+									"required":             []string{"search", "replace"},
+									"additionalProperties": false,
+								},
+							},
+							"content": map[string]any{"type": "string", "description": "Альтернатива patches: весь текст блоков <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE; будет разобран автоматически"},
+						},
+						"required":             []string{"filename"},
+						"additionalProperties": false,
+					},
+				},
+			},
+			"required":             []string{"files"},
+			"additionalProperties": false,
+		},
+	}
+}
+func (t *searchReplaceTool) Execute(args map[string]any) ([]byte, error) {
+	return t.ops.SearchReplace(args)
+}
 
 // singleFileProps возвращает общую схему свойств для одного файла (filename + content).
 func singleFileProps() map[string]any {

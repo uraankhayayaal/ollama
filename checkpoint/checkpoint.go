@@ -48,6 +48,11 @@ type Snapshot struct {
 	// в JSON (массив runner.Message). Позволяет при resume продолжить агентский
 	// цикл с потраченных раундов, а не начинать шаг заново.
 	Conversations map[string]json.RawMessage `json:"conversations,omitempty"`
+	// Metrics — детальные метрики выполнения шагов (стадии): каждый шаг — карта
+	// ключ→значение (например вердикт приёмки, число изменений контракта, число
+	// раундов, список изменённых файлов). Чистая телеметрия для анализа, на
+	// resume не влияет.
+	Metrics map[string]map[string]any `json:"metrics,omitempty"`
 	// Waves — шаги, сгруппированные по волнам параллельности (для resume).
 	Waves [][]string `json:"waves,omitempty"`
 	// UpdatedAt — время последнего обновления чекпоинта (RFC3339).
@@ -213,6 +218,26 @@ func (s *Store) ClearRoundState(ctx context.Context, snap *Snapshot, stepID stri
 	}
 	if snap.Conversations != nil {
 		delete(snap.Conversations, stepID)
+	}
+	return s.Save(ctx, snap)
+}
+
+// MetricFor возвращает метрики шага (несколько значений одной стадии можно
+// обновлять сразу одним вызовом).
+func (s *Store) TrackMetric(ctx context.Context, snap *Snapshot, stepID string, values map[string]any) error {
+	if snap == nil {
+		return ErrNotFound
+	}
+	if snap.Metrics == nil {
+		snap.Metrics = map[string]map[string]any{}
+	}
+	m := snap.Metrics[stepID]
+	if m == nil {
+		m = map[string]any{}
+		snap.Metrics[stepID] = m
+	}
+	for k, v := range values {
+		m[k] = v
 	}
 	return s.Save(ctx, snap)
 }

@@ -512,6 +512,10 @@ func (ops *FileOps) WriteFiles(args map[string]any) ([]byte, error) {
 // ReadParams соответствует JSON-параметрам инструмента ReadFiles
 type ReadParams struct {
 	Filenames []string `json:"filenames"`
+	// Lines — опциональный интервал строк «хирургического окна»: "20-45",
+	// "40" или "90-" (1-based, включительно). Применяется ко всем файлам
+	// вызова. Пусто — файл читается целиком.
+	Lines string `json:"lines"`
 }
 
 // Лимиты чтения защищают контекст модели от переполнения на больших
@@ -563,6 +567,17 @@ func (ops *FileOps) ReadFiles(args map[string]any) ([]byte, error) {
 	}
 
 	maxFile, maxTotal := readLimit()
+	// Разбор опционального интервала строк («хирургическое окно»): модель
+	// может прочитать не весь файл, а только нужный диапазон — это режет
+	// контекст и помогает находить точный фрагмент SEARCH/REPLACE.
+	var lineStart, lineEnd int
+	hasLines := false
+	if strings.TrimSpace(params.Lines) != "" {
+		if s, e, ok := parseRange(params.Lines); ok {
+			lineStart, lineEnd, hasLines = s, e, true
+		}
+	}
+
 	result := []map[string]string{}
 	total := 0
 
@@ -585,7 +600,34 @@ func (ops *FileOps) ReadFiles(args map[string]any) ([]byte, error) {
 		}
 
 		content := r["content"]
-		if len(content) > maxFile {
+		if hasLines {
+			// Режем файл до интервала строк (1-based, включительно), чтобы
+			// «хирургическое окно» не тащило в контекст весь файл.
+			lines := strings.Split(content, "\n")
+			if len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			end := lineEnd
+			if end == 0 || end > len(lines) {
+				end = len(lines)
+			}
+			sliced := make([]string, 0, end-lineStart+1)
+			for i := lineStart; i <= end; i++ {
+				if i-1 < 0 || i-1 >= len(lines) {
+					break
+				}
+				sliced = append(sliced, lines[i-1])
+			}
+			if len(sliced) == 0 {
+				r["status"] = "error"
+				r["message"] = fmt.Sprintf("интервал строк %q выходит за пределы файла (%d строк)", params.Lines, len(lines))
+				result = append(result, r)
+				continue
+			}
+			content = "[строки " + strconv.Itoa(lineStart) + "-" + strconv.Itoa(end) + " файла]\n" + strings.Join(sliced, "\n")
+			r["content"] = content
+			r["lines"] = fmt.Sprintf("%d-%d", lineStart, end)
+		} else if len(content) > maxFile {
 			r["content"] = content[:maxFile] +
 				fmt.Sprintf("\n\n[... содержание обрезано, файл %d байт, лимит %d байт ...]",
 					len(content), maxFile)

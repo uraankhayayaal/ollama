@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ollama/ollama/api"
 )
@@ -54,6 +55,12 @@ type Executor struct {
 	store *checkpoint.Store
 	// resume — возобновлять ли выполнение с чекпоинта.
 	resume bool
+	// mu сериализует разделяемое состояние исполнителя (completed/statuses,
+	// acceptReports, операции с чекпоинтом Store и запись PLAN.md). Нужен,
+	// чтобы при ПАРАЛЛЕЛЬНОМ выполнении шагов волны (runWave) обновления
+	// Redis-снимка не терялись на read-modify-write и не возникало гонок
+	// на картах.
+	mu sync.Mutex
 }
 
 // NewExecutor создаёт исполнителя плана.
@@ -93,31 +100,15 @@ func (e *Executor) Run(ctx context.Context) error {
 
 	// PLAN.md: пишем начальный план работ (без декомпозиций — они появятся
 	// после шагов лидов), чтобы документ существовал с самого начала.
-	if err := writePlanDoc(e.plan.ProjectName, e.plan); err != nil {
+	if err := e.writePlan(e.plan.ProjectName); err != nil {
 		logging.Warnf("[Plan] не удалось записать PLAN.md: %v", err)
 	}
 
 	for _, wave := range waves {
-		for _, stepID := range wave {
-			step := e.findStep(stepID)
-			if step == nil {
-				return fmt.Errorf("шаг %q не найден в плане", stepID)
-			}
-
-			// Resume: шаг уже завершён в прошлом запуске — пропускаем.
-			if e.completed[stepID] {
-				logging.Detailf("[%s] шаг %s уже выполнен ранее, пропускаю (resume)", agentLabel(step.Agent, step.Role), stepID)
-				continue
-			}
-
-			logging.Infof("[%s] шаг %s: %s", agentLabel(step.Agent, step.Role), step.ID, step.Description)
-			e.markRunning(ctx, stepID)
-			if err := e.executeStep(ctx, step); err != nil {
-				e.markFailed(ctx, stepID)
-				return fmt.Errorf("шаг %q: %w", step.ID, err)
-			}
-			e.markDone(ctx, stepID)
-			logging.Infof("[%s] шаг %s завершён", agentLabel(step.Agent, step.Role), step.ID)
+		// Волны остаются строго последовательными; внутри волны шаги
+		// независимы и (при CODEGEN_PARALLEL) выполняются одновременно.
+		if err := e.runWave(ctx, wave); err != nil {
+			return err
 		}
 	}
 
@@ -130,9 +121,96 @@ func (e *Executor) Run(ctx context.Context) error {
 
 	// Финальная запись PLAN.md после полного выполнения (включая шаги
 	// исправлений цикла приёмки).
-	if err := writePlanDoc(e.plan.ProjectName, e.plan); err != nil {
+	if err := e.writePlan(e.plan.ProjectName); err != nil {
 		logging.Warnf("[Plan] не удалось записать PLAN.md (финал): %v", err)
 	}
+	return nil
+}
+
+// parallelEnabled — включено ли параллельное выполнение шагов внутри волны.
+// По умолчанию ВКЛЮЧЕНО; отключается переменной окружения CODEGEN_PARALLEL
+// (значения "0"/"false"/"off"/"no" — последовательный режим).
+func parallelEnabled() bool {
+	if v := strings.TrimSpace(os.Getenv("CODEGEN_PARALLEL")); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "false", "off", "no":
+			return false
+		}
+	}
+	return true
+}
+
+// runWave выполняет все шаги одной волны. Волны строго последовательны;
+// при параллельном режиме (CODEGEN_PARALLEL) шаги волны стартуют одновременно
+// в отдельных горутинах. Первая ошибка (по детерминированному порядку шагов)
+// отменяет остальные шаги волны через общий context.
+func (e *Executor) runWave(ctx context.Context, wave []string) error {
+	if len(wave) == 1 || !parallelEnabled() {
+		for _, stepID := range wave {
+			if err := e.runOneStep(ctx, stepID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	for _, stepID := range wave {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			err := e.runOneStep(runCtx, id)
+			mu.Lock()
+			if err != nil && first == nil {
+				first = fmt.Errorf("шаг %q: %w", id, err)
+				cancel()
+			}
+			mu.Unlock()
+		}(stepID)
+	}
+	wg.Wait()
+
+	// Отменённые соседи из-за чужой ошибки возвращают "контекст отменён" —
+	// в диагностику уходит только первопричина (первая ошибка по порядку шагов).
+	if first != nil {
+		return first
+	}
+	return nil
+}
+
+// runOneStep выполняет один шаг плана: resume-пропуск, markRunning, executeStep,
+// markDone/markFailed. В параллельном режиме вызывается в отдельной горутине;
+// разделяемое состояние и чекпоинт защищены e.mu.
+func (e *Executor) runOneStep(ctx context.Context, stepID string) error {
+	step := e.findStep(stepID)
+	if step == nil {
+		return fmt.Errorf("шаг %q не найден в плане", stepID)
+	}
+
+	// Resume: шаг уже завершён в прошлом запуске — пропускаем.
+	e.mu.Lock()
+	done := e.completed[stepID]
+	e.mu.Unlock()
+	if done {
+		logging.Detailf("[%s] шаг %s уже выполнен ранее, пропускаю (resume)", agentLabel(step.Agent, step.Role), stepID)
+		return nil
+	}
+
+	logging.Infof("[%s] шаг %s: %s", agentLabel(step.Agent, step.Role), step.ID, step.Description)
+	e.markRunning(ctx, stepID)
+	if err := e.executeStep(ctx, step); err != nil {
+		e.markFailed(ctx, stepID)
+		return fmt.Errorf("шаг %q: %w", step.ID, err)
+	}
+	e.markDone(ctx, stepID)
+	logging.Infof("[%s] шаг %s завершён", agentLabel(step.Agent, step.Role), step.ID)
 	return nil
 }
 
@@ -181,12 +259,16 @@ func (e *Executor) newSnapshot(waves [][]string) *checkpoint.Snapshot {
 
 // markRunning помечает шаг как выполняющийся и сбрасывает в чекпоинт.
 func (e *Executor) markRunning(ctx context.Context, stepID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.statuses[stepID] = checkpoint.StatusRunning
 	e.persistStatus(ctx, stepID, checkpoint.StatusRunning)
 }
 
 // markDone помечает шаг завершённым и сбрасывает в чекпоинт.
 func (e *Executor) markDone(ctx context.Context, stepID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.completed[stepID] = true
 	e.statuses[stepID] = checkpoint.StatusDone
 	e.persistStatus(ctx, stepID, checkpoint.StatusDone)
@@ -207,6 +289,8 @@ func (e *Executor) markDone(ctx context.Context, stepID string) {
 
 // markFailed помечает шаг упавшим и сбрасывает в чекпоинт.
 func (e *Executor) markFailed(ctx context.Context, stepID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.statuses[stepID] = checkpoint.StatusFailed
 	if e.store != nil {
 		// Загружаем свежий снапшот и обновляем статус.
@@ -217,6 +301,8 @@ func (e *Executor) markFailed(ctx context.Context, stepID string) {
 }
 
 // persistStatus сохраняет статус шага в Redis (если чекпоинт подключён).
+// Должен вызываться ТОЛЬКО под защитой e.mu: Store — read-modify-write,
+// параллельные вызовы без блокировки теряли бы обновления снапшота.
 func (e *Executor) persistStatus(ctx context.Context, stepID, status string) {
 	if e.store == nil {
 		return
@@ -228,6 +314,140 @@ func (e *Executor) persistStatus(ctx context.Context, stepID, status string) {
 	} else {
 		logging.Detailf("[Checkpoint] ошибка чтения снапшота для %s: %v", stepID, err)
 	}
+}
+
+// trackStepMetrics обновляет метрики шага в чекпоинте (теляметрия стадий:
+// раунды, вердикт приёмки, изменения контракта, изменённые файлы). Работает
+// только при подключённом чекпоинте; на ход плана не влияет.
+func (e *Executor) trackStepMetrics(ctx context.Context, stepID string, values map[string]any) {
+	if e.store == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if snap, err := e.store.Load(ctx); err == nil {
+		if err := e.store.TrackMetric(ctx, snap, stepID, values); err != nil {
+			logging.Detailf("[Checkpoint] ошибка сохранения метрик шага %s: %v", stepID, err)
+		}
+	}
+}
+
+// rollbackEnabled — включает/выключает защитный откат упавших шагов
+// переменной CODEGEN_ROLLBACK_ON_FAIL. По умолчанию ВКЛЮЧЕН: неудачный шаг
+// субагента не должен оставлять в общем репозитории изменённый/удалённый чужой
+// код или половину переписанного файла. Отключается значением "0"/"false"/
+// "off" — например, когда откат мешает отладке или обрезает полезный прогресс.
+func rollbackEnabled() bool {
+	if v := strings.TrimSpace(os.Getenv("CODEGEN_ROLLBACK_ON_FAIL")); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "false", "off", "no":
+			return false
+		}
+	}
+	return true
+}
+
+// contractAuditEnabled — снимать снимок публичной поверхности проекта до/после
+// шага разработчика (сравнение нормализованных сигнатур). Отключение/включение
+// через CODEGEN_CONTRACT_ENFORCE (0/1); по умолчанию снимок снимается и diff
+// пишется в Detail, при enforce=1 уровень повышается до предупреждения.
+func contractAuditEnabled() bool {
+	if v := strings.TrimSpace(os.Getenv("CODEGEN_CONTRACT_ENFORCE")); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "false", "off", "no":
+			return false
+		}
+	}
+	return true
+}
+
+// auditContractStep сравнивает публичную поверхность проекта до и после шага
+// разработчика и логирует изменения контракта (добавленные/удалённые/
+// изменённые сигнатуры). Это диагностика, а не блокирующая проверка: вердикт
+// об ошибке шага выносят приёмка и анализатор (acceptor).
+func (e *Executor) auditContractStep(ctx context.Context, step *Step, projectName string, before *tools.PublicAPISnapshot) {
+	after, err := tools.BuildPublicAPISnapshot(projects.ProjectDir(projectName))
+	if err != nil {
+		logging.Detailf("[%s] шаг %s: не удалось снять повторный снимок API: %v", agentLabel(step.Agent, step.Role), step.ID, err)
+		return
+	}
+	diff := tools.ComparePublicAPI(before, after)
+	if len(diff) == 0 {
+		return
+	}
+	e.trackStepMetrics(ctx, step.ID, map[string]any{"contract_changes": len(diff)})
+	constrained := diff
+	if len(constrained) > 12 {
+		rest := fmt.Sprintf("…и ещё %d деклараций", len(constrained)-12)
+		constrained = append(constrained[:12], rest)
+	}
+	enforced := strings.TrimSpace(os.Getenv("CODEGEN_CONTRACT_ENFORCE")) != ""
+	if enforced {
+		logging.Warnf("[%s] шаг %s: ИЗМЕНЕНИЕ КОНТРАКТА (публичная поверхность): %d деклараций:\n  %s", agentLabel(step.Agent, step.Role), step.ID, len(diff), strings.Join(constrained, "\n  "))
+		return
+	}
+	logging.Detailf("[%s] шаг %s: изменение контракта (публичная поверхность): %d деклараций:\n  %s", agentLabel(step.Agent, step.Role), step.ID, len(diff), strings.Join(constrained, "\n  "))
+}
+
+// auditFileChanges выводит дайджест файловых правок шага (что субагент
+// создал/изменил/удалил) и сохраняет счётчики в метрики чекпоинта. Ничего не
+// откатывает — это аудит, а не контроль: код на всякий случай не трогается.
+func (e *Executor) auditFileChanges(ctx context.Context, step *Step, snap *tools.Snap) {
+	added, modified, removed, err := snap.Diff()
+	if err != nil {
+		logging.Detailf("[%s] шаг %s: не удалось вычислить diff правок: %v", agentLabel(step.Agent, step.Role), step.ID, err)
+		return
+	}
+	total := len(added) + len(modified) + len(removed)
+	if total == 0 {
+		return
+	}
+	e.trackStepMetrics(ctx, step.ID, map[string]any{"files_added": len(added), "files_modified": len(modified), "files_removed": len(removed)})
+	limit := func(paths []string) string {
+		if len(paths) > 8 {
+			return strings.Join(paths[:8], ", ") + fmt.Sprintf(" … и ещё %d", len(paths)-8)
+		}
+		return strings.Join(paths, ", ")
+	}
+	logging.Detailf("[%s] шаг %s: правки субагента: +%d создано, ~%d изменено, -%d удалено", agentLabel(step.Agent, step.Role), step.ID, len(added), len(modified), len(removed))
+	if len(added) > 0 {
+		logging.Detailf("[%s] шаг %s:   создано: %s", agentLabel(step.Agent, step.Role), step.ID, limit(added))
+	}
+	if len(modified) > 0 {
+		logging.Detailf("[%s] шаг %s:   изменено: %s", agentLabel(step.Agent, step.Role), step.ID, limit(modified))
+	}
+	if len(removed) > 0 {
+		logging.Detailf("[%s] шаг %s:   удалено: %s", agentLabel(step.Agent, step.Role), step.ID, limit(removed))
+	}
+}
+
+// rollbackStep откатывает директорию проекта к снимку, сделанному перед
+// началом выполнения шага: восстанавливает изменённые/удалённые файлы и
+// удаляет созданные субагентом. Вызывается ТОЛЬКО при реальной ошибке шага
+// (не при исчерпании раундов/обрезке по токенам — там откат поломал бы resume:
+// сохранённая история диалога ссылается на уже существующие файлы).
+//
+// Возвращает true, если откат реально что-то изменил.
+func (e *Executor) rollbackStep(projectName, stepID string, snap *tools.Snap) bool {
+	if snap == nil || !rollbackEnabled() {
+		return false
+	}
+	restored, removed, err := snap.Restore()
+	if err != nil {
+		logging.Warnf("[откат] шаг %s: не удалось откатить директорию %s: %v", stepID, projectName, err)
+		return false
+	}
+	if len(restored) == 0 && len(removed) == 0 {
+		logging.Detailf("[откат] шаг %s: снимок актуален, правок не потребовалось", stepID)
+		return false
+	}
+	if len(restored) > 0 {
+		logging.Warnf("[откат] шаг %s: восстановлено файлов: %d (изменённые/удалённые субагентом): %v", stepID, len(restored), restored)
+	}
+	if len(removed) > 0 {
+		logging.Warnf("[откат] шаг %s: удалено файлов, созданных упавшим субагентом: %d: %v", stepID, len(removed), removed)
+	}
+	return true
 }
 
 // executeStep выполняет один шаг плана нужным агентом.
@@ -295,6 +515,31 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	if len(scope) != len(step.Scope) {
 		logging.Detailf("[%s] шаг %s: scope шага расширен для создания: %v -> %v", agentLabel(step.Agent, step.Role), step.ID, step.Scope, scope)
 	}
+
+	// Снимок проекта перед выполнением шага: при реальной ошибке шага его
+	// область откатывается к этому состоянию, чтобы сломанные правки упавшего
+	// субагента (в т.ч. удалённый/переписанный им чужой функционал) не утекли
+	// в общий репозиторий (см. rollbackEnabled/rollbackStep). Снимок СКОПИРОВАН
+	// по области шага (NewSnapScoped): при параллельном выполнении волны откат
+	// одного шага не должен трогать файлы соседних. PLAN.md исключается — им
+	// управляет исполнитель, и параллельный шаг не удаляет его при откате.
+	var snap *tools.Snap
+	if rollbackEnabled() {
+		var s *tools.Snap
+		var serr error
+		if len(scope) > 0 {
+			s, serr = tools.NewSnapScoped(projects.ProjectDir(projectName), scope, planDocName)
+		} else {
+			s, serr = tools.NewSnap(projects.ProjectDir(projectName))
+		}
+		if serr == nil {
+			snap = s
+			logging.Detailf("[%s] шаг %s: защитный откат активен (снимок: %d файлов, scope %d записей)", agentLabel(step.Agent, step.Role), step.ID, s.FileCount(), len(scope))
+		} else {
+			logging.Warnf("[%s] шаг %s: не удалось снять снимок для отката: %v", agentLabel(step.Agent, step.Role), step.ID, serr)
+		}
+	}
+
 	if scoper, ok := agent.(interface{ SetScope([]string) }); ok {
 		scoper.SetScope(scope)
 	}
@@ -316,9 +561,40 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 		genCtx = runner.WithResumeState(ctx, rs)
 	}
 
+	// Снимок публичной поверхности (нормализованные сигнатуры пакетов) до шага.
+	// После выполнения diff покажет, как изменился контракт — добавление/
+	// удаление/изменение публичных деклараций. Не ошибка плана, а сигнал для
+	// человека (см. auditContractStep); при CODEGEN_CONTRACT_ENFORCE=1 уровень
+	// лога поднимается до предупреждения.
+	var apiBefore *tools.PublicAPISnapshot
+	if contractAuditEnabled() {
+		if s, serr := tools.BuildPublicAPISnapshot(projects.ProjectDir(projectName)); serr == nil {
+			apiBefore = s
+		} else {
+			logging.Detailf("[%s] шаг %s: не удалось снять снимок API: %v", agentLabel(step.Agent, step.Role), step.ID, serr)
+		}
+	}
+
 	resp, err := e.provider.Generate(genCtx, agent)
 	if err != nil {
+		// Реальная ошибка выполнения шага (провайдер/инструменты): откатываем
+		// проект к состоянию на момент старта шага. На ошибках «исчерпан лимит
+		// раундов» (resp.Truncated) откат не выполняется — resume продолжит
+		// существующий диалог и файлы.
+		e.rollbackStep(projectName, step.ID, snap)
 		return nil, err
+	}
+
+	// Аудит изменения контракта: сравниваем поверхность до/после шага.
+	if apiBefore != nil {
+		e.auditContractStep(ctx, step, projectName, apiBefore)
+	}
+
+	// Аудит файловых правок шага: какие файлы субагент создал/изменил/удалил.
+	// Диагностический дайджест для человека и метрика стадии для чекпоинта
+	// (не ошибка плана, план правят приёмка и анализатор).
+	if snap != nil {
+		e.auditFileChanges(ctx, step, snap)
 	}
 
 	// Цикл упёрся в лимит раундов (или модель обрезалась по лимиту токенов):
@@ -343,6 +619,11 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 		logging.Warnf("[%s] шаг %s: цикл исчерпал лимит раундов (%d), но чекпоинт отключён, продолжаю с частичным результатом", agentLabel(step.Agent, step.Role), step.ID, resp.Rounds)
 	}
 
+	if resp != nil {
+		// Телеметрия: сколько раундов агентского цикла потратил шаг.
+		e.trackStepMetrics(ctx, step.ID, map[string]any{"rounds": resp.Rounds})
+	}
+
 	return resp, nil
 }
 
@@ -356,6 +637,29 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	lead := newStepAgent(step, projectName)
 	if lead == nil {
 		return fmt.Errorf("неизвестный тип агента-лида: %s", step.Agent)
+	}
+
+	// Защитный откат на случай падения шага-декомпозиции (см. rollbackStep):
+	// снимок покрывает и декомпозицию, и реализацию всех задач специалистами.
+	// Снимок снят по области шага лида (leadStepScope): параллельные
+	// шаги волны не пересекаются по файлам, поэтому откат одного из них не
+	// станет откатывать чужую работу. PLAN.md исключается — им управляет
+	// исполнитель.
+	var snap *tools.Snap
+	if rollbackEnabled() {
+		var s *tools.Snap
+		var serr error
+		if scope := leadStepScope(projects.ProjectDir(projectName), step); len(scope) > 0 {
+			s, serr = tools.NewSnapScoped(projects.ProjectDir(projectName), scope, planDocName)
+		} else {
+			s, serr = tools.NewSnap(projects.ProjectDir(projectName))
+		}
+		if serr == nil {
+			snap = s
+			logging.Detailf("[%s] шаг %s: защитный откат активен (снимок: %d файлов)", agentLabel(step.Agent, step.Role), step.ID, s.FileCount())
+		} else {
+			logging.Warnf("[%s] шаг %s: не удалось снять снимок для отката: %v", agentLabel(step.Agent, step.Role), step.ID, serr)
+		}
 	}
 
 	// Лид scope НЕ ограничиваем: он только читает проект (List/ReadFiles) и
@@ -375,15 +679,18 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		logging.Infof("[%s] шаг %s: сбрасываю устаревшую историю resume, шаг выполнится заново", agentLabel(step.Agent, step.Role), step.ID)
 	}
 	if e.store != nil {
+		e.mu.Lock()
 		if snap, err := e.store.Load(ctx); err == nil {
 			if _, ok := snap.Conversations[step.ID]; ok {
 				_ = e.store.ClearRoundState(ctx, snap, step.ID)
 			}
 		}
+		e.mu.Unlock()
 	}
 
 	resp, err := e.provider.Generate(ctx, lead)
 	if err != nil {
+		e.rollbackStep(projectName, step.ID, snap)
 		return fmt.Errorf("декомпозиция эпика %q: %w", step.ID, err)
 	}
 	if resp != nil && resp.Truncated {
@@ -394,7 +701,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 
 	tasks, err := board.UnmarshalTasks(resp.Content)
 	if (err != nil || len(tasks) == 0) && !resp.Truncated {
-		// Модель вместо JSON-декомпозиции вернула текст (пути, рассуждения): 
+		// Модель вместо JSON-декомпозиции вернула текст (пути, рассуждения):
 		// не фаталим сразу — один раз спрашиваем ещё раз с чёткой инструкцией.
 		// Повторный ответ обрабатываем как основной (петля «переспросить»
 		// ограничена ровно одной попыткой, чтобы не растить токен-бюджет).
@@ -406,6 +713,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		}
 	}
 	if err != nil || len(tasks) == 0 {
+		e.rollbackStep(projectName, step.ID, snap)
 		return fmt.Errorf("лид не вернул JSON-декомпозицию задач (задач: %d, ошибка: %v)", len(tasks), err)
 	}
 	printDecomposedTasks(tasks)
@@ -415,7 +723,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 
 	// PLAN.md: детерминированно записываем полный план работ с декомпозицией
 	// лидов — следующий разработчик видит все задачи и их контракты.
-	if err := writePlanDoc(projectName, e.plan); err != nil {
+	if err := e.writePlan(projectName); err != nil {
 		logging.Warnf("[%s] шаг %s: не удалось записать PLAN.md: %v", agentLabel(step.Agent, step.Role), step.ID, err)
 	}
 
@@ -432,6 +740,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		logging.Infof("[задача %s] специалист %s выполняет: %s", ts.TaskID, truncateText(ts.AssignedRole, 30), truncateText(ts.Title, 60))
 		resp, err := e.provider.Generate(ctx, spec)
 		if err != nil {
+			e.rollbackStep(projectName, step.ID, snap)
 			return fmt.Errorf("шаг %q, задача %s: %w", step.ID, ts.TaskID, err)
 		}
 		if resp != nil && resp.Truncated {
@@ -442,7 +751,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		logging.Infof("[задача %s] выполнена специалистом %s", ts.TaskID, truncateText(ts.AssignedRole, 30))
 	}
 	// Финальная запись PLAN.md после выполнения всех задач шага.
-	if err := writePlanDoc(projectName, e.plan); err != nil {
+	if err := e.writePlan(projectName); err != nil {
 		logging.Warnf("[%s] шаг %s: не удалось записать PLAN.md (финальная): %v", agentLabel(step.Agent, step.Role), step.ID, err)
 	}
 	return nil
@@ -450,10 +759,14 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 
 // persistPlan обновляет PlanJSON в чекпоинте, чтобы декомпозиции лидов
 // (Step.Tasks с контрактами) переживали resume. Без чекпоинта — no-op.
+// Сериализуется e.mu: параллельные шаги волны не должны терять обновления
+// PLAN.json (Store — read-modify-write).
 func (e *Executor) persistPlan(ctx context.Context) {
 	if e.store == nil {
 		return
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	planJSON, err := json.Marshal(e.plan)
 	if err != nil {
 		logging.Warnf("[Checkpoint] не удалось сериализовать план с декомпозицией: %v", err)
@@ -468,6 +781,14 @@ func (e *Executor) persistPlan(ctx context.Context) {
 	if err := e.store.Save(ctx, snap); err != nil {
 		logging.Warnf("[Checkpoint] не удалось обновить PLAN.json (Save: %v)", err)
 	}
+}
+
+// writePlan записывает PLAN.md под защитой e.mu: параллельные шаги волны
+// (лиды) пишут документ по очереди, без гонок на файле.
+func (e *Executor) writePlan(projectName string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return writePlanDoc(projectName, e.plan)
 }
 
 // truncatedStepError обрабатывает исчерпание лимита раундов в шаге-декомпозиции
@@ -546,11 +867,14 @@ func (e *Executor) loadResumeState(ctx context.Context, stepID string) (*runner.
 
 // persistRoundState сохраняет историю диалога и потраченные раунды шага в
 // чекпоинт, чтобы при resume продолжить агентский цикл. Возвращает true,
-// если состояние сохранено.
+// если состояние сохранено. Сериализуется e.mu: при параллельном выполнении
+// волны истории двух шагов не должны терять обновления снимка.
 func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *runner.AgentResponse) bool {
 	if e.store == nil || len(resp.Messages) == 0 {
 		return false
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	conv, err := json.Marshal(resp.Messages)
 	if err != nil {
 		logging.Warnf("[Checkpoint] ошибка сериализации истории шага %s: %v", step.ID, err)
@@ -581,7 +905,46 @@ func (e *Executor) runAcceptorAgent(ctx context.Context, step *Step, projectName
 	root := projects.ProjectDir(projectName)
 	dir := acceptanceDir(root, step.Scope)
 	rep := acceptor.Accept(dir, acceptor.LoadConfig())
+	e.mu.Lock()
 	e.acceptReports[step.ID] = rep
+	e.mu.Unlock()
+
+	// Телеметрия стадий приёмки в чекпоинт (verdict, статусы сборки/запуска/
+	// форматирования/анализа). Чистая диагностика, на вердикт не влияет.
+	m := map[string]any{
+		"verdict": string(rep.Verdict),
+		"dir":     dir,
+	}
+	if rep.Build.OK {
+		m["build"] = "ok"
+	} else {
+		m["build"] = "fail"
+	}
+	if rep.Build.Skipped {
+		m["build"] = "skipped"
+	}
+	if rep.Run != nil {
+		m["run"] = "fail"
+		if rep.Run.OK {
+			m["run"] = "ok"
+		}
+		if rep.Run.Skipped {
+			m["run"] = "skipped"
+		}
+	}
+	if rep.Format != nil {
+		m["format"] = "fail"
+		if rep.Format.OK {
+			m["format"] = "ok"
+		}
+	}
+	if rep.Analyze != nil {
+		m["analyze"] = "fail"
+		if rep.Analyze.OK {
+			m["analyze"] = "ok"
+		}
+	}
+	e.trackStepMetrics(ctx, step.ID, m)
 
 	if rep.Verdict == acceptor.VerdictApprove {
 		logging.Infof("[приёмка] шаг %s: приёмка %q пройдена (%s)", step.ID, dir, rep.Summary)
@@ -669,7 +1032,7 @@ func leadStepScope(projectDir string, step *Step) []string {
 	// прочитать, чтобы понять план и объём уже реализованного.
 	scope = append(scope, planDocName)
 	return scope
-} 
+}
 
 // effectiveCreationScope расширяет scope шага для СОЗДАНИЯ файлов. Если запись
 // scope указывает на конкретный файл, которого ещё нет на диске, шаг создаёт
@@ -859,6 +1222,10 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 
 %s
 
+Карта уже реализованного кода проекта (существующие пакеты, типы и сигнатуры — НЕ дублируй и НЕ переписывай их, исправляй точечно):
+
+%s
+
 Составь план исправлений этих ошибок.
 Требования:
 - Все шаги — только агенты-разработчики backend или frontend, выбранные по принадлежности файлов к подпроекту (server/→backend, frontend/→frontend).
@@ -866,7 +1233,7 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]St
 - scope каждого шага — ТОЛЬКО файлы, реально требующие правки, обязательно включая:
 %s
   (а не весь проект и не узкую догадку вроде только [go.mod], если правка нужна в исходниках).
-- Каждый шаг — одно конкретное исправление.`, rep.FixPrompt(), bullet(issueFiles))
+- Каждый шаг — одно конкретное исправление.`, rep.FixPrompt(), BuildProjectMap(rep.Project), bullet(issueFiles))
 
 	pa := NewPlanner(rep.Project, prompt)
 	resp, err := e.provider.Generate(ctx, pa)
@@ -907,9 +1274,9 @@ func (h *leadHintAgent) GetSystemMessages(text []agents.Message) []agents.Messag
 	return append(base, agents.Message{Type: agents.MessageTypeSystem, Message: h.hint})
 }
 
-func (h *leadHintAgent) GetUserMessages() []agents.Message       { return h.inner.GetUserMessages() }
-func (h *leadHintAgent) GetTools() []tools.ToolDefinition        { return h.inner.GetTools() }
-func (h *leadHintAgent) GetToolsForOllama() []api.Tool           { return h.inner.GetToolsForOllama() }
+func (h *leadHintAgent) GetUserMessages() []agents.Message { return h.inner.GetUserMessages() }
+func (h *leadHintAgent) GetTools() []tools.ToolDefinition  { return h.inner.GetTools() }
+func (h *leadHintAgent) GetToolsForOllama() []api.Tool     { return h.inner.GetToolsForOllama() }
 func (h *leadHintAgent) CallFunction(name string, args map[string]any) ([]byte, error) {
 	return h.inner.CallFunction(name, args)
 }

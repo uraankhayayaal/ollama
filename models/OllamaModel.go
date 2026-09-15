@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/ollama/ollama/api"
 )
@@ -87,6 +89,24 @@ func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 		Tools:    ollamaTools,
 		Stream:   &stream,
 		Options:  map[string]any{"num_ctx": o.numCtx},
+	}
+
+	// Reasoning-модели (например qwen3 с включённым thinking) перед ответом
+	// генерируют цепочку рассуждения — это удваивает время и токены на каждом
+	// раунде инструментов при той же точности вызовов. Переменная OLLAMA_THINK
+	// позволяет отключить рассуждение явно ("0"/"false"/"off") или принудительно
+	// включить ("1"). По умолчанию параметр не задаётся — модель работает
+	// как настроена.
+	if v := strings.TrimSpace(os.Getenv("OLLAMA_THINK")); v != "" {
+		enabled := true
+		switch strings.ToLower(v) {
+		case "0", "false", "off", "no":
+			enabled = false
+		}
+		req.Think = &api.ThinkValue{Value: enabled}
+		if !enabled {
+			runner.Debugf("OLLAMA: рассуждение (think) отключено для модели %q", o.model)
+		}
 	}
 
 	runner.Debugf("OLLAMA: запрос к модели %q (сообщений: %d, инструментов: %d)", o.model, len(messages), len(ollamaTools))

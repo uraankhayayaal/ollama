@@ -82,6 +82,8 @@ func newTool(name string, deps Deps) Tool {
 		return &writeFilesTool{ops: deps.FileOps}
 	case "ReadFiles":
 		return &readFilesTool{ops: deps.FileOps}
+	case "ReadMap":
+		return &readMapTool{ops: deps.FileOps}
 	case "DeleteFiles":
 		return &deleteFilesTool{ops: deps.FileOps}
 	case "Run":
@@ -90,6 +92,10 @@ func newTool(name string, deps Deps) Tool {
 		return &listTool{ops: deps.FileOps}
 	case "AppendFile":
 		return &appendFileTool{ops: deps.FileOps}
+	case "PatchGoFunction":
+		return &patchGoFunctionTool{ops: deps.FileOps}
+	case "SearchReplace":
+		return &searchReplaceTool{ops: deps.FileOps}
 	case "ReviewMr":
 		return &reviewMrTool{ses: deps.Session}
 	case "ApproveMr":

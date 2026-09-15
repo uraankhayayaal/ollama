@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -139,6 +141,84 @@ func retryMessage(toolName string) string {
 // же инструменты, сжигая раунды до лимита (REVIEW_MAX_ROUNDS) и роняя шаг
 // «исчерпан лимит раундов» вместо завершения декомпозицией.
 const maxRepeatedToolCalls = 4
+
+// maxNeedRefills — сколько раз за цикл раннер может «дозаправить» контекст по
+// маркерам NEED_* в финальном ответе модели, прежде чем принять его как есть.
+// Ограничение защищает от бесконечной петли «модель просит контекст → раннер
+// добавляет → модель просит снова».
+const maxNeedRefills = 2
+
+// ContextSupplier — необязательный интерфейс агента, умеющего отдавать
+// компактный контекст «по требованию» (карта кода / диапазон строк): карты
+// кода экономят контекст, а дозаправка не даёт модели галлюцинировать
+// недостающие сигнатуры. Реализуется встроенным в агентов *tools.FileOps
+// (FetchContext), поэтому методы промотируются автоматически.
+type ContextSupplier interface {
+	// FetchContext возвращает компактный контекст по цели вида
+	// "path/to/file.go" (карта кода), "path/to/file.go:20-45" или
+	// "path/to/file.go 20-45" (интервал строк). false — цель нераспознана.
+	FetchContext(target string) (string, bool)
+}
+
+// needContextRe — регулярное выражение маркеров дозаправки контекста в
+// текстовом ответе модели: NEED_CONTEXT / NEED_SIGNATURE / NEED_FILE с целью
+// (путь и, опционально, интервал строк) до конца строки.
+var needContextRe = regexp.MustCompile(`(?m)(?:NEED_CONTEXT|NEED_SIGNATURE|NEED_FILE)\s*[:：]?\s*([^\r\n]+)`)
+
+// NeedContextTargets извлекает цели дозаправки контекста (маркеры NEED_*) из
+// ответа модели. Возвращает уникальные цели в порядке появления.
+func NeedContextTargets(content string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range needContextRe.FindAllStringSubmatch(content, -1) {
+		t := strings.TrimSpace(m[1])
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return out
+}
+
+// needContextPull запрашивает у агента (если он реализует ContextSupplier)
+// компактный контекст для каждой цели дозаправки из финального ответа.
+// Возвращает карту «цель → контекст» и true, если запросили хотя бы один.
+func needContextPull(agent agents.Agent, content string) (map[string]string, bool) {
+	supplier, ok := agent.(ContextSupplier)
+	if !ok {
+		return nil, false
+	}
+	targets := NeedContextTargets(content)
+	if len(targets) == 0 {
+		return nil, false
+	}
+	pulled := make(map[string]string, len(targets))
+	for _, t := range targets {
+		if txt, ok := supplier.FetchContext(t); ok {
+			pulled[t] = txt
+		}
+	}
+	return pulled, len(pulled) > 0
+}
+
+// contextRefillMessage составляет системное сообщение с дозаправленным
+// контекстом (что модель запросила маркерами NEED_*). Детерминированный
+// порядок целей — по алфавиту.
+func contextRefillMessage(pulled map[string]string) string {
+	keys := make([]string, 0, len(pulled))
+	for k := range pulled {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("Система дозаправила контекст по твоим маркерам NEED_*. Используй только эти данные и заверши задачу итоговым ответом; НЕ повторяй маркеры NEED_*.\n\n")
+	for _, k := range keys {
+		fmt.Fprintf(&b, "--- %s ---\n%s\n", k, pulled[k])
+	}
+	return b.String()
+}
 
 // callSignature строит нормализованный ключ вызова инструмента (имя +
 // нормализованные аргументы) для детекции повторяющихся циклов. encoding/json
@@ -273,6 +353,9 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// одной на сигнатуру, чтобы не спамить модель).
 	callCounts := make(map[string]int)
 	loopNudged := make(map[string]bool)
+	// needRefills — сколько раз за цикл уже дозаправляли контекст по маркерам
+	// NEED_* (защита от петли «модель просит контекст → дозаправка → снова»).
+	needRefills := 0
 
 	// pendingRequired возвращает имя первого ещё не выполненного обязательного
 	// инструмента — им runner подсказывает модели в подсказках.
@@ -288,6 +371,17 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	for round := startRound; round < startRound+mx; round++ {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("контекст отменён до раунда %d: %w", round+1, err)
+		}
+
+		// Сжатие истории под символьный бюджет (CODEGEN_HISTORY_BUDGET): при
+		// включённом бюджете перед каждым запросом выбрасываем старейшие пары
+		// assistant+tool из середины, сохраняя систему, задачу и актуальный
+		// хвост. Счётчики allToolCalls/requiredDone от истории не зависят.
+		if budget := historyBudget(); budget > 0 {
+			if compacted := CompressHistory(messages, budget); len(compacted) != len(messages) {
+				Debugf("RUNNER: раунд %d: сжатие истории %d -> %d сообщений (бюджет %d)", round+1, len(messages), len(compacted), budget)
+				messages = compacted
+			}
 		}
 
 		reply, err := provider.ChatOnce(ctx, agent, messages)
@@ -323,6 +417,24 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			if truncated {
 				Debugf("RUNNER: раунд %d: модель обрезалась по лимиту токенов (finish_reason=length), content=%q", round+1, Truncate(content, 300))
 			}
+
+			// Дозаправка контекста on-demand: модель вместо завершения попросила
+			// недостающие данные маркерами NEED_CONTEXT/NEED_SIGNATURE/NEED_FILE.
+			// Подтягиваем компактный контекст (карта кода/интервал строк) у
+			// агента и продолжаем диалог, пока не исчерпаны повторы. Так
+			// модель не галлюцинирует сигнатуры соседних пакетов, а получает
+			// их точечно, без чтения файлов целиком.
+			if !truncated {
+				if pulled, pullNeeded := needContextPull(agent, content); pullNeeded && needRefills < maxNeedRefills {
+					needRefills++
+					Debugf("RUNNER: раунд %d: дозаправка контекста по маркеру NEED_* (%d целей, %d/%d)", round+1, len(pulled), needRefills, maxNeedRefills)
+					messages = append(messages, Message{Role: "assistant", Content: content})
+					messages = append(messages, Message{Role: "user", Content: contextRefillMessage(pulled)})
+					content = ""
+					continue
+				}
+			}
+
 			Debugf("RUNNER: раунд %d: модель завершила (finish_reason=%q), content=%q",
 				round+1, reply.FinishReason, Truncate(content, 300))
 			// История включает финальный ответ модели: если ответ усечён по
