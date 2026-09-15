@@ -199,8 +199,8 @@ func (s *Snap) Restore() (restored, removed []string, err error) {
 	for _, rel := range restored {
 		entry := s.files[rel]
 		full := filepath.Join(s.root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
-			return restored, removed, fmt.Errorf("откат: не удалось создать директорию для %s: %v", rel, err)
+		if err := ensureParentDirs(full); err != nil {
+			return restored, removed, fmt.Errorf("откат: %v", err)
 		}
 		if err := os.WriteFile(full, entry.data, entry.mode); err != nil {
 			return restored, removed, fmt.Errorf("откат: не удалось восстановить %s: %v", rel, err)

@@ -130,10 +130,8 @@ func (ops *FileOps) Write(name, content string) error {
 		}
 	}
 
-	if dir := filepath.Dir(full); dir != "." && dir != "/" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("не удалось создать директорию %s: %v", dir, err)
-		}
+	if err := ensureParentDirs(full); err != nil {
+		return err
 	}
 	if err := os.WriteFile(full, []byte(content), 0644); err != nil {
 		return err
@@ -153,6 +151,9 @@ func (ops *FileOps) AppendTo(name, content string) error {
 	if !ops.writeAllowed(ops.relPath(full)) {
 		return fmt.Errorf("файл %q вне области работы (scope: %v)", name, ops.Scope)
 	}
+	if err := ensureParentDirs(full); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(full, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return err
@@ -163,6 +164,60 @@ func (ops *FileOps) AppendTo(name, content string) error {
 	}
 	logging.Detailf("[AppendFile] дополнен %q -> %q", name, full)
 	return nil
+}
+
+// ensureParentDirs создаёт родительские каталоги для будущей записи файла
+// full и «лечит» файлы-заглушки, блокирующие эти каталоги.
+//
+// У модели нет инструмента создания директорий: чтобы «создать структуру»,
+// она часто вызывает WriteFiles с путём каталога и пустым содержимым. На диске
+// тогда появляется ПУСТОЙ ФАЙЛ с именем каталога (например server/internal),
+// занимающий имя будущей папки. Любая последующая запись внутрь падает с
+// ENOTDIR: «файлы в папке не меняются», шаги циклически повторяются. Эта
+// функция устраняет такое состояние: пустая заглушка удаляется, вместо неё
+// создаются каталоги. Непустой файл НЕ трогается — это реальный код, а не
+// заглушка.
+func ensureParentDirs(full string) error {
+	dir := filepath.Dir(full)
+	for {
+		err := os.MkdirAll(dir, 0755)
+		if err == nil {
+			return nil
+		}
+		blocker := deepestExistingPath(dir)
+		if blocker == "" {
+			return fmt.Errorf("не удалось создать директорию %s: %v", dir, err)
+		}
+		st, serr := os.Lstat(blocker)
+		if serr != nil || !st.Mode().IsRegular() {
+			return fmt.Errorf("не удалось создать директорию %s: путь %s занят", dir, blocker)
+		}
+		if st.Size() > 0 {
+			return fmt.Errorf("не удалось создать директорию %s: путь %s занят непустым файлом", dir, blocker)
+		}
+		logging.Warnf("[tools] устранена пустая файловая заглушка %q, блокировавшая запись (директория была «создана» пустым файлом)", blocker)
+		if err := os.Remove(blocker); err != nil {
+			return fmt.Errorf("не удалось создать директорию %s: %v", dir, err)
+		}
+		// Продолжаем цикл: MkdirAll(dir) повторяется уже без блокера.
+	}
+}
+
+// deepestExistingPath возвращает самый глубокий существующий путь на оси
+// dir .. корня файловой системы. Если это регулярный файл на месте каталога —
+// это и есть предполагаемый блокер (пустая заглушка).
+func deepestExistingPath(dir string) string {
+	p := dir
+	for {
+		if _, err := os.Lstat(p); err == nil {
+			return p
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return ""
+		}
+		p = parent
+	}
 }
 
 // ReadResult читает файл и возвращает результат-статус.
