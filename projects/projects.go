@@ -18,6 +18,13 @@ func ProjectDir(projectName string) string {
 	return filepath.Join(moduleRoot(), "temp", projectName)
 }
 
+// ModuleRoot возвращает корень модуля (директорию с go.mod). Публичная
+// обёртка над moduleRoot для пакетов, которым нужен корень без конкатенации
+// temp/<имя> (например, workspace-реестр проектов).
+func ModuleRoot() string {
+	return moduleRoot()
+}
+
 // moduleRoot находит корень модуля — директорию с go.mod, поднимаясь вверх от
 // рабочей директории. Если go.mod не найден, возвращает рабочую директорию
 // (запуск вне модуля): temp/ тогда окажется рядом с CWD и для всех агентов.

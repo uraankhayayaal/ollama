@@ -70,42 +70,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	providerType := os.Getenv("LLM_PROVIDER") // "ollama", "yandex" или "trim"
-
-	var (
-		provider models.LLMProvider
-		err      error
-	)
-
-	switch providerType {
-	case "ollama":
-		model := os.Getenv("OLLAMA_MODEL") // например, "llama3"
-		if model == "" {
-			model = "llama3"
-		}
-		// Двухслойная маршрутизация по размеру модели (Скорость 2): если задан
-		// OLLAMA_MODEL_LARGE — быстрые шаги идут на OLLAMA_MODEL, тяжёлые
-		// (лиды/ревью) и эскалации — на большую модель. Без OLLAMA_MODEL_LARGE
-		// поведение не меняется.
-		var smallProvider, largeProvider models.LLMProvider
-		smallProvider, err = models.NewOllamaProvider(model)
-		if largeModel := os.Getenv("OLLAMA_MODEL_LARGE"); largeModel != "" && largeModel != model {
-			largeProvider, err = models.NewOllamaProvider(largeModel)
-		}
-		if err == nil {
-			provider = models.NewLayeredProvider(smallProvider, largeProvider)
-		}
-
-	case "yandex":
-		provider = models.NewAlisaProvider()
-
-	case "trim":
-		provider, err = models.NewTrimProvider()
-
-	default:
-		logging.Fatalf("Unknown provider: %s. Use 'ollama', 'yandex' or 'trim'", providerType)
-	}
-
+	// Провайдер LLM создаётся общей функцией (CLI и Web UI используют одну
+	// логику выбора модели по окружению; подробности в models.ResolveProvider).
+	provider, providerType, err := models.ResolveProvider()
 	if err != nil {
 		logging.Fatalf("Failed to init provider: %v", err)
 	}

@@ -7,6 +7,9 @@
 на русском. Зависимости: `github.com/ollama/ollama`, `openai-go`,
 `go-redis/v9`, `miniredis/v2`, `godotenv`.
 
+> **В работе:** Web UI-оболочка «Доска + Чат + Дифф» с полным HITL —
+> см. [PLAN-webui.md](PLAN-webui.md).
+
 ---
 
 ## 1. Что это

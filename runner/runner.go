@@ -2,6 +2,7 @@ package runner
 
 import (
 	"ai/agents"
+	"ai/runevents"
 	"ai/tools"
 	"bytes"
 	"context"
@@ -281,6 +282,10 @@ func Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*
 }
 
 func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, resume *ResumeState) (*AgentResponse, error) {
+	// Репортёр live-событий: если контекст снабжён Router (Web UI), каждый
+	// ответ модели и каждый вызов инструмента транслируются наружу.
+	rep := runevents.ReporterFromContext(ctx)
+
 	// Собираем user-сообщения (например, дифф для ревью), чтобы передать
 	// их контекст в метод системных сообщений (GetSystemMessages).
 	userMessages := agent.GetUserMessages()
@@ -389,6 +394,10 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			return nil, err
 		}
 
+		if rep != nil {
+			rep.OnMessage("assistant", reply.Content, reply.FinishReason == "length")
+		}
+
 		if len(reply.ToolCalls) == 0 {
 			// Если не выполнена хотя бы одна группа обязательных инструментов
 			// (модель ответила текстом вместо вызова ИЛИ вызов вернул ошибки),
@@ -465,10 +474,18 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 
 			callCounts[callSignature(tc.Name, args)]++
 
+			if rep != nil {
+				rep.OnToolStart(tc.Name, Truncate(tc.Arguments, 2000))
+			}
+
 			result, err := agent.CallFunction(tc.Name, args)
 			if err != nil {
 				Debugf("RUNNER: инструмент %q вернул ошибку: %v", tc.Name, err)
 				return nil, fmt.Errorf("выполнение инструмента %s: %w", tc.Name, err)
+			}
+
+			if rep != nil {
+				rep.OnToolResult(tc.Name, Truncate(string(result), 8000), !toolResultFailed(tc.Name, result))
 			}
 
 			Debugf("RUNNER: результат инструмента %q: %s", tc.Name, Truncate(string(result), 500))

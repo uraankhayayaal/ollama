@@ -41,11 +41,121 @@ const maxKanbanRounds = 100
 type KanbanRunner struct {
 	provider models.LLMProvider
 	store    *board.Store
+	gate     HumanGate
 }
+
+// GateDecision — решение человека по HITL-затвору.
+type GateDecision struct {
+	// Approved — подтверждено. false означает «переделать»: публикация
+	// отменяется, доска очищается, фаза запускается заново.
+	Approved bool
+	// Reason — комментарий человека (причина отклонения / правки).
+	Reason string
+}
+
+// HumanGate — интерфейс подтверждения человеком. Устанавливается сервером
+// Web UI; в консольном режиме (nil) KanbanRunner работает полностью
+// автономно, как раньше. Затворы БЛОКИРУЮТ runner до решения человека —
+// пока канал ожидания открыт, пользователь правит доску (редактирование,
+// статусы, удаление), а runner при продолжении перечитает её заново.
+type HumanGate interface {
+	// Epics — подтверждение эпиков, только что опубликованных Системным
+	// архитектором, перед декомпозицией лидами.
+	Epics(ctx context.Context, epics []*board.Epic) (GateDecision, error)
+	// Tasks — подтверждение задач, готовых к работе, перед раздачей
+	// специалистам.
+	Tasks(ctx context.Context, tasks []*board.Task) (GateDecision, error)
+}
+
+// SetGate устанавливает HITL-затвор. nil возвращает автономный режим.
+func (k *KanbanRunner) SetGate(g HumanGate) { k.gate = g }
 
 // NewKanbanRunner создаёт Kanban-оркестратор поверх хранилища доски.
 func NewKanbanRunner(provider models.LLMProvider, store *board.Store) *KanbanRunner {
 	return &KanbanRunner{provider: provider, store: store}
+}
+
+// waitEpics — HITL-затвор «утвердить эпики»: блокирует до решения человека.
+// При отклонении эпики (и их задачи) удаляются — следующая итерация
+// перезапустит архитектора.
+func (k *KanbanRunner) waitEpics(ctx context.Context) error {
+	epics, err := k.store.ListEpics(ctx)
+	if err != nil {
+		return err
+	}
+	if len(epics) == 0 {
+		return nil
+	}
+	dec, err := k.gate.Epics(ctx, epics)
+	if err != nil {
+		return fmt.Errorf("затвор «утвердить эпики»: %w", err)
+	}
+	if dec.Approved {
+		logging.Infof("[HITL] эпики утверждены (%d): %s", len(epics), epicList(epics))
+		return nil
+	}
+	logging.Infof("[HITL] эпики отклонены (%s), переделываем", truncateText(dec.Reason, 120))
+	return k.rework(ctx, epics)
+}
+
+// waitReadyTasks — HITL-затвор «утвердить задачи»: блокирует до решения
+// человека. При отклонении задачи не исполняются: эпики, в которых они
+// живут, удаляются (каскадом), и весь путь повторяется.
+func (k *KanbanRunner) waitReadyTasks(ctx context.Context) error {
+	ready, err := k.readyTasks(ctx)
+	if err != nil {
+		return err
+	}
+	if len(ready) == 0 {
+		return nil
+	}
+	dec, err := k.gate.Tasks(ctx, ready)
+	if err != nil {
+		return fmt.Errorf("затвор «утвердить задачи»: %w", err)
+	}
+	if dec.Approved {
+		logging.Infof("[HITL] задачи утверждены (%d)", len(ready))
+		return nil
+	}
+	logging.Infof("[HITL] задачи отклонены (%s), переделываем эпики", truncateText(dec.Reason, 120))
+	epicIDs := map[string]struct{}{}
+	for _, t := range ready {
+		epicIDs[t.EpicID] = struct{}{}
+	}
+	var epics []*board.Epic
+	for id := range epicIDs {
+		e, err := k.store.GetEpic(ctx, id)
+		if err != nil {
+			if errors.Is(err, board.ErrNotFound) {
+				continue
+			}
+			return err
+		}
+		epics = append(epics, e)
+	}
+	return k.rework(ctx, epics)
+}
+
+// rework удаляет эпики вместе с их задачами (каскадом). Эпики, чьи задачи
+// уже взяты в работу, удалить нельзя — вернётся первая такая ошибка, чтобы
+// человек вмешался вручную.
+func (k *KanbanRunner) rework(ctx context.Context, epics []*board.Epic) error {
+	var firstErr error
+	deleted := 0
+	for _, e := range epics {
+		if err := k.store.DeleteEpic(ctx, e.TaskID); err != nil {
+			if errors.Is(err, board.ErrNotFound) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("переделка: эпик %s: %w", e.TaskID, err)
+			}
+			continue
+		}
+		deleted++
+	}
+	logging.Infof("[HITL] переделка: удалено эпиков: %d, проблем: %v", deleted, firstErr)
+	return firstErr
 }
 
 // Run исполняет Kanban-оркестрацию до решения задачи пользователя.
@@ -70,20 +180,64 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 		}
 
 		progress := false
-		for _, phase := range []func(context.Context) (bool, error){
-			k.phaseArchitect,
-			k.phaseLeads,
-			k.phaseReady,
-			k.phaseExecute,
-			k.phaseBugs,
-			k.phaseComplete,
-		} {
-			p, err := phase(ctx)
-			if err != nil {
+
+		// Архитектура: эпики -> затвор HITL «утвердить эпики» (перед
+		// декомпозицией лидами). Затвор срабатывает только в раунде, где
+		// архитектор что-то опубликовал (phaseArchitect вернул true) — в
+		// последующих раундах эпики уже есть, и повторного подтверждения
+		// не требуется.
+		p, err := k.phaseArchitect(ctx)
+		if err != nil {
+			return err
+		}
+		progress = progress || p
+		if k.gate != nil && p {
+			if err := k.waitEpics(ctx); err != nil {
 				return err
 			}
-			progress = progress || p
 		}
+
+		// Декомпозиция лидами (после утверждения эпиков выше).
+		p, err = k.phaseLeads(ctx)
+		if err != nil {
+			return err
+		}
+		progress = progress || p
+
+		// Готовность к работе -> затвор HITL «утвердить задачи» (перед
+		// раздачей специалистам). Срабатывает в раунде, где появились новые
+		// готовые задачи; уже подтверждённые потоки в следующих раундах
+		// исполняются без повторного подтверждения.
+		p, err = k.phaseReady(ctx)
+		if err != nil {
+			return err
+		}
+		progress = progress || p
+		if k.gate != nil && p {
+			if err := k.waitReadyTasks(ctx); err != nil {
+				return err
+			}
+		}
+
+		// Исполнение специалистами.
+		p, err = k.phaseExecute(ctx)
+		if err != nil {
+			return err
+		}
+		progress = progress || p
+
+		// Багрепорты и финализация эпиков.
+		p, err = k.phaseBugs(ctx)
+		if err != nil {
+			return err
+		}
+		progress = progress || p
+
+		p, err = k.phaseComplete(ctx)
+		if err != nil {
+			return err
+		}
+		progress = progress || p
 
 		// Ни один этап цикла не сделал работу: на доске остались только
 		// отменённые записи или неразрешимые зависимости — дальше бессмысленно.
