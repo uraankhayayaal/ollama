@@ -108,13 +108,13 @@ GET   /api/projects/:id/diff               — дифф (git diff или Snap.Di
 ## Этапы и чеклист
 
 ### Ф-1 (фундамент)
-- [ ] `workspace/`: реестр проектов + `.ai-workspaces.json` + безопасность путей + тесты
-- [ ] `runevents/`: Reporter + передача через context + тесты
-- [ ] `chat/`: Redis Streams + pub/sub + тесты
-- [ ] HITL gates в `agents/planner/kanban.go` (`HumanGate`, nil = автономный CLI) + контракт-тесты
-- [ ] `server/`: `resolve.go`, HTTP+WS хаб, SessionRegistry, REST-хендлеры
-- [ ] `web/`: каркас React (Vite+TS), три панели, WS-клиент, embed+dev-прокси
-- [ ] Верификация Ф-1: build/vet/тесты (в т.ч. `-race`), регресс CLI без gates, `npm run build` web/
+- [x] `workspace/`: реестр проектов + `.ai-workspaces.json` + безопасность путей + тесты
+- [x] `runevents/`: Reporter + передача через context + тесты
+- [x] `chat/`: Redis Streams + pub/sub + тесты
+- [x] HITL gates в `agents/planner/kanban.go` (`HumanGate`, nil = автономный CLI) + контракт-тесты
+- [x] `server/`: `resolve.go`, HTTP+WS хаб, SessionRegistry, REST-хендлеры
+- [x] `web/`: каркас React (Vite+TS), три панели, WS-клиент, embed+dev-прокси
+- [x] Верификация Ф-1: build/vet/тесты (в т.ч. `-race`), регресс CLI без gates, `npm run build` web/
 
 ### Ф-2 (полный контроль + Git)
 - [ ] Полный контроль в UI: редактирование задач, DnD, ручные статусы, approve/reject

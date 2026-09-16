@@ -22,6 +22,7 @@ import (
 	"ai/logging"
 	"ai/models"
 	"ai/projects"
+	"ai/server"
 	"ai/services/mrlistener"
 	"context"
 	"fmt"
@@ -61,6 +62,23 @@ func main() {
 		}
 		runAcceptCommand(os.Args[2])
 		os.Exit(0)
+	}
+
+	// Web UI: HTTP+WS сервер с Kanban-доской, чатом и HITL-контролем.
+	// go run . serve [addr]  (по умолчанию 127.0.0.1:8090)
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		addr := "127.0.0.1:8090"
+		if len(os.Args) > 2 && os.Args[2] != "" {
+			addr = os.Args[2]
+		}
+		srv, err := server.NewServer(server.Config{Addr: addr})
+		if err != nil {
+			logging.Fatalf("server: %v", err)
+		}
+		if err := srv.Run(context.Background()); err != nil {
+			logging.Fatalf("server: %v", err)
+		}
+		return
 	}
 
 	// Таймаут цикла агента берётся из окружения REVIEW_TIMEOUT, иначе 10 минут.
