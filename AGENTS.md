@@ -37,3 +37,14 @@ go test . ./agents/... ./tools/ ./board/
   (артефакт сгенерированного проекта) — используй перечень выше.
 - Предсуществующие неформатированные файлы (`agents/acceptor/checks.go`,
   `agents/acceptor/run.go`) не трогать.
+
+Состояние Ф-2-3 (последняя сессия): интерфейс `forges.Forge` расширен
+`CreateMergeRequest(MergeRequestOptions) (string, error)`; реализованы
+github (PR) и gitlab (MR) с автоопределением по remote — `ParseURL/ParseRemote`,
+`NewByRemote`/`RegisterRemote` в `forges/registry.go`, `init()` регистрирует оба;
+local — заглушка «нет remote»; hermetic-тесты (roundTripFunc, без сети) зелёные.
+БЛОКЕР: REST `POST /api/projects/{id}/accept` (commit+push+MR/PR) и кнопка
+«Принять → MR» в web НЕ сделаны — сервер до сих пор открывает git-проекты как
+501 (`server/server.go` handleOpenProject: `git_url` → NotImplemented; diff/reject
+эндпоинты отсутствуют). Следующий шаг: открытие git-проекта на сервере
+(workspace KindGit + gitops) + REST accept/reject-branch/diff + web-кнопка.
