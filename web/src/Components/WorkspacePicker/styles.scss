@@ -1,0 +1,59 @@
+// Канон-стили пикера воркспейса. Префикс .picker — глобальный,
+// зеркалит App:153 (дропдаун + форма открытия/создания).
+
+.picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .lbl {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted, #8a94a6);
+  }
+
+  select,
+  input {
+    font-size: 13px;
+    padding: 6px 10px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: var(--card, #fff);
+    color: var(--ink, #1b2330);
+  }
+
+  .picker-form {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .btn {
+    font-size: 13px;
+    padding: 6px 12px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: var(--btn, #f1f5f9);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--btn-hover, #e2e8f0);
+    }
+
+    &.primary {
+      background: var(--primary, #2563eb);
+      border-color: var(--primary, #2563eb);
+      color: #fff;
+
+      &:hover {
+        background: var(--primary-hover, #1d4ed8);
+      }
+    }
+  }
+
+  .err {
+    color: #dc2626;
+    font-size: 12px;
+  }
+}

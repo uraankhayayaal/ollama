@@ -1,0 +1,74 @@
+// Стили чат-панели (сайдбар поверх доски). Имена .chatboard — канон,
+// зеркалит props { chat, onSend, endRef } и типы ChatMsg/types.ts.
+
+.chatboard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+
+  .history {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1;
+    padding: 4px 2px;
+
+    .msg {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      max-width: 82%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: var(--chat-bg, #f1f5f9);
+      border: 1px solid var(--line, #e2e8f0);
+
+      &.user {
+        align-self: flex-end;
+        background: var(--chat-user, #dbeafe);
+      }
+      &.tool,
+      &.agent {
+        align-self: flex-start;
+        background: var(--chat-agent, #f8fafc);
+      }
+
+      .who {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted, #94a3b8);
+      }
+
+      .content {
+        font-size: 14px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .when {
+        font-size: 11px;
+        color: var(--muted, #94a3b8);
+        align-self: flex-end;
+      }
+    }
+  }
+
+  .send {
+    display: flex;
+    gap: 8px;
+
+    input {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+  }
+}

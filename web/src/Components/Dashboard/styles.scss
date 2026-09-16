@@ -1,0 +1,145 @@
+// Канон-стили дашборда (канбан-колонки, карточки задач, эпики).
+// Имена классов — глобальные, ICSS-модулизация не нужна (см. styles совместимость).
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+
+  .meta {
+    display: flex;
+    align-items: baseline;
+    gap: 10px ;
+    font-size: 13px;
+    color: var(--muted, #8a94a6);
+
+    .counts {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  .columns {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    gap: 12px;
+    align-items: start;
+
+    .col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      background: var(--col, #f4f6f9);
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted, #8a94a6);
+
+        b {
+          color: var(--ink);
+        }
+      }
+
+      &.todo header { color: var(--st-todo, #64748b); }
+      &.in_progress header { color: var(--st-in-progress, #2563eb); }
+      &.review header { color: var(--st-review, #b45309); }
+      &.done header { color: var(--st-done, #15803d); }
+
+      ul {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+    }
+  }
+
+  .task {
+    padding: 8px 10px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: var(--card, #fff);
+
+    .title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .sub {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted, #94a3b8);
+
+      .epic {
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 0.03em;
+      }
+    }
+
+    .controls {
+      margin-top: 6px;
+
+      button {
+        font-size: 11px;
+        padding: 3px 8px;
+        border: 1px solid var(--line, #e2e8f0);
+        border-radius: 6px;
+        background: var(--btn, #f1f5f9);
+        cursor: pointer;
+
+        &:hover {
+          background: var(--btn-hover, #e2e8f0);
+        }
+      }
+    }
+  }
+
+  .epics {
+    h3 {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted, #8a94a6);
+      margin-bottom: 6px;
+    }
+
+    ul {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--card, #fff);
+
+      .lead {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--muted, #94a3b8);
+      }
+
+      .done { color: var(--st-done, #15803d); }
+      .in_progress { color: var(--st-in-progress, #2563eb); }
+    }
+  }
+
+  &.empty {
+    color: var(--muted, #94a3b8);
+    padding: 20px 0;
+  }
+}

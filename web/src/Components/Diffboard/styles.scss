@@ -1,0 +1,53 @@
+// Стили дифф-доски. Канон-имена .diffboard — зеркало DiffInfo api.ts:117.
+
+.diffboard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+
+  .err {
+    color: var(--err, #dc2626);
+    font-size: 13px;
+  }
+
+  .hint {
+    color: var(--muted, #8a94a6);
+    font-size: 13px;
+  }
+
+  .tree {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    .entry {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+
+      &.added {
+        border-left: 3px solid var(--add, #16a34a);
+      }
+      &.removed {
+        border-left: 3px solid var(--rem, #dc2626);
+      }
+      &.modified {
+        border-left: 3px solid var(--mod, #2563eb);
+      }
+
+      span {
+        color: var(--muted, #8a94a6);
+        font-size: 12px;
+      }
+    }
+  }
+}
