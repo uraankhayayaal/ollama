@@ -1,4 +1,4 @@
-import type { BoardView, Status, TaskRow } from "../../types";
+import type { BoardView, Status, TaskRow } from "@/Types";
 import "./styles.scss";
 
 const STATUS_ORDER: Status[] = ["todo", "in_progress", "review", "done"];

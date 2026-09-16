@@ -3,8 +3,8 @@
 // Канон-архитектура — как Dashboard (Components/Chatboard/*).
 
 import { useEffect } from "react";
-import type { ChatMsg } from "../../types";
-import { APIError } from "../../api";
+import type { ChatMsg } from "@/Types";
+// import { APIError } from "@/Api";
 import "./styles.scss";
 
 export function Chatboard({

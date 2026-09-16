@@ -9,11 +9,10 @@ import type {
   BugRow,
   ChatMsg,
   // EpicRow,
-  // GateEvent,
   ProjectMeta,
   // Status,
   TaskRow,
-} from "./types";
+} from "@/Types";
 
 export class APIError extends Error {
   constructor(

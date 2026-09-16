@@ -1,0 +1,1 @@
+export { GateBanner } from "./GateBanner";
