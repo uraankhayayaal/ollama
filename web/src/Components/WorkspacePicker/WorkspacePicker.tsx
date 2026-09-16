@@ -4,9 +4,9 @@
 // (projects/current/onOpen/busy). BASE/fmtErr — локальный канон-артефакт.
 
 import { useEffect, useState, type FormEvent } from "react";
-import { listProjects } from "@/Api";
+import { listProjects } from "../../Api";
 import "./styles.scss";
-import { ProjectMeta } from "@/Types";
+import { ProjectMeta } from "../../Types";
 
 const BASE = ""; // dev: Vite-прокси /api→backend; прод: embed same-origin.
 

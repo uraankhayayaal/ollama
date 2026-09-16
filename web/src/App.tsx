@@ -2,17 +2,17 @@
 // зеркалит server/session.go + runevents + chat/store.go (см. web/src/types.ts).
 
 import { useEffect, useRef, useState } from "react";
-import { boardOf, chatHistory, gateDecide, listProjects, openProject, postChat, sessionStop, updateTask } from "@/Api";
+import { boardOf, chatHistory, gateDecide, listProjects, openProject, postChat, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { BoardView, ChatMsg, TaskRow, ProjectMeta } from "@/Types";
-import { Dashboard } from "@/Components/Dashboard";
-import { Chatboard } from "@/Components/Chatboard";
-import { Diffboard } from "@/Components/Diffboard";
-import { WorkspacePicker } from "@/Components/WorkspacePicker";
-import { Tabs } from "@/Components/Tabs";
-import { Badge } from "@/Components/Badge";
-import { GateBanner } from "@/Components/GateBanner";
-import { GateEvent } from "@/Types";
+import { Dashboard } from "./Components/Dashboard";
+import { Chatboard } from "./Components/Chatboard";
+import { Diffboard } from "./Components/Diffboard";
+import { WorkspacePicker } from "./Components/WorkspacePicker";
+import { Tabs } from "./Components/Tabs";
+import { Badge } from "./Components/Badge";
+import { GateBanner } from "./Components/GateBanner";
+import { GateEvent } from "./Types";
 
 const BASE = ""; // dev: Vite-прокси /api→backend; прод: embed same-origin.
 
