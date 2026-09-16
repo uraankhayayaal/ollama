@@ -25,6 +25,9 @@ func (f *fakeForge) PostComment(forges.ReviewComment) error {
 }
 func (f *fakeForge) PostSummary(string) error { return nil }
 func (f *fakeForge) Approve(string) error     { f.approves++; return nil }
+func (f *fakeForge) CreateMergeRequest(forges.MergeRequestOptions) (string, error) {
+	return "https://example.invalid/mr", nil
+}
 
 func TestApproveBlockedWhenPostFailed(t *testing.T) {
 	ff := &fakeForge{failPost: true}
@@ -184,7 +187,7 @@ func TestReviewMrParsesInterfaceArrayComments(t *testing.T) {
 			map[string]any{
 				"file_path": "AuthManager.php",
 				"line":      280,
-				"text":      "для заметки: проверь nil",
+				"text":      "для заметки: в AuthManager'е заливается nil",
 			},
 			map[string]any{
 				"file_path": "AuthManager.php",

@@ -39,6 +39,28 @@ type Forge interface {
 	// Approve одобряет запрос на слияние. summary — текст комментария,
 	// прикладываемый к одобрению (легенда ревью, может быть пустым).
 	Approve(summary string) error
+
+	// CreateMergeRequest создаёт запрос на слияние по параметрам и
+	// возвращает ссылку на созданный MR/PR. Применяется для HITL-затвора
+	// «Принять → MR» (Ф-2-3): агент подготовил фича-ветку и отправляет её
+	// человеку на одобрение слияния.
+	//
+	// Передаваемый при конструировании URL не обязан быть «живым» запросом
+	// на слияние — конструктор в этом случае должен позволить создание MR
+	// по параметрам (переопределяется реализациями).
+	CreateMergeRequest(opts MergeRequestOptions) (string, error)
+}
+
+// MergeRequestOptions — параметры создания Merge/Pull Request.
+type MergeRequestOptions struct {
+	// SourceBranch — имя исходной (фича) ветки.
+	SourceBranch string `json:"source_branch"`
+	// TargetBranch — целевая ветка, в которую вливается фича.
+	TargetBranch string `json:"target_branch"`
+	// Title — заголовок запроса.
+	Title string `json:"title"`
+	// Description — описание (легенда правки, итог кратко).
+	Description string `json:"description"`
 }
 
 // DetectType определяет тип провайдера по URL.

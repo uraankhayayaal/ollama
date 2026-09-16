@@ -34,11 +34,25 @@ func init() {
 	forges.Register(forges.KindGitLab, func(prURL, token string) (forges.Forge, error) {
 		return New(prURL, token)
 	})
+	forges.RegisterRemote(forges.KindGitLab, func(remoteURL, token string) (forges.Forge, error) {
+		return NewByRemote(remoteURL, token)
+	})
 }
 
 // New создаёт GitLab-провайдер по ссылке на Merge Request.
 func New(mrURL string, token string) (*Forge, error) {
 	cfg, err := ParseURL(mrURL, token)
+	if err != nil {
+		return nil, err
+	}
+	return &Forge{cfg: cfg}, nil
+}
+
+// NewByRemote создаёт GitLab-провайдер по git-remote (без номера MR):
+// используется HITL-затвором HITL-затвора «Принять → MR» (Ф-2-3), когда
+// фича-ветка уже запушена, а сам Merge Request предстоит открыть.
+func NewByRemote(remoteURL string, token string) (*Forge, error) {
+	cfg, err := ParseRemote(remoteURL, token)
 	if err != nil {
 		return nil, err
 	}
@@ -300,4 +314,35 @@ func (f *Forge) Approve(summary string) error {
 		return fmt.Errorf("статус %d: %s", status, string(data))
 	}
 	return nil
+}
+
+// CreateMergeRequest создаёт Merge Request GitLab и возвращает ссылку на него.
+// source: фича-ветка из того же проекта. Параметры задаются HITL-затвором
+// «Принять → MR» (Ф-2-3): ветка уже запушена в remote, MR открываем сейчас.
+func (f *Forge) CreateMergeRequest(opts forges.MergeRequestOptions) (string, error) {
+	payload := map[string]string{
+		"source_branch": opts.SourceBranch,
+		"target_branch": opts.TargetBranch,
+		"title":         opts.Title,
+	}
+
+	apiPath := fmt.Sprintf("/api/v4/projects/%s/merge_requests", f.cfg.ProjID)
+	data, status, err := f.do("POST", apiPath, payload)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusCreated && status != http.StatusOK {
+		return "", fmt.Errorf("статус %d: %s", status, string(data))
+	}
+
+	var mr struct {
+		WebURL string `json:"web_url"`
+	}
+	if err := json.Unmarshal(data, &mr); err != nil {
+		return "", err
+	}
+	if mr.WebURL == "" {
+		return "", fmt.Errorf("GitLab не вернул ссылку на созданный Merge Request")
+	}
+	return mr.WebURL, nil
 }

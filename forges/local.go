@@ -198,6 +198,14 @@ func (lf *LocalForge) PostSummary(summary string) error {
 	return nil
 }
 
+// CreateMergeRequest для локальной директории не поддерживается: здесь нет
+// удалённого репозитория и понятия запроса на слияние. Возвращает явную
+// ошибку «нет remote», чтобы цикл HITL понимал: локальные проекты нельзя
+// принимать через MR (Ф-2-3 не предназначен для local-провайдеров).
+func (lf *LocalForge) CreateMergeRequest(opts MergeRequestOptions) (string, error) {
+	return "", fmt.Errorf("локальная директория не поддерживает создание MR/PR: нет удалённого репозитория (воспользуйтесь git-проектом с remote)")
+}
+
 // Approve фиксирует одобрение.
 func (lf *LocalForge) Approve(summary string) error {
 	lf.Approved = true

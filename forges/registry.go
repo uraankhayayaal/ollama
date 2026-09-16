@@ -15,18 +15,28 @@ const (
 // без правки этого пакета.
 var builders = map[kind]Builder{}
 
-// Builder конструирует реализацию Forge по ссылке и токену.
+// Builder конструирует реализацию Forge по ссылке на существующий PR/MR.
 type Builder func(prURL string, token string) (Forge, error)
 
-// Register регистрирует строителя для типа провайдера.
+// RemoteBuilder конструирует реализацию Forge по git-remote (без номера MR):
+// используется, когда запрос на слияние ещё не создан, а нужно его открыть
+// (Ф-2-3, HITL-затвор «Принять → MR»).
+type RemoteBuilder func(remoteURL string, token string) (Forge, error)
+
+// Register регистрирует строителя провайдера по ссылке на PR/MR.
 func Register(k kind, b Builder) {
 	builders[k] = b
 }
 
+// remoteBuilders — строители по git-remote.
+var remoteBuilders = map[kind]RemoteBuilder{}
+
+// RegisterRemote регистрирует строителя провайдера по git-remote.
+func RegisterRemote(k kind, b RemoteBuilder) {
+	remoteBuilders[k] = b
+}
+
 // New создаёт провайдер по ссылке на Pull/Merge Request.
-// Провайдер определяется по хостингу из URL; токен — для доступа к его API.
-// Чтобы добавить новый хостинг, достаточно зарегистрировать строителя
-// через Register и добавить хост в DetectType.
 func New(prURL string, token string) (Forge, error) {
 	kind := DetectType(prURL)
 	if kind == "" {

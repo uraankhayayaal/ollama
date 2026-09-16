@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"ai/forges"
 )
@@ -51,14 +52,70 @@ func ParseURL(prURL string, token string) (*config, error) {
 	}, nil
 }
 
-// Forge — реализация интерфейса forges.Forge для GitHub.
+// Forge — реализация интерффеса forges.Forge для GitHub.
 type Forge struct {
 	cfg *config
+}
+
+// ParseRemote разбирает ссылку на git-remote (SSH `git@github.com:o/r.git`
+// или HTTPS `https://github.com/o/r.git`) и возвращает конфиг без номера
+// Pull Request. Используется для создания PR по уже существующей
+// подключённой фича-ветке (Ф-2-3): источником служит remote, а не URL PR.
+func ParseRemote(remoteURL string, token string) (*config, error) {
+	// SSH-вид: git@github.com:owner/repo.git
+	if strings.HasPrefix(remoteURL, "git@") {
+		scp := strings.TrimPrefix(remoteURL, "git@")
+		pieces := strings.Split(scp, ":")
+		if len(pieces) != 2 {
+			return nil, fmt.Errorf("неверный формат SSH remote: %q", remoteURL)
+		}
+		host, path := pieces[0], strings.TrimSuffix(pieces[1], ".git")
+		parts := strings.Split(path, "/")
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("неверный формат пути в SSH remote: %q", remoteURL)
+		}
+		return &config{
+			BaseURL: "https://api." + host,
+			Token:   token,
+			Owner:   parts[0],
+			Repo:    parts[1],
+		}, nil
+	}
+
+	// HTTPS-вид: https://github.com/owner/repo.git
+	u, err := url.Parse(remoteURL)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(strings.TrimSuffix(u.Path, ".git"), "/")
+	if len(parts) < 3 || parts[1] == "" || parts[2] == "" {
+		return nil, fmt.Errorf("неверный формат HTTPS remote: %q", remoteURL)
+	}
+	return &config{
+		BaseURL: fmt.Sprintf("https://api.%s", u.Hostname()),
+		Token:   token,
+		Owner:   parts[1],
+		Repo:    parts[2],
+	}, nil
+}
+
+// NewByRemote создаёт GitHub-провайдер по git-remote (без номера PR).
+// Используется для HITL-затвора «Принять → PR»: источником создания PR
+// служит подключённая фича-ветка.
+func NewByRemote(remoteURL string, token string) (*Forge, error) {
+	cfg, err := ParseRemote(remoteURL, token)
+	if err != nil {
+		return nil, err
+	}
+	return &Forge{cfg: cfg}, nil
 }
 
 func init() {
 	forges.Register(forges.KindGitHub, func(prURL, token string) (forges.Forge, error) {
 		return New(prURL, token)
+	})
+	forges.RegisterRemote(forges.KindGitHub, func(remoteURL, token string) (forges.Forge, error) {
+		return NewByRemote(remoteURL, token)
 	})
 }
 
@@ -251,4 +308,41 @@ func (f *Forge) Approve(summary string) error {
 		return fmt.Errorf("статус %d: %s", status, string(data))
 	}
 	return nil
+}
+
+// CreateMergeRequest создаёт Pull Request по параметрам и возвращает ссылку
+// на созданный PR (Ф-2-3, HITL-затвор «Принять → MR»). Источником выступает
+// фича-ветка, уже запушенная в remote (см. gitops).
+//
+// ВАЖНО: в отличие от New (который требует живой URL PR), этот метод не
+// трогает PR — он создаёт новый, поэтому заголовок/описание задаются явно.
+func (f *Forge) CreateMergeRequest(opts forges.MergeRequestOptions) (string, error) {
+	// head должен быть "owner:branch" (если ветка из того же репозитория —
+	// хватает имени, но GitHub API надёжнее принимает owner:branch).
+	payload := map[string]string{
+		"title": opts.Title,
+		"head":  fmt.Sprintf("%s:%s", f.cfg.Owner, opts.SourceBranch),
+		"base":  opts.TargetBranch,
+		"body":  opts.Description,
+	}
+
+	apiPath := fmt.Sprintf("/repos/%s/%s/pulls", f.cfg.Owner, f.cfg.Repo)
+	data, status, err := f.do("POST", apiPath, payload)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusCreated && status != http.StatusOK {
+		return "", fmt.Errorf("статус %d: %s", status, string(data))
+	}
+
+	var pr struct {
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.Unmarshal(data, &pr); err != nil {
+		return "", err
+	}
+	if pr.HTMLURL == "" {
+		return "", fmt.Errorf("GitHub не вернул ссылку на созданный Pull Request")
+	}
+	return pr.HTMLURL, nil
 }
