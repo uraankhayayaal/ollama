@@ -118,7 +118,7 @@ GET   /api/projects/:id/diff               — дифф (git diff или Snap.Di
 
 ### Ф-2 (полный контроль + Git)
 - [x] Полный контроль в UI: редактирование задач, DnD, ручные статусы, approve/reject
-- [ ] `gitops/`: worktree-изоляция, commit, push, fallback branch-in-place, reject-branch
+- [x] `gitops/`: worktree-изоляция, commit, push, fallback branch-in-place, reject-branch
 - [ ] MR/PR обоих форджей (автоопределение по remote) + кнопка «Принять → MR»
 - [ ] Дифф-вью: `git diff` от точки отхода / `Snap.Diff()` для обычных папок
 - [ ] Верификация Ф-2: тесты gitops (dry-run), определения форджа, DnD/статусов
