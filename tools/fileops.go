@@ -112,7 +112,18 @@ func (ops *FileOps) ResolvePath(name string) (string, error) {
 }
 
 // Write создаёт директории при необходимости и записывает файл.
+// Мутация сериализуется пер-проектной блокировкой (см. filelock.go): любые две
+// записи в каталог проекта выполняются строго последовательно, исключая гонки
+// между параллельными шагами волны плана.
 func (ops *FileOps) Write(name, content string) error {
+	return withProjectLock(ops.OutputDir, func() error {
+		return ops.writeLocked(name, content)
+	})
+}
+
+// writeLocked — тело Write без пер-проектной блокировки. Вызывается только из
+// Write (под блокировкой) и тестами напрямую не предполагается.
+func (ops *FileOps) writeLocked(name, content string) error {
 	full, err := ops.ResolvePath(name)
 	if err != nil {
 		return err
@@ -143,7 +154,15 @@ func (ops *FileOps) Write(name, content string) error {
 
 // AppendTo прибавляет текст в конец существующего файла (без полной
 // перезаписи). Используется инструментом AppendFile для точечных правок.
+// Сериализуется той же пер-проектной блокировкой, что и Write.
 func (ops *FileOps) AppendTo(name, content string) error {
+	return withProjectLock(ops.OutputDir, func() error {
+		return ops.appendToLocked(name, content)
+	})
+}
+
+// appendToLocked — тело AppendTo без пер-проектной блокировки.
+func (ops *FileOps) appendToLocked(name, content string) error {
 	full, err := ops.ResolvePath(name)
 	if err != nil {
 		return err
@@ -237,7 +256,20 @@ func (ops *FileOps) ReadResult(name string) map[string]string {
 }
 
 // Remove удаляет файл или папку и возвращает (результат-статус, ошибку).
+// Сериализуется пер-проектной блокировкой: удаление не должно пересекаться
+// с параллельной записью в тот же каталог проекта.
 func (ops *FileOps) Remove(name string) (map[string]string, error) {
+	var res map[string]string
+	err := withProjectLock(ops.OutputDir, func() error {
+		var rerr error
+		res, rerr = ops.removeLocked(name)
+		return rerr
+	})
+	return res, err
+}
+
+// removeLocked — тело Remove без пер-проектной блокировки.
+func (ops *FileOps) removeLocked(name string) (map[string]string, error) {
 	full, err := ops.ResolvePath(name)
 	if err != nil {
 		return nil, err

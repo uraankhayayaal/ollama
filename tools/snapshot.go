@@ -166,6 +166,22 @@ func (s *Snap) addFile(path string) {
 // Возвращает списки восстановленных и удалённых относительных (slash) путей.
 // На пустом снимке (пустая директория) — no-op.
 func (s *Snap) Restore() (restored, removed []string, err error) {
+	if s == nil {
+		// Nil-снимок — безопасный no-op (см. TestSnapRestoreNil).
+		return nil, nil, nil
+	}
+	err = withProjectLock(s.root, func() error {
+		var rerr error
+		restored, removed, rerr = s.restoreLocked()
+		return rerr
+	})
+	return restored, removed, err
+}
+
+// restoreLocked — тело Restore без пер-проектной блокировки. Откат выполняется
+// под той же блокировкой, что и обычные записи: параллельные шаги волны в тот же
+// момент могут писать код, и откат не должен «проглатывать» их файлы.
+func (s *Snap) restoreLocked() (restored, removed []string, err error) {
 	if s == nil || s.root == "" {
 		return nil, nil, nil
 	}

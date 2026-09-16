@@ -20,7 +20,21 @@ import (
 // ОДНОЙ функции (известной по function_name/receiver) на код из body и
 // форматирует файл через go/format. Остальные функции, импорты и структура
 // файла остаются нетронутыми (см. PatchGoFuncSource).
+// Read-modify-write сериализуется пер-проектной блокировкой: параллельные
+// шаги волны не должны одновременно читать устаревшие версии одного файла
+// и взаимно затирать патчи.
 func (ops *FileOps) PatchGoFunction(args map[string]any) ([]byte, error) {
+	var resp []byte
+	err := withProjectLock(ops.OutputDir, func() error {
+		var rerr error
+		resp, rerr = ops.patchGoFunctionLocked(args)
+		return rerr
+	})
+	return resp, err
+}
+
+// patchGoFunctionLocked — тело PatchGoFunction без пер-проектной блокировки.
+func (ops *FileOps) patchGoFunctionLocked(args map[string]any) ([]byte, error) {
 	var params GoFuncPatchParams
 	raw, err := json.Marshal(args)
 	if err == nil {
@@ -85,7 +99,19 @@ func (ops *FileOps) PatchGoFunction(args map[string]any) ([]byte, error) {
 // SearchReplace применяет к существующим файлам блоки SEARCH/REPLACE.
 // Каждый SEARCH обязан совпасть с кодом файла дословно; при промахе хоть
 // одного блока файл НЕ записывается и возвращается ошибка с фрагментом.
+// Весь read-modify-write проходит под пер-проектной блокировкой (см. filelock.go).
 func (ops *FileOps) SearchReplace(args map[string]any) ([]byte, error) {
+	var resp []byte
+	err := withProjectLock(ops.OutputDir, func() error {
+		var rerr error
+		resp, rerr = ops.searchReplaceLocked(args)
+		return rerr
+	})
+	return resp, err
+}
+
+// searchReplaceLocked — тело SearchReplace без пер-проектной блокировки.
+func (ops *FileOps) searchReplaceLocked(args map[string]any) ([]byte, error) {
 	files := parseSearchReplaceFiles(args["files"])
 	if len(files) == 0 {
 		return patchStatusError("список files пуст или неверный формат. Ожидается: {\"files\": [{\"filename\": \"...\", \"patches\": [{\"search\": \"...\", \"replace\": \"...\"}]}]}. Вместо патчей можно передать raw-текст блоков <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE в поле content")
