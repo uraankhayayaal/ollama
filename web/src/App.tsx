@@ -14,6 +14,7 @@ import { WorkspacePicker } from "./Components/WorkspacePicker";
 import { Tabs } from "./Components/Tabs";
 import { Badge } from "./Components/Badge";
 import { GateBanner } from "./Components/GateBanner";
+import { ToolBar } from "./Components/ToolBar";
 import { GateEvent } from "./Types";
 
 const BASE = ""; // dev: Vite-прокси /api→backend; прод: embed same-origin.
@@ -34,6 +35,7 @@ export function App() {
   const [status, setStatus] = useState<string>("idle");
   const [detail, setDetail] = useState<string>("");
   const [tab, setTab] = useState<"board" | "chat" | "diff">("board");
+  const [showDiffboard, setShowDiffboard] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -233,6 +235,11 @@ export function App() {
         </div>
       </header>
 
+      <ToolBar 
+        showDiffboard={showDiffboard} 
+        onToggleDiffboard={() => setShowDiffboard(!showDiffboard)} 
+      />
+
       {project && (
         <div className="statusline">
           <Badge status={status} />
@@ -258,7 +265,7 @@ export function App() {
             <Chatboard chat={chat} live={live} onSend={onSend} endRef={chatEnd} />
           </section>
           <section className={tab === "diff" ? "pane active" : "pane"}>
-            <Diffboard project={project.project_name} kind={project.kind} />
+            <Diffboard project={project.project_name} kind={project.kind} showDiffboard={showDiffboard} toggleDiffboard={() => setShowDiffboard(!showDiffboard)} />
           </section>
         </main>
       ) : (

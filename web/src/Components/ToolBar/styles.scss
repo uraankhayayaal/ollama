@@ -1,0 +1,31 @@
+// Стили тулбара
+.toolbar {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--card, #fff);
+  border-bottom: 1px solid var(--line, #e2e8f0);
+  
+  .btn {
+    font-size: 13px;
+    padding: 6px 12px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: var(--btn, #f1f5f9);
+    cursor: pointer;
+    
+    &:hover {
+      background: var(--btn-hover, #e2e8f0);
+    }
+    
+    &.toggle-diffboard {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      
+      i {
+        font-size: 14px;
+      }
+    }
+  }
+}

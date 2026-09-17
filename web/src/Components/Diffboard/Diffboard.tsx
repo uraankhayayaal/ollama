@@ -13,6 +13,8 @@ import "./styles.scss";
 export interface DiffboardProps {
   project: string;
   kind?: ProjectKind;
+  showDiffboard?: boolean;
+  toggleDiffboard?: () => void;
 }
 
 const BASE = "";
@@ -123,7 +125,12 @@ export function Diffboard(props: DiffboardProps) {
                   {open[f.path] && (
                     <div className="fpatch">
                       {patches[f.path] ? (
-                        <pre className="patch">{patches[f.path]!.patch}</pre>
+                        <div className="patch-container">
+                          <pre className="patch-left">{'-' + f.path}</pre>
+                          <div className="patch-content">
+                            <pre className="patch">{patches[f.path]!.patch}</pre>
+                          </div>
+                        </div>
                       ) : (
                         <p className="hint">Гружу патч…</p>
                       )}
