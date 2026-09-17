@@ -123,6 +123,31 @@ func TestRejectBranchInPlaceDryRun(t *testing.T) {
 	}
 }
 
+func TestPushToDryRun(t *testing.T) {
+	ctx := context.Background()
+	ex := &fakeExecutor{}
+	repo := &Repo{Root: "/clone", Branch: "ai/g", ex: ex}
+	url := "https://x-access-token:tok@github.com/g/r.git"
+	if err := repo.PushTo(ctx, url); err != nil {
+		t.Fatalf("PushTo: %v", err)
+	}
+	// Токен-URL живёт только в argv; upstream (-u) не настраивается.
+	want := `/clone | git push https://x-access-token:tok@github.com/g/r.git ai/g`
+	if got := strings.Join(ex.calls, "\n"); got != want {
+		t.Fatalf("вызовы:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+func TestPushToRequiresURL(t *testing.T) {
+	repo := &Repo{Root: "/clone", Branch: "ai/g", ex: &fakeExecutor{}}
+	if err := repo.PushTo(context.Background(), "  "); err == nil {
+		t.Fatal("пустой URL — ожидали ошибку")
+	}
+	if err := (&Repo{}).PushTo(context.Background(), "url"); err == nil {
+		t.Fatal("пустой Repo — ожидали ошибку")
+	}
+}
+
 func TestDiffReturnsBaseHead(t *testing.T) {
 	ctx := context.Background()
 	ex := &fakeExecutor{resp: map[string]string{

@@ -46,9 +46,13 @@ workspace KindGit; REST: `GET /api/projects/{id}/diff` (git — unified-дифф
 baseline-снимку), `POST /api/projects/{id}/accept` (dirty → commit → push →
 `forges.NewByRemote` → `CreateMergeRequest`; токен GITHUB_TOKEN/GITLAB_TOKEN
 по remote), `POST /api/projects/{id}/reject-branch` (delete на remote +
-`reset --hard` базы + удаление ветки). Web: Diffboard — дифф, «Принять → MR»
-и «Отклонить ветку» (`projectDiff`/`acceptProject`/`rejectBranch` в Api.ts>,
-тип DiffView в Types.ts). Hermetic-тесты (fake-исполнитель git + stub-фордж,
-без сети) и E2E на реальном git-протоколе (gitops/cli_test.go) зелёные;
-`npm run build` web/ проходит. Остался пункт VI плана: проверить end-to-end
-на реальном git-проекте (ветка → MR на GitLab/GitHub с токен-авторизацией).
+`reset --hard` базы + удаление ветки). Push на HTTPS в headless-среде:
+`server.pushRepo` встраивает токен в URL (`https://x-access-token:<токен>@…`)
+и зовёт `gitops.Repo.PushTo` (без `-u`, чтобы upstream/токен не попадали в
+конфиг; SSH-remote — обычный `git push origin`). Web: Diffboard — дифф,
+«Принять → MR» и «Отклонить ветку» (`projectDiff`/`acceptProject`/`rejectBranch`
+в Api.ts>, тип DiffView в Types.ts). Hermetic-тесты (fake-исполнитель git +
+stub-фордж, без сети) и E2E на реальном git-протоколе (gitops/cli_test.go)
+зелёные; `npm run build` web/ проходит. VI плана выполнен: end-to-end на
+реальном проекте GitHub (`uraankhayayaal/my-rust-app`) — открытие по git_url,
+дифф, accept → push + PR (#1).

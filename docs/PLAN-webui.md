@@ -128,7 +128,11 @@ GET   /api/projects/:id/diff               — дифф (git diff или Snap.Di
 - [x] Дифф-вью: `git diff` от точки отхода / `Snap.Diff()` для обычных папок
 - [x] Верификация Ф-2: тесты gitops (dry-run + E2E на реальном git CLI),
       определения форджа, DnD/статусов, серверные hermetic-тесты, `npm run build` web/
-- [ ] VI: проверено на реальном git-проекте end-to-end (ветка → MR на GitLab)
+- [x] VI: проверено на реальном git-проекте end-to-end (ветка → MR на GitLab):
+      `https://github.com/uraankhayayaal/my-rust-app` — открытие по `git_url`,
+      дифф правки, accept → commit+push+PR (`#1`, head `ai/my-rust-app` → main).
+      Для headless-сервера push на HTTPS идёт с токеном, встроенным в URL
+      (`x-access-token`), без сохранения upstream (gitops.Repo.PushTo)
 
 ### Ф-3 (полировка)
 - [ ] Потоковый ответ модели: рефактор `ChatOnce` → стрим

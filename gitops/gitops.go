@@ -135,6 +135,24 @@ func (r *Repo) Push(ctx context.Context) error {
 	return nil
 }
 
+// PushTo пушит фича-ветку в явно указанный remote-URL (без -u: upstream на
+// временный URL не настраивается). Используется для HTTPS-remotes GitHub/
+// GitLab, где нет credentialed credential-helper: токен встраивается в URL
+// (https://x-access-token:<token>@host/…), чтобы push прошёл в headless-среде
+// без интерактива. Токен никуда не сохраняется — URL живёт только в argv.
+func (r *Repo) PushTo(ctx context.Context, remoteURL string) error {
+	if r == nil || r.Root == "" {
+		return fmt.Errorf("gitops: пустой Repo")
+	}
+	if strings.TrimSpace(remoteURL) == "" {
+		return fmt.Errorf("gitops: пустой push-URL")
+	}
+	if _, err := r.ex.Exec(ctx, r.Root, "git", "push", remoteURL, r.Branch); err != nil {
+		return fmt.Errorf("gitops: git push %s: %w", r.Branch, err)
+	}
+	return nil
+}
+
 // Clone клонирует удалённый репозиторий remote в новый каталог dest и создаёт
 // в нём фича-ветку branch от ветки по умолчанию (base). Используется Web UI
 // при открытии git-проекта по URL (Ф-2-3): фича-ветка создаётся сразу, чтобы

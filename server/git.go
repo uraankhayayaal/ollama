@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -133,6 +134,22 @@ func gitToken(remote string) string {
 	}
 }
 
+// pushRepo пушит фича-ветку в remote. Для HTTPS-remote GitHub/GitLab с токеном
+// в окружении встраивает его в URL push (https://x-access-token:<токен>@host/…):
+// headless-сервер может не иметь credentialed credential-helper, и обычный
+// `git push origin` падает на интерактивном запросе логина. Токен не
+// сохраняется в конфиг git (см. gitops.Repo.PushTo). SSH-remote токеном не
+// помогает — там остаётся штатный `git push origin` (SSH-ключ).
+func (s *Server) pushRepo(ctx context.Context, repo *gitops.Repo, remote string) error {
+	if tok := gitToken(remote); tok != "" {
+		if u, err := url.Parse(remote); err == nil && u.Scheme == "https" {
+			u.User = url.UserPassword("x-access-token", tok)
+			return repo.PushTo(ctx, u.String())
+		}
+	}
+	return repo.Push(ctx)
+}
+
 // --- REST: дифф ---
 
 // handleGetDiff возвращает сводку изменений проекта: для git-проектов —
@@ -253,7 +270,7 @@ func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "git commit: "+err.Error())
 		return
 	}
-	if err := repo.Push(r.Context()); err != nil {
+	if err := s.pushRepo(r.Context(), repo, inf.GitRemote); err != nil {
 		writeErr(w, http.StatusBadGateway, "git push: "+err.Error())
 		return
 	}

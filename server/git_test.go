@@ -283,6 +283,59 @@ func TestAcceptNonGitProjectRejected(t *testing.T) {
 	}
 }
 
+// TestAcceptGitProjectPushesWithToken проверяет https-remote с токеном:
+// push идёт на URL с встроенным x-access-token (headless-сервер без
+// credential-helper), и форджу передаётся тот же токен.
+func TestAcceptGitProjectPushesWithToken(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "tok")
+	git := &fakeGit{starts: map[string]string{
+		"git status --porcelain": " M file.go\n",
+	}}
+	stub := &stubForge{url: "https://github.com/o/r/pulls/7"}
+	srv, handler, _ := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		if remote != "https://github.com/o/r.git" || token != "tok" {
+			t.Fatalf("forge(remote=%q, token=%q)", remote, token)
+		}
+		return stub, nil
+	})
+	registerGit(t, srv, "myrepo", "https://github.com/o/r.git", "ai/myrepo", "main")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/myrepo/accept",
+		bytes.NewBufferString(`{"title":"Готово"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST accept: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if !git.saw("git push https://x-access-token:tok@github.com/o/r.git ai/myrepo") {
+		t.Fatalf("ожидали push с токеном, вызовы: %v", git.callsList())
+	}
+}
+
+// TestAcceptGitProjectSSHRemoteIgnoresToken: SSH-remote токеном не
+// авторизуется — остаётся штатный `git push -u origin` (SSH-ключ).
+func TestAcceptGitProjectSSHRemoteIgnoresToken(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "tok")
+	git := &fakeGit{starts: map[string]string{
+		"git status --porcelain": " M file.go\n",
+	}}
+	srv, handler, _ := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		return &stubForge{url: "x"}, nil
+	})
+	registerGit(t, srv, "myrepo", "git@github.com:o/r.git", "ai/myrepo", "main")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/myrepo/accept",
+		bytes.NewBufferString(`{"title":"Готово"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST accept: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if !git.saw("git push -u origin ai/myrepo") {
+		t.Fatalf("SSH-remote должны пушить через origin, вызовы: %v", git.callsList())
+	}
+}
+
 func TestRejectBranchGitProject(t *testing.T) {
 	git := &fakeGit{}
 	srv, handler, _ := newTestServerGit(t, git, nil)
