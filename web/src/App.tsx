@@ -11,7 +11,6 @@ import { Chatboard } from "./Components/Chatboard";
 import { Diffboard } from "./Components/Diffboard";
 import { Login } from "./Components/Login";
 import { WorkspacePicker } from "./Components/WorkspacePicker";
-import { Tabs } from "./Components/Tabs";
 import { Badge } from "./Components/Badge";
 import { GateBanner } from "./Components/GateBanner";
 import { ToolBar } from "./Components/ToolBar";
@@ -35,6 +34,7 @@ export function App() {
   const [status, setStatus] = useState<string>("idle");
   const [detail, setDetail] = useState<string>("");
   const [tab, setTab] = useState<"board" | "chat" | "diff">("board");
+  // Diffboard по умолчанию скрыт; открывается кнопкой ToolBar.
   const [showDiffboard, setShowDiffboard] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -139,6 +139,11 @@ export function App() {
       try {
         setGate(ev.payload as GateEvent);
         setTab("board");
+        // Затвор мог прийти раньше снимка доски — фоново перечитаем её,
+        // чтобы GateBanner показал полные карточки утверждаемых эпиков/задач.
+        boardOf(BASE, project.project_name)
+          .then(setBoard)
+          .catch(() => {});
       } catch {}
     });
     l.on("status", (ev) => {
@@ -218,11 +223,30 @@ export function App() {
     return <Login base={BASE} onLoggedIn={() => void onLoggedIn()} />;
   }
 
+  // Активная панель: открытый Diffboard перекрывает вкладку доски/чата.
+  const activeView = showDiffboard ? "diff" : tab;
+
+  const onSelectView = (v: "board" | "chat" | "diff") => {
+    if (v === "diff") {
+      setShowDiffboard(true);
+    } else {
+      setShowDiffboard(false);
+      setTab(v);
+    }
+  };
+
   return (
     <div className="app">
+      <ToolBar
+        hasProject={!!project}
+        activeView={activeView}
+        onSelectView={onSelectView}
+        diffVisible={showDiffboard}
+        onToggleDiff={() => setShowDiffboard((v) => !v)}
+      />
+
       <header className="top">
         <WorkspacePicker projects={projects} current={project} onOpen={open} busy={busy} />
-        <Tabs tab={tab} setTab={setTab} />
         <div className="head-actions">
           <button className="btn danger" onClick={onStop} disabled={!project || status !== "running"}>
             Стоп
@@ -234,11 +258,6 @@ export function App() {
           )}
         </div>
       </header>
-
-      <ToolBar 
-        showDiffboard={showDiffboard} 
-        onToggleDiffboard={() => setShowDiffboard(!showDiffboard)} 
-      />
 
       {project && (
         <div className="statusline">
@@ -254,19 +273,26 @@ export function App() {
         </div>
       )}
 
-      {gate && <GateBanner gate={gate} onDecide={onGate} />}
+      {gate && <GateBanner gate={gate} board={board} onDecide={onGate} />}
 
       {project ? (
         <main className="panes">
-          <section className={tab === "board" ? "pane active" : "pane"}>
-            <Dashboard board={board} onTaskUpdate={onTaskUpdate} onGateDecide={onGate} />
+          <section className={activeView === "board" ? "pane active" : "pane"}>
+            <Dashboard board={board} onTaskUpdate={onTaskUpdate} />
           </section>
-          <section className={tab === "chat" ? "pane active" : "pane"}>
+          <section className={activeView === "chat" ? "pane active" : "pane"}>
             <Chatboard chat={chat} live={live} onSend={onSend} endRef={chatEnd} />
           </section>
-          <section className={tab === "diff" ? "pane active" : "pane"}>
-            <Diffboard project={project.project_name} kind={project.kind} showDiffboard={showDiffboard} toggleDiffboard={() => setShowDiffboard(!showDiffboard)} />
-          </section>
+          {showDiffboard && (
+            <section className="pane active diff-pane">
+              <Diffboard
+                project={project.project_name}
+                kind={project.kind}
+                showDiffboard={showDiffboard}
+                toggleDiffboard={() => setShowDiffboard(false)}
+              />
+            </section>
+          )}
         </main>
       ) : (
         <div className="empty">

@@ -1,5 +1,7 @@
 // Стили дифф-доски. Канон-имена .diffboard — зеркало DiffView (Types) и
-// GET /api/projects/<name>/diff.
+// GET /api/projects/<name>/diff. Патч файла показывается side-by-side в
+// стиле JetBrains (.sdiff): слева «до», справа «после», зелёным — добавленное,
+// красным — удалённое.
 
 .diffboard {
   display: flex;
@@ -8,7 +10,7 @@
   height: 100%;
   min-height: 0;
   overflow-y: auto;
-  
+
   &.hidden {
     display: none;
   }
@@ -29,6 +31,37 @@
 
     code {
       font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    }
+  }
+
+  // Шапка панели: сводка + кнопка «свернуть» справа.
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .hint {
+      flex: 1;
+      margin: 0;
+    }
+
+    .btn.close {
+      flex: 0 0 auto;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      font-size: 16px;
+      line-height: 1;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 6px;
+      background: var(--btn, #f1f5f9);
+      color: var(--muted, #8a94a6);
+      cursor: pointer;
+
+      &:hover {
+        background: var(--btn-hover, #e2e8f0);
+        color: var(--err, #dc2626);
+      }
     }
   }
 
@@ -147,42 +180,130 @@
         }
       }
 
+      // Раскрытый патч файла — side-by-side.
       .fpatch {
+        border-top: 1px solid var(--line, #e2e8f0);
+      }
+    }
+  }
+
+  // Фолбэк: если дифф не удалось разложить по хункам — сырой патч.
+  .rawpatch {
+    margin: 0;
+    padding: 8px 12px;
+    overflow-x: auto;
+    color: var(--ink, #1b2330);
+    background: var(--bg, #fff);
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre;
+  }
+
+  // ── Side-by-side (JetBrains-стиль) ────────────────────────────────
+  .sdiff {
+    overflow: hidden;
+
+    .sdiff-head {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      background: var(--col, #f4f6f9);
+      border-bottom: 1px solid var(--line, #e2e8f0);
+
+      .win {
         display: flex;
-        
-        .patch-container {
-          display: flex;
-          width: 100%;
-          gap: 1px;
-          
-          .patch-left {
-            flex: 0 0 auto;
-            background: #1e293b;
-            color: #e2e8f0;
-            padding: 8px 12px;
-            margin: 0;
-            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-            font-size: 12px;
-            line-height: 1.45;
-            white-space: pre;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        font-size: 12px;
+        color: var(--muted, #64748b);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+
+        .dot {
+          flex: 0 0 auto;
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+
+          &.red {
+            background: var(--rem, #dc2626);
           }
-          
-          .patch-content {
-            flex: 1;
-            overflow-x: auto;
-            
-            .patch {
-              margin: 0;
-              padding: 8px 12px;
-              overflow-x: auto;
-              color: #e2e8f0;
-              font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-              font-size: 12px;
-              line-height: 1.45;
-              white-space: pre;
-            }
+          &.green {
+            background: var(--add, #16a34a);
           }
         }
+      }
+    }
+
+    .sdiff-cols {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      height: 100%;
+      min-height: 0;
+
+      .col {
+        overflow: auto;
+        font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        font-size: 12px;
+        line-height: 17px;
+        background: var(--card, #fff);
+
+        &.old {
+          border-right: 1px solid var(--line, #e2e8f0);
+        }
+      }
+    }
+
+    .sd-line {
+      display: flex;
+      white-space: pre;
+      min-height: 17px;
+
+      &.ctx {
+        background: var(--card, #fff);
+      }
+
+      &.del {
+        background: #fdeaea;
+
+        .sd-no {
+          background: #fbdada;
+          color: #b91c1c;
+        }
+      }
+
+      &.add {
+        background: #e8f7ec;
+
+        .sd-no {
+          background: #d5f0dc;
+          color: #15803d;
+        }
+      }
+
+      &.empty {
+        background: #f6f7f9;
+      }
+
+      .sd-no {
+        flex: 0 0 auto;
+        min-width: 3.5ch;
+        padding-right: 8px;
+        text-align: right;
+        color: var(--muted, #94a3b8);
+        user-select: none;
+        background: var(--col, #f4f6f9);
+      }
+
+      .sd-tx {
+        flex: 1;
+        padding: 0 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--ink, #1b2330);
       }
     }
   }

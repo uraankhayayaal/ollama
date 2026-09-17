@@ -1,13 +1,18 @@
-// Diffboard — вкладка «Дифф»: разница предложенного и текущего состояния
+// Diffboard — панель «Дифф»: разница предложенного и текущего состояния
 // (GET /api/projects/<name>/diff), а для git-проектов — приёмка:
 // «Принять → MR» (commit+push+MR/PR через фордж) и «Отклонить ветку».
 // Ф-3: для git-проектов дифф загружается лениво — список файлов (метаданные),
-// патч конкретного файла подтягивается при раскрытии (projectDiffFile).
+// патч конкретного файла подтягивается при раскрытии (projectDiffFile) и
+// показывается side-by-side «до → после» в стиле JetBrains (см. sidebyside.ts).
 // Пропс kind приходит из ProjectMeta (workspace.Info.Kind).
+//
+// Панель скрыта по умолчанию (showDiffboard=false): переключается кнопкой
+// ToolBar, а внутри — кнопкой «×» в шапке (toggleDiffboard).
 
 import { useCallback, useEffect, useState } from "react";
 import { acceptProject, projectDiff, projectDiffFile, rejectBranch } from "@/Api";
 import type { DiffFileView, DiffView, ProjectKind } from "@/Types";
+import { sideBySide, type SideRow } from "./sidebyside";
 import "./styles.scss";
 
 export interface DiffboardProps {
@@ -99,17 +104,24 @@ export function Diffboard(props: DiffboardProps) {
   const gitFiles = diff?.files ?? [];
 
   return (
-    <div className="diffboard">
+    <div className={"diffboard" + (props.showDiffboard === false ? " hidden" : "")}>
       {loading && <p className="hint">Загружаю дифф…</p>}
 
       {error && <p className="err">{error}</p>}
 
       {!loading && !error && diff?.kind === "git" && (
         <>
-          <p className="hint">
-            Ветка <strong>{diff.branch}</strong> → <strong>{diff.base}</strong> (base) · remote{" "}
-            <code>{diff.remote}</code> · файлов: {gitFiles.length}
-          </p>
+          <div className="head">
+            <p className="hint">
+              Ветка <strong>{diff.branch}</strong> → <strong>{diff.base}</strong> (base) · remote{" "}
+              <code>{diff.remote}</code> · файлов: {gitFiles.length}
+            </p>
+            {props.toggleDiffboard && (
+              <button className="btn close" onClick={props.toggleDiffboard} title="Скрыть дифф">
+                ×
+              </button>
+            )}
+          </div>
           {gitFiles.length > 0 ? (
             <div className="filelist">
               {gitFiles.map((f) => (
@@ -125,12 +137,7 @@ export function Diffboard(props: DiffboardProps) {
                   {open[f.path] && (
                     <div className="fpatch">
                       {patches[f.path] ? (
-                        <div className="patch-container">
-                          <pre className="patch-left">{'-' + f.path}</pre>
-                          <div className="patch-content">
-                            <pre className="patch">{patches[f.path]!.patch}</pre>
-                          </div>
-                        </div>
+                        <SideDiff patch={patches[f.path]!.patch} />
                       ) : (
                         <p className="hint">Гружу патч…</p>
                       )}
@@ -205,6 +212,54 @@ export function Diffboard(props: DiffboardProps) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// SideDiff — двухколоночный дифф одного файла «до → после» (JetBrains-стиль):
+// слева красным — удалённые строки, справа зелёным — добавленные.
+function SideDiff({ patch }: { patch: string }) {
+  const s = sideBySide(patch);
+
+  if (s.binary) {
+    return <p className="hint">Бинарный файл: содержимое в диффе недоступно.</p>;
+  }
+  if (s.rows.length === 0) {
+    return (
+      <pre className="rawpatch">
+        {patch}
+      </pre>
+    );
+  }
+
+  const cell = (row: SideRow, side: "left" | "right", key: string) => {
+    const line = side === "left" ? row.left : row.right;
+    return (
+      <div key={key} className={"sd-line" + (line ? " " + line.kind : " empty")}>
+        <span className="sd-no">{line ? line.no : ""}</span>
+        <span className="sd-tx">{line ? line.text : "\u00a0"}</span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="sdiff">
+      <div className="sdiff-head">
+        <span className="win old" title={s.oldPath ?? undefined}>
+          <span className="dot red" /> До · {s.oldPath ?? "—"}
+        </span>
+        <span className="win new" title={s.newPath ?? undefined}>
+          <span className="dot green" /> После · {s.newPath ?? "—"}
+        </span>
+      </div>
+      <div className="sdiff-cols">
+        <div className="col old">
+          {s.rows.map((r, idx) => cell(r, "left", "l" + idx))}
+        </div>
+        <div className="col new">
+          {s.rows.map((r, idx) => cell(r, "right", "r" + idx))}
+        </div>
+      </div>
     </div>
   );
 }

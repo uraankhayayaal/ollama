@@ -1,6 +1,16 @@
 // Типы контракта REST/SSE Web UI. Зеркалят server/session.go и board/entity.go.
 
-export type Status = "todo" | "in_progress" | "review" | "done";
+// Статусы зеркалят board/entity.go: единая цепочка для эпиков и задач
+// (new -> analysis -> ready -> in_progress -> done; cancelled — терминальный).
+// Важно: сервер валидирует переходы (ValidateTransition), поэтому в UI
+// переводы между колонками ограничены соседними статусами.
+export type Status =
+  | "new"
+  | "analysis"
+  | "ready"
+  | "in_progress"
+  | "done"
+  | "cancelled";
 
 // Совместимые алиасы (ретро): некоторые файлы импортируют Epic/Task/
 // BoardSnapshot вместо EpicRow/TaskRow/BoardView — это одно и то же.

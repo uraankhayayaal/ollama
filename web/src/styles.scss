@@ -1,0 +1,170 @@
+// Глобальные стили и CSS-переменные темы (оболочка App + <main className="panes">).
+// Компонемые стили живут рядом с ними (Components/*/styles.scss) и опираются
+// на эти переменные; тёмная тема придёт переопределением :root.
+
+:root {
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --line: #e2e8f0;
+  --ink: #1b2330;
+  --muted: #8a94a6;
+  --btn: #f1f5f9;
+  --btn-hover: #e2e8f0;
+  --col: #f4f6f9;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --err: #dc2626;
+  --rem: #dc2626;
+  --add: #16a34a;
+  --mod: #2563eb;
+  --st-todo: #64748b;
+  --st-in-progress: #2563eb;
+  --st-review: #b45309;
+  --st-done: #15803d;
+  --st-analysis: #7c3aed;
+  --st-ready: #0891b2;
+  --mono: ui-monospace, SFMono-Regular, Menlo, "Courier New", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+// Оболочка: заголовок + тулбар + основная область в столбик.
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+// Верхний заголовок: пикер воркспейса + заглушка вкладок + действия справа.
+.top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .btn {
+    font-size: 13px;
+    padding: 6px 12px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: var(--btn, #f1f5f9);
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--btn-hover, #e2e8f0);
+    }
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    &.danger {
+      color: var(--err, #dc2626);
+    }
+  }
+}
+
+// Строка статуса сессии под заголовком.
+.statusline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--muted, #8a94a6);
+  background: var(--card, #fff);
+  border-bottom: 1px solid var(--line, #e2e8f0);
+
+  .detail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+// Баннер ошибки.
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+
+  &.err {
+    color: var(--err, #dc2626);
+    background: #fef2f2;
+    border-bottom: 1px solid #fecaca;
+  }
+
+  button {
+    margin-left: auto;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 16px;
+    cursor: pointer;
+  }
+}
+
+// Основная область: активная панель занимает весь экран, остальные скрыты.
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.pane {
+  display: none;
+
+  &.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 14px;
+  }
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--muted, #8a94a6);
+  font-size: 15px;
+}

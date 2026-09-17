@@ -367,7 +367,17 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("декомпозиция эпика %s: %w", epic.TaskID, err)
 	}
 	if resp != nil && resp.Truncated {
-		return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов", epic.TaskID)
+		// Лимит раундов агентского цикла не должен ронять весь запуск, если
+		// лид уже опубликовал на доске частичную (но рабочую) декомпозицию:
+		// продолжаем, задачи передадутся специалистам после затвора.
+		tasks, terr := k.store.TasksByEpic(ctx, epic.TaskID)
+		if terr != nil {
+			return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов: %w", epic.TaskID, terr)
+		}
+		if len(tasks) == 0 {
+			return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов (задачи не созданы)", epic.TaskID)
+		}
+		logging.Infof("[эпик %s] лимит раундов лида, но опубликовано задач: %d — продолжаем с частичной декомпозицией", epic.TaskID, len(tasks))
 	}
 
 	// Инструментный путь: лид мог создать/изменить задачи прямо на доске
