@@ -11,6 +11,8 @@ export function Chatboard({
   chat,
   live,
   onSend,
+  onContinue,
+  canContinue,
   endRef,
   busy,
 }: {
@@ -19,6 +21,11 @@ export function Chatboard({
   // с маркером «…» до прихода финального протокола chat с ролью assistant.
   live: { id: string; agent: string; content: string } | null;
   onSend: (text: string) => void;
+  // Продолжить: повторить текущую задачу проекта (продолжение после
+  // остановки/ошибки). Кнопка неактивна, пока продолжение невозможно
+  // (нет задачи или запуск активен).
+  onContinue: () => void;
+  canContinue: boolean;
   endRef: React.RefObject<HTMLDivElement | null>;
   busy?: boolean;
 }) {
@@ -60,6 +67,22 @@ export function Chatboard({
         )}
         <div ref={endRef} />
       </ul>
+
+      <div className="actions">
+        <button
+          type="button"
+          className="continue"
+          onClick={onContinue}
+          disabled={!canContinue}
+          title={
+            canContinue
+              ? "Продолжить выполнение текущей задачи"
+              : "Продолжение невозможно: нет задачи или запуск уже идёт"
+          }
+        >
+          ▷ Продолжить
+        </button>
+      </div>
 
       <form className="send" onSubmit={submit}>
         <input

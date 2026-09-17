@@ -176,6 +176,29 @@ export function App() {
     }
   };
 
+  // «Продолжить»: возможен, когда есть задача проекта и оркестрация не идёт
+  // (stopped/error/done/idle). Повторная отправка исходной задачи продолжает
+  // Kanban с текущего состояния доски (эпики/задачи уже в Redis).
+  const [continuing, setContinuing] = useState(false);
+  const canContinue =
+    !!project &&
+    !!board?.meta?.task &&
+    status !== "running" &&
+    status !== "waiting" &&
+    !continuing;
+
+  const onContinue = async () => {
+    if (!canContinue) {
+      return;
+    }
+    setContinuing(true);
+    try {
+      await onSend(board!.meta!.task);
+    } finally {
+      setContinuing(false);
+    }
+  };
+
   const onGate = async (gateName: "epics" | "tasks", decision: { approved: boolean; reason?: string }) => {
     if (!project) {
       return;
@@ -281,7 +304,7 @@ export function App() {
             <Dashboard board={board} onTaskUpdate={onTaskUpdate} />
           </section>
           <section className={activeView === "chat" ? "pane active" : "pane"}>
-            <Chatboard chat={chat} live={live} onSend={onSend} endRef={chatEnd} />
+            <Chatboard chat={chat} live={live} onSend={onSend} onContinue={onContinue} canContinue={canContinue} endRef={chatEnd} />
           </section>
           {showDiffboard && (
             <section className="pane active diff-pane">

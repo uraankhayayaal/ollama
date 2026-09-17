@@ -76,6 +76,32 @@
     }
   }
 
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+
+    .continue {
+      padding: 6px 12px;
+      font-size: 13px;
+      border: 1px solid var(--primary, #2563eb);
+      border-radius: 8px;
+      color: var(--primary, #2563eb);
+      background: var(--card, #fff);
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        background: #eff6ff;
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: default;
+        border-color: var(--line, #e2e8f0);
+        color: var(--muted, #8a94a6);
+      }
+    }
+  }
+
   .send {
     display: flex;
     gap: 8px;
