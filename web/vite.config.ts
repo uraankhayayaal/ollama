@@ -6,6 +6,11 @@ import react from "@vitejs/plugin-react";
 //  - build: `npm run build` → web/dist (embed в Go-бинар, прод same-origin).
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@": new URL("./src", import.meta.url).pathname,
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

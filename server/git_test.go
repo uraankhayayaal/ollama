@@ -1,0 +1,316 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"ai/forges"
+	"ai/gitops"
+	"ai/projects"
+	"ai/workspace"
+
+	"github.com/alicebob/miniredis/v2"
+)
+
+// fakeGit — исполнитель git для hermetic-тестов: записывает вызовы и может
+// отвечать заданными значениями (префиксное совпадение по команде git);
+// реальный git CLI не требуется.
+type fakeGit struct {
+	mu     sync.Mutex
+	calls  []string          // "dir | git ..."
+	starts map[string]string // префикс команды → вывод
+}
+
+func (f *fakeGit) Exec(_ context.Context, dir string, argv ...string) (string, error) {
+	call := dir + " | git " + strings.Join(argv[1:], " ")
+	f.mu.Lock()
+	f.calls = append(f.calls, call)
+	f.mu.Unlock()
+	cmd := "git " + strings.Join(argv[1:], " ")
+	for prefix, out := range f.starts {
+		if strings.HasPrefix(cmd, prefix) {
+			return out, nil
+		}
+	}
+	return "", nil
+}
+
+func (f *fakeGit) saw(arg string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if strings.Contains(c, arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeGit) callsList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+// stubForge — стаб провайдера форджа: захватывает параметры MR/PR и
+// возвращает предзаданную ссылку. Реализует forges.Forge без сети.
+type stubForge struct {
+	opts forges.MergeRequestOptions
+	url  string
+}
+
+func (s *stubForge) GetDiff() (string, error)               { return "", nil }
+func (s *stubForge) PostComment(forges.ReviewComment) error { return nil }
+func (s *stubForge) PostSummary(string) error               { return nil }
+func (s *stubForge) Approve(string) error                   { return nil }
+func (s *stubForge) CreateMergeRequest(o forges.MergeRequestOptions) (string, error) {
+	s.opts = o
+	return s.url, nil
+}
+
+// newTestServerGit создаёт сервер с fake-исполнителем git и стабом форджа.
+func newTestServerGit(t *testing.T, git gitops.Executor, forge func(remote, token string) (forges.Forge, error)) (*Server, http.Handler, *miniredis.Miniredis) {
+	t.Helper()
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mr.Close)
+	t.Setenv("BOARD_REDIS_ADDR", mr.Addr())
+	wsPath := filepath.Join(t.TempDir(), "workspaces.json")
+	srv, err := NewServer(Config{WorkspacesPath: wsPath, GitExec: git, ForgeFactory: forge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, srv.routes(), mr
+}
+
+// registerGit регистрирует git-проект и создаёт его корень на диске.
+func registerGit(t *testing.T, srv *Server, name, remote, branch, base string) {
+	t.Helper()
+	root := projects.ProjectDir(name)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if _, err := srv.reg.Add(workspace.AddParams{
+		Name: name, Kind: workspace.KindGit, Root: root,
+		GitRemote: remote, GitBranch: branch, GitBase: base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenGitProjectClonesAndRegisters(t *testing.T) {
+	git := &fakeGit{starts: map[string]string{
+		"git rev-parse --abbrev-ref HEAD": "main\n",
+	}}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+
+	// Реальный git CLI создал бы каталог клона; в hermetic-тесте создаём сами.
+	dest := projects.ProjectDir("myrepo")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dest) })
+
+	url := "git@gitlab.com:g/myrepo.git"
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects",
+		bytes.NewBufferString(`{"git_url":"`+url+`"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST git_url: %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var meta map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["project_name"] != "myrepo" {
+		t.Fatalf("project_name = %v, want myrepo", meta["project_name"])
+	}
+	if meta["kind"] != string(workspace.KindGit) {
+		t.Fatalf("kind = %v, want %v", meta["kind"], workspace.KindGit)
+	}
+	if meta["git_branch"] != "ai/myrepo" || meta["git_base"] != "main" {
+		t.Fatalf("git_branch/base = %v/%v, want ai/myrepo/main", meta["git_branch"], meta["git_base"])
+	}
+	if meta["git_remote"] != url {
+		t.Fatalf("git_remote = %v", meta["git_remote"])
+	}
+
+	inf, err := srv.reg.Get("myrepo")
+	if err != nil {
+		t.Fatalf("реестр: %v", err)
+	}
+	if inf.Kind != workspace.KindGit || inf.GitRemote != url {
+		t.Fatalf("запись реестра: %+v", inf)
+	}
+	if !git.saw("git clone") || !git.saw("git checkout -b ai/myrepo") {
+		t.Fatalf("ожидали clone + checkout -b, вызовы: %v", git.callsList())
+	}
+
+	// Повторное открытие идемпотентно (тот же проект возвращается).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/projects",
+		bytes.NewBufferString(`{"git_url":"`+url+`"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("повторное открытие: %d", rec.Code)
+	}
+}
+
+func TestGitProjectNameFromURLs(t *testing.T) {
+	cases := map[string]string{
+		"git@gitlab.com:group/proj.git":          "proj",
+		"git@gitlab.com:g1/g2/proj.git":          "proj",
+		"https://github.com/owner/repo.git":      "repo",
+		"https://gitlab.com/a/b/c/name":          "name",
+		"https://host/inner/deep/repo.git?x=1#y": "repo",
+		"":                                       "",
+	}
+	for in, want := range cases {
+		if got := gitProjectName(in); got != want {
+			t.Fatalf("gitProjectName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestGetDiffGitProject(t *testing.T) {
+	git := &fakeGit{starts: map[string]string{
+		"git diff main": "--- a/x\n+++ b/x\n+строка\n",
+	}}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/projects/myrepo/diff", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET diff: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["kind"] != "git" || out["branch"] != "ai/myrepo" || out["base"] != "main" {
+		t.Fatalf("diff meta: %+v", out)
+	}
+	if !strings.Contains(out["diff"].(string), "+строка") {
+		t.Fatalf("diff текст: %q", out["diff"])
+	}
+}
+
+func TestAcceptGitProjectCreatesMR(t *testing.T) {
+	git := &fakeGit{starts: map[string]string{
+		"git status --porcelain": " M file.go\n",
+	}}
+	stub := &stubForge{url: "https://gitlab.com/g/myrepo/-/merge_requests/1"}
+	srv, handler, _ := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		if remote != "git@gitlab.com:g/myrepo.git" {
+			t.Fatalf("remote для форджа = %q", remote)
+		}
+		return stub, nil
+	})
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+
+	reqBody := `{"title":"Готово","description":"Итог","message":"фикс"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/myrepo/accept",
+		bytes.NewBufferString(reqBody))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST accept: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["url"] != stub.url {
+		t.Fatalf("url = %q, want %q", out["url"], stub.url)
+	}
+	if stub.opts.SourceBranch != "ai/myrepo" || stub.opts.TargetBranch != "main" {
+		t.Fatalf("opts = %+v", stub.opts)
+	}
+	if stub.opts.Title != "Готово" || stub.opts.Description != "Итог" {
+		t.Fatalf("opts title/desc = %q/%q", stub.opts.Title, stub.opts.Description)
+	}
+	if !git.saw("git commit") || !git.saw("git push") {
+		t.Fatalf("ожидали commit+push, вызовы: %v", git.callsList())
+	}
+}
+
+func TestAcceptGitProjectWithoutChangesRejected(t *testing.T) {
+	git := &fakeGit{starts: map[string]string{
+		"git status --porcelain": "",
+	}}
+	srv, handler, _ := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		return &stubForge{url: "x"}, nil
+	})
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/myrepo/accept",
+		bytes.NewBufferString(`{"title":"Пусто"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("accept без изменений: %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAcceptNonGitProjectRejected(t *testing.T) {
+	srv, handler, _ := newTestServerGit(t, &fakeGit{}, nil)
+	dir := t.TempDir()
+	if _, err := srv.reg.Add(workspace.AddParams{Name: "plain", Kind: workspace.KindDir, Root: dir, Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/plain/accept",
+		bytes.NewBufferString(`{"title":"x"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("accept не-git: %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRejectBranchGitProject(t *testing.T) {
+	git := &fakeGit{}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/myrepo/reject-branch",
+		bytes.NewBufferString(`{}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reject-branch: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if !git.saw("git reset --hard main") || !git.saw("git branch -D ai/myrepo") {
+		t.Fatalf("ожидали reset --hard базы + удаление ветки, вызовы: %v", git.callsList())
+	}
+}
+
+func TestRejectBranchNonGitRejected(t *testing.T) {
+	srv, handler, _ := newTestServerGit(t, &fakeGit{}, nil)
+	dir := t.TempDir()
+	if _, err := srv.reg.Add(workspace.AddParams{Name: "plain", Kind: workspace.KindDir, Root: dir, Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/plain/reject-branch",
+		bytes.NewBufferString(`{}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("reject не-git: %d, want 400", rec.Code)
+	}
+}

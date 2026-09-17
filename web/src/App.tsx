@@ -180,13 +180,13 @@ export function App() {
       {project ? (
         <main className="panes">
           <section className={tab === "board" ? "pane active" : "pane"}>
-            <Dashboard board={board} onTaskUpdate={onTaskUpdate} />
+            <Dashboard board={board} onTaskUpdate={onTaskUpdate} onGateDecide={onGate} />
           </section>
           <section className={tab === "chat" ? "pane active" : "pane"}>
             <Chatboard chat={chat} onSend={onSend} endRef={chatEnd} />
           </section>
           <section className={tab === "diff" ? "pane active" : "pane"}>
-            <Diffboard project={project.project_name} />
+            <Diffboard project={project.project_name} kind={project.kind} />
           </section>
         </main>
       ) : (

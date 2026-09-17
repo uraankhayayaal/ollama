@@ -29,12 +29,6 @@ export function Dashboard({
     return <div className="dashboard">Совет ещё не загружен…</div>;
   }
 
-  const move = (task: TaskRow, status: Status) => {
-    if (task.status !== status) {
-      onTaskUpdate(task, { status });
-    }
-  };
-
   return (
     <div className="dashboard" onDragOver={(e) => e.preventDefault()}>
       <div className="banner">
@@ -51,7 +45,6 @@ export function Dashboard({
             status={status}
             tasks={board.tasks}
             onTaskUpdate={onTaskUpdate}
-            setTaskStatus={(t, s) => move(t, s)}
           />
         ))}
       </div>
@@ -78,12 +71,10 @@ function Column({
   status,
   tasks,
   onTaskUpdate,
-  setTaskStatus,
 }: {
   status: Status;
   tasks: TaskRow[];
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
-  setTaskStatus: (t: TaskRow, s: Status) => void;
 }) {
   const items = tasks.filter((t) => t.status === status).sort((a, b) => a.order - b.order);
 
@@ -125,7 +116,7 @@ function TaskCard({
 }) {
   const idx = STATUS_ORDER.indexOf(task.status);
   const prev: Status | null = STATUS_ORDER[idx - 1] ?? null;
-  const next: Status | null = STATUS_ORDER[idx + 1] ?? nullRate;
+  const next: Status | null = STATUS_ORDER[idx + 1] ?? null;
   const [editing, setEditing] = useState(false);
   const [assignee, setAssignee] = useState(task.assignee ?? "");
 

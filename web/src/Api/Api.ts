@@ -8,6 +8,7 @@ import type {
   BoardView,
   BugRow,
   ChatMsg,
+  DiffView,
   // EpicRow,
   ProjectMeta,
   // Status,
@@ -148,4 +149,40 @@ export async function listBugs(
   project: string,
 ): Promise<BugRow[]> {
   return req<BugRow[]>("GET", `${base}/api/projects/${enc(project)}/bugs`);
+}
+
+// --- приёмка (Ф-2-3) ---
+
+// Дифф предложенных изменений: для git-проектов unified-дифф строкой,
+// для остальных — списки добавленных/изменённых/удалённых файлов.
+export async function projectDiff(
+  base: string,
+  project: string,
+): Promise<DiffView> {
+  return req<DiffView>("GET", `${base}/api/projects/${enc(project)}/diff`);
+}
+
+// Принятие git-проекта: коммит + push + создание MR/PR через фордж.
+export async function acceptProject(
+  base: string,
+  project: string,
+  body?: { title?: string; description?: string; message?: string },
+): Promise<{ url: string; branch: string; base: string }> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/accept`,
+    body ?? {},
+  );
+}
+
+// Отклонение фича-ветки git-проекта: деплой на remote + возврат на базу.
+export async function rejectBranch(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/reject-branch`,
+    {},
+  );
 }

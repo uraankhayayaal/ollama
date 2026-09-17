@@ -55,12 +55,35 @@ export interface BugRow {
   updated_at: string;
 }
 
+// Хранение проекта: где и как работает оркестрация.
+export type ProjectKind = "dir" | "git";
+
 export interface ProjectMeta {
   project_name: string;
   task: string;
   status: string;
   created_at: string;
   updated_at: string;
+  // Ф-2-3: для git-проектов (git_url) сервер клонирует репозиторий и ведёт
+  // приёмку через MR. Поля дублируют workspace.Info.
+  kind?: ProjectKind;
+  git_remote?: string;
+  git_branch?: string;
+  git_base?: string;
+}
+
+// Дифф-вью (GET /api/projects/:id/diff). Для git-проектов — unified-дифф
+// рабочего каталога от точки отхода (git diff <base>); для остальных —
+// списки файлов относительно baseline-снимка.
+export interface DiffView {
+  kind: "git" | "snap";
+  branch?: string;
+  base?: string;
+  remote?: string;
+  diff?: string;
+  added?: string[];
+  modified?: string[];
+  removed?: string[];
 }
 
 // Снимок доски из GET /api/projects/:id и события board (type=board).

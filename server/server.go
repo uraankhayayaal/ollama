@@ -4,8 +4,11 @@ import (
 	"ai/agents/architect"
 	"ai/board"
 	"ai/chat"
+	"ai/forges"
+	"ai/gitops"
 	"ai/logging"
 	"ai/models"
+	"ai/tools"
 	"ai/workspace"
 	"context"
 	"encoding/json"
@@ -24,6 +27,14 @@ import (
 type Config struct {
 	Addr           string // по умолчанию 127.0.0.1:8090
 	WorkspacesPath string // путь к файлу workspace-реестра (пусто → DefaultPath)
+
+	// GitExec — исполнитель git-команд (по умолчанию git CLI). Переопределяется
+	// в тестах fake-исполнителем для hermetic-прогона.
+	GitExec gitops.Executor
+
+	// ForgeFactory создаёт провайдера форджа по git-remote (по умолчанию —
+	// forges.NewByRemote). Переопределяется в тестах стабом без сети.
+	ForgeFactory func(remoteURL, token string) (forges.Forge, error)
 }
 
 // Server — HTTP+WS сервер Web UI. Хранит реестр проектов, WebSocket-хаб
@@ -34,8 +45,17 @@ type Server struct {
 	hub  *Hub
 	prov providerResolve
 
+	gitExec      gitops.Executor
+	forgeFactory func(remoteURL, token string) (forges.Forge, error)
+
 	mu       sync.Mutex
 	sessions map[string]*Session
+
+	// diffMu защищает базу «точки отхода» для не-git проектов: снимок каталога
+	// на момент первого запроса диффа, от которого Snap.Diff строит список
+	// изменённых файлов.
+	diffMu    sync.Mutex
+	baselines map[string]*tools.Snap
 }
 
 // NewServer создаёт сервер. Реестр workspace открывается по cfg.WorkspacesPath.
@@ -47,12 +67,22 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server: open workspace registry: %w", err)
 	}
-	return &Server{
-		cfg:      cfg,
-		reg:      reg,
-		hub:      NewHub(),
-		sessions: make(map[string]*Session),
-	}, nil
+	s := &Server{
+		cfg:       cfg,
+		reg:       reg,
+		hub:       NewHub(),
+		sessions:  make(map[string]*Session),
+		baselines: make(map[string]*tools.Snap),
+	}
+	s.gitExec = cfg.GitExec
+	if s.gitExec == nil {
+		s.gitExec = gitops.CLIExecutor{}
+	}
+	s.forgeFactory = cfg.ForgeFactory
+	if s.forgeFactory == nil {
+		s.forgeFactory = forges.NewByRemote
+	}
+	return s, nil
 }
 
 // Run запускает HTTP+WS сервер с graceful shutdown. Блокирует до завершения.
@@ -98,6 +128,11 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
+	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
+	mux.HandleFunc("GET /api/projects/{id}/diff", s.handleGetDiff)
+	mux.HandleFunc("POST /api/projects/{id}/accept", s.handleAccept)
+	mux.HandleFunc("POST /api/projects/{id}/reject-branch", s.handleRejectBranch)
+
 	// WebSocket
 	mux.HandleFunc("GET /api/projects/{id}/ws", s.handleWS)
 
@@ -136,7 +171,7 @@ func (s *Server) session(project string) *Session {
 // --- утилиты ---
 
 // projectMeta собирает ProjectMeta для REST API.
-func projectMeta(name string, meta *board.Meta, running, gating bool) map[string]any {
+func projectMeta(inf workspace.Info, meta *board.Meta, running, gating bool) map[string]any {
 	status := "idle"
 	if running {
 		status = "running"
@@ -155,11 +190,21 @@ func projectMeta(name string, meta *board.Meta, running, gating bool) map[string
 		}
 	}
 	out := map[string]any{
-		"project_name": name,
+		"project_name": inf.Name,
+		"kind":         inf.Kind,
 		"task":         "",
 		"status":       status,
 		"created_at":   "",
 		"updated_at":   "",
+	}
+	if inf.GitRemote != "" {
+		out["git_remote"] = inf.GitRemote
+	}
+	if inf.GitBranch != "" {
+		out["git_branch"] = inf.GitBranch
+	}
+	if inf.GitBase != "" {
+		out["git_base"] = inf.GitBase
 	}
 	if meta != nil {
 		out["task"] = meta.Task
@@ -233,7 +278,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 			gating = sess.gating
 			sess.mu.Unlock()
 		}
-		out = append(out, projectMeta(inf.Name, meta, running, gating))
+		out = append(out, projectMeta(inf, meta, running, gating))
 	}
 	if out == nil {
 		out = []map[string]any{}
@@ -252,9 +297,9 @@ func (s *Server) handleOpenProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// git-URL → Ф-2 (gitops не реализован).
+	// git-URL → клон в temp/<имя> с фича-веткой (Ф-2-3).
 	if body.GitURL != "" {
-		writeErr(w, http.StatusNotImplemented, "git-проекты будут поддержаны в Ф-2")
+		s.handleOpenGitProject(w, r, body.GitURL)
 		return
 	}
 
@@ -340,7 +385,7 @@ func (s *Server) writeProjectMetaFromInfo(w http.ResponseWriter, inf workspace.I
 		gating = sess.gating
 		sess.mu.Unlock()
 	}
-	writeJSON(w, http.StatusOK, projectMeta(inf.Name, meta, running, gating))
+	writeJSON(w, http.StatusOK, projectMeta(inf, meta, running, gating))
 }
 
 // dirBase возвращает последний компонент пути.

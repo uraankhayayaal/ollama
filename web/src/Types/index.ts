@@ -3,6 +3,8 @@ export type {
     TaskRow,
     BugRow,
     ProjectMeta,
+    ProjectKind,
+    DiffView,
     BoardView,
     ChatMsg,
     GateEvent,

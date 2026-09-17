@@ -49,3 +49,20 @@ func New(prURL string, token string) (Forge, error) {
 	}
 	return builder(prURL, token)
 }
+
+// NewByRemote создаёт провайдер по git-remote (без номера PR/MR):
+// используется HITL-затвором «Принять → MR» (Ф-2-3), когда фича-ветка уже
+// запушена в remote, а сам запрос на слияние предстоит открыть
+// (CreateMergeRequest).
+func NewByRemote(remoteURL string, token string) (Forge, error) {
+	kind := DetectType(remoteURL)
+	if kind == "" {
+		return nil, fmt.Errorf("не удалось определить тип хостинга по git-remote: %s", remoteURL)
+	}
+
+	builder, ok := remoteBuilders[kind]
+	if !ok {
+		return nil, fmt.Errorf("провайдер %q не зарегистрирован (по remote)", kind)
+	}
+	return builder(remoteURL, token)
+}

@@ -38,6 +38,8 @@ type Info struct {
 	Kind      Kind      `json:"kind"`
 	Root      string    `json:"root"`
 	GitRemote string    `json:"git_remote,omitempty"`
+	GitBranch string    `json:"git_branch,omitempty"` // фича-ветка (KindGit)
+	GitBase   string    `json:"git_base,omitempty"`   // точка отхода (ветка по умолчанию)
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -47,6 +49,8 @@ type AddParams struct {
 	Kind      Kind   // temp / dir / git
 	Root      string // исходный путь (для temp игнорируется — берётся ProjectDir)
 	GitRemote string // обязателен для KindGit
+	GitBranch string // фича-ветка git-проекта (KindGit)
+	GitBase   string // точка отхода/базовая ветка git-проекта (KindGit)
 	Confirm   bool   // явное подтверждение для KindDir (не из temp/)
 }
 
@@ -144,6 +148,8 @@ func (r *Registry) Add(p AddParams) (Info, error) {
 		Kind:      p.Kind,
 		Root:      root,
 		GitRemote: p.GitRemote,
+		GitBranch: p.GitBranch,
+		GitBase:   p.GitBase,
 		CreatedAt: time.Now().UTC(),
 	}
 	r.projects[p.Name] = in

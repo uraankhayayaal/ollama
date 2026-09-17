@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -134,6 +135,77 @@ func (r *Repo) Push(ctx context.Context) error {
 	return nil
 }
 
+// Clone клонирует удалённый репозиторий remote в новый каталог dest и создаёт
+// в нём фича-ветку branch от ветки по умолчанию (base). Используется Web UI
+// при открытии git-проекта по URL (Ф-2-3): фича-ветка создаётся сразу, чтобы
+// агенты работали в изоляции, а приёмка (accept/reject) шла от этой ветки.
+//
+// Режим — branch-in-place: репозиторий уже принадлежит проекту, отдельный
+// worktree не создаётся (якорь — сам свежий клон в temp/<проект>).
+func Clone(ctx context.Context, ex Executor, remoteURL, branch, dest string) (*Repo, error) {
+	if ex == nil {
+		return nil, fmt.Errorf("gitops: не задан исполнитель")
+	}
+	if strings.TrimSpace(remoteURL) == "" {
+		return nil, fmt.Errorf("gitops: пустой remote")
+	}
+	if strings.TrimSpace(branch) == "" {
+		return nil, fmt.Errorf("gitops: пустая фича-ветка")
+	}
+	if strings.TrimSpace(dest) == "" {
+		return nil, fmt.Errorf("gitops: пустой путь клона")
+	}
+
+	parent := filepath.Dir(dest)
+	if _, err := ex.Exec(ctx, parent, "git", "clone", remoteURL, dest); err != nil {
+		return nil, fmt.Errorf("gitops: git clone %s: %w", remoteURL, err)
+	}
+
+	// Ветка по умолчанию (точка отхода базы) — до создания фича-ветки.
+	base, err := ex.Exec(ctx, dest, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("gitops: определение ветки по умолчанию: %w", err)
+	}
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return nil, fmt.Errorf("gitops: не удалось определить ветку по умолчанию клона %s", remoteURL)
+	}
+
+	if _, err := ex.Exec(ctx, dest, "git", "checkout", "-b", branch); err != nil {
+		return nil, fmt.Errorf("gitops: создание фича-ветки %s: %w", branch, err)
+	}
+
+	return &Repo{
+		Remote: strings.TrimSpace(remoteURL),
+		Root:   dest,
+		Branch: branch,
+		Base:   base,
+		ex:     ex,
+	}, nil
+}
+
+// RepoFromState восстанавливает Repo по сохранённому состоянию (реестр
+// workspace: root/remote/branch/base). Сервер Web UI пересоздаёт Repo из
+// записи реестра при каждом запросе diff/accept/reject — состояние git не
+// хранится в памяти, а читается из реестра заново.
+func RepoFromState(ex Executor, root, remote, branch, base string) *Repo {
+	return &Repo{Root: root, Remote: remote, Branch: branch, Base: base, ex: ex}
+}
+
+// Dirty сообщает, есть ли незакоммиченные изменения в фича-ветке
+// (git status --porcelain непустой). Используется приёмкой (accept/ПМР),
+// чтобы не коммитить пустое состояние.
+func (r *Repo) Dirty(ctx context.Context) (bool, error) {
+	if r == nil || r.Root == "" {
+		return false, fmt.Errorf("gitops: пустой Repo")
+	}
+	out, err := r.ex.Exec(ctx, r.Root, "git", "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("gitops: git status: %w", err)
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
 // RejectBranch удаляет фича-ветку: на remote (если он есть) и локально,
 // снимая worktree, если Repo был создан через Worktree. После отката рабочая
 // копия возвращается в состояние базы (checkout base). Используется HITL-затвором
@@ -143,11 +215,12 @@ func (r *Repo) RejectBranch(ctx context.Context) error {
 		return fmt.Errorf("gitops: пустой Repo")
 	}
 
-	// 1) Если это worktree — снимаем его и удаляем ветку. Проверяем наличие
-	//    worktree-файла (есть только у изолированных worktree).
+	// 1) Если это worktree — снимаем его и удаляем ветку. Проверяем тип `.git`:
+	//    у изолированного worktree файл `.git` — это файл-указатель на основной
+	//    репозиторий; у обычного клона (branch-in-place) `.git` — это каталог.
 	isWorktree := false
-	if _, err := os.Stat(r.Root + "/.git"); err != nil {
-		isWorktree = true // у worktree каталог .git — это файл со ссылкой
+	if st, err := os.Stat(r.Root + "/.git"); err == nil && !st.IsDir() {
+		isWorktree = true
 	}
 
 	if r.Remote != "" {
@@ -175,8 +248,13 @@ func (r *Repo) RejectBranch(ctx context.Context) error {
 			return fmt.Errorf("gitops: git branch -D %s: %w", r.Branch, err)
 		}
 	} else {
-		// Branch-in-place: просто возвращаемся на базу и удаляем ветку.
+		// Branch-in-place: отбрасываем незакоммиченные правки (reset --hard),
+		// переходим на базу и удаляем фича-ветку. Удалить нельзя текущую
+		// (checked-out) ветку, поэтому сначала переключаемся на базу.
 		if r.Base != "" {
+			if _, err := r.ex.Exec(ctx, r.Root, "git", "reset", "--hard", r.Base); err != nil {
+				return fmt.Errorf("gitops: reset --hard %s: %w", r.Base, err)
+			}
 			if _, err := r.ex.Exec(ctx, r.Root, "git", "checkout", r.Base); err != nil {
 				return fmt.Errorf("gitops: checkout %s: %w", r.Base, err)
 			}
@@ -188,14 +266,24 @@ func (r *Repo) RejectBranch(ctx context.Context) error {
 	return nil
 }
 
-// Diff возвращает git diff от точки отхода Base до текущей HEAD.
+// Diff возвращает изменения от точки отхода Base до рабочего каталога:
+// сюда входят и незакоммиченные правки агентов, и уже закоммиченные. Новые
+// (untracked) файлы помечаются git add -N (intent-to-add), иначе git diff их
+// не покажет. Это то же состояние, которое Accept зафиксирует через
+// git add -A + commit, поэтому дифф ревью до accept совпадает с содержимым
+// будущего коммита; после commit отдача не меняется (рабочий каталог = HEAD).
+// Intent-to-add безопасен: содержимое файлов не меняет, Accept перезатрёт
+// index, а Reject — сбросит через git reset --hard.
 // Для локальных (не-git) проектов этот пакет не используется — там дифф
-// строится по Snap.Diff() в board (см. PLAN Ф-2 (diff-вью, loc)).
+// строится по Snap.Diff() в server (см. PLAN Ф-2 (diff-вью, loc)).
 func (r *Repo) Diff(ctx context.Context) (string, error) {
 	if r == nil || r.Root == "" {
 		return "", fmt.Errorf("gitops: пустой Repo")
 	}
-	out, err := r.ex.Exec(ctx, r.Root, "git", "diff", r.Base+"..HEAD")
+	if _, err := r.ex.Exec(ctx, r.Root, "git", "add", "-N", "-A"); err != nil {
+		return "", fmt.Errorf("gitops: git add -N: %w", err)
+	}
+	out, err := r.ex.Exec(ctx, r.Root, "git", "diff", r.Base)
 	if err != nil {
 		return "", fmt.Errorf("gitops: git diff: %w", err)
 	}

@@ -120,11 +120,14 @@ GET   /api/projects/:id/diff               — дифф (git diff или Snap.Di
 - [x] Полный контроль в UI: редактирование задач, DnD, ручные статусы, approve/reject
 - [x] `gitops/`: worktree-изоляция, commit, push, fallback branch-in-place, reject-branch
 - [x] MR/PR обоих форджей (автоопределение по remote; github+gitlab — hermetic-тесты)
-- [ ] Кнопка «Принять → MR» + REST accept/reject-branch/diff (блокированы: сервер
-      git-проекты открывает через 501 — следующий шаг Ф-2-3: подключить git на
-      сервере через gitops+forges и дать REST-ручки web-интерфейсу)
-- [ ] Дифф-вью: `git diff` от точки отхода / `Snap.Diff()` для обычных папок
-- [ ] Верификация Ф-2: тесты gitops (dry-run), определения форджа, DnD/статусов
+- [x] Кнопка «Принять → MR» + REST accept/reject-branch/diff: сервер открывает
+      git-проекты (`git_url` → clone → фича-ветка в temp/<имя> через gitops),
+      REST `/diff` (унифицированный дифф от базы / Snap.Diff() для папок),
+      `/accept` (commit+push+MR/PR через forges.NewByRemote, GITHUB/GITLAB_TOKEN),
+      `/reject-branch`; web: Diffboard с диффом, кнопками и ссылкой на MR
+- [x] Дифф-вью: `git diff` от точки отхода / `Snap.Diff()` для обычных папок
+- [x] Верификация Ф-2: тесты gitops (dry-run + E2E на реальном git CLI),
+      определения форджа, DnD/статусов, серверные hermetic-тесты, `npm run build` web/
 - [ ] VI: проверено на реальном git-проекте end-to-end (ветка → MR на GitLab)
 
 ### Ф-3 (полировка)

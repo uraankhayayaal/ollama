@@ -9,4 +9,7 @@ export {
     sessionStop,
     updateTask,
     listBugs,
+    projectDiff,
+    acceptProject,
+    rejectBranch,
 } from "./Api"

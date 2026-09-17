@@ -38,13 +38,17 @@ go test . ./agents/... ./tools/ ./board/
 - Предсуществующие неформатированные файлы (`agents/acceptor/checks.go`,
   `agents/acceptor/run.go`) не трогать.
 
-Состояние Ф-2-3 (последняя сессия): интерфейс `forges.Forge` расширен
-`CreateMergeRequest(MergeRequestOptions) (string, error)`; реализованы
-github (PR) и gitlab (MR) с автоопределением по remote — `ParseURL/ParseRemote`,
-`NewByRemote`/`RegisterRemote` в `forges/registry.go`, `init()` регистрирует оба;
-local — заглушка «нет remote»; hermetic-тесты (roundTripFunc, без сети) зелёные.
-БЛОКЕР: REST `POST /api/projects/{id}/accept` (commit+push+MR/PR) и кнопка
-«Принять → MR» в web НЕ сделаны — сервер до сих пор открывает git-проекты как
-501 (`server/server.go` handleOpenProject: `git_url` → NotImplemented; diff/reject
-эндпоинты отсутствуют). Следующий шаг: открытие git-проекта на сервере
-(workspace KindGit + gitops) + REST accept/reject-branch/diff + web-кнопка.
+Состояние Ф-2-3 (последняя сессия): сервер открывает git-проекты через
+`git_url` — `handleOpenGitProject` клонирует репозиторий в `temp/<имя>`
+(фича-ветка `ai/<имя>`, база = ветка по умолчанию), регистрирует
+workspace KindGit; REST: `GET /api/projects/{id}/diff` (git — unified-дифф
+`git diff base` от рабочего каталога; обычно папки — `Snap.Diff` по
+baseline-снимку), `POST /api/projects/{id}/accept` (dirty → commit → push →
+`forges.NewByRemote` → `CreateMergeRequest`; токен GITHUB_TOKEN/GITLAB_TOKEN
+по remote), `POST /api/projects/{id}/reject-branch` (delete на remote +
+`reset --hard` базы + удаление ветки). Web: Diffboard — дифф, «Принять → MR»
+и «Отклонить ветку» (`projectDiff`/`acceptProject`/`rejectBranch` в Api.ts>,
+тип DiffView в Types.ts). Hermetic-тесты (fake-исполнитель git + stub-фордж,
+без сети) и E2E на реальном git-протоколе (gitops/cli_test.go) зелёные;
+`npm run build` web/ проходит. Остался пункт VI плана: проверить end-to-end
+на реальном git-проекте (ветка → MR на GitLab/GitHub с токен-авторизацией).
