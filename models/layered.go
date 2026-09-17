@@ -120,3 +120,20 @@ func (l *LayeredProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs
 	}
 	return cp.ChatOnce(ctx, agent, msgs)
 }
+
+// ChatStream — потоковая версия ChatOnce для слоёв: делегирует выбранному слою,
+// если тот поддерживает стриминг, иначе fallback на разовый ChatOnce.
+func (l *LayeredProvider) ChatStream(ctx context.Context, agent agents.Agent, msgs []runner.Message, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
+	layer := l.Small
+	if l.heavyFor(agent) {
+		layer = l.Large
+	}
+	if sp, ok := layer.(runner.StreamChatProvider); ok {
+		return sp.ChatStream(ctx, agent, msgs, onChunk)
+	}
+	cp, ok := layer.(runner.ChatProvider)
+	if !ok {
+		return nil, fmt.Errorf("слой %T не является ChatProvider", layer)
+	}
+	return cp.ChatOnce(ctx, agent, msgs)
+}

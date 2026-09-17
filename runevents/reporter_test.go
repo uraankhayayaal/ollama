@@ -98,3 +98,22 @@ func TestContextRoundtrip(t *testing.T) {
 		t.Fatal("без WithReporter должен возвращаться nil")
 	}
 }
+
+// TestOnMessageDelta проверяет потоковый фрагмент (Ф-3): тип message_delta,
+// накопленный текст и StreamID, помечающий поток.
+func TestOnMessageDelta(t *testing.T) {
+	ch, sink := collect(t, 2)
+	r := NewRouter(sink).WithAgent("developer")
+
+	r.OnMessageDelta("stream-1", "Привет")
+	r.OnMessageDelta("stream-1", "Привет, мир!")
+
+	ev := <-ch
+	if ev.Type != TypeMessageDelta || ev.Content != "Привет" || ev.StreamID != "stream-1" || ev.Agent != "developer" {
+		t.Fatalf("первый фрагмент = %+v", ev)
+	}
+	ev = <-ch
+	if ev.Type != TypeMessageDelta || ev.Content != "Привет, мир!" || ev.StreamID != "stream-1" {
+		t.Fatalf("второй фрагмент = %+v", ev)
+	}
+}

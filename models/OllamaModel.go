@@ -40,8 +40,16 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 	return runner.Generate(ctx, o, agent)
 }
 
-// ChatOnce выполняет один запрос к модели Ollama.
+// ChatOnce выполняет один запрос к модели Ollama. Реализуется через ChatStream
+// с убранным потоковым колбэком — поведение сохранено (полный текст ответа).
 func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
+	return o.ChatStream(ctx, agent, msgs, nil)
+}
+
+// ChatStream выполняет один запрос к модели Ollama в потоковом режиме: фрагменты
+// текста отдаются через onChunk (накопленный Partial), полный текст возвращается
+// в ModelReply. Реализует runner.StreamChatProvider.
+func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msgs []runner.Message, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
 	ollamaTools := agent.GetToolsForOllama()
 
 	// Перевод нейтральных сообщений в формат Ollama
@@ -80,8 +88,9 @@ func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 		}
 	}
 
-	// Флаг для отключения стриминга (false гарантирует атомарный ответ)
-	stream := false
+	// Стриминг включён: фрагменты отдаются колбэку клиента, а ChatOnce
+	// (делегирующий сюда) просто накапливает полный текст.
+	stream := true
 
 	req := &api.ChatRequest{
 		Model:    o.model,
@@ -117,13 +126,17 @@ func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 		runner.Debugf("OLLAMA: tool=%q", t.Function.Name)
 	}
 
-	var content string
+	var content strings.Builder
 	var toolCalls []tools.ToolCall
 	var doneReason string
 
 	err := o.client.Chat(ctx, req, func(resp api.ChatResponse) error {
-		content = resp.Message.Content
-		doneReason = resp.DoneReason
+		if resp.Message.Content != "" {
+			content.WriteString(resp.Message.Content)
+		}
+		if resp.DoneReason != "" {
+			doneReason = resp.DoneReason
+		}
 
 		if len(resp.Message.ToolCalls) > 0 {
 			for i, tc := range resp.Message.ToolCalls {
@@ -144,11 +157,19 @@ func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 			}
 		}
 
-		runner.Debugf(
-			"OLLAMA: сырой ответ done=%v done_reason=%q content=%q thinking=%q",
-			resp.Done, resp.DoneReason, runner.Truncate(resp.Message.Content, 300), runner.Truncate(resp.Message.Thinking, 300),
-		)
-		runner.DebugCheckEmpty("ollama", resp.DoneReason, resp.Message.Content, len(resp.Message.ToolCalls), resp)
+		if resp.Done {
+			runner.Debugf(
+				"OLLAMA: сырой ответ done=%v done_reason=%q content=%q thinking=%q",
+				resp.Done, resp.DoneReason, runner.Truncate(resp.Message.Content, 300), runner.Truncate(resp.Message.Thinking, 300),
+			)
+			runner.DebugCheckEmpty("ollama", resp.DoneReason, content.String(), len(resp.Message.ToolCalls), resp)
+		}
+
+		// Потоковый фрагмент: накопленный текст, чтобы клиент просто
+		// перезаписывал предпоследнее сообщение. Стрим идёт синхронно.
+		if onChunk != nil {
+			onChunk(runner.StreamChunk{Partial: content.String(), Done: resp.Done})
+		}
 
 		return nil
 	})
@@ -156,5 +177,5 @@ func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 		return nil, fmt.Errorf("Ошибка выполнения Chat: %v", err)
 	}
 
-	return &runner.ModelReply{Content: content, ToolCalls: toolCalls, FinishReason: doneReason}, nil
+	return &runner.ModelReply{Content: content.String(), ToolCalls: toolCalls, FinishReason: doneReason}, nil
 }

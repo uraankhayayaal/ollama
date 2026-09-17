@@ -74,6 +74,91 @@
     }
   }
 
+  // Ленивая загрузка git-диффа (Ф-3): список файлов + раскрываемые патчи.
+  .filelist {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    .fentry {
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      overflow: hidden;
+
+      .frow {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 6px 10px;
+        background: var(--card, #fff);
+        border: none;
+        border-left: 3px solid var(--mod, #2563eb);
+        cursor: pointer;
+        text-align: left;
+        font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        font-size: 13px;
+
+        &:hover {
+          background: var(--btn-hover, #eef2f7);
+        }
+
+        &.added {
+          border-left-color: var(--add, #16a34a);
+        }
+        &.removed {
+          border-left-color: var(--rem, #dc2626);
+        }
+        &.renamed {
+          border-left-color: var(--mod, #7c3aed);
+        }
+
+        .fpath {
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--ink, #1b2330);
+        }
+
+        .fstat {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+
+          .badge {
+            font-style: normal;
+            color: var(--muted, #8a94a6);
+            font-size: 11px;
+            text-transform: lowercase;
+          }
+          .add {
+            color: var(--add, #16a34a);
+          }
+          .del {
+            color: var(--rem, #dc2626);
+          }
+        }
+      }
+
+      .fpatch {
+        background: #0f172a;
+        .patch {
+          margin: 0;
+          padding: 8px 12px;
+          overflow-x: auto;
+          color: #e2e8f0;
+          font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+          font-size: 12px;
+          line-height: 1.45;
+          white-space: pre;
+        }
+      }
+    }
+  }
+
   .actions {
     display: flex;
     flex-direction: column;

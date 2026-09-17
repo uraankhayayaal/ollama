@@ -4,6 +4,7 @@ import (
 	"ai/board"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -73,12 +74,17 @@ func TestBoardToolsEpicAndTaskCRUD(t *testing.T) {
 		"architecture_summary": "Go, chi, postgres",
 	})
 
-	// Дубликат эпика — ошибка.
+	// Дубликат эпика — ошибка (с подсказкой модели, как выйти из тупика).
 	msg := errExec(t, set, BoardCreateEpic, map[string]any{
 		"task_id": "EPIC-01", "title": "Dup", "description": "dup", "assigned_role": "Backend Lead",
 	})
 	if msg == "" {
 		t.Fatalf("ожидалось сообщение об ошибке дубликата")
+	}
+	for _, hint := range []string{"существует", "BoardUpdateEpic", "BoardListEpics"} {
+		if !strings.Contains(msg, hint) {
+			t.Fatalf("сообщение дубликата должно подсказывать выход (%q): %q", hint, msg)
+		}
 	}
 
 	// Задачи в эпике: T-02 зависит от T-01.

@@ -1,5 +1,7 @@
 // Live-транспорт: WebSocket /api/projects/:id/ws.
 // Типы событий соответствуют backend (runevents + server hub):
+//   chat_delta — потоковый фрагмент ответа модели (стриминг, Ф-3); финал
+//                приходит обычным chat с ролью assistant
 //   chat  — сообщение чата (ChatMessage)
 //   board — снимок доски (BoardSnapshot)
 //   gate  — HITL-затвор (epics/tasks)
@@ -21,6 +23,7 @@ export interface LiveEvent {
 
 export type EventTypeName =
   | "chat"
+  | "chat_delta"
   | "board"
   | "gate"
   | "tool"
@@ -55,8 +58,18 @@ export function connectLive(projectID: string, baseURL: string): LiveClient {
 
   const open = () => {
     if (closed) return;
-    const proto = baseURL.startsWith("https") ? "wss" : "ws";
-    const url = `${proto}://${baseURL.replace(/^https?:\/\//, "")}/api/projects/${encodeURIComponent(projectID)}/ws`;
+    const path = `/api/projects/${encodeURIComponent(projectID)}/ws`;
+    // baseURL может быть "" (same-origin: прод-embed или Vite-прокси) —
+    // тогда WS подключается к текущему хосту страницы. Пустой host в URL
+    // (ws:///api/…) браузер не резолвит → ERR_NAME_NOT_RESOLVED.
+    let url: string;
+    if (baseURL) {
+      const proto = baseURL.startsWith("https") ? "wss" : "ws";
+      url = `${proto}://${baseURL.replace(/^https?:\/\//, "")}${path}`;
+    } else {
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      url = `${proto}://${window.location.host}${path}`;
+    }
     let s: WebSocket;
     try {
       s = new WebSocket(url);

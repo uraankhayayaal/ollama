@@ -135,10 +135,22 @@ GET   /api/projects/:id/diff               — дифф (git diff или Snap.Di
       (`x-access-token`), без сохранения upstream (gitops.Repo.PushTo)
 
 ### Ф-3 (полировка)
-- [ ] Потоковый ответ модели: рефактор `ChatOnce` → стрим
-- [ ] Безопасность: `127.0.0.1` + `AI_WEB_PASSWORD` (httpOnly + CSRF), rate-limit
-- [ ] Большие диффы/доска: пагинация, ленивая загрузка файлов
-- [ ] Док-та: `docs/project-map.md` (структура, env, раздел WebUI)
+- [x] Потоковый ответ модели: рефактор `ChatOnce` → стрим
+      (`runner.StreamChatProvider.ChatStream` — накопленный текст по кускам;
+      `OllamaProvider.ChatStream` c `stream:true`; `ChatOnce` делегирует;
+      `LayeredProvider` пробрасывает стрим слоя с fallback; события
+      `runevents.TypeMessageDelta` (WS `chat_delta`) — веб-чат рисует
+      плавающий live-пузырь, закрываемый финальным `chat`)
+- [x] Безопасность: `127.0.0.1` + `AI_WEB_PASSWORD` (httpOnly + CSRF), rate-limit
+      (`server/auth.go`, `server/ratelimit.go`; вход 5/мин, API 120/мин,
+      чат 30/мин; публичны только `POST /api/login` и `GET /api/auth`;
+      web: Login-вью + `X-CSRF-Token`)
+- [x] Большие диффы/доска: пагинация, ленивая загрузка файлов
+      (доска `?limit/&offset` + `total`; git-дифф сначала отдаёт список
+      `files`, патч файла — по `GET /api/projects/{id}/diff?file=<path>`
+      из кеша; web: Diffboard разворачивает файлы on-demand)
+- [x] Док-та: `docs/project-map.md` (структура, env, раздел WebUI)
+      + `.env.example` (`AI_WEB_ADDR`, `AI_WEB_PASSWORD`)
 
 ## Верификация
 

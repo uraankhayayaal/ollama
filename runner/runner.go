@@ -54,6 +54,22 @@ type ChatProvider interface {
 	ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error)
 }
 
+// StreamChunk — фрагмент потокового ответа модели. Partial содержит НАКОПЛЕННЫЙ
+// текст (от начала ответа до текущего фрагмента), чтобы клиенты могли просто
+// перезаписывать сообщение, а не склеивать куски.
+type StreamChunk struct {
+	Partial string
+	Done    bool
+}
+
+// StreamChatProvider — опциональное расширение ChatProvider: отдаёт текст
+// ответа по кускам через onChunk. onChunk вызывается синхронно из той же
+// горутины, что и ChatStream, до возврата результата. Провайдеры без стрима
+// остаются реализацией только ChatProvider — runner использует fallback.
+type StreamChatProvider interface {
+	ChatStream(ctx context.Context, agent agents.Agent, messages []Message, onChunk func(StreamChunk)) (*ModelReply, error)
+}
+
 // ToolRequiringAgent — необязательный интерфейс агента, который требует,
 // чтобы в ПЕРВОМ раунде модель обязательно вызвала определённый инструмент
 // (например, WriteFiles у генератора кода). Если модель вместо вызова вернула
@@ -142,6 +158,15 @@ func retryMessage(toolName string) string {
 // же инструменты, сжигая раунды до лимита (REVIEW_MAX_ROUNDS) и роняя шаг
 // «исчерпан лимит раундов» вместо завершения декомпозицией.
 const maxRepeatedToolCalls = 4
+
+// maxRepeatedToolFails — порог неудачных вызовов ОДНОГО инструмента за цикл
+// (независимо от аргументов), после которого раннер подсказывает модели
+// переключиться. Отличается от maxRepeatedToolCalls (повтор одной и той же
+// сигнатуры): модель, «перебирающая» аргументы в цикле ошибок (например,
+// архитектор, повторно создающий уже существующие эпики), каждый раз меняет
+// аргументы, и сигнатурный определитель её не ловит. Пока не сработает,
+// раунды сжигаются до лимита (REVIEW_MAX_ROUNDS) впустую.
+const maxRepeatedToolFails = 4
 
 // maxNeedRefills — сколько раз за цикл раннер может «дозаправить» контекст по
 // маркерам NEED_* в финальном ответе модели, прежде чем принять его как есть.
@@ -235,6 +260,18 @@ func callSignature(name string, args map[string]any) string {
 // loopMessage — подсказка модели при детекции повторяющихся вызовов.
 func loopMessage(toolName string, n int) string {
 	return fmt.Sprintf("Ты уже %d раз вызвал инструмент %q с одинаковыми аргументами — это повторяющийся цикл. Прекрати его: опирайся на уже полученные результаты и заверши работу итоговым ответом по требуемой схеме (не вызывая повторно те же инструменты).", n, toolName)
+}
+
+// toolFailMessage — подсказка модели, когда один и тот же инструмент много раз
+// подряд возвращает ошибку (аргументы могут меняться). Модель должна
+// перестать перебирать провальные варианты: проверить состояние, сменить
+// инструмент/данные или, если есть обязательное действие, выполнить его.
+func toolFailMessage(toolName string, n int, required string) string {
+	msg := fmt.Sprintf("Инструмент %q %d раз подряд возвращает ошибку — не повторяй его с теми же аргументами и не перебирай их варианты наугад: проверь актуальное состояние (результатами инструментов), используй другой инструмент/другие данные или заверши работу по требуемой схеме.", toolName, n)
+	if required != "" {
+		msg += fmt.Sprintf(" Обязательное действие не выполнено: вызови %q с корректными аргументами до успешного результата.", required)
+	}
+	return msg
 }
 
 // toolResultFailed признаёт выполнение инструмента неудачным, если результат
@@ -358,6 +395,11 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// одной на сигнатуру, чтобы не спамить модель).
 	callCounts := make(map[string]int)
 	loopNudged := make(map[string]bool)
+	// Детекция повторяющихся ПРОВАЛОВ инструмента: failCounts — сколько раз
+	// инструмент вернул ошибку за цикл (имя без аргументов), loopFailNudged —
+	// для каких имён уже подсказали. Ловит перебор аргументов в цикле ошибок.
+	failCounts := make(map[string]int)
+	loopFailNudged := make(map[string]bool)
 	// needRefills — сколько раз за цикл уже дозаправляли контекст по маркерам
 	// NEED_* (защита от петли «модель просит контекст → дозаправка → снова»).
 	needRefills := 0
@@ -389,7 +431,21 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			}
 		}
 
-		reply, err := provider.ChatOnce(ctx, agent, messages)
+		// Если провайдер поддерживает стриминг — текст отдаём по кускам
+		// (Reporter.OnMessageDelta), иначе fallback на разовый ChatOnce.
+		// Финальное OnMessage с полным текстом приходит в обоих случаях ниже.
+		var reply *ModelReply
+		var err error
+		if sp, ok := provider.(StreamChatProvider); ok {
+			streamID := fmt.Sprintf("stream-%d", round+1)
+			reply, err = sp.ChatStream(ctx, agent, messages, func(ch StreamChunk) {
+				if rep != nil && ch.Partial != "" {
+					rep.OnMessageDelta(streamID, ch.Partial)
+				}
+			})
+		} else {
+			reply, err = provider.ChatOnce(ctx, agent, messages)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -489,6 +545,12 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			}
 
 			Debugf("RUNNER: результат инструмента %q: %s", tc.Name, Truncate(string(result), 500))
+			// Считаем провалы инструмента НЕЗАВИСИМО от аргументов: если модель
+			// «перебирает» аргументы в цикле ошибок, сигнатурный определитель
+			// её не ловит, а счётчик по имени — ловит.
+			if toolResultFailed(tc.Name, result) {
+				failCounts[tc.Name]++
+			}
 			// Отмечаем успешность обязательных инструментов: ошибки/пустые
 			// результаты считаются неудачей, при которой нужна повторная подсказка.
 			for gi, grp := range requiredGroups {
@@ -522,6 +584,21 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				Debugf("RUNNER: раунд %d: детектировал повторяющийся вызов %q (%d раз), подсказываю завершить цикл", round+1, toolName, n)
 				messages = append(messages, Message{Role: "user", Content: loopMessage(toolName, n)})
 				break
+			}
+		}
+
+		// Защита от зацикливания на ОШИБКАХ: если инструмент много раз подряд
+		// (maxRepeatedToolFails) вернул ошибку — даже с разными аргументами —
+		// подсказываем модели переключиться и (если есть) выполнить
+		// невыполненное обязательное действие. Одна подсказка на имя.
+		if len(failCounts) > 0 {
+			for name, n := range failCounts {
+				if n >= maxRepeatedToolFails && !loopFailNudged[name] {
+					loopFailNudged[name] = true
+					Debugf("RUNNER: раунд %d: инструмент %q вернул ошибки подряд (%d раз), подсказываю не перебирать их", round+1, name, n)
+					messages = append(messages, Message{Role: "user", Content: toolFailMessage(name, n, pendingRequired())})
+					break
+				}
 			}
 		}
 	}

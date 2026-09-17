@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -25,8 +26,13 @@ import (
 
 // Config — параметры HTTP-сервера Web UI.
 type Config struct {
-	Addr           string // по умолчанию 127.0.0.1:8090
+	Addr           string // по умолчанию 127.0.0.1:8090; переопределяется AI_WEB_ADDR
 	WorkspacesPath string // путь к файлу workspace-реестра (пусто → DefaultPath)
+
+	// Password — пароль Web UI (AI_WEB_PASSWORD). Пустой — аутентификация
+	// отключена (сервер предполагается на 127.0.0.1). Задан — Web UI требует
+	// вход (httpOnly-сессия + CSRF + rate-limit).
+	Password string
 
 	// GitExec — исполнитель git-команд (по умолчанию git CLI). Переопределяется
 	// в тестах fake-исполнителем для hermetic-прогона.
@@ -48,14 +54,21 @@ type Server struct {
 	gitExec      gitops.Executor
 	forgeFactory func(remoteURL, token string) (forges.Forge, error)
 
+	// auth — аутентификация Web UI (nil/отключена, если пароль не задан).
+	auth *authManager
+	// Лимитеры (Ф-3): общий API, строгий на вход, отдельный на чат.
+	apiLim   *rateLimiter
+	loginLim *rateLimiter
+	chatLim  *rateLimiter
+
 	mu       sync.Mutex
 	sessions map[string]*Session
 
-	// diffMu защищает базу «точки отхода» для не-git проектов: снимок каталога
-	// на момент первого запроса диффа, от которого Snap.Diff строит список
-	// изменённых файлов.
+	// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
+	// (baselines) и кэш разобранных диффов git-проектов (diffs, Ф-3).
 	diffMu    sync.Mutex
 	baselines map[string]*tools.Snap
+	diffs     map[string]*cachedDiff
 }
 
 // NewServer создаёт сервер. Реестр workspace открывается по cfg.WorkspacesPath.
@@ -73,6 +86,12 @@ func NewServer(cfg Config) (*Server, error) {
 		hub:       NewHub(),
 		sessions:  make(map[string]*Session),
 		baselines: make(map[string]*tools.Snap),
+		diffs:     make(map[string]*cachedDiff),
+		auth:      newAuth(cfg.Password),
+		// Лимиты Ф-3: 5 логинов/мин, 120 API-запросов/мин, 30 сообщений/мин.
+		apiLim:   newRateLimit(120, time.Minute),
+		loginLim: newRateLimit(5, time.Minute),
+		chatLim:  newRateLimit(30, time.Minute),
 	}
 	s.gitExec = cfg.GitExec
 	if s.gitExec == nil {
@@ -111,9 +130,16 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-// routes собирает HTTP-маршруты: REST, WebSocket и статика Web UI.
-func (s *Server) routes() *http.ServeMux {
+// routes собирает HTTP-маршруты: REST, WebSocket, статика Web UI.
+// При включённой аутентификации (AI_WEB_PASSWORD) всё /api/* защищается
+// middleware'ом authHandler (сессии + CSRF + rate-limit).
+func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
+
+	// Аутентификация (Ф-3): вход/выход/статус.
+	mux.HandleFunc("POST /api/login", s.handleLogin)
+	mux.HandleFunc("POST /api/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/auth", s.handleAuthStatus)
 
 	// REST — проекты
 	mux.HandleFunc("GET /api/projects", s.handleListProjects)
@@ -139,7 +165,13 @@ func (s *Server) routes() *http.ServeMux {
 	// Статика Web UI (embed web/dist)
 	mux.Handle("/", staticHandler())
 
-	return mux
+	return &authHandler{
+		next:     mux,
+		auth:     s.auth,
+		apiLim:   s.apiLim,
+		loginLim: s.loginLim,
+		chatLim:  s.chatLim,
+	}
 }
 
 // --- SessionRegistry (single-flight) ---
@@ -212,16 +244,6 @@ func projectMeta(inf workspace.Info, meta *board.Meta, running, gating bool) map
 		out["updated_at"] = meta.UpdatedAt
 	}
 	return out
-}
-
-// boardSnapshots открывает board.Store и возвращает полный снимок доски.
-func boardSnapshotFromRedis(ctx context.Context, project string) (boardSnapshot, error) {
-	store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(project))
-	if err != nil {
-		return boardSnapshot{}, err
-	}
-	defer store.Close()
-	return boardView(ctx, store)
 }
 
 // provider возвращает LLM-провайдер (ленивая инициализация). Возвращает
@@ -400,14 +422,28 @@ func dirBase(path string) string {
 
 // --- REST: доска ---
 
-// handleGetBoard возвращает полный снимок доски (meta + epics + tasks + bugs).
+// handleGetBoard возвращает снимок доски (meta + epics + tasks + bugs).
+// Ф-3: пагинация через ?limit=&offset= — ограничивает каждую секцию и
+// добавляет полные счётчики в total.
 func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	ctx := r.Context()
 
+	limit, offset := 0, 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if intval, err := strconv.Atoi(l); err == nil && intval > 0 {
+			limit = intval
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if intval, err := strconv.Atoi(o); err == nil && intval > 0 {
+			offset = intval
+		}
+	}
+
 	// Сначала пробуем сессию (board store уже открыт).
 	if sess := s.session(project); sess != nil {
-		snap, err := boardView(ctx, sess.board)
+		snap, err := boardViewPage(ctx, sess.board, limit, offset)
 		if err == nil {
 			writeJSON(w, http.StatusOK, snap)
 			return
@@ -415,7 +451,13 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Фолбек: открываем store на лету.
-	snap, err := boardSnapshotFromRedis(ctx, project)
+	store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
+		return
+	}
+	defer store.Close()
+	snap, err := boardViewPage(ctx, store, limit, offset)
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
 		return

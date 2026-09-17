@@ -72,7 +72,10 @@ func (s *Server) newSession(project string) (*Session, error) {
 	}
 	sess.router = runevents.NewRouter(func(ev runevents.Event) {
 		sess.chatEvent(ev)
-		sess.kickBoard()
+		// Потоковые фрагменты не меняют доску — не дёргаем флашер на каждый токен.
+		if ev.Type != runevents.TypeMessageDelta {
+			sess.kickBoard()
+		}
 	})
 	return sess, nil
 }
@@ -236,6 +239,10 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 	switch ev.Type {
 	case runevents.TypeMessage:
 		sess.append(chat.RoleAssistant, ev.Content, ev.Agent, "", nil)
+	case runevents.TypeMessageDelta:
+		// Потоковый фрагмент — только live-трансляция (type=chat_delta),
+		// в историю чата не пишется: финал проходит обычным TypeMessage.
+		sess.srv.hub.publish(sess.project, "chat_delta", ev)
 	case runevents.TypeToolStart:
 		sess.srv.hub.publish(sess.project, "tool", ev)
 	case runevents.TypeToolResult:
@@ -338,6 +345,48 @@ type boardSnapshot struct {
 	Epics []*board.Epic     `json:"epics"`
 	Tasks []*board.Task     `json:"tasks"`
 	Bugs  []*board.BugReport `json:"bugs"`
+	Total *boardTotal       `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
+}
+
+// boardTotal — полные счётчики доски (когда снимок ограничен limit/offset).
+type boardTotal struct {
+	Epics int `json:"epics"`
+	Tasks int `json:"tasks"`
+	Bugs  int `json:"bugs"`
+}
+
+// boardViewPage ограничивает снимок доски страницей (limit/limit+offset=0 —
+// полный снимок) и дополняет его полными счётчиками.
+func boardViewPage(ctx context.Context, store *board.Store, limit, offset int) (boardSnapshot, error) {
+	v, err := boardView(ctx, store)
+	if err != nil {
+		return boardSnapshot{}, err
+	}
+	total := &boardTotal{Epics: len(v.Epics), Tasks: len(v.Tasks), Bugs: len(v.Bugs)}
+	if limit <= 0 {
+		v.Total = total
+		return v, nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	v.Epics = slicePage(v.Epics, offset, limit)
+	v.Tasks = slicePage(v.Tasks, offset, limit)
+	v.Bugs = slicePage(v.Bugs, offset, limit)
+	v.Total = total
+	return v, nil
+}
+
+// slicePage возвращает подмножество [offset, offset+limit) из слайса любого типа.
+func slicePage[T any](in []T, offset, limit int) []T {
+	if offset >= len(in) {
+		return []T{}
+	}
+	end := offset + limit
+	if end > len(in) {
+		end = len(in)
+	}
+	return in[offset:end]
 }
 
 // truncateText обрезает длинный текст для статусных сообщений.

@@ -1,11 +1,13 @@
 // Diffboard — вкладка «Дифф»: разница предложенного и текущего состояния
 // (GET /api/projects/<name>/diff), а для git-проектов — приёмка:
 // «Принять → MR» (commit+push+MR/PR через фордж) и «Отклонить ветку».
+// Ф-3: для git-проектов дифф загружается лениво — список файлов (метаданные),
+// патч конкретного файла подтягивается при раскрытии (projectDiffFile).
 // Пропс kind приходит из ProjectMeta (workspace.Info.Kind).
 
 import { useCallback, useEffect, useState } from "react";
-import { acceptProject, projectDiff, rejectBranch } from "@/Api";
-import type { DiffView, ProjectKind } from "@/Types";
+import { acceptProject, projectDiff, projectDiffFile, rejectBranch } from "@/Api";
+import type { DiffFileView, DiffView, ProjectKind } from "@/Types";
 import "./styles.scss";
 
 export interface DiffboardProps {
@@ -13,10 +15,15 @@ export interface DiffboardProps {
   kind?: ProjectKind;
 }
 
+const BASE = "";
+
 export function Diffboard(props: DiffboardProps) {
   const [diff, setDiff] = useState<DiffView | null>(null);
-  const [error, setError] = useState("");
+  // патчи по файлам: path → DiffFileView (ленивая загрузка, запоминаем).
+  const [patches, setPatches] = useState<Record<string, DiffFileView | undefined>>({});
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState("");
   const [mr, setMr] = useState<{ url: string; branch: string; base: string } | null>(null);
@@ -24,8 +31,10 @@ export function Diffboard(props: DiffboardProps) {
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
+    setPatches({});
+    setOpen({});
     try {
-      setDiff(await projectDiff("", props.project));
+      setDiff(await projectDiff(BASE, props.project));
     } catch (e) {
       setError(fmtErr(e));
     } finally {
@@ -37,12 +46,25 @@ export function Diffboard(props: DiffboardProps) {
     void load();
   }, [load]);
 
+  // Раскрытие файла: подтягиваем патч (если ещё не загружен) — лениво.
+  const toggle = async (path: string) => {
+    setOpen((prev) => ({ ...prev, [path]: !prev[path] }));
+    if (!patches[path]) {
+      try {
+        const pv = await projectDiffFile(BASE, props.project, path);
+        setPatches((prev) => ({ ...prev, [path]: pv }));
+      } catch (e) {
+        setError(fmtErr(e));
+      }
+    }
+  };
+
   const onAccept = async () => {
     if (!props.kind) return;
     setBusy(true);
     setError("");
     try {
-      const res = await acceptProject("", props.project, {
+      const res = await acceptProject(BASE, props.project, {
         title: title.trim() || undefined,
       });
       setMr(res);
@@ -62,7 +84,7 @@ export function Diffboard(props: DiffboardProps) {
     setError("");
     setMr(null);
     try {
-      await rejectBranch("", props.project);
+      await rejectBranch(BASE, props.project);
       await load();
     } catch (e) {
       setError(fmtErr(e));
@@ -72,6 +94,7 @@ export function Diffboard(props: DiffboardProps) {
   };
 
   const isGit = props.kind === "git";
+  const gitFiles = diff?.files ?? [];
 
   return (
     <div className="diffboard">
@@ -83,10 +106,32 @@ export function Diffboard(props: DiffboardProps) {
         <>
           <p className="hint">
             Ветка <strong>{diff.branch}</strong> → <strong>{diff.base}</strong> (base) · remote{" "}
-            <code>{diff.remote}</code>
+            <code>{diff.remote}</code> · файлов: {gitFiles.length}
           </p>
-          {diff.diff ? (
-            <pre className="diff">{diff.diff}</pre>
+          {gitFiles.length > 0 ? (
+            <div className="filelist">
+              {gitFiles.map((f) => (
+                <div className="fentry" key={f.path}>
+                  <button className={"frow " + f.status} onClick={() => void toggle(f.path)}>
+                    <span className="fpath">{f.path}</span>
+                    <span className="fstat">
+                      <i className="badge">{statusWord(f.status)}</i>
+                      <b className="add">+{f.added}</b>
+                      <b className="del">-{f.deleted}</b>
+                    </span>
+                  </button>
+                  {open[f.path] && (
+                    <div className="fpatch">
+                      {patches[f.path] ? (
+                        <pre className="patch">{patches[f.path]!.patch}</pre>
+                      ) : (
+                        <p className="hint">Гружу патч…</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           ) : (
             <p className="hint">Изменений от точки отхода нет.</p>
           )}
@@ -155,6 +200,19 @@ export function Diffboard(props: DiffboardProps) {
       )}
     </div>
   );
+}
+
+function statusWord(s: string): string {
+  switch (s) {
+    case "added":
+      return "новый";
+    case "removed":
+      return "удалён";
+    case "renamed":
+      return "переименован";
+    default:
+      return "изменён";
+  }
 }
 
 function fmtErr(err: unknown): string {

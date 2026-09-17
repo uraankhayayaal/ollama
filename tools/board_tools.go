@@ -358,6 +358,14 @@ func (t *boardCreateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	epic := &board.Epic{TaskSpec: ts, Summary: strArg(args, "architecture_summary")}
 	if err := t.b.CreateEpic(ctx, epic); err != nil {
+		if errors.Is(err, board.ErrExists) {
+			// Подсказываем модели выход из тупика «ID уже занят»: проверить
+			// доску, взять другой ID или обновить существующий эпик. Без
+			// подсказки модель часто зацикливается, повторно создавая те же
+			// эпики (см. runner maxRepeatedToolFails).
+			return boardErr(BoardCreateEpic, fmt.Errorf(
+				"эпик %q уже существует на доске — создавать заново нельзя. Используй уникальный task_id, обнови существующий эпик BoardUpdateEpic или проверь список BoardListEpics", epic.TaskID))
+		}
 		return boardErr(BoardCreateEpic, err)
 	}
 	logging.Infof("[эпик %s] создан: %s", epic.TaskID, boardTitle(epic.Title))

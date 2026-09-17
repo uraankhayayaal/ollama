@@ -89,6 +89,12 @@ ollama/  (go.mod module ai)
 ├── temp/                    — рабочее хранилище генерируемых проектов (не коммитится!)
 ├── archive/                 — архивные/учебные проекты (quadratic-calculator*)
 ├── logs/                    — файлы логов (создаётся автоматически)
+├── runevents/               — события агентного цикла (сообщения, tool-call, потоковые message_delta)
+├── workspace/               — реестр проектов Web UI (имя → абс.путь, типы temp/папка/git, .ai-workspaces.json)
+├── chat/                    — Redis Streams истории чата + pub/sub событий
+├── gitops/                  — git-изоляция проектов (commit, push, diff от базы, определение форджа, MR/PR)
+├── server/                  — HTTP/WS-сервис Web UI: REST, WS-хаб, сессии, auth/CSRF/rate-limit, lazy-дифф
+├── web/                     — React-интерфейс Web UI (Vite+TS, прод-сборка embed'ится в бинарь)
 └── docs/                    — документация (этот каталог)
 ```
 
@@ -254,6 +260,12 @@ ollama/  (go.mod module ai)
 | `BOARD_REDIS_ADDR` / `BOARD_REDIS_PASSWORD` / `BOARD_REDIS_DB` | Redis доски | `localhost:6379` / — / `0` |
 | `BOARD_TTL` | TTL записей доски | `0` (без) |
 
+### Web UI (`go run . serve`)
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `AI_WEB_ADDR` | адрес HTTP-сервера Web UI | `127.0.0.1:8090` |
+| `AI_WEB_PASSWORD` | пароль входа. Пустой — защита выключена. Непустой: httpOnly-сессия `ai_sid` + CSRF-токен `X-CSRF-Token` + per-IP rate-limit (5 входов/мин, 120 запросов `/api/*`, 30 сообщений в чат) | пусто |
+
 ### Слушатель MR (listen)
 | Переменная | Описание | По умолчанию |
 |---|---|---|
@@ -293,6 +305,16 @@ ollama/  (go.mod module ai)
   (десятки раундов инструментов).
 - **Детерминированные проверки** gofmt/vet (аналог prettier/black и
   eslint/ruff) подключаются в приёмке и к каскадным оценкам качества.
+- **Web UI «Доска + Чат + Дифф»** (`go run . serve`, React в `web/`):
+  Kanban-доска (DnD, статусы, approve/reject эпиков), чат с live-таймлайном
+  tool-call'ов и потоковым ответом модели (`message_delta`, плавающий
+  пузырь в UI), Diffboard с ленивой загрузкой per-file патчей; git-проекты
+  открываются по `git_url` (клонирование в `temp/<имя>`, фича-ветка),
+  «Принять → MR» создаёт Merge Request (GitHub/GitLab по remote).
+- **Безопасность Web UI**: опциональный `AI_WEB_PASSWORD` → httpOnly-сессия
+  + per-session CSRF-токен для мутаций + rate-limit, bind `127.0.0.1`.
+- **Пагинация**: доска отдаёт полные счётчики `total` при `?limit/&offset`;
+  дифф git-проектов — список файлов и патч по запросу (`?file=`).
 - **Ecosystem Redis**: чекпоинты плана, Kanban-доска, метрики шагов поднимаются
   `docker compose up -d` (`compose.yaml`).
 - **`temp/` не коммитится.** Генерируемые проекты — артефакты агентов; единый
@@ -305,6 +327,12 @@ ollama/  (go.mod module ai)
 ## 6. TODO
 
 ### Сделано в последних итерациях
+- **Ф-3 Web UI (полировка)** — см. [PLAN-webui.md](PLAN-webui.md): потоковый
+  ответ модели (`StreamChatProvider` → `runevents.TypeMessageDelta`, WS
+  `chat_delta`, `OllamaProvider.ChatStream`), безопасность (`AI_WEB_PASSWORD`,
+  `server/auth.go` + `server/ratelimit.go`, CSRF, rate-limit; фронт — Login-вью
+  и CSRF-заголовок), пагинация доски (`?limit/&offset` + `total`),
+  ленивый дифф git-проектов (`server/diff.go`, `GET /diff?file=`).
 - **Пер-проектная сериализация файловых мутаций** (`tools/filelock.go`):
   `Write`, `AppendTo`, `Remove`, `SearchReplace`, `PatchGoFunction` и
   `snapshot.Restore` исполняются под блокировкой каталога проекта — параллельные

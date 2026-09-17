@@ -65,15 +65,26 @@ func main() {
 	}
 
 	// Web UI: HTTP+WS сервер с Kanban-доской, чатом и HITL-контролем.
-	// go run . serve [addr]  (по умолчанию 127.0.0.1:8090)
+	// go run . serve [addr]  (по умолчанию 127.0.0.1:8090 или AI_WEB_ADDR)
+	// Пароль Web UI задаётся AI_WEB_PASSWORD — при нём включается логин,
+	// httpOnly-сессия, CSRF и rate-limit (см. server/auth.go).
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		addr := "127.0.0.1:8090"
+		addr := os.Getenv("AI_WEB_ADDR")
+		if addr == "" {
+			addr = "127.0.0.1:8090"
+		}
 		if len(os.Args) > 2 && os.Args[2] != "" {
 			addr = os.Args[2]
 		}
-		srv, err := server.NewServer(server.Config{Addr: addr})
+		srv, err := server.NewServer(server.Config{
+			Addr:     addr,
+			Password: os.Getenv("AI_WEB_PASSWORD"),
+		})
 		if err != nil {
 			logging.Fatalf("server: %v", err)
+		}
+		if os.Getenv("AI_WEB_PASSWORD") != "" {
+			logging.Infof("server: включена аутентификация Web UI (AI_WEB_PASSWORD)")
 		}
 		if err := srv.Run(context.Background()); err != nil {
 			logging.Fatalf("server: %v", err)

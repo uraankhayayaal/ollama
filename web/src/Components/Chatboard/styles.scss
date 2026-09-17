@@ -56,6 +56,23 @@
         color: var(--muted, #94a3b8);
         align-self: flex-end;
       }
+
+      // «Плавающее» потоковое сообщение (стриминг, Ф-3): неполный текст,
+      // после курсоравных символов добиваем анимацией печати.
+      &.streaming {
+        border-style: dashed;
+
+        .cursor {
+          animation: blink 1s steps(2, start) infinite;
+          color: var(--muted, #94a3b8);
+        }
+      }
+    }
+  }
+
+  @keyframes blink {
+    50% {
+      opacity: 0;
     }
   }
 

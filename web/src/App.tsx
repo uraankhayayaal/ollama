@@ -1,13 +1,15 @@
 // Оболочка: селектор воркспейса, HITL-затворы, три вкладки. React-канон
 // зеркалит server/session.go + runevents + chat/store.go (см. web/src/types.ts).
+// Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useEffect, useRef, useState } from "react";
-import { boardOf, chatHistory, gateDecide, listProjects, openProject, postChat, sessionStop, updateTask } from "./Api";
+import { authStatus, boardOf, chatHistory, gateDecide, listProjects, logout, openProject, postChat, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { BoardView, ChatMsg, TaskRow, ProjectMeta } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { Diffboard } from "./Components/Diffboard";
+import { Login } from "./Components/Login";
 import { WorkspacePicker } from "./Components/WorkspacePicker";
 import { Tabs } from "./Components/Tabs";
 import { Badge } from "./Components/Badge";
@@ -16,11 +18,18 @@ import { GateEvent } from "./Types";
 
 const BASE = ""; // dev: Vite-прокси /api→backend; прод: embed same-origin.
 
+type AuthPhase = "checking" | "ok" | "denied";
+
 export function App() {
+  const [auth, setAuth] = useState<AuthPhase>("checking");
+  const [protectedMode, setProtectedMode] = useState(false);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [project, setProject] = useState<ProjectMeta | null>(null);
   const [board, setBoard] = useState<BoardView | null>(null);
   const [chat, setChat] = useState<ChatMsg[]>([]);
+  // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3): заполняется
+  // событиями chat_delta и схлопывается в историю при финальном chat.
+  const [live, setLive] = useState<{ id: string; agent: string; content: string } | null>(null);
   const [gate, setGate] = useState<GateEvent | null>(null);
   const [status, setStatus] = useState<string>("idle");
   const [detail, setDetail] = useState<string>("");
@@ -28,14 +37,32 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const live = useRef<LiveClient | null>(null);
+  const liveClient = useRef<LiveClient | null>(null);
   const chatEnd = useRef<HTMLDivElement | null>(null);
 
+  // Начальная проверка аутентификации: /api/auth отдаёт статус и CSRF
+  // текущей httpOnly-сессии; если сервер без пароля — сразу ok.
   useEffect(() => {
-    listProjects(BASE)
-      .then(setProjects)
-      .catch((e) => setError(fmtErr(e)));
+    authStatus(BASE)
+      .then((st) => {
+        setProtectedMode(st.login);
+        setAuth(st.ok ? "ok" : "denied");
+        return st.ok ? listProjects(BASE) : null;
+      })
+      .then((pr) => {
+        if (pr) setProjects(pr);
+      })
+      .catch(fail);
   }, []);
+
+  // fail — единая обработка ошибок: протухшая сессия (401) → экран входа.
+  const fail = (e: unknown) => {
+    if (e && typeof e === "object" && (e as { status?: number }).status === 401) {
+      setAuth("denied");
+      return;
+    }
+    setError(fmtErr(e));
+  };
 
   const open = async (spec: { path_or_git?: string; git_url?: string }) => {
     setBusy(true);
@@ -45,17 +72,32 @@ export function App() {
       setProject(p);
       setProjects((prev) => (prev.some((x) => x.project_name === p.project_name) ? prev : [...prev, p]));
     } catch (e) {
-      setError(fmtErr(e));
+      fail(e);
     } finally {
       setBusy(false);
     }
   };
 
+  const onLoggedIn = async () => {
+    setAuth("ok");
+    try {
+      setProjects(await listProjects(BASE));
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  const onLogout = async () => {
+    await logout(BASE);
+    setAuth("denied");
+  };
+
   useEffect(() => {
     if (!project) return;
-    live.current?.close();
+    liveClient.current?.close();
     setGate(null);
     setChat([]);
+    setLive(null);
     setBoard(null);
     (async () => {
       try {
@@ -63,16 +105,27 @@ export function App() {
         setBoard(b);
         setChat(h);
       } catch (e) {
-        setError(fmtErr(e));
+        fail(e);
       }
     })();
 
     const l = connectLive(project.project_name, BASE);
-    live.current = l;
+    liveClient.current = l;
 
     l.on("chat", (ev) => {
       try {
-        setChat((prev) => [...prev, ev.payload as ChatMsg]);
+        const m = ev.payload as ChatMsg;
+        // Финальное сообщение модели закрывает потоковый «плавающий» пузырь.
+        if (m.role === "assistant") {
+          setLive(null);
+        }
+        setChat((prev) => [...prev, m]);
+      } catch {}
+    });
+    l.on("chat_delta", (ev) => {
+      try {
+        const p = ev.payload as { content?: string; agent?: string; stream_id?: string };
+        setLive({ id: p.stream_id ?? "live", agent: p.agent ?? "assistant", content: p.content ?? "" });
       } catch {}
     });
     l.on("board", (ev) => {
@@ -112,7 +165,7 @@ export function App() {
     try {
       await postChat(BASE, project.project_name, text);
     } catch (e) {
-      setError(fmtErr(e));
+      fail(e);
     }
   };
 
@@ -124,7 +177,7 @@ export function App() {
       await gateDecide(BASE, project.project_name, gateName, decision);
       setGate(null);
     } catch (e) {
-      setError(fmtErr(e));
+      fail(e);
     }
   };
 
@@ -136,7 +189,7 @@ export function App() {
       const next = await updateTask(BASE, project.project_name, t.task_id, patch);
       setBoard((prev) => (prev ? { ...prev, tasks: prev.tasks.map((x) => (x.task_id === next.task_id ? next : x)) } : prev));
     } catch (e) {
-      setError(fmtErr(e));
+      fail(e);
     }
   };
 
@@ -147,18 +200,37 @@ export function App() {
     try {
       await sessionStop(BASE, project.project_name);
     } catch (e) {
-      setError(fmtErr(e));
+      fail(e);
     }
   };
+
+  if (auth === "checking") {
+    return (
+      <div className="app">
+        <p className="hint">Подключаюсь…</p>
+      </div>
+    );
+  }
+
+  if (auth === "denied") {
+    return <Login base={BASE} onLoggedIn={() => void onLoggedIn()} />;
+  }
 
   return (
     <div className="app">
       <header className="top">
         <WorkspacePicker projects={projects} current={project} onOpen={open} busy={busy} />
         <Tabs tab={tab} setTab={setTab} />
-        <button className="btn danger" onClick={onStop} disabled={!project || status !== "running"}>
-          Стоп
-        </button>
+        <div className="head-actions">
+          <button className="btn danger" onClick={onStop} disabled={!project || status !== "running"}>
+            Стоп
+          </button>
+          {protectedMode && (
+            <button className="btn" onClick={() => void onLogout()}>
+              Выход
+            </button>
+          )}
+        </div>
       </header>
 
       {project && (
@@ -183,7 +255,7 @@ export function App() {
             <Dashboard board={board} onTaskUpdate={onTaskUpdate} onGateDecide={onGate} />
           </section>
           <section className={tab === "chat" ? "pane active" : "pane"}>
-            <Chatboard chat={chat} onSend={onSend} endRef={chatEnd} />
+            <Chatboard chat={chat} live={live} onSend={onSend} endRef={chatEnd} />
           </section>
           <section className={tab === "diff" ? "pane active" : "pane"}>
             <Diffboard project={project.project_name} kind={project.kind} />

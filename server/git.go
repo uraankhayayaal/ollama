@@ -153,9 +153,10 @@ func (s *Server) pushRepo(ctx context.Context, repo *gitops.Repo, remote string)
 // --- REST: дифф ---
 
 // handleGetDiff возвращает сводку изменений проекта: для git-проектов —
-// unified-дифф от точки отхода (git diff base..HEAD); для остальных —
-// списки добавленных/изменённых/удалённых файлов относительно «точки
-// отхода» (baseline-снимок каталога, снимается при первом запросе).
+// список изменённых файлов (метаданные, Ф-3) и патч конкретного файла через
+// ?file=<path> (ленивая загрузка); для остальных — списки
+// добавленных/изменённых/удалённых файлов относительно «точки отхода»
+// (baseline-снимок каталога, снимается при первом запросе).
 func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	inf, err := s.reg.Get(project)
@@ -165,18 +166,38 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if inf.Kind == workspace.KindGit {
-		repo := gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
-		diff, err := repo.Diff(r.Context())
+		c, err := s.gitProjectDiff(r.Context(), inf)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "ошибка диффа: "+err.Error())
 			return
 		}
+		if file := r.URL.Query().Get("file"); file != "" {
+			patch, ok := c.File[file]
+			if !ok {
+				writeErr(w, http.StatusNotFound, "файл не найден в диффе: "+file)
+				return
+			}
+			status := string(diffModified)
+			for _, f := range c.Files {
+				if f.Path == file {
+					status = string(f.Status)
+					break
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"kind":   "git",
+				"path":   file,
+				"status": status,
+				"patch":  patch,
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"kind":   "git",
-			"branch": inf.GitBranch,
-			"base":   inf.GitBase,
-			"remote": inf.GitRemote,
-			"diff":   diff,
+			"branch": c.Branch,
+			"base":   c.Base,
+			"remote": c.Remote,
+			"files":  c.Files,
 		})
 		return
 	}
@@ -315,6 +336,10 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "отклонение ветки: "+err.Error())
 		return
 	}
+	// Рабочая копия сброшена на базу — кэш диффа устарел.
+	s.diffMu.Lock()
+	delete(s.diffs, project)
+	s.diffMu.Unlock()
 
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,

@@ -35,6 +35,9 @@ export function Dashboard({
         <span className="project">{board.meta?.project_name ?? "—"}</span>
         <span className="counts">
           эпиков {board.epics.length} · задач {board.tasks.length} · багов {board.bugs.length}
+          {board.total && board.total.tasks > board.tasks.length && (
+            <em> (всего задач: {board.total.tasks}, доска ограничена)</em>
+          )}
         </span>
       </div>
 

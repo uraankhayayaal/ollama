@@ -9,18 +9,22 @@ import "./styles.scss";
 
 export function Chatboard({
   chat,
+  live,
   onSend,
   endRef,
   busy,
 }: {
   chat: ChatMsg[];
+  // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3); рендерится
+  // с маркером «…» до прихода финального протокола chat с ролью assistant.
+  live: { id: string; agent: string; content: string } | null;
   onSend: (text: string) => void;
   endRef: React.RefObject<HTMLDivElement | null>;
   busy?: boolean;
 }) {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat, endRef]);
+  }, [chat, live, endRef]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +49,15 @@ export function Chatboard({
             <time className="when">{fmtTime(m.time)}</time>
           </li>
         ))}
+        {live && (
+          <li key={live.id} className="msg assistant streaming">
+            <span className="who">{live.agent}</span>
+            <p className="content">
+              {live.content}
+              <span className="cursor">…</span>
+            </p>
+          </li>
+        )}
         <div ref={endRef} />
       </ul>
 

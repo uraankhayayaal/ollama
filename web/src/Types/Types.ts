@@ -84,6 +84,25 @@ export interface DiffView {
   added?: string[];
   modified?: string[];
   removed?: string[];
+  // Ф-3 (ленивая загрузка): для git-проектов вместо полного diff — список файлов;
+  // патч конкретного файла отдаётся GET /api/projects/:id/diff?file=<path>.
+  files?: DiffFile[];
+}
+
+// Один файл в диффе git-проекта (метаданные для ленивой загрузки, Ф-3).
+export interface DiffFile {
+  path: string;
+  status: "added" | "modified" | "removed" | "renamed";
+  added: number;
+  deleted: number;
+}
+
+// Патч конкретного файла git-диффа (GET /api/projects/:id/diff?file=<path>).
+export interface DiffFileView {
+  kind: "git";
+  path: string;
+  status: string;
+  patch: string;
 }
 
 // Снимок доски из GET /api/projects/:id и события board (type=board).
@@ -92,6 +111,8 @@ export interface BoardView {
   epics: EpicRow[];
   tasks: TaskRow[];
   bugs: BugRow[];
+  // Полные счётчики (Ф-3): заполняются при пагинации (limit/offset) или всегда.
+  total?: { epics: number; tasks: number; bugs: number };
 }
 
 // Сообщение чата (тип события chat; история — тот же формат).

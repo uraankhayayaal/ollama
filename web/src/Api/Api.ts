@@ -8,10 +8,9 @@ import type {
   BoardView,
   BugRow,
   ChatMsg,
+  DiffFileView,
   DiffView,
-  // EpicRow,
   ProjectMeta,
-  // Status,
   TaskRow,
 } from "@/Types";
 
@@ -25,11 +24,37 @@ export class APIError extends Error {
   }
 }
 
+// CSRF-токен текущей сессии (Ф-3). При включённой аутентификации
+// (AI_WEB_PASSWORD) мутации (POST/PUT/DELETE) требуют X-CSRF-Token.
+// Токен берётся из /api/auth при загрузке или из ответа /api/login.
+let csrfToken = "";
+
+export function setCSRF(token: string): void {
+  csrfToken = token;
+}
+
+export function clearCSRF(): void {
+  csrfToken = "";
+}
+
+function mutationHeaders(hasBody: boolean): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (hasBody) {
+    h["content-type"] = "application/json";
+  }
+  if (csrfToken) {
+    h["x-csrf-token"] = csrfToken;
+  }
+  return h;
+}
+
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
     headers:
-      body === undefined ? undefined : { "content-type": "application/json" },
+      body === undefined && !csrfToken
+        ? undefined
+        : mutationHeaders(body !== undefined),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
@@ -57,6 +82,46 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 
 function enc(s: string): string {
   return encodeURIComponent(s);
+}
+
+// --- аутентификация (Ф-3) ---
+
+export interface AuthStatus {
+  ok: boolean;
+  // login=false — сервер без AI_WEB_PASSWORD (защита отключена);
+  // login=true  — требуется вход; ok отражает состояние текущей сессии.
+  login: boolean;
+  csrf: string;
+}
+
+// Статус аутентификации и CSRF-токен текущей (httpOnly) сессии.
+export async function authStatus(base: string): Promise<AuthStatus> {
+  const st = await req<AuthStatus>("GET", `${base}/api/auth`);
+  if (st.ok && st.csrf) {
+    setCSRF(st.csrf);
+  }
+  return st;
+}
+
+// Вход по паролю (AI_WEB_PASSWORD). Успех → httpOnly-сессия + CSRF.
+export async function login(
+  base: string,
+  password: string,
+): Promise<AuthStatus> {
+  const st = await req<AuthStatus>("POST", `${base}/api/login`, { password });
+  if (st.ok && st.csrf) {
+    setCSRF(st.csrf);
+  }
+  return st;
+}
+
+// Выход: уничтожает сессию на сервере и сбрасывает локальный CSRF.
+export async function logout(base: string): Promise<void> {
+  try {
+    await req<{ ok: boolean }>("POST", `${base}/api/logout`, {});
+  } finally {
+    clearCSRF();
+  }
 }
 
 // --- проекты ---
@@ -153,13 +218,26 @@ export async function listBugs(
 
 // --- приёмка (Ф-2-3) ---
 
-// Дифф предложенных изменений: для git-проектов unified-дифф строкой,
-// для остальных — списки добавленных/изменённых/удалённых файлов.
+// Дифф предложенных изменений: для git-проектов — список файлов (метаданные,
+// Ф-3: ленивая загрузка; патч файла — через projectDiffFile); для остальных —
+// списки добавленных/изменённых/удалённых файлов.
 export async function projectDiff(
   base: string,
   project: string,
 ): Promise<DiffView> {
   return req<DiffView>("GET", `${base}/api/projects/${enc(project)}/diff`);
+}
+
+// Патч конкретного файла git-диффа (ленивая загрузка, Ф-3).
+export async function projectDiffFile(
+  base: string,
+  project: string,
+  path: string,
+): Promise<DiffFileView> {
+  return req<DiffFileView>(
+    "GET",
+    `${base}/api/projects/${enc(project)}/diff?file=${enc(path)}`,
+  );
 }
 
 // Принятие git-проекта: коммит + push + создание MR/PR через фордж.

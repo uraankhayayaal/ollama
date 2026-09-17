@@ -186,8 +186,10 @@ func TestGitProjectNameFromURLs(t *testing.T) {
 }
 
 func TestGetDiffGitProject(t *testing.T) {
+	const raw = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n-старая\n+строка\n+nовая\n" +
+		"diff --git a/f.go b/f.go\nnew file mode 100644\n--- /dev/null\n+++ b/f.go\n@@ -0,0 +1 @@\n+package f\n"
 	git := &fakeGit{starts: map[string]string{
-		"git diff main": "--- a/x\n+++ b/x\n+строка\n",
+		"git diff main": raw,
 	}}
 	srv, handler, _ := newTestServerGit(t, git, nil)
 	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
@@ -198,15 +200,68 @@ func TestGetDiffGitProject(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET diff: %d, body: %s", rec.Code, rec.Body.String())
 	}
-	var out map[string]any
+	var out struct {
+		Kind   string `json:"kind"`
+		Branch string `json:"branch"`
+		Base   string `json:"base"`
+		Remote string `json:"remote"`
+		Files  []struct {
+			Path    string `json:"path"`
+			Status  string `json:"status"`
+			Added   int    `json:"added"`
+			Deleted int    `json:"deleted"`
+		} `json:"files"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out["kind"] != "git" || out["branch"] != "ai/myrepo" || out["base"] != "main" {
+	if out.Kind != "git" || out.Branch != "ai/myrepo" || out.Base != "main" {
 		t.Fatalf("diff meta: %+v", out)
 	}
-	if !strings.Contains(out["diff"].(string), "+строка") {
-		t.Fatalf("diff текст: %q", out["diff"])
+	if len(out.Files) != 2 {
+		t.Fatalf("файлов = %+v, want 2", out.Files)
+	}
+	if out.Files[0].Path != "x" || out.Files[0].Status != "modified" ||
+		out.Files[0].Added != 2 || out.Files[0].Deleted != 1 {
+		t.Fatalf("файл x: %+v", out.Files[0])
+	}
+	if out.Files[1].Path != "f.go" || out.Files[1].Status != "added" || out.Files[1].Added != 1 {
+		t.Fatalf("файл f.go: %+v", out.Files[1])
+	}
+
+	// Ленивая загрузка: патч конкретного файла.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/projects/myrepo/diff?file=f.go", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET diff?file: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var fout struct {
+		Kind  string `json:"kind"`
+		Path  string `json:"path"`
+		Patch string `json:"patch"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &fout); err != nil {
+		t.Fatal(err)
+	}
+	if fout.Path != "f.go" || !strings.Contains(fout.Patch, "+package f") ||
+		!strings.Contains(fout.Patch, "+++ b/f.go") {
+		t.Fatalf("патч файла: %+v", fout)
+	}
+}
+
+func TestGetDiffGitProjectUnknownFileNotFound(t *testing.T) {
+	git := &fakeGit{starts: map[string]string{
+		"git diff main": "--- a/x\n+++ b/x\n+строка\n",
+	}}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/projects/myrepo/diff?file=missing.go", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("diff?file=missing: %d, want 404", rec.Code)
 	}
 }
 

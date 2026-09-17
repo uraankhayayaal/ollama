@@ -20,6 +20,10 @@ type EventType string
 const (
 	// TypeMessage — текст модели (роль assistant).
 	TypeMessage EventType = "message"
+	// TypeMessageDelta — фрагмент потокового ответа модели (стриминг, Ф-3).
+	// Сервер транслирует его в WS как type=chat_delta; итоговое сообщение
+	// приходит обычным TypeMessage, поэтому дельты в историю чата не пишутся.
+	TypeMessageDelta EventType = "message_delta"
 	// TypeToolStart — начало выполнения инструмента.
 	TypeToolStart EventType = "tool_start"
 	// TypeToolResult — результат выполнения инструмента.
@@ -29,21 +33,27 @@ const (
 // Event — событие агентного цикла для трансляции в Web UI.
 type Event struct {
 	Type      EventType `json:"type"`
-	Agent     string    `json:"agent,omitempty"`     // имя агента (через WithAgent)
-	Role      string    `json:"role,omitempty"`      // assistant
-	Content   string    `json:"content,omitempty"`   // текст ответа модели
-	Tool      string    `json:"tool,omitempty"`      // имя инструмента
-	Arguments string    `json:"arguments,omitempty"` // аргументы вызова (обрезаны)
-	Result    string    `json:"result,omitempty"`    // результат (обрезан)
-	OK        bool      `json:"ok"`                  // успешен ли результат инструмента
-	Truncated bool      `json:"truncated,omitempty"` // текст/результат обрезаны по лимиту
-	Time      time.Time `json:"time"`                // момент события (UTC)
+	Agent     string    `json:"agent,omitempty"`      // имя агента (через WithAgent)
+	Role      string    `json:"role,omitempty"`       // assistant
+	Content   string    `json:"content,omitempty"`    // текст ответа модели / потоковый фрагмент
+	StreamID  string    `json:"stream_id,omitempty"`  // идентификатор потока (для message_delta)
+	Tool      string    `json:"tool,omitempty"`       // имя инструмента
+	Arguments string    `json:"arguments,omitempty"`  // аргументы вызова (обрезаны)
+	Result    string    `json:"result,omitempty"`     // результат (обрезан)
+	OK        bool      `json:"ok"`                   // успешен ли результат инструмента
+	Truncated bool      `json:"truncated,omitempty"`  // текст/результат обрезаны по лимиту
+	Time      time.Time `json:"time"`                 // момент события (UTC)
 }
 
 // Reporter — назначение событий от runner.Generate. Небезопасен для вызовов
 // из нескольких горутин — runner вызывает последовательно.
 type Reporter interface {
+	// OnMessage — полный текст ответа модели (финальный).
 	OnMessage(role, content string, truncated bool)
+	// OnMessageDelta — потоковый фрагмент ответа модели (стриминг).
+	// streamID помечает поток, чтобы фронтенд связывал фрагменты с одним
+	// «плавающим» сообщением до прихода финального OnMessage.
+	OnMessageDelta(streamID, content string)
 	OnToolStart(tool, args string)
 	OnToolResult(tool, result string, ok bool)
 }
@@ -83,6 +93,11 @@ func (r *Router) OnMessage(role, content string, truncated bool) {
 		Content:   content,
 		Truncated: truncated,
 	})
+}
+
+// OnMessageDelta сообщает потоковый фрагмент ответа модели (стриминг).
+func (r *Router) OnMessageDelta(streamID, content string) {
+	r.emit(Event{Type: TypeMessageDelta, StreamID: streamID, Content: content})
 }
 
 // OnToolStart сообщает начало вызова инструмента.
