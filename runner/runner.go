@@ -457,6 +457,10 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// needRefills — сколько раз за цикл уже дозаправляли контекст по маркерам
 	// NEED_* (защита от петли «модель просит контекст → дозаправка → снова»).
 	needRefills := 0
+	// autoFixUsed — сколько подряд итераций авто-самоисправления (Ф-2) уже
+	// подмешано в этом эпизоде. Сбрасывается, когда раунд мутаций прошёл без
+	// диагностик; ограничен autoFixMaxRounds().
+	autoFixUsed := 0
 
 	// pendingRequired возвращает имя первого ещё не выполненного обязательного
 	// инструмента — им runner подсказывает модели в подсказках.
@@ -690,6 +694,35 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				ToolCallID: j.tc.ID,
 				Content:    string(result),
 			})
+		}
+
+		// Ф-2: авто-самоисправление. После раунда с мутациями файлов проверяем
+		// затронутые файлы через LspCheck и, если есть ошибки, подмешиваем
+		// СКРЫТЫЙ user-промпт с точными строками — модель правит код, не жгя
+		// раунды на перечитывание сырых логов. Такие же события в Web UI, как
+		// у обычного инструмента. Очередь затронутых файлов сбрасывается всегда.
+		if af, ok := agent.(AutoFixer); ok && autoFixEnabled() {
+			if rep != nil {
+				rep.OnToolStart("LspAutoFix", "диагностика файлов, затронутых раундом")
+			}
+			diags, hadMutation := af.LspAutoFix()
+			if rep != nil {
+				rep.OnToolResult("LspAutoFix", Truncate(strings.Join(diags, "\n"), 8000), !hadMutation || len(diags) == 0)
+			}
+			switch {
+			case !hadMutation:
+				// Ничего не менялось (только чтения) — проверять нечего.
+			case len(diags) == 0:
+				// Раунд мутаций без ошибок: эпизод закрыт, счётчик итераций
+				// сбрасываем (следующая поломка снова получит полный лимит).
+				autoFixUsed = 0
+			case autoFixUsed >= autoFixMaxRounds():
+				Debugf("RUNNER: раунд %d: авто-лечение: лимит итераций (%d) исчерпан, подсказки прекращены", round+1, autoFixUsed)
+			default:
+				autoFixUsed++
+				Debugf("RUNNER: раунд %d: авто-лечение: подмешиваю подсказку с %d диагностиками (%d/%d)", round+1, len(diags), autoFixUsed, autoFixMaxRounds())
+				messages = append(messages, Message{Role: "user", Content: autoFixMessage(diags, autoFixUsed, autoFixMaxRounds())})
+			}
 		}
 
 		// Защита от зацикливания: если какой-то вызов был повторён

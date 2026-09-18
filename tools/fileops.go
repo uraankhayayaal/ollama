@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -42,6 +43,13 @@ type FileOps struct {
 	WriteReadmeOnly bool
 	// written — счётчик записанных файлов (разделяется инструментами).
 	written int
+	// touched — относительные (slash) пути файлов, затронутых мутацией с
+	// момента последнего вызова LspAutoFix. Используется Ф-2 (авто-
+	// самоисправление): после раунда с записями раннер проверяет эти файлы
+	// LspCheck и подмешивает модели скрытый промпт при ошибках. Ведётся под
+	// touchedMu; сама мутация сериализуется пер-проектной блокировкой.
+	touched   []string
+	touchedMu sync.Mutex
 }
 
 // SetScope задаёт области работы для инструментов (нормализует записи через
@@ -148,6 +156,7 @@ func (ops *FileOps) writeLocked(name, content string) error {
 		return err
 	}
 	ops.written++
+	ops.recordTouched(full)
 	logging.Detailf("[WriteFiles] записано %q -> %q", name, full)
 	return nil
 }
@@ -181,6 +190,7 @@ func (ops *FileOps) appendToLocked(name, content string) error {
 	if _, err := f.WriteString(content); err != nil {
 		return err
 	}
+	ops.recordTouched(full)
 	logging.Detailf("[AppendFile] дополнен %q -> %q", name, full)
 	return nil
 }
@@ -283,6 +293,7 @@ func (ops *FileOps) removeLocked(name string) (map[string]string, error) {
 	if err := os.RemoveAll(full); err != nil {
 		return nil, err
 	}
+	ops.recordTouched(full)
 	return map[string]string{"path": name, "status": "success"}, nil
 }
 

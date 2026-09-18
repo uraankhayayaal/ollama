@@ -86,6 +86,7 @@ func (ops *FileOps) patchGoFunctionLocked(args map[string]any) ([]byte, error) {
 	if err := os.WriteFile(full, out, info.Mode()); err != nil {
 		return patchStatusError(fmt.Sprintf("не удалось записать %q: %v", params.TargetFile, err))
 	}
+	ops.recordTouched(full)
 	logging.Detailf("[PatchGoFunction] функция %q в %q заменена (receiver %q)",
 		params.FunctionName, params.TargetFile, params.Receiver)
 	return json.Marshal(map[string]string{
@@ -183,6 +184,7 @@ func (ops *FileOps) searchReplaceLocked(args map[string]any) ([]byte, error) {
 		res["patches"] = fmt.Sprintf("%d", len(f.Patches))
 		res["message"] = fmt.Sprintf("применено блоков SEARCH/REPLACE: %d", len(f.Patches))
 		result = append(result, res)
+		ops.recordTouched(full)
 		logging.Detailf("[SearchReplace] %q: применено %d блоков", f.Filename, len(f.Patches))
 	}
 
