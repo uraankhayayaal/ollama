@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // AgentResponse содержит ответ модели и все выполненные вызовы функций.
@@ -274,6 +275,59 @@ func toolFailMessage(toolName string, n int, required string) string {
 	return msg
 }
 
+// Параллельное выполнение инструментов (parallel tool calling).
+//
+// Модель может запросить НЕСКОЛЬКО вызовов за один раунд. Read-only
+// инструменты (List/ReadFiles/ReadMap и чтение доски) независимы и безопасны
+// для одновременного запуска — это заметно ускоряет цикл: главный боттлнек
+// агента-разработчика/лида — последовательное чтение многих файлов. Все
+// остальные инструменты выполняются строго последовательно в порядке вызова,
+// сохраняя прежнюю семантику (см. tools.IsParallelSafe и tools/parallel.go).
+//
+// Фича включается по умолчанию, отключается PARALLEL_TOOL_CALLS=0. Ширина
+// волны ограничивается PARALLEL_TOOL_MAX (0 — без ограничения).
+const (
+	defaultParallelMax     = 8
+	parallelToolCallsOnEnv = "PARALLEL_TOOL_CALLS"
+	parallelToolMaxOnEnv   = "PARALLEL_TOOL_MAX"
+)
+
+// parallelToolCallsEnabled сообщает, включено ли параллельное выполнение
+// независимых (read-only) инструментов одного раунда. По умолчанию — да;
+// выключается PARALLEL_TOOL_CALLS=0/false/off.
+func parallelToolCallsEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(parallelToolCallsOnEnv))) {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return true
+}
+
+// parallelToolMax — максимальная ширина параллельной волны read-only
+// инструментов (PARALLEL_TOOL_MAX). 0 или отрицательное значение — без
+// ограничения.
+func parallelToolMax() int {
+	if v := strings.TrimSpace(os.Getenv(parallelToolMaxOnEnv)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultParallelMax
+}
+
+// toolCallJob — подготовленный вызов инструмента раунда: аргументы уже
+// разобраны из JSON строки, к вызову готов.
+type toolCallJob struct {
+	tc   tools.ToolCall
+	args map[string]any
+}
+
+// toolOutcome — результат выполнения одного вызова инструмента.
+type toolOutcome struct {
+	result []byte
+	err    error
+}
+
 // toolResultFailed признаёт выполнение инструмента неудачным, если результат
 // помечен ошибкой ("status":"error"). Пустой результат ("status":"empty") —
 // неудача ТОЛЬКО для пишущих инструментов (WriteFiles и др.), где это
@@ -520,7 +574,13 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		messages = append(messages, Message{Role: "assistant", Content: reply.Content, ToolCalls: reply.ToolCalls})
 		allToolCalls = append(allToolCalls, reply.ToolCalls...)
 
-		for _, tc := range reply.ToolCalls {
+		// Готовим вызовы: разбираем аргументы и помечаем read-only инструменты,
+		// которые можно выполнить параллельно (независимые, без аргументов от
+		// результатов других вызовов).
+		jobs := make([]toolCallJob, len(reply.ToolCalls))
+		parallel := make([]bool, len(reply.ToolCalls))
+		nParallel := 0
+		for i, tc := range reply.ToolCalls {
 			Debugf("RUNNER: выполняю инструмент %q args=%s", tc.Name, Truncate(tc.Arguments, 500))
 
 			args, err := tools.ParseArguments(tc.Arguments)
@@ -528,28 +588,90 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				return nil, fmt.Errorf("разбор аргументов инструмента %s: %w", tc.Name, err)
 			}
 
-			callCounts[callSignature(tc.Name, args)]++
+			jobs[i] = toolCallJob{tc: tc, args: args}
+			if len(reply.ToolCalls) > 1 && parallelToolCallsEnabled() && tools.IsParallelSafe(tc.Name) {
+				parallel[i] = true
+				nParallel++
+			}
+		}
 
-			if rep != nil {
-				rep.OnToolStart(tc.Name, Truncate(tc.Arguments, 2000))
+		outcomes := make([]toolOutcome, len(jobs))
+
+		// Волна параллельных (read-only) вызовов: одно соединение к провайдеру
+		// уже потрачено, поэтому выигрыш — в одновременном выполнении чтений.
+		// Результаты собираются по индексу, порядок tool-сообщений ниже
+		// восстанавливается по порядку вызова в исходном сообщении модели.
+		if nParallel > 0 {
+			limit := parallelToolMax()
+			if limit < 1 {
+				limit = len(jobs)
+			}
+			Debugf("RUNNER: раунд %d: запускаю %d read-only вызовов параллельно (лимит волны %d)", round+1, nParallel, limit)
+
+			sem := make(chan struct{}, limit)
+			var wg sync.WaitGroup
+			for i := range jobs {
+				if !parallel[i] {
+					continue
+				}
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+
+					j := jobs[i]
+					if rep != nil {
+						rep.OnToolStart(j.tc.Name, Truncate(j.tc.Arguments, 2000))
+					}
+					result, err := agent.CallFunction(j.tc.Name, j.args)
+					outcomes[i] = toolOutcome{result: result, err: err}
+					if rep != nil {
+						rep.OnToolResult(j.tc.Name, Truncate(string(result), 8000), err == nil && !toolResultFailed(j.tc.Name, result))
+					}
+				}(i)
+			}
+			wg.Wait()
+
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("контекст отменён во время выполнения инструментов: %w", err)
+			}
+		}
+
+		// Последовательный проход в порядке вызова: read-only вызовы берут уже
+		// готовый результат волны, остальные выполняются как раньше — по одному.
+		// Учёт в callCounts/failCounts/requiredDone и история диалога идентичны
+		// последовательному исполнению; порядок tool-сообщений = порядок вызова.
+		for i, j := range jobs {
+			var (
+				result []byte
+				err    error
+			)
+			if parallel[i] {
+				result, err = outcomes[i].result, outcomes[i].err
+			} else {
+				if rep != nil {
+					rep.OnToolStart(j.tc.Name, Truncate(j.tc.Arguments, 2000))
+				}
+				result, err = agent.CallFunction(j.tc.Name, j.args)
+				if rep != nil {
+					rep.OnToolResult(j.tc.Name, Truncate(string(result), 8000), !toolResultFailed(j.tc.Name, result))
+				}
 			}
 
-			result, err := agent.CallFunction(tc.Name, args)
 			if err != nil {
-				Debugf("RUNNER: инструмент %q вернул ошибку: %v", tc.Name, err)
-				return nil, fmt.Errorf("выполнение инструмента %s: %w", tc.Name, err)
+				Debugf("RUNNER: инструмент %q вернул ошибку: %v", j.tc.Name, err)
+				return nil, fmt.Errorf("выполнение инструмента %s: %w", j.tc.Name, err)
 			}
 
-			if rep != nil {
-				rep.OnToolResult(tc.Name, Truncate(string(result), 8000), !toolResultFailed(tc.Name, result))
-			}
+			callCounts[callSignature(j.tc.Name, j.args)]++
 
-			Debugf("RUNNER: результат инструмента %q: %s", tc.Name, Truncate(string(result), 500))
+			Debugf("RUNNER: результат инструмента %q: %s", j.tc.Name, Truncate(string(result), 500))
 			// Считаем провалы инструмента НЕЗАВИСИМО от аргументов: если модель
 			// «перебирает» аргументы в цикле ошибок, сигнатурный определитель
 			// её не ловит, а счётчик по имени — ловит.
-			if toolResultFailed(tc.Name, result) {
-				failCounts[tc.Name]++
+			if toolResultFailed(j.tc.Name, result) {
+				failCounts[j.tc.Name]++
 			}
 			// Отмечаем успешность обязательных инструментов: ошибки/пустые
 			// результаты считаются неудачей, при которой нужна повторная подсказка.
@@ -557,15 +679,15 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				if requiredDone[gi] {
 					continue
 				}
-				if slices.Contains(grp, tc.Name) && !toolResultFailed(tc.Name, result) {
+				if slices.Contains(grp, j.tc.Name) && !toolResultFailed(j.tc.Name, result) {
 					requiredDone[gi] = true
-					Debugf("RUNNER: обязательный инструмент %q выполнен успешно", tc.Name)
+					Debugf("RUNNER: обязательный инструмент %q выполнен успешно", j.tc.Name)
 				}
 			}
 			messages = append(messages, Message{
 				Role:       "tool",
-				ToolName:   tc.Name,
-				ToolCallID: tc.ID,
+				ToolName:   j.tc.Name,
+				ToolCallID: j.tc.ID,
 				Content:    string(result),
 			})
 		}

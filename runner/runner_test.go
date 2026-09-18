@@ -5,6 +5,7 @@ import (
 	"ai/tools"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ollama/ollama/api"
@@ -12,7 +13,10 @@ import (
 
 // fakeAgent — минимальная реализация agents.Agent для тестов.
 // callResults задаёт результаты инструментов по очереди (последний повторяется).
+// Потокобезопасен: раунды тестов могут выполнять read-only инструменты
+// параллельно, и вызовы разных горутин мутируют общий callIdx.
 type fakeAgent struct {
+	mu             sync.Mutex
 	requiredTool   string
 	requiredGroups [][]string
 	callResults    [][]byte
@@ -30,6 +34,8 @@ func (f *fakeAgent) GetTools() []tools.ToolDefinition {
 }
 func (f *fakeAgent) GetToolsForOllama() []api.Tool { return nil }
 func (f *fakeAgent) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if len(f.callResults) == 0 {
 		return []byte("ok"), nil
 	}
