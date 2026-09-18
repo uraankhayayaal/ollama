@@ -1,6 +1,8 @@
 # План: LSP-интеграция — диагностика и навигация «глазами IDE»
 
-Статус: **Ф-1 и Ф-2 ВЫПОЛНЕНЫ**. Дальше — Ф-3 (нативный JSON-RPC клиент).
+Статус: **Ф-1, Ф-2 и Ф-3 ВЫПОЛНЕНЫ** (Ф-3 — только навигация; нативный
+`publishDiagnostics` сознательно отложен в Ф-4, `LspCheck` пока остаётся CLI).
+Дальше — Ф-4 (полировка и docs).
 Обновлять этот файл по мере выполнения (чекбоксы `[x]`), как в `PLAN-webui.md`.
 
 ## Решения пользователя (зафиксировано на обсуждении)
@@ -98,6 +100,7 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 | `LSP_MAX_FIX_ROUNDS` | `3` | Лимит скрытых итераций исправления на один мутирующий шаг |
 | `LSP_TIMEOUT` | `30s` | Таймаут одного запуска чекера / RPC для нативного клиента |
 | `LSP_SERVER` | `` | Явный путь к языковому серверу (Ф-3); пусто — автопоиск в PATH |
+| `LSP_MAX_LOCATIONS` | `50` | Максимум позиций (definition/references) в ответе Ф-3 |
 
 ## Архитектура (обзор)
 
@@ -132,7 +135,8 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 | `tools/lspcheck.go` | Инструмент `LspCheck` (Ф-1): детект стека, выбор чекера, `runCommand`, парсеры вывода (JSON/text), лимиты, формат результата |
 | `tools/lspcheck_test.go` | Hermetic-тесты: fake-чекер в `testdata/`, разбор gopls/tsc/pyright вывода, лимиты, degrade «чекер не найден» |
 | `tools/stackdetect/` (или функции в `tools`) | Детект стека по маркерам (переезд логики из `agents/acceptor/detect.go`, чтобы не было цикла импортов) |
-| `tools/lspclient/` | Нативный JSON-RPC клиент (Ф-3): запуск сервера, `initialize`, `didOpen/didChange`, `publishDiagnostics`, навигация |
+| `tools/lspclient/` | Нативный JSON-RPC клиент (Ф-3): запуск сервера, `initialize`, `didOpen/didChange`, навигация; `client.go`/`servers.go`/`manager.go` |
+| `tools/lspnav.go` | Инструменты `LspDefinition`/`LspReferences`/`LspHover` (Ф-3): degrade, лимиты, формат результата |
 | `runner/autofix.go` | Хук авто-лечения в цикле (Ф-2): затронутые файлы `FileOps.touched`, компактная диагностика, скрытый промпт, счётчик итераций |
 | `runner/autofix_test.go` | Тесты: мутация → авто-LspCheck → исправление → лимит итераций |
 | `docs/PLAN-lsp.md` | Этот план |
@@ -252,23 +256,26 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 - [x] Верификация Ф-2: `go build/vet/test` по перечню пакетов зелёные; регресс
       поведения без LSP (нет мутаций или `LSP_AUTO_FIX=0` — хук не срабатывает)
 
-### Ф-3: нативный Go JSON-RPC клиент
-- [ ] `tools/lspclient/`: запуск сервера (`gopls`/`typescript-language-server`/
+### Ф-3: нативный Go JSON-RPC клиент (навигация)
+- [x] `tools/lspclient/`: запуск сервера (`gopls`/`typescript-language-server`/
       `pyright-langserver`) как child process со `stdio`; `initialize` +
       capabilities (definition/references/hover); handshake, JSON-RPC framing
-      (Content-Length), реконнект при падении процесса; `LSP_TIMEOUT`
-- [ ] `didOpen` (текст файла из FS) / `didChange` — стрим `publishDiagnostics`
-      (severity 1=error, 2=warning) как источник для `LspCheck` (нативный
-      режим вместо CLI, тот же результат-формат)
-- [ ] `LspDefinition`/`LspReferences`/`LspHover` + регистрация в реестре;
-      добавление в набор лидов (`agents/backendlead`, `frontendlead`,
-      `architect`, `planner`) как НЕобязательных (graceful: сервер не найден →
-      «используй ReadMap/Need*»)
-- [ ] Зависимости: предпочтительно `go.lsp.dev/jsonrpc2` + `go.lsp.dev/protocol`
-      (+ тесты hermetic с фейковым stdio-процессом); при запрете новых deps —
-      минимальный hand-rolled JSON-RPC (~200 строк, но больше кода на поддержку)
-- [ ] Верификация Ф-3: hermetic-тесты клиента (fake-сервер на pipe), согласованность
-      формата с Ф-1, `-race`
+      (Content-Length через `go.lsp.dev/jsonrpc2`), перезапуск мёртвого клиента
+      в `Manager` (кэш по проекту+стеку), `LSP_TIMEOUT`
+- [x] `didOpen` (текст файла из FS) / `didChange` (при изменении файла) —
+      синхронизация документов для точной навигации. Стрим `publishDiagnostics`
+      как нативный источник диагностик сознательно отложен в Ф-4 (сейчас
+      `LspCheck` остаётся CLI, Ф-1)
+- [x] `LspDefinition`/`LspReferences`/`LspHover` (`tools/lspnav.go`) + регистрация
+      в реестре; добавлены разработчикам/QA и лидам (`agents/backendlead`,
+      `frontendlead`, `architect`, `planner`) как НЕобязательные
+      (graceful: сервер не найден → «используй ReadMap/ReadFiles»)
+- [x] Зависимости: `go.lsp.dev/jsonrpc2` + `go.lsp.dev/protocol` (+ тесты
+      hermetic: in-memory fake-сервер и реальный stdio-процесс); hand-rolled
+      минимальный JSON-RPC не понадобился
+- [x] Верификация Ф-3: hermetic-тесты клиента (`tools/lspclient/client_test.go`:
+      channel-stream-pair + stdio через тестовый бинарник), формат/лимиты/degrade
+      инструментов (`tools/lspnav_test.go`), `-race` для `tools/lspclient`/`tools`
 
 ### Ф-4: полировка и docs
 - [ ] `compose.yaml`: установка gopls/typescript-language-server/pyright в
@@ -300,7 +307,7 @@ go test . ./agents/... ./tools/ ./board/ ./runner/    # новые — под -r
 
 ## Как продолжить
 
-1. Открыть этот файл, взять первый незачёркнутый пункт (сейчас — Ф-3),
+1. Открыть этот файл, взять первый незачёркнутый пункт (сейчас — Ф-4),
    выполнить, отметить `[x]`, закоммитить (`docs/` + код).
 2. Ф-1 не требует сети/новых зависимостей: только Go + установленные чекеры
    (для hermetic-тестов — fake в `testdata/`).

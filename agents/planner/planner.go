@@ -10,7 +10,7 @@ import (
 )
 
 // plannerToolNames — минимальный набор инструментов для анализа состояния проекта.
-var plannerToolNames = []string{"List", "ReadFiles"}
+var plannerToolNames = []string{"List", "ReadFiles", tools.LspDefinition, tools.LspReferences, tools.LspHover}
 
 // Planner — агент-планировщик, разбивает запрос пользователя на поэтапный план.
 // Использует минимальный набор инструментов (List, ReadFiles) для анализа

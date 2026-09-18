@@ -25,6 +25,7 @@ import (
 var devToolNames = []string{
 	"WriteFiles", "ReadFiles", "ReadMap", "DeleteFiles", "Run", "List", "AppendFile",
 	"SearchReplace", "PatchGoFunction", tools.LspCheck,
+	tools.LspDefinition, tools.LspReferences, tools.LspHover,
 }
 
 // devBoardToolNames — инструменты общей Kanban-доски, добавляемые разработчику,

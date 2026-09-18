@@ -18,6 +18,7 @@ import (
 // консольной командой через Run.
 var qaToolNames = []string{
 	"WriteFiles", "ReadFiles", "DeleteFiles", "AppendFile", "List", "Run",
+	tools.LspDefinition, tools.LspReferences, tools.LspHover,
 }
 
 // qaBoardToolNames — инструменты общей Kanban-доски, добавляемые

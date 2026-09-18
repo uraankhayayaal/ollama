@@ -20,6 +20,7 @@ import (
 // НЕ пишет код и не запускает консольные команды.
 var frontendLeadToolNames = []string{
 	"List", "ReadFiles", "ReadMap", "WriteFiles", "AppendFile",
+	tools.LspDefinition, tools.LspReferences, tools.LspHover,
 	tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
 	tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask, tools.BoardSetTaskStatus,
 }

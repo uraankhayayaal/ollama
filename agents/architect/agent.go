@@ -38,6 +38,7 @@ const SubmitBacklogToolName = "submit_architecture_backlog"
 // архитектуру, вести эпики и проводить экспертизу багрепортов.
 var toolNames = []string{
 	"List", "ReadFiles",
+	tools.LspDefinition, tools.LspReferences, tools.LspHover,
 	tools.BoardListEpics, tools.BoardListTasks, tools.BoardListBugs, tools.BoardGetBug,
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
 	tools.BoardReviewBug,
