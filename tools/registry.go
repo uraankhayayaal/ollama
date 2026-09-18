@@ -96,6 +96,8 @@ func newTool(name string, deps Deps) Tool {
 		return &patchGoFunctionTool{ops: deps.FileOps}
 	case "SearchReplace":
 		return &searchReplaceTool{ops: deps.FileOps}
+	case LspCheck:
+		return &lspCheckTool{ops: deps.FileOps}
 	case "ReviewMr":
 		return &reviewMrTool{ses: deps.Session}
 	case "ApproveMr":

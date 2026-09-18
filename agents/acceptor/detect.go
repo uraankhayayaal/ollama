@@ -1,6 +1,7 @@
 package acceptor
 
 import (
+	"ai/stackdetect"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,32 +11,23 @@ import (
 )
 
 // Kind — тип проекта, определяемый по маркерам в корне директории.
-type Kind string
+// Производный тип поверх нейтрального пакета stackdetect (единый источник
+// детекта для приёмки и tools); методы (buildCommand/runCommand/…) работают на
+// нём, как и раньше.
+type Kind stackdetect.Kind
 
+// Константы типов проекта (значения из stackdetect).
 const (
-	KindGo      Kind = "go"
-	KindNode    Kind = "node"
-	KindPython  Kind = "python"
-	KindUnknown Kind = "unknown"
+	KindGo      Kind = Kind(stackdetect.KindGo)
+	KindNode    Kind = Kind(stackdetect.KindNode)
+	KindPython  Kind = Kind(stackdetect.KindPython)
+	KindUnknown Kind = Kind(stackdetect.KindUnknown)
 )
 
 // DetectKind определяет тип проекта по маркерам в корне директории.
-// Приоритет: go.mod → package.json → требовательные питон-маркеры.
+// Делегирует в stackdetect — общий источник детекта для всех пакетов.
 func DetectKind(dir string) Kind {
-	switch {
-	case hasFile(dir, "go.mod"):
-		return KindGo
-	case hasFile(dir, "package.json"):
-		return KindNode
-	case hasFile(dir, "requirements.txt"),
-		hasFile(dir, "pyproject.toml"),
-		hasFile(dir, "setup.py"),
-		hasFile(dir, "main.py"),
-		hasFile(dir, "app.py"):
-		return KindPython
-	default:
-		return KindUnknown
-	}
+	return Kind(stackdetect.DetectKind(dir))
 }
 
 // ProjectRoot — один обнаруживаемый проект (под)приёмки со своим типом.

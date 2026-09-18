@@ -1,7 +1,7 @@
 # План: LSP-интеграция — диагностика и навигация «глазами IDE»
 
-Статус: **ПЛАН**. Реализация по фазам, старт с Ф-1 (простой путь). Обновлять
-этот файл по мере выполнения (чекбоксы `[x]`), как в `PLAN-webui.md`.
+Статус: **Ф-1 ВЫПОЛНЕНА**. Дальше — Ф-2 (авто-самоисправление в раннере).
+Обновлять этот файл по мере выполнения (чекбоксы `[x]`), как в `PLAN-webui.md`.
 
 ## Решения пользователя (зафиксировано на обсуждении)
 
@@ -218,19 +218,22 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 ## Этапы и чеклист
 
 ### Ф-1: `LspCheck` (CLI-обёртки) — старт
-- [ ] `stackdetect` (или функции в `tools`): маркеры go.mod/package.json/
+- [x] `stackdetect` (или функции в `tools`): маркеры go.mod/package.json/
       requirements.txt/pyproject.toml + unit-тесты; `acceptor` переключён на него
-- [ ] `tools/lspcheck.go`: выбор чекера по стеку, `runCommand`, парсеры
+- [x] `tools/lspcheck.go`: выбор чекера по стеку, `runCommand`, парсеры
       (gopls-text, tsc-text, pyright-json, ruff-text), лимиты `LSP_MAX_DIAGS`/
       `LSP_MAX_OUTPUT`, формат результата `{checker, diagnostics[], skipped}`
-- [ ] регистрация в `tools/registry.go` (`newTool`) + добавление `LspCheck`
+- [x] регистрация в `tools/registry.go` (`newTool`) + добавление `LspCheck`
       в `devToolNames` (backend/frontend, опционально devops)
-- [ ] промпт разработчика (`agents/developer`): шаг «сборка упала → LspCheck →
+- [x] промпт разработчика (`agents/developer`): шаг «сборка упала → LspCheck →
       исправь по точным строкам»; degrade-инструкция «чекер не найден → Run»
-- [ ] Hermetic-тесты: fake-чекер в `testdata/` (отдаёт тексты gopls/tsc и
+- [x] Hermetic-тесты: fake-чекер в `testdata/` (отдаёт тексты gopls/tsc и
       JSON pyright), лимиты, сортировка/дедуп, degraded `skipped`
-- [ ] Верификация Ф-1: билд/вет/тесты (см. блок ниже), ручной прогон на
-      сломанном Go-проекте (gopls) и TS (tsc), если чекеры установлены
+- [x] Верификация Ф-1: билд/вет/тесты (см. блок ниже), ручной прогон на
+      сломанном проекте: TS (реальный tsc из PATH — 2 точные строки на
+      сломанном src/index.ts, пустые при зелёном) и Go (go vet fallback в
+      TestLSPResultGoReal). gopls/pyright/ruff на машине не установлены —
+      их ветки покрыты hermetic-тестами и degrade-подсказкой
 
 ### Ф-2: авто-самоисправление (пайплайн)
 - [ ] `FileOps.touched`: потокобезопасная очередь затронутых файлов (внутри
