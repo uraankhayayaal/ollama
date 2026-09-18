@@ -212,7 +212,7 @@ func TestSnapScopedFilesAndPrefixedEntries(t *testing.T) {
 
 func TestSnapDiffDetectsChanges(t *testing.T) {
 	dir := t.TempDir()
-	mkfile(t, filepath.Join(dir, "keep.go"), "package keep\n")      // не трогаем
+	mkfile(t, filepath.Join(dir, "keep.go"), "package keep\n")          // не трогаем
 	mkfile(t, filepath.Join(dir, "mod.go"), "package mod\nvar A = 1\n") // будем править
 
 	snap, err := NewSnap(dir)

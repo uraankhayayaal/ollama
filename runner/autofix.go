@@ -54,6 +54,22 @@ func autoFixMaxRounds() int {
 	return defaultAutoFixMax
 }
 
+// filterNewDiags возвращает только те строки диагностик, которых ещё не было
+// среди отправленных (sent), сохраняя порядок. Нужен, чтобы не подмешивать
+// модели один и тот же текст повторно между итерациями (токен-бюджет, Ф-4).
+func filterNewDiags(diags []string, sent map[string]bool) []string {
+	if len(diags) == 0 || len(sent) == 0 {
+		return diags
+	}
+	fresh := make([]string, 0, len(diags))
+	for _, d := range diags {
+		if !sent[d] {
+			fresh = append(fresh, d)
+		}
+	}
+	return fresh
+}
+
 // autoFixMessage составляет скрытый user-промпт «исправь код» с точными
 // строками ошибок и номером итерации.
 func autoFixMessage(diags []string, iteration, max int) string {

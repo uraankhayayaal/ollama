@@ -381,14 +381,14 @@ func renderFuncSignature(fset *token.FileSet, fd *ast.FuncDecl) string {
 // целиком считается контрактом и показывается; для function/class/const —
 // только открывающая строка (сигнатура).
 var (
-	reIfType        = regexp.MustCompile(`^(?:export\s+)?(?:declare\s+)?(?:interface|type|enum)\s+\w+`)
-	reFunc          = regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+\*?[\w$]+`)
-	reClass         = regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+[\w$]+`)
-	reConstDecl     = regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+[\w$]+\s*(?:=|:)`)
-	reArrowConst    = regexp.MustCompile(`^(?:export\s+)?const\s+[\w$]+\s*=\s*(?:async\s*)?\((?:[^()]|\([^()]*\))*\)\s*=>`)
-	reMethod        = regexp.MustCompile(`^(?:readonly\s+|private\s+|public\s+|protected\s+|static\s+|async\s+)*\*?[\w$]+(?:\([^)]*\)(?:\s*:\s*[\w<>\[\]|., ]+)?|=\s*\([^)]*\)\s*=>)\s*[{:]$`)
-	reProp          = regexp.MustCompile(`^(?:readonly\s+)?[\w$]+\??\s*:\s*[\w<>\[\]|.,'"]+[;,]?$`)
-	reTSImport      = regexp.MustCompile(`^import\s|^export\s+\*\s+from|^export\s*\{|^import\s*\(`)
+	reIfType     = regexp.MustCompile(`^(?:export\s+)?(?:declare\s+)?(?:interface|type|enum)\s+\w+`)
+	reFunc       = regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+\*?[\w$]+`)
+	reClass      = regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+[\w$]+`)
+	reConstDecl  = regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+[\w$]+\s*(?:=|:)`)
+	reArrowConst = regexp.MustCompile(`^(?:export\s+)?const\s+[\w$]+\s*=\s*(?:async\s*)?\((?:[^()]|\([^()]*\))*\)\s*=>`)
+	reMethod     = regexp.MustCompile(`^(?:readonly\s+|private\s+|public\s+|protected\s+|static\s+|async\s+)*\*?[\w$]+(?:\([^)]*\)(?:\s*:\s*[\w<>\[\]|., ]+)?|=\s*\([^)]*\)\s*=>)\s*[{:]$`)
+	reProp       = regexp.MustCompile(`^(?:readonly\s+)?[\w$]+\??\s*:\s*[\w<>\[\]|.,'"]+[;,]?$`)
+	reTSImport   = regexp.MustCompile(`^import\s|^export\s+\*\s+from|^export\s*\{|^import\s*\(`)
 )
 
 // skeletonScript строит карту TS/JS-файла: интерфейсы/типы/перечисления —

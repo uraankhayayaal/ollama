@@ -461,6 +461,9 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// подмешано в этом эпизоде. Сбрасывается, когда раунд мутаций прошёл без
 	// диагностик; ограничен autoFixMaxRounds().
 	autoFixUsed := 0
+	// sentDiags — диагностики, уже показанные модели в этом эпизоде: повторные
+	// строки не дублируются (токен-бюджет, Ф-4). Сбрасывается на чистом раунде.
+	sentDiags := make(map[string]bool)
 
 	// pendingRequired возвращает имя первого ещё не выполненного обязательного
 	// инструмента — им runner подсказывает модели в подсказках.
@@ -706,6 +709,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				rep.OnToolStart("LspAutoFix", "диагностика файлов, затронутых раундом")
 			}
 			diags, hadMutation := af.LspAutoFix()
+			fresh := filterNewDiags(diags, sentDiags)
 			if rep != nil {
 				rep.OnToolResult("LspAutoFix", Truncate(strings.Join(diags, "\n"), 8000), !hadMutation || len(diags) == 0)
 			}
@@ -714,14 +718,23 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				// Ничего не менялось (только чтения) — проверять нечего.
 			case len(diags) == 0:
 				// Раунд мутаций без ошибок: эпизод закрыт, счётчик итераций
-				// сбрасываем (следующая поломка снова получит полный лимит).
+				// сбрасываем (следующая поломка снова получит полный лимит),
+				// а память об отправленном — очищаем.
 				autoFixUsed = 0
+				sentDiags = make(map[string]bool)
+			case len(fresh) == 0:
+				// Все диагностики уже показаны модели ранее — не дублируем
+				// (токен-бюджет, Ф-4); подсказку не подмешиваем.
+				Debugf("RUNNER: раунд %d: авто-лечение: все %d диагностик уже отправлены, подсказка не нужна", round+1, len(diags))
 			case autoFixUsed >= autoFixMaxRounds():
 				Debugf("RUNNER: раунд %d: авто-лечение: лимит итераций (%d) исчерпан, подсказки прекращены", round+1, autoFixUsed)
 			default:
 				autoFixUsed++
-				Debugf("RUNNER: раунд %d: авто-лечение: подмешиваю подсказку с %d диагностиками (%d/%d)", round+1, len(diags), autoFixUsed, autoFixMaxRounds())
-				messages = append(messages, Message{Role: "user", Content: autoFixMessage(diags, autoFixUsed, autoFixMaxRounds())})
+				for _, d := range fresh {
+					sentDiags[d] = true
+				}
+				Debugf("RUNNER: раунд %d: авто-лечение: подмешиваю подсказку с %d диагностиками (%d/%d)", round+1, len(fresh), autoFixUsed, autoFixMaxRounds())
+				messages = append(messages, Message{Role: "user", Content: autoFixMessage(fresh, autoFixUsed, autoFixMaxRounds())})
 			}
 		}
 

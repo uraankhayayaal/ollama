@@ -229,11 +229,11 @@ func ComparePublicAPI(before, after *PublicAPISnapshot) []string {
 	}
 	afterSet := map[string]bool{}
 	for _, e := range after.Entries {
-		afterSet[e.Kind + " " + e.Name + " " + e.Sign] = true
+		afterSet[e.Kind+" "+e.Name+" "+e.Sign] = true
 	}
 	beforeSet := map[string]bool{}
 	for _, e := range before.Entries {
-		beforeSet[e.Kind + " " + e.Name + " " + e.Sign] = true
+		beforeSet[e.Kind+" "+e.Name+" "+e.Sign] = true
 	}
 	signByKey := map[string]string{}
 	for _, e := range before.Entries {

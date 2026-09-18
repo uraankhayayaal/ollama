@@ -130,6 +130,54 @@ func TestAutoFixRespectsMaxRounds(t *testing.T) {
 	}
 }
 
+// Повторные (идентичные) диагностики между итерациями не подмешиваются
+// повторно — токен-бюджет (Ф-4).
+func TestAutoFixDeduplicatesRepeatedDiags(t *testing.T) {
+	agent := &autoFixAgent{
+		diags: [][]string{
+			{"a.go:1:1: boom", "b.go:2:2: bang"},
+			{"a.go:1:1: boom", "b.go:2:2: bang"},
+			{"a.go:1:1: boom", "c.go:3:3: new"},
+		},
+		hasMut: []bool{true, true, true, true},
+	}
+	provider := &recordingProvider{fakeChatProvider: fakeChatProvider{replies: []*ModelReply{
+		{ToolCalls: []tools.ToolCall{{Name: "WriteFiles", Arguments: "{}"}}, FinishReason: "tool_calls"},
+	}}}
+	resp := runRecordingGenerate(t, agent, provider)
+
+	var prompts []string
+	for _, m := range resp.Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "вызвала ошибки компиляции") {
+			prompts = append(prompts, m.Content)
+		}
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("ожидали 2 подсказки (раунд без новых ошибок пропускается), got %d: %#v", len(prompts), prompts)
+	}
+	if n := strings.Count(strings.Join(prompts, "\n"), "a.go:1:1: boom"); n != 1 {
+		t.Fatalf("повторная диагностика показана %d раз(а), ожидали 1", n)
+	}
+	if n := strings.Count(strings.Join(prompts, "\n"), "c.go:3:3: new"); n != 1 {
+		t.Fatalf("новая диагностика не показана ровно один раз: %d", n)
+	}
+}
+
+// filterNewDiags возвращает только ещё не отправленные строки, сохраняя порядок.
+func TestFilterNewDiags(t *testing.T) {
+	sent := map[string]bool{"a": true, "b": true}
+	got := filterNewDiags([]string{"a", "c", "b", "d"}, sent)
+	if len(got) != 2 || got[0] != "c" || got[1] != "d" {
+		t.Fatalf("filterNewDiags = %#v", got)
+	}
+	if len(filterNewDiags(nil, sent)) != 0 {
+		t.Fatal("nil-вход должен дать пусто")
+	}
+	if got := filterNewDiags([]string{"x"}, nil); len(got) != 1 || got[0] != "x" {
+		t.Fatalf("без sent всё считается новым: %#v", got)
+	}
+}
+
 // LSP_AUTO_FIX=0 полностью выключает авто-лечение.
 func TestAutoFixDisabledByEnv(t *testing.T) {
 	t.Setenv("LSP_AUTO_FIX", "0")

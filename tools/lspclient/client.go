@@ -71,13 +71,80 @@ type Navigator interface {
 	Hover(ctx context.Context, file string, line, col int) (*Hover, error)
 }
 
+// Diagnostic — одна нативная диагностика (publishDiagnostics).
+type Diagnostic struct {
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Col      int    `json:"col"`
+	Severity string `json:"severity"` // error | warning
+	Message  string `json:"message"`
+}
+
+// DiagnosticsProvider — источник нативных диагностик по файлам (Ф-4).
+type DiagnosticsProvider interface {
+	Diagnostics(ctx context.Context, files []string) ([]Diagnostic, error)
+}
+
+var (
+	_ Navigator           = (*Client)(nil)
+	_ DiagnosticsProvider = (*Client)(nil)
+)
+
+// diagStore хранит последние publishDiagnostics по URI и будит ожидающих.
+type diagStore struct {
+	mu      sync.Mutex
+	diags   map[uri.URI][]protocol.Diagnostic
+	waiters map[uri.URI][]chan struct{}
+}
+
+func newDiagStore() *diagStore {
+	return &diagStore{diags: make(map[uri.URI][]protocol.Diagnostic), waiters: make(map[uri.URI][]chan struct{})}
+}
+
+func (s *diagStore) set(u uri.URI, ds []protocol.Diagnostic) {
+	s.mu.Lock()
+	s.diags[u] = ds
+	ws := s.waiters[u]
+	delete(s.waiters, u)
+	s.mu.Unlock()
+	for _, w := range ws {
+		close(w)
+	}
+}
+
+// wait регистрирует ожидание следующей публикации для URI.
+func (s *diagStore) wait(u uri.URI) chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch := make(chan struct{})
+	s.waiters[u] = append(s.waiters[u], ch)
+	return ch
+}
+
+func (s *diagStore) get(u uri.URI) []protocol.Diagnostic {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.diags[u]
+}
+
 // clientHandler — обработчик встречных запросов сервера. Встраивает
 // UnimplementedClient: все уведомления игнорируются (не рвут соединение), а
 // запросы конфигурации получают пустой ответ, чтобы gopls/tsserver не ждали.
-type clientHandler struct{ protocol.UnimplementedClient }
+// publishDiagnostics складываются в diagStore.
+type clientHandler struct {
+	protocol.UnimplementedClient
+	store *diagStore
+}
 
-func (clientHandler) Configuration(context.Context, *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
+func (h clientHandler) Configuration(context.Context, *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
 	return []protocol.LSPAny{}, nil
+}
+
+func (h clientHandler) PublishDiagnostics(_ context.Context, p *protocol.PublishDiagnosticsParams) error {
+	if h.store != nil {
+		h.store.set(p.URI, p.Diagnostics)
+	}
+	return nil
 }
 
 // Config — параметры запуска клиента.
@@ -100,6 +167,7 @@ type Client struct {
 	server    protocol.Server
 	cancel    context.CancelFunc
 	transport io.Closer
+	diags     *diagStore
 
 	mu      sync.Mutex
 	open    map[string]string // абсолютный путь -> последнее отправленное содержимое
@@ -169,8 +237,9 @@ func Start(ctx context.Context, cfg Config) (*Client, error) {
 // рукопожатие. Используется Start (stdio) и тестами (in-memory pair).
 func newClient(ctx context.Context, stream jsonrpc2.Stream, dir string, kind stackdetect.Kind) (*Client, error) {
 	dir = canonical(dir)
+	store := newDiagStore()
 	connCtx, cancel := context.WithCancel(context.Background())
-	_, conn, server := protocol.NewClient(connCtx, clientHandler{}, stream)
+	_, conn, server := protocol.NewClient(connCtx, clientHandler{store: store}, stream)
 
 	c := &Client{
 		dir:    dir,
@@ -178,6 +247,7 @@ func newClient(ctx context.Context, stream jsonrpc2.Stream, dir string, kind sta
 		conn:   conn,
 		server: server,
 		cancel: cancel,
+		diags:  store,
 		open:   make(map[string]string),
 	}
 	if err := c.initialize(ctx); err != nil {
@@ -294,6 +364,116 @@ func (c *Client) Hover(ctx context.Context, file string, line, col int) (*Hover,
 		out.EndCol = int(h.Range.End.Character) + 1
 	}
 	return out, nil
+}
+
+// diagItem — файл, ожидающий публикацию диагностик.
+type diagItem struct {
+	file string
+	u    uri.URI
+	ch   chan struct{}
+}
+
+// Diagnostics возвращает нативные диагностики по перечисленным файлам
+// (publishDiagnostics). Файлы открываются/синхронизируются, после чего клиент
+// ждёт публикации в пределах LSP_DIAG_WAIT; не дождавшись — отдаёт кэш.
+// Пути к файлам — относительно проекта; в Diagnostic.File — тоже.
+func (c *Client) Diagnostics(ctx context.Context, files []string) ([]Diagnostic, error) {
+	items := make([]diagItem, 0, len(files))
+	for _, f := range files {
+		abs, err := c.resolve(f)
+		if err != nil {
+			return nil, err
+		}
+		u := uri.File(abs)
+		items = append(items, diagItem{file: f, u: u, ch: c.diags.wait(u)})
+	}
+	// Открываем/синхронизируем все файлы: это инициирует публикацию.
+	for _, it := range items {
+		if _, err := c.ensureOpen(ctx, it.file); err != nil {
+			return nil, err
+		}
+	}
+
+	uris := make([]uri.URI, 0, len(items))
+	for _, it := range items {
+		uris = append(uris, it.u)
+	}
+	budget := time.After(diagWait())
+	for _, it := range items {
+		select {
+		case <-it.ch:
+		case <-ctx.Done():
+			return c.collectDiagnostics(uris), ctx.Err()
+		case <-budget:
+			return c.collectDiagnostics(uris), nil
+		}
+	}
+	return c.collectDiagnostics(uris), nil
+}
+
+func (c *Client) collectDiagnostics(uris []uri.URI) []Diagnostic {
+	out := make([]Diagnostic, 0)
+	for _, u := range uris {
+		rel, ok := c.relFile(u)
+		if !ok {
+			continue
+		}
+		for _, d := range c.diags.get(u) {
+			sev := diagSeverity(d.Severity)
+			if sev == "" {
+				continue // information/hint отбрасываем, как CLI-парсеры
+			}
+			out = append(out, Diagnostic{
+				File:     rel,
+				Line:     int(d.Range.Start.Line) + 1,
+				Col:      int(d.Range.Start.Character) + 1,
+				Severity: sev,
+				Message:  diagMessageText(d.Message),
+			})
+		}
+	}
+	return out
+}
+
+// diagMessageText извлекает текст сообщения диагностики (string | *MarkupContent).
+func diagMessageText(m protocol.InlayHintTooltip) string {
+	switch v := m.(type) {
+	case protocol.String:
+		return strings.TrimSpace(string(v))
+	case *protocol.MarkupContent:
+		if v == nil {
+			return ""
+		}
+		return strings.TrimSpace(v.Value)
+	default:
+		return ""
+	}
+}
+
+// diagSeverity переводит LSP severity в строку; info/hint — пусто.
+func diagSeverity(s protocol.DiagnosticSeverity) string {
+	switch s {
+	case protocol.DiagnosticSeverityError, 0:
+		// 0 (поле опущено) по спецификации трактуется как error.
+		return "error"
+	case protocol.DiagnosticSeverityWarning:
+		return "warning"
+	default:
+		return ""
+	}
+}
+
+// diagWait — пауза ожидания publishDiagnostics (LSP_DIAG_WAIT, по умолчанию 3s).
+func diagWait() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("LSP_DIAG_WAIT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 3 * time.Second
 }
 
 // Close отправляет shutdown/exit и гарантированно завершает процесс.

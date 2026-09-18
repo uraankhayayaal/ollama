@@ -211,6 +211,7 @@ func TestLSPResultGoReal(t *testing.T) {
 	if !commandAvailable("gopls") && !commandAvailable("go") {
 		t.Skip("нет go/gopls — пропускаем E2E")
 	}
+	t.Setenv("LSP_NATIVE", "0") // тест про CLI-ветку; нативная — в lspnative_test.go
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n\ngo 1.26\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() { undefined() }\n"), 0644)

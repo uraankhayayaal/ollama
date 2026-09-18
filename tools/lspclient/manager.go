@@ -38,6 +38,17 @@ func NewManager() *Manager {
 // Navigator возвращает живой клиент для проекта dir и стека kind, запуская
 // сервер при необходимости.
 func (m *Manager) Navigator(ctx context.Context, dir string, kind stackdetect.Kind) (Navigator, error) {
+	return m.Client(ctx, dir, kind)
+}
+
+// DiagnosticsProvider возвращает клиент как источник нативных диагностик.
+func (m *Manager) DiagnosticsProvider(ctx context.Context, dir string, kind stackdetect.Kind) (DiagnosticsProvider, error) {
+	return m.Client(ctx, dir, kind)
+}
+
+// Client возвращает живой клиент для проекта dir и стека kind, запуская
+// сервер при необходимости.
+func (m *Manager) Client(ctx context.Context, dir string, kind stackdetect.Kind) (*Client, error) {
 	dir = filepath.Clean(dir)
 	key := string(kind) + "|" + dir
 

@@ -112,36 +112,46 @@ func (ops *FileOps) LspCheck(args map[string]any) ([]byte, error) {
 		}), nil
 	}
 
-	cmd, checker, err := lspCheckerCommand(stack, proj, files)
-	if err != nil {
-		return lspJSON(map[string]any{
-			"status":      "skipped",
-			"checker":     checker,
-			"diagnostics": []lspDiagnostic{},
-			"message":     err.Error(),
-		}), nil
-	}
-
 	rel := ""
 	if proj != dir {
 		if r, rerr := filepath.Rel(dir, proj); rerr == nil {
 			rel = filepath.ToSlash(r)
 		}
 	}
+	// Пути файлов — от OutputDir; чекер и LSP запускаются из proj, поэтому
+	// переводим их в proj-относительные (для корневого проекта — без изменений).
+	projFiles := lspProjectFiles(dir, proj, files)
 
-	res, runErr := runCommand(cmd, proj)
-	if runErr != nil {
+	// Ф-4: если языковой сервер стека доступен, берём диагностики нативно
+	// (publishDiagnostics); иначе — прежний CLI-чекер (Ф-1).
+	ds, checker, output, runError, skipped := func() ([]lspDiagnostic, string, string, bool, string) {
+		if nds, handled := ops.lspNativeDiagnostics(proj, stack, projFiles); handled {
+			return sortDedupLSP(nds), "lsp", "", false, ""
+		}
+		cmd, ck, cerr := lspCheckerCommand(stack, proj, projFiles)
+		if cerr != nil {
+			return nil, ck, "", false, cerr.Error()
+		}
+		res, runErr := runCommand(cmd, proj)
+		if runErr != nil {
+			return nil, ck, "", true, "команда не запустилась: " + runErr.Error()
+		}
+		out := strings.TrimSpace(res["stdout"] + "\n" + res["stderr"])
+		return sortDedupLSP(parseLSPOutput(stack, out, dir)), ck, out, res["status"] == "error", ""
+	}()
+
+	if skipped != "" {
+		status := "skipped"
+		if runError {
+			status = "error"
+		}
 		return lspJSON(map[string]any{
-			"status":      "error",
+			"status":      status,
 			"checker":     checker,
 			"diagnostics": []lspDiagnostic{},
-			"message":     "команда не запустилась: " + runErr.Error(),
+			"message":     skipped,
 		}), nil
 	}
-
-	output := strings.TrimSpace(res["stdout"] + "\n" + res["stderr"])
-	ds := parseLSPOutput(stack, output, dir)
-	ds = sortDedupLSP(ds)
 
 	limits := lspLimits()
 	truncated := 0
@@ -179,7 +189,7 @@ func (ops *FileOps) LspCheck(args map[string]any) ([]byte, error) {
 			}
 		}
 	}
-	if len(ds) == 0 && res["status"] == "error" {
+	if len(ds) == 0 && runError {
 		// Команда упала, но точечных строк выдать не удалось (шумы, сборка
 		// модуля и т.п.) — честно отдаём шапку вывода с подсказкой.
 		msg := strings.TrimSpace(output)
@@ -355,6 +365,34 @@ func lspTscCommand(bin string, files []string) string {
 	args := []string{bin, "--noEmit", "--pretty", "false"}
 	args = append(args, files...)
 	return strings.Join(args, " ")
+}
+
+// lspProjectFiles переводит пути файлов из OutputDir-относительных в
+// proj-относительные (чекеры и LSP запускаются из директории проекта). Пути
+// вне proj отбрасываются; для корневого проекта список не меняется.
+func lspProjectFiles(dir, proj string, files []string) []string {
+	if len(files) == 0 {
+		return files
+	}
+	d := filepath.Clean(dir)
+	p := filepath.Clean(proj)
+	if filepath.ToSlash(d) == filepath.ToSlash(p) {
+		return files
+	}
+	var out []string
+	for _, f := range files {
+		abs := filepath.Join(d, filepath.FromSlash(f))
+		r, err := filepath.Rel(p, abs)
+		if err != nil {
+			continue
+		}
+		r = filepath.ToSlash(r)
+		if r == ".." || strings.HasPrefix(r, "../") {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // relArgs приводит относительные пути файлов к виду для запуска из dir

@@ -25,7 +25,8 @@ import (
 // позициями и записывает полученные didOpen/didChange.
 type fakeServer struct {
 	protocol.UnimplementedServer
-	root string
+	root   string
+	client protocol.Client
 
 	mu      sync.Mutex
 	opened  []string
@@ -36,10 +37,27 @@ func (s *fakeServer) Initialize(context.Context, *protocol.InitializeParams) (*p
 	return &protocol.InitializeResult{}, nil
 }
 
+// publish отправляет publishDiagnostics для файла (error + warning + info,
+// последний должен быть отфильтрован клиентом).
+func (s *fakeServer) publish(u uri.URI) {
+	if s.client == nil {
+		return
+	}
+	_ = s.client.PublishDiagnostics(context.Background(), &protocol.PublishDiagnosticsParams{
+		URI: u,
+		Diagnostics: []protocol.Diagnostic{
+			{Range: protocol.Range{Start: protocol.Position{Line: 1, Character: 4}}, Severity: protocol.DiagnosticSeverityError, Message: protocol.String("undefined: Foo")},
+			{Range: protocol.Range{Start: protocol.Position{Line: 2, Character: 0}}, Severity: protocol.DiagnosticSeverityWarning, Message: protocol.String("unused variable")},
+			{Range: protocol.Range{Start: protocol.Position{Line: 3, Character: 0}}, Severity: protocol.DiagnosticSeverityInformation, Message: protocol.String("info hint")},
+		},
+	})
+}
+
 func (s *fakeServer) DidOpen(_ context.Context, p *protocol.DidOpenTextDocumentParams) error {
 	s.mu.Lock()
 	s.opened = append(s.opened, p.TextDocument.URI.FsPath())
 	s.mu.Unlock()
+	s.publish(p.TextDocument.URI)
 	return nil
 }
 
@@ -47,6 +65,7 @@ func (s *fakeServer) DidChange(_ context.Context, p *protocol.DidChangeTextDocum
 	s.mu.Lock()
 	s.changed = append(s.changed, p.TextDocument.URI.FsPath())
 	s.mu.Unlock()
+	s.publish(p.TextDocument.URI)
 	return nil
 }
 
@@ -96,7 +115,8 @@ func TestClientNavigation(t *testing.T) {
 
 	left, right := jsonrpc2.NewChannelStreamPair(0)
 	srv := &fakeServer{root: dir}
-	_, sconn, _ := protocol.NewServer(context.Background(), srv, right)
+	_, sconn, sclient := protocol.NewServer(context.Background(), srv, right)
+	srv.client = sclient
 	defer sconn.Close()
 
 	ctx := context.Background()
@@ -161,7 +181,8 @@ func TestClientRejectsPathOutsideProject(t *testing.T) {
 	dir := writeProject(t)
 	left, right := jsonrpc2.NewChannelStreamPair(0)
 	srv := &fakeServer{root: dir}
-	_, sconn, _ := protocol.NewServer(context.Background(), srv, right)
+	_, sconn, sclient := protocol.NewServer(context.Background(), srv, right)
+	srv.client = sclient
 	defer sconn.Close()
 
 	c, err := newClient(context.Background(), left, dir, stackdetect.KindGo)
@@ -172,6 +193,38 @@ func TestClientRejectsPathOutsideProject(t *testing.T) {
 
 	if _, err := c.Definition(context.Background(), "../secret.go", 1, 1); err == nil {
 		t.Fatal("ожидалась ошибка для пути вне проекта")
+	}
+}
+
+// TestClientDiagnostics проверяет нативный сбор publishDiagnostics: severity
+// error/warning попадают в результат, info отфильтровывается, позиции 1-based.
+func TestClientDiagnostics(t *testing.T) {
+	dir := writeProject(t)
+	left, right := jsonrpc2.NewChannelStreamPair(0)
+	srv := &fakeServer{root: dir}
+	_, sconn, sclient := protocol.NewServer(context.Background(), srv, right)
+	srv.client = sclient
+	defer sconn.Close()
+
+	ctx := context.Background()
+	c, err := newClient(ctx, left, dir, stackdetect.KindGo)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	defer c.Close()
+
+	ds, err := c.Diagnostics(ctx, []string{"main.go"})
+	if err != nil {
+		t.Fatalf("Diagnostics: %v", err)
+	}
+	if len(ds) != 2 {
+		t.Fatalf("diagnostics = %+v", ds)
+	}
+	if ds[0].File != "main.go" || ds[0].Severity != "error" || ds[0].Line != 2 || ds[0].Col != 5 {
+		t.Fatalf("diag[0] = %+v", ds[0])
+	}
+	if ds[1].Severity != "warning" || ds[1].Line != 3 {
+		t.Fatalf("diag[1] = %+v", ds[1])
 	}
 }
 
@@ -186,7 +239,8 @@ func TestHelperProcess(t *testing.T) {
 	if wd, err := os.Getwd(); err == nil {
 		srv.root = wd
 	}
-	_, conn, _ := protocol.NewServer(context.Background(), srv, jsonrpc2.NewStream(rwc))
+	_, conn, sclient := protocol.NewServer(context.Background(), srv, jsonrpc2.NewStream(rwc))
+	srv.client = sclient
 	<-conn.Done()
 	os.Exit(0)
 }

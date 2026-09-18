@@ -1,8 +1,9 @@
 # План: LSP-интеграция — диагностика и навигация «глазами IDE»
 
-Статус: **Ф-1, Ф-2 и Ф-3 ВЫПОЛНЕНЫ** (Ф-3 — только навигация; нативный
-`publishDiagnostics` сознательно отложен в Ф-4, `LspCheck` пока остаётся CLI).
-Дальше — Ф-4 (полировка и docs).
+Статус: **Ф-1, Ф-2, Ф-3 и Ф-4 ВЫПОЛНЕНЫ.** `LspCheck` в нативном режиме берёт
+диагностики из `publishDiagnostics` (fallback — CLI-чекеры Ф-1), повторные
+диагностики между итерациями авто-лечения дедуплицируются (Ф-4). Опциональный
+пункт Ф-4 (интеграция с приёмкой/волнами плана) не делался — вынесен в бэклог.
 Обновлять этот файл по мере выполнения (чекбоксы `[x]`), как в `PLAN-webui.md`.
 
 ## Решения пользователя (зафиксировано на обсуждении)
@@ -98,9 +99,11 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 | `LSP_MAX_OUTPUT` | `4000` | Лимит суммарного объёма вывода (символов) |
 | `LSP_AUTO_FIX` | `1` | Авто-самоисправление после мутирующих инструментов (Ф-2) |
 | `LSP_MAX_FIX_ROUNDS` | `3` | Лимит скрытых итераций исправления на один мутирующий шаг |
-| `LSP_TIMEOUT` | `30s` | Таймаут одного запуска чекера / RPC для нативного клиента |
+| `LSP_TIMEOUT` | `15s` | Таймаут одного RPC нативного клиента (Ф-3) |
 | `LSP_SERVER` | `` | Явный путь к языковому серверу (Ф-3); пусто — автопоиск в PATH |
 | `LSP_MAX_LOCATIONS` | `50` | Максимум позиций (definition/references) в ответе Ф-3 |
+| `LSP_NATIVE` | `1` | Нативные `publishDiagnostics` как источник LspCheck (Ф-4); `0` — только CLI |
+| `LSP_DIAG_WAIT` | `3s` | Пауза ожидания публикации диагностик после открытия файлов (Ф-4) |
 
 ## Архитектура (обзор)
 
@@ -113,16 +116,16 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 └──────────────────────────────────┬────────────────────────────────┘
                                    ▼
   tools/ (реестр tools/registry.go)
-   ├─ LspCheck        (Ф-1) CLI-обёртки: gopls check / tsc --noEmit /
-   │                          pyright --outputjson → parse → фильтр
+   ├─ LspCheck        (Ф-1/Ф-4) CLI-обёртки ИЛИ нативные publishDiagnostics
+   │                          (LSP_NATIVE) → parse → фильтр → дедуп
    ├─ LspDefinition   (Ф-3) tools/lspclient/ — нативный JSON-RPC клиент
    ├─ LspReferences   (Ф-3)  (голос клиента одинаковый: FAQ-парсинг)
    └─ LspHover        (Ф-3)
-                                   │
-                           process/stdio
-                                   ▼
+                                    │
+                            process/stdio
+                                    ▼
                  gopls | typescript-language-server | pyright
-                 (установлены в dev-контейнере, см. compose.yaml)
+                 (ставятся на хост, см. readme; Dockerfile агента нет)
 ```
 
 Промпты агентов (`agents/developer`, `agents/planner`) дополняются шагом:
@@ -133,7 +136,8 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 | Пакет / файл | Назначение |
 |---|---|
 | `tools/lspcheck.go` | Инструмент `LspCheck` (Ф-1): детект стека, выбор чекера, `runCommand`, парсеры вывода (JSON/text), лимиты, формат результата |
-| `tools/lspcheck_test.go` | Hermetic-тесты: fake-чекер в `testdata/`, разбор gopls/tsc/pyright вывода, лимиты, degrade «чекер не найден» |
+| `tools/lspnative.go` | Нативные диагностики для `LspCheck` (Ф-4): `publishDiagnostics` через `lspclient`, `LSP_NATIVE`, fallback на CLI |
+| `tools/lspcheck_test.go` | Hermetic-тесты: fake-чекер, разбор gopls/tsc/pyright вывода, лимиты, degrade «чекер не найден» |
 | `tools/stackdetect/` (или функции в `tools`) | Детект стека по маркерам (переезд логики из `agents/acceptor/detect.go`, чтобы не было цикла импортов) |
 | `tools/lspclient/` | Нативный JSON-RPC клиент (Ф-3): запуск сервера, `initialize`, `didOpen/didChange`, навигация; `client.go`/`servers.go`/`manager.go` |
 | `tools/lspnav.go` | Инструменты `LspDefinition`/`LspReferences`/`LspHover` (Ф-3): degrade, лимиты, формат результата |
@@ -264,8 +268,7 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
       в `Manager` (кэш по проекту+стеку), `LSP_TIMEOUT`
 - [x] `didOpen` (текст файла из FS) / `didChange` (при изменении файла) —
       синхронизация документов для точной навигации. Стрим `publishDiagnostics`
-      как нативный источник диагностик сознательно отложен в Ф-4 (сейчас
-      `LspCheck` остаётся CLI, Ф-1)
+      реализован в Ф-4 как нативный источник LspCheck (см. ниже)
 - [x] `LspDefinition`/`LspReferences`/`LspHover` (`tools/lspnav.go`) + регистрация
       в реестре; добавлены разработчикам/QA и лидам (`agents/backendlead`,
       `frontendlead`, `architect`, `planner`) как НЕобязательные
@@ -278,12 +281,25 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
       инструментов (`tools/lspnav_test.go`), `-race` для `tools/lspclient`/`tools`
 
 ### Ф-4: полировка и docs
-- [ ] `compose.yaml`: установка gopls/typescript-language-server/pyright в
-      dev-контейнер (точные версии); заметка в readme про окружение
-- [ ] Токен-бюджет: проверить, что ЛСП-вывод не раздувает историю (`LSP_MAX_*`),
-      дедуп повторных диагностик между итерациями (не слать модель дважды одно)
+- [x] Нативные диагностики для `LspCheck`: `Diagnostic`/`DiagnosticsProvider` +
+      кэш публикаций (`diagStore`) в `tools/lspclient/client.go`
+      (`PublishDiagnostics` перехватывается, severity error/warning, сериализация
+      union-текста, ожидание `LSP_DIAG_WAIT` после открытия файлов);
+      `Manager.DiagnosticsProvider`/`Client`; `tools/lspnative.go` — нативный путь
+      в `LspCheck` (`LSP_NATIVE`, fallback на CLI при недоступном сервере),
+      перевод путей к подпроекту в `lspProjectFiles`
+- [x] Дедуп повторных диагностик между итерациями авто-лечения: `sentDiags`
+      в `runner/runner.go` + `filterNewDiags` (`runner/autofix.go`) — одно и то же
+      сообщение не слать модели дважды; сброс памяти на чистом раунде
+- [x] Docs: env `LSP_NATIVE`/`LSP_DIAG_WAIT` в `readme.md` и раздел окружения
+      (серверы ставятся на хост, см. readme; Dockerfile агента нет — пункт про
+      `compose.yaml` переосмыслен)
 - [ ] Опционально: интеграция с приёмкой (`agents/acceptor`) и с волнами плана —
-      ЛСП-замечания по scope шага; док-та в `readme.md` раздела env
+      ЛСП-замечания по scope шага. НЕ ДЕЛАЕТСЯ (решение пользователя), в бэклог
+- [x] Верификация Ф-4: `tools/lspnative_test.go` (native в LspCheck, degrade,
+      `LSP_NATIVE=0`, монорепо-префиксы), `TestClientDiagnostics`
+      (`tools/lspclient`), дедуп в `runner/autofix_test.go`; `-race` для
+      `tools/lspclient`/`tools`/`runner`
 
 ## Верификация
 
@@ -307,8 +323,9 @@ go test . ./agents/... ./tools/ ./board/ ./runner/    # новые — под -r
 
 ## Как продолжить
 
-1. Открыть этот файл, взять первый незачёркнутый пункт (сейчас — Ф-4),
-   выполнить, отметить `[x]`, закоммитить (`docs/` + код).
-2. Ф-1 не требует сети/новых зависимостей: только Go + установленные чекеры
-   (для hermetic-тестов — fake в `testdata/`).
-3. После фазы — верификация (блок выше) и краткая запись о сделанном.
+Все запланированные фазы (Ф-1…Ф-4) выполнены. Дальнейшие шаги (бэклог):
+1. Интеграция ЛСП-замечаний с приёмкой (`agents/acceptor`) и волнами плана —
+   точечные замечания по scope шага.
+2. Опциональные чекеры/серверы: установка на хост и прогон ручного E2E,
+   если на машине есть gopls/typescript-language-server/pyright.
+3. Обновление web/API при появлении новых параметров окружения.
