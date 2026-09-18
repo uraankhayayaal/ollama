@@ -14,13 +14,36 @@ import (
 	"testing"
 )
 
-type lspGateProvider struct{}
+// lspWriteProvider пишет файл в проект и возвращает пустой ответ — по
+// окончании снимок (snap) видит его как добавленный, гейт проверяет.
+type lspWriteProvider struct {
+	filename string
+	content  string
+}
 
-func (p *lspGateProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *lspWriteProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+	_, err := agent.CallFunction("WriteFiles", map[string]any{
+		"files": []map[string]any{
+			{"filename": p.filename, "content": p.content},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &runner.AgentResponse{}, nil
 }
 
-func (p *lspGateProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *lspWriteProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+	return &runner.ModelReply{}, nil
+}
+
+// lspNoopProvider не меняет ничего — гейт видит пустой diff и пропускается.
+type lspNoopProvider struct{}
+
+func (p *lspNoopProvider) Generate(_ context.Context, _ agents.Agent) (*runner.AgentResponse, error) {
+	return &runner.AgentResponse{}, nil
+}
+func (p *lspNoopProvider) ChatOnce(_ context.Context, _ agents.Agent, _ []runner.Message) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -95,45 +118,6 @@ func sameStrings(a, b []string) bool {
 	return true
 }
 
-// Шаг завершился успешно, но ошибка уровня scope — шаг упал, его область
-// откачена (созданные файлы удалены), план остановлен.
-func TestStepLSPGateFailsStep(t *testing.T) {
-	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "1")
-	ctx := context.Background()
-	name := "LSPGateFail"
-	root := projects.ProjectDir(name)
-	defer os.RemoveAll(filepath.Clean(root))
-
-	// Существующий до шага функционал.
-	if err := os.MkdirAll(filepath.Join(root, "server"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	writePlanFile(t, filepath.Join(root, "server", "keep.go"), "package main\nfunc Keep() {}\n")
-
-	plan := &Plan{
-		ProjectName: name,
-		Summary:     "гейт по scope",
-		Steps: []Step{{
-			ID: "g1", Agent: AgentBackendDev, Prompt: "сделай",
-			Description: "генерация", Scope: []string{"server"},
-		}},
-	}
-	withStepLSPFind(t, []tools.LSPDiag{
-		{File: "server/handler.go", Line: 3, Col: 5, Severity: "error", Message: "undeclared name: Foo"},
-	}, true)
-
-	exec := NewExecutor(&lspGateProvider{}, plan)
-	if err := exec.Run(ctx); err == nil {
-		t.Fatal("гейт с ошибкой в scope должен остановить план")
-	}
-	if exec.completed["g1"] {
-		t.Fatal("провалившийся гейтом шаг не может быть completed")
-	}
-	if _, err := os.Stat(filepath.Join(root, "server", "keep.go")); err != nil {
-		t.Fatalf("чужой функционал повреждён: %v", err)
-	}
-}
-
 func writePlanFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -144,42 +128,106 @@ func writePlanFile(t *testing.T, path, content string) {
 	}
 }
 
-// В scope чисто либо есть только предупреждения — шаг проходит, план успешен.
-func TestStepLSPGatePasses(t *testing.T) {
+// Субагент записал файл в scope — гейт видит ошибку → шаг падает, откат
+// удаляет файл, «чужой» функционал сохраняется.
+func TestStepLSPGateFailsOnChangedFile(t *testing.T) {
 	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "1")
 	ctx := context.Background()
-	name := "LSPGateOK"
+	name := "LSPGateFailChanged"
+	root := projects.ProjectDir(name)
+	defer os.RemoveAll(filepath.Clean(root))
+	writePlanFile(t, filepath.Join(root, "server", "keep.go"), "package main\nfunc Keep() {}\n")
+
+	plan := &Plan{
+		ProjectName: name,
+		Summary:     "гейт по изменённым",
+		Steps: []Step{{
+			ID: "g1", Agent: AgentBackendDev, Prompt: "сделай",
+			Description: "генерация", Scope: []string{"server"},
+		}},
+	}
+	withStepLSPFind(t, []tools.LSPDiag{
+		{File: "server/hack.go", Line: 1, Severity: "error", Message: "undeclared name: Foo"},
+	}, true)
+
+	exec := NewExecutor(&lspWriteProvider{filename: "server/hack.go", content: "package main\nfunc Hack() {}\n"}, plan)
+	if err := exec.Run(ctx); err == nil {
+		t.Fatal("гейт с ошибкой в изменённом файле должен остановить план")
+	}
+	if exec.completed["g1"] {
+		t.Fatal("провалившийся гейтом шаг не может быть completed")
+	}
+	if _, err := os.Stat(filepath.Join(root, "server", "hack.go")); err == nil {
+		t.Fatal("файл упавшего субагента должен быть откачен")
+	}
+	if _, err := os.Stat(filepath.Join(root, "server", "keep.go")); err != nil {
+		t.Fatalf("чужой функционал повреждён при откате: %v", err)
+	}
+}
+
+// Без изменений файлов — diff пуст, гейт пропускается (субагент ничего не менял).
+func TestStepLSPGateSkipsNoChanges(t *testing.T) {
+	ctx := context.Background()
+	name := "LSPGateSkipNoChanges"
 	root := projects.ProjectDir(name)
 	defer os.RemoveAll(filepath.Clean(root))
 	writePlanFile(t, filepath.Join(root, "main.go"), "package main\nfunc X() {}\n")
 
 	plan := &Plan{
 		ProjectName: name,
-		Summary:     "чистый гейт",
+		Summary:     "пустой diff",
 		Steps: []Step{{
 			ID: "g2", Agent: AgentBackendDev, Prompt: "сделай",
 			Description: "генерация", Scope: []string{"main.go"},
 		}},
 	}
-	withStepLSPFind(t, []tools.LSPDiag{
-		{File: "main.go", Line: 2, Severity: "warning", Message: "style"},
-	}, true)
+	withStepLSPFind(t, []tools.LSPDiag{{File: "x.go", Severity: "error", Message: "boom"}}, true)
 
-	exec := NewExecutor(&lspGateProvider{}, plan)
+	exec := NewExecutor(&lspNoopProvider{}, plan)
 	if err := exec.Run(ctx); err != nil {
-		t.Fatalf("предупреждения не должны останавливать гейт: %v", err)
+		t.Fatalf("без изменений гейт должен пропускать: %v", err)
 	}
 	if !exec.completed["g2"] {
 		t.Fatal("шаг должен быть completed")
 	}
 }
 
-// Гейт выключен — ошибки в scope не мешают шагу.
+// Предупреждения в изменённом файле — гейт не падает.
+func TestStepLSPGatePassesWarnings(t *testing.T) {
+	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "1")
+	ctx := context.Background()
+	name := "LSPGatePassWarnings"
+	root := projects.ProjectDir(name)
+	defer os.RemoveAll(filepath.Clean(root))
+	writePlanFile(t, filepath.Join(root, "main.go"), "package main\nfunc X() {}\n")
+
+	plan := &Plan{
+		ProjectName: name,
+		Summary:     "только ворнинги",
+		Steps: []Step{{
+			ID: "g3", Agent: AgentBackendDev, Prompt: "сделай",
+			Description: "генерация", Scope: []string{"."},
+		}},
+	}
+	withStepLSPFind(t, []tools.LSPDiag{
+		{File: "main.go", Line: 2, Severity: "warning", Message: "style"},
+	}, true)
+
+	exec := NewExecutor(&lspWriteProvider{filename: "app.go", content: "package main\nfunc App() {}\n"}, plan)
+	if err := exec.Run(ctx); err != nil {
+		t.Fatalf("предупреждения не должны останавливать гейт: %v", err)
+	}
+	if !exec.completed["g3"] {
+		t.Fatal("шаг должен быть completed")
+	}
+}
+
+// Гейт выключен — ошибки в изменённых файлах не мешают шагу.
 func TestStepLSPGateDisabled(t *testing.T) {
 	t.Setenv("LSP_STEP_GATE", "0")
 	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "1")
 	ctx := context.Background()
-	name := "LSPGateOff"
+	name := "LSPGateDisabled"
 	root := projects.ProjectDir(name)
 	defer os.RemoveAll(filepath.Clean(root))
 	writePlanFile(t, filepath.Join(root, "main.go"), "package main\nfunc X() {}\n")
@@ -188,19 +236,19 @@ func TestStepLSPGateDisabled(t *testing.T) {
 		ProjectName: name,
 		Summary:     "выключенный гейт",
 		Steps: []Step{{
-			ID: "g3", Agent: AgentBackendDev, Prompt: "сделай",
-			Description: "генерация", Scope: []string{"main.go"},
+			ID: "g4", Agent: AgentBackendDev, Prompt: "сделай",
+			Description: "генерация", Scope: []string{"."},
 		}},
 	}
 	withStepLSPFind(t, []tools.LSPDiag{
 		{File: "main.go", Line: 5, Severity: "error", Message: "boom"},
 	}, true)
 
-	exec := NewExecutor(&lspGateProvider{}, plan)
+	exec := NewExecutor(&lspWriteProvider{filename: "bad.go", content: "bad"}, plan)
 	if err := exec.Run(ctx); err != nil {
 		t.Fatalf("выключенный гейт не должен ронять план: %v", err)
 	}
-	if !exec.completed["g3"] {
+	if !exec.completed["g4"] {
 		t.Fatal("шаг должен быть completed")
 	}
 }
@@ -209,7 +257,7 @@ func TestStepLSPGateDisabled(t *testing.T) {
 func TestStepLSPGateNoServer(t *testing.T) {
 	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "1")
 	ctx := context.Background()
-	name := "LSPGateNoSrv"
+	name := "LSPGateNoServer"
 	root := projects.ProjectDir(name)
 	defer os.RemoveAll(filepath.Clean(root))
 	writePlanFile(t, filepath.Join(root, "main.go"), "package main\nfunc X() {}\n")
@@ -218,46 +266,48 @@ func TestStepLSPGateNoServer(t *testing.T) {
 		ProjectName: name,
 		Summary:     "нет сервера",
 		Steps: []Step{{
-			ID: "g4", Agent: AgentBackendDev, Prompt: "сделай",
-			Description: "генерация", Scope: []string{"main.go"},
+			ID: "g5", Agent: AgentBackendDev, Prompt: "сделай",
+			Description: "генерация", Scope: []string{"."},
 		}},
 	}
 	withStepLSPFind(t, nil, false)
 
-	exec := NewExecutor(&lspGateProvider{}, plan)
+	exec := NewExecutor(&lspWriteProvider{filename: "a.go", content: "package main\n"}, plan)
 	if err := exec.Run(ctx); err != nil {
 		t.Fatalf("без сервера гейт должен пропускать: %v", err)
 	}
-	if !exec.completed["g4"] {
+	if !exec.completed["g5"] {
 		t.Fatal("шаг должен быть completed")
 	}
 }
 
-// Scope не содержит исходников — файлов для проверки нет, гейт молчит.
-func TestStepLSPGateSkipsNoSource(t *testing.T) {
+// Изменённые файлы не являются исходниками (README, картинки) — гейт молчит.
+func TestStepLSPGateIgnoresNonSource(t *testing.T) {
+	t.Setenv("CODEGEN_ROLLBACK_ON_FAIL", "1")
 	ctx := context.Background()
-	name := "LSPGateNoSrc"
+	name := "LSPGateNonSource"
 	root := projects.ProjectDir(name)
 	defer os.RemoveAll(filepath.Clean(root))
-	writePlanFile(t, filepath.Join(root, "README.md"), "# test\n")
+	writePlanFile(t, filepath.Join(root, "main.go"), "package main\nfunc X() {}\n")
 
 	plan := &Plan{
 		ProjectName: name,
-		Summary:     "нет исходников",
+		Summary:     "не-исходники",
 		Steps: []Step{{
-			ID: "g5", Agent: AgentBackendDev, Prompt: "сделай",
-			Description: "генерация", Scope: []string{"README.md"},
+			ID: "g6", Agent: AgentBackendDev, Prompt: "сделай",
+			Description: "генерация", Scope: []string{"."},
 		}},
 	}
 	withStepLSPFind(t, []tools.LSPDiag{
 		{File: "x.go", Severity: "error", Message: "boom"},
 	}, true)
 
-	exec := NewExecutor(&lspGateProvider{}, plan)
+	// Субагент пишет только не-исходник — diff его видит, но gate отфильтрует.
+	exec := NewExecutor(&lspWriteProvider{filename: "docs/notes.md", content: "# notes\n"}, plan)
 	if err := exec.Run(ctx); err != nil {
-		t.Fatalf("без исходников в scope гейт не срабатывает: %v", err)
+		t.Fatalf("не-исходники не должны вызывать гейт: %v", err)
 	}
-	if !exec.completed["g5"] {
+	if !exec.completed["g6"] {
 		t.Fatal("шаг должен быть completed")
 	}
 }

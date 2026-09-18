@@ -159,6 +159,15 @@ type Config struct {
 	Env []string
 }
 
+// openDoc — последнее состояние документа, отправленное серверу (didOpen/
+// didChange), плюс сигнатура файла на диске (stat) для быстрого определения
+// «файл не менялся» без чтения содержимого при каждом обращении.
+type openDoc struct {
+	content string
+	size    int64
+	mod     time.Time
+}
+
 // Client — соединение с одним языковым сервером.
 type Client struct {
 	dir       string
@@ -170,8 +179,13 @@ type Client struct {
 	diags     *diagStore
 
 	mu      sync.Mutex
-	open    map[string]string // абсолютный путь -> последнее отправленное содержимое
+	open    map[string]openDoc // абсолютный путь -> последнее отправленное состояние
 	version int32
+
+	// pubAvg — экспоненциальное среднее времени ожидания публикаций после
+	// синхронизации: адаптивный бюджет для Diagnostics (не ждать LSP_DIAG_WAIT
+	// целиком, если сервер успевает быстрее).
+	pubAvg time.Duration
 
 	closeOnce sync.Once
 }
@@ -248,7 +262,7 @@ func newClient(ctx context.Context, stream jsonrpc2.Stream, dir string, kind sta
 		server: server,
 		cancel: cancel,
 		diags:  store,
-		open:   make(map[string]string),
+		open:   make(map[string]openDoc),
 	}
 	if err := c.initialize(ctx); err != nil {
 		_ = c.Close()
@@ -306,7 +320,7 @@ func (c *Client) Alive() bool {
 // Definition возвращает определения символа в позиции (file относительно
 // проекта, line/col 1-based).
 func (c *Client) Definition(ctx context.Context, file string, line, col int) ([]Location, error) {
-	abs, err := c.ensureOpen(ctx, file)
+	abs, _, err := c.ensureOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +337,7 @@ func (c *Client) Definition(ctx context.Context, file string, line, col int) ([]
 
 // References возвращает ссылки на символ в позиции.
 func (c *Client) References(ctx context.Context, file string, line, col int, includeDeclaration bool) ([]Location, error) {
-	abs, err := c.ensureOpen(ctx, file)
+	abs, _, err := c.ensureOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +355,7 @@ func (c *Client) References(ctx context.Context, file string, line, col int, inc
 
 // Hover возвращает информацию о символе в позиции.
 func (c *Client) Hover(ctx context.Context, file string, line, col int) (*Hover, error) {
-	abs, err := c.ensureOpen(ctx, file)
+	abs, _, err := c.ensureOpen(ctx, file)
 	if err != nil {
 		return nil, err
 	}
@@ -374,9 +388,12 @@ type diagItem struct {
 }
 
 // Diagnostics возвращает нативные диагностики по перечисленным файлам
-// (publishDiagnostics). Файлы открываются/синхронизируются, после чего клиент
-// ждёт публикации в пределах LSP_DIAG_WAIT; не дождавшись — отдаёт кэш.
-// Пути к файлам — относительно проекта; в Diagnostic.File — тоже.
+// (publishDiagnostics). Изменённые файлы открываются/синхронизируются, после
+// чего клиент ждёт публикации; неизменённые (сигнатура файла на диске та же) —
+// отдают кэш diagStore сразу, не дожидаясь сервера. Бюджет ожидания адаптивный
+// (см. diagBudget): измеренная на проекте латентность публикаций без лишнего
+// ожидания при быстрых серверах. Пути к файлам — относительно проекта;
+// в Diagnostic.File — тоже.
 func (c *Client) Diagnostics(ctx context.Context, files []string) ([]Diagnostic, error) {
 	items := make([]diagItem, 0, len(files))
 	for _, f := range files {
@@ -387,10 +404,15 @@ func (c *Client) Diagnostics(ctx context.Context, files []string) ([]Diagnostic,
 		u := uri.File(abs)
 		items = append(items, diagItem{file: f, u: u, ch: c.diags.wait(u)})
 	}
-	// Открываем/синхронизируем все файлы: это инициирует публикацию.
+	// Открываем/синхронизируем файлы: это инициирует публикацию. Ожидание нужно
+	// только там, где реально ушли didOpen/didChange; у неизменённых файлов
+	// waiter не используется и отдаётся кэш.
+	pending := make([]diagItem, 0, len(items))
 	for _, it := range items {
-		if _, err := c.ensureOpen(ctx, it.file); err != nil {
+		if _, changed, err := c.ensureOpen(ctx, it.file); err != nil {
 			return nil, err
+		} else if changed {
+			pending = append(pending, it)
 		}
 	}
 
@@ -398,15 +420,22 @@ func (c *Client) Diagnostics(ctx context.Context, files []string) ([]Diagnostic,
 	for _, it := range items {
 		uris = append(uris, it.u)
 	}
-	budget := time.After(diagWait())
-	for _, it := range items {
-		select {
-		case <-it.ch:
-		case <-ctx.Done():
-			return c.collectDiagnostics(uris), ctx.Err()
-		case <-budget:
-			return c.collectDiagnostics(uris), nil
+
+	// Пустых публикаций не ждём вообще. Публикации ждём с общим бюджетом
+	// (адаптивным), так что суммарное ожидание не превышает diagBudget.
+	if len(pending) > 0 {
+		budget := time.After(c.diagBudget())
+		start := time.Now()
+		for _, it := range pending {
+			select {
+			case <-it.ch:
+			case <-ctx.Done():
+				return c.collectDiagnostics(uris), ctx.Err()
+			case <-budget:
+				return c.collectDiagnostics(uris), nil
+			}
 		}
+		c.learnLatency(time.Since(start))
 	}
 	return c.collectDiagnostics(uris), nil
 }
@@ -476,6 +505,47 @@ func diagWait() time.Duration {
 	return 3 * time.Second
 }
 
+// minDiagBudget — нижняя граница адаптивного бюджета ожидания публикаций.
+const minDiagBudget = 250 * time.Millisecond
+
+// diagBudget возвращает бюджет ожидания publishDiagnostics для Diagnostics.
+// Адаптивный: если латентность публикаций на проекте уже измерена, бюджет —
+// 4x от неё (но не меньше minDiagBudget и не больше LSP_DIAG_WAIT); иначе —
+// LSP_DIAG_WAIT целиком.
+func (c *Client) diagBudget() time.Duration {
+	max := diagWait()
+	c.mu.Lock()
+	avg := c.pubAvg
+	c.mu.Unlock()
+	if avg <= 0 {
+		return max
+	}
+	b := avg * 4
+	if b < minDiagBudget {
+		b = minDiagBudget
+	}
+	if b > max {
+		b = max
+	}
+	return b
+}
+
+// learnLatency обновляет экспоненциальное среднее латентности публикаций.
+// Вызывается только когда все ожидаемые публикации реально пришли (без срабатывания
+// бюджета/контекста), чтобы срез не засорялся таймаутами.
+func (c *Client) learnLatency(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pubAvg <= 0 {
+		c.pubAvg = d
+	} else {
+		c.pubAvg = (c.pubAvg*3 + d) / 4
+	}
+}
+
 // Close отправляет shutdown/exit и гарантированно завершает процесс.
 func (c *Client) Close() error {
 	var err error
@@ -493,23 +563,43 @@ func (c *Client) Close() error {
 	return err
 }
 
-// ensureOpen открывает документ при первом обращении и синхронизирует
-// содержимое (didChange) при последующих изменениях. Возвращает абс. путь.
-func (c *Client) ensureOpen(ctx context.Context, file string) (string, error) {
+// ensureOpen открывает документ при первом обращении (didOpen) и синхронизирует
+// содержимое (didChange) при последующих изменениях. Возвращает абсолютный путь
+// и changed=true, если серверу реально ушёл didOpen/didChange (значит, стоит
+// ждать publishDiagnostics). Если сигнатура файла на диске (stat: размер+mtime)
+// не изменилась — содержимое не перечитывается и сервер не трогается
+// (changed=false); это основной путь для повторных вызовов Diagnostics по
+// штатным файлам.
+func (c *Client) ensureOpen(ctx context.Context, file string) (string, bool, error) {
 	abs, err := c.resolve(file)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", false, fmt.Errorf("файл не доступен: %w", err)
+	}
+
+	c.mu.Lock()
+	prev, seen := c.open[abs]
+	if seen && prev.size == info.Size() && prev.mod.Equal(info.ModTime()) {
+		// Стат не менялся — содержимое то же (или файл перезаписан так, что
+		// размер и время не изменились; редкий край читать нет смысла).
+		c.mu.Unlock()
+		return abs, false, nil
+	}
+	c.mu.Unlock()
+
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		return "", fmt.Errorf("файл не читается: %w", err)
+		return "", false, fmt.Errorf("файл не читается: %w", err)
 	}
 	content := string(data)
 	u := uri.File(abs)
 
 	c.mu.Lock()
-	prev, seen := c.open[abs]
-	c.open[abs] = content
+	prev, seen = c.open[abs]
+	c.open[abs] = openDoc{content: content, size: info.Size(), mod: info.ModTime()}
 	c.version++
 	version := c.version
 	c.mu.Unlock()
@@ -518,7 +608,8 @@ func (c *Client) ensureOpen(ctx context.Context, file string) (string, error) {
 	defer cancel()
 
 	if !seen {
-		return abs, c.server.DidOpen(cctx, &protocol.DidOpenTextDocumentParams{
+		// Первый didOpen для файла — содержимое открыто свежим чтением.
+		return abs, true, c.server.DidOpen(cctx, &protocol.DidOpenTextDocumentParams{
 			TextDocument: protocol.TextDocumentItem{
 				URI:        u,
 				LanguageID: languageFor(file, c.kind),
@@ -527,10 +618,12 @@ func (c *Client) ensureOpen(ctx context.Context, file string) (string, error) {
 			},
 		})
 	}
-	if prev == content {
-		return abs, nil
+	if prev.content == content {
+		// Стат изменился, но содержимое то же (например touch) — синхронизация
+		// не нужна, публикация не придёт.
+		return abs, false, nil
 	}
-	return abs, c.server.DidChange(cctx, &protocol.DidChangeTextDocumentParams{
+	return abs, true, c.server.DidChange(cctx, &protocol.DidChangeTextDocumentParams{
 		TextDocument: protocol.VersionedTextDocumentIdentifier{
 			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: u},
 			Version:                version,

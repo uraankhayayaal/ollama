@@ -597,10 +597,21 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 		e.auditFileChanges(ctx, step, snap)
 	}
 
-	// Scope-гейт ЛСП (Ф-5): нативные диагностики по области шага. Если
-	// субагент оставил код сломанным в scope — шаг считается упавшим (откат
-	// области). Сервер не установлен для стека → гейт неактивен (деградация).
-	if err := e.checkStepLSP(ctx, step, projects.ProjectDir(projectName), scope); err != nil {
+	// Scope-гейт ЛСП (Ф-5): нативные диагностики строго по изменённым шагом
+	// файлам. Список берётся из diff снимка (added+modified); без снимка
+	// (откат выключен) — фолбэк на развёрнутый scope. Изменений нет — гейт
+	// молчит. Если субагент оставил код сломанным в своей области — шаг
+	// считается упавшим (откат области). Сервер не установлен → гейт неактивен.
+	var gateFiles []string
+	if snap != nil {
+		added, modified, _, derr := snap.Diff()
+		if derr == nil {
+			gateFiles = append(added, modified...)
+		}
+	} else if len(scope) > 0 {
+		gateFiles = scopeSourceFiles(projects.ProjectDir(projectName), scope, maxScopeFiles)
+	}
+	if err := e.checkStepLSP(ctx, step, projects.ProjectDir(projectName), gateFiles); err != nil {
 		e.rollbackStep(projectName, step.ID, snap)
 		return nil, err
 	}

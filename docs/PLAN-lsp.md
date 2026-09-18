@@ -304,6 +304,22 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
       Accept в т.ч. монорепо-префикс), `agents/planner/lspgate_test.go`
       (fail/pass/disabled/no-server/no-source)
 - [x] Docs: env `LSP_STEP_GATE`/`ACCEPT_LSP` в `readme.md` + этот раздел
+- [x] Оптимизации:
+  - `Client.Diagnostics` ждёт publishDiagnostics только для реально изменённых
+    файлов (stat-based fast path), экономя ~3s на каждом вызове при неизменённых
+    файлах
+  - adaptive `diagBudget` на основе измеренной латентности публикаций
+  - singleflight запуска сервера: параллельные запросы к одному проекту не
+    стартуют N процессов gopls
+  - idle eviction: клиенты, не использовавшиеся дольше `LSP_IDLE_TTL`, закрываются
+  - scope-гейт шага теперь использует `snap.Diff()` (изменённые файлы), а не весь
+    scope — более точная и быстрая проверка, избегает ложных срабатываний
+    на старых ошибках
+  - `ensureOpen` использует stat (size+mtime) для быстрого определения
+    «файл не менялся» без чтения содержимого
+- [x] Тесты: `tools/lspclient/manager_test.go` (singleflight, idle eviction),
+      `agents/planner/lspgate_test.go` (gate on changed files)
+- [x] Docs: env `LSP_IDLE_TTL` в `readme.md` и этот раздел
 
 ### Ф-4: полировка и docs
 - [x] Нативные диагностики для `LspCheck`: `Diagnostic`/`DiagnosticsProvider` +

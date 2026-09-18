@@ -117,14 +117,15 @@ func scopeSourceFiles(projectDir string, scope []string, limit int) []string {
 	return out
 }
 
-// checkStepLSP выполняет scope-гейт шага: нативные ЛСП-диагностики строго по
-// области работы. Ошибок нет (или нет данных) — nil; иначе возвращает ошибку,
-// которую runOneStep трактует как падение шага (scope откатывается).
-func (e *Executor) checkStepLSP(ctx context.Context, step *Step, projectDir string, scope []string) error {
+// checkStepLSP выполняет scope-гейт шага по изменённым шагом файлам: нативные
+// ЛСП-диагностики строго по области работы (added+modified из snap.Diff, пути
+// относительно проекта). Ошибок нет (или нет данных) — nil; иначе возвращает
+// ошибку, которую runOneStep трактует как падение шага (scope откатывается).
+func (e *Executor) checkStepLSP(ctx context.Context, step *Step, projectDir string, changedFiles []string) error {
 	if !stepLSPGateEnabled() {
 		return nil
 	}
-	files := scopeSourceFiles(projectDir, scope, maxScopeFiles)
+	files := changedSourceFiles(changedFiles, maxScopeFiles)
 	if len(files) == 0 {
 		return nil
 	}
@@ -155,10 +156,29 @@ func (e *Executor) checkStepLSP(ctx context.Context, step *Step, projectDir stri
 		logging.Detailf("[%s] шаг %s: ЛСП по scope: замечаний-ошибок нет (предупреждений: %d)", agentLabel(step.Agent, step.Role), step.ID, warns)
 		return nil
 	}
-	msg := fmt.Sprintf("шаг %q: ЛСП-замечания по scope шага: %d ошибок — субагент оставил код сломанным в своей области", step.ID, errs)
+	msg := fmt.Sprintf("шаг %q: ЛСП-замечания по изменённым файлам шага: %d ошибок — субагент оставил код сломанным в своей области", step.ID, errs)
 	if len(examples) > 0 {
 		msg += ": " + strings.Join(examples, "; ")
 	}
 	logging.Warnf("[%s] %s", agentLabel(step.Agent, step.Role), msg)
 	return fmt.Errorf("%s", msg)
+}
+
+// changedSourceFiles оставляет из списка изменённых файлов только исходники
+// (расширение scopeSourceExt), дедуплицирует и ограничивает maxScopeFiles.
+func changedSourceFiles(files []string, limit int) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		f = filepath.ToSlash(strings.TrimSpace(f))
+		if f == "" || seen[f] || !scopeSourceExt[filepath.Ext(f)] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
