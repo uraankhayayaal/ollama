@@ -42,7 +42,10 @@ type Report struct {
 	Run     *RunResult     `json:"run,omitempty"`
 	Format  *CheckResult   `json:"format,omitempty"`
 	Analyze *CheckResult   `json:"analyze,omitempty"`
-	Issues  []Issue        `json:"issues"`
+	// LSP — результат точечной ЛСП-диагностики (нативные publishDiagnostics
+	// языкового сервера). Замечания попадают в Issues как analyze-ошибки.
+	LSP    *CheckResult `json:"lsp,omitempty"`
+	Issues []Issue      `json:"issues"`
 	// Projects — отчёты подпроектов монорепозитория (frontend/, server/).
 	// Заполняется, когда корень проекта не имеет файловых маркеров, а его
 	// прямые подкаталоги — имеют: каждый подпроект принимается отдельно.
@@ -389,6 +392,18 @@ func (r *Report) FixPrompt() string {
 			if r.Analyze.Output != "" {
 				fmt.Fprintf(&b, "Вывод анализатора:\n%s\n", r.Analyze.Output)
 			}
+		}
+	}
+
+	if r.LSP != nil {
+		b.WriteString("\nЛСП-диагностика: ")
+		if r.LSP.Skipped {
+			fmt.Fprintf(&b, "не выполнена (%s)\n", r.LSP.Output)
+		} else if r.LSP.OK {
+			fmt.Fprintf(&b, "замечаний нет (%s)\n", r.LSP.Tool)
+		} else {
+			fmt.Fprintf(&b, "ОШИБКИ (%s)\n", r.LSP.Tool)
+			// Точные строки уже в «Замечаниях» ниже — здесь не дублируем.
 		}
 	}
 

@@ -1,9 +1,10 @@
 # План: LSP-интеграция — диагностика и навигация «глазами IDE»
 
-Статус: **Ф-1, Ф-2, Ф-3 и Ф-4 ВЫПОЛНЕНЫ.** `LspCheck` в нативном режиме берёт
+Статус: **Ф-1, Ф-2, Ф-3, Ф-4 и Ф-5 ВЫПОЛНЕНЫ.** `LspCheck` в нативном режиме берёт
 диагностики из `publishDiagnostics` (fallback — CLI-чекеры Ф-1), повторные
-диагностики между итерациями авто-лечения дедуплицируются (Ф-4). Опциональный
-пункт Ф-4 (интеграция с приёмкой/волнами плана) не делался — вынесен в бэклог.
+диагностики между итерациями авто-лечения дедуплицируются (Ф-4). Ф-5: точечные
+ЛСП-замечания по scope шага — приёмка (`agents/acceptor`) и scope-гейт шагов
+плана (`agents/planner`) используют нативные диагностики (см. бэклог внизу).
 Обновлять этот файл по мере выполнения (чекбоксы `[x]`), как в `PLAN-webui.md`.
 
 ## Решения пользователя (зафиксировано на обсуждении)
@@ -104,6 +105,8 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 | `LSP_MAX_LOCATIONS` | `50` | Максимум позиций (definition/references) в ответе Ф-3 |
 | `LSP_NATIVE` | `1` | Нативные `publishDiagnostics` как источник LspCheck (Ф-4); `0` — только CLI |
 | `LSP_DIAG_WAIT` | `3s` | Пауза ожидания публикации диагностик после открытия файлов (Ф-4) |
+| `LSP_STEP_GATE` | `1` | Scope-гейт шага плана по нативным ЛСП-диагностикам (Ф-5); `0` — выключить |
+| `ACCEPT_LSP` | `1` | Этап ЛСП-диагностики при приёмке (Ф-5); `0` — выключить |
 
 ## Архитектура (обзор)
 
@@ -136,7 +139,9 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 | Пакет / файл | Назначение |
 |---|---|
 | `tools/lspcheck.go` | Инструмент `LspCheck` (Ф-1): детект стека, выбор чекера, `runCommand`, парсеры вывода (JSON/text), лимиты, формат результата |
-| `tools/lspnative.go` | Нативные диагностики для `LspCheck` (Ф-4): `publishDiagnostics` через `lspclient`, `LSP_NATIVE`, fallback на CLI |
+| `tools/lspnative.go` | Нативные диагностики для `LspCheck` (Ф-4): `publishDiagnostics` через `lspclient`, `LSP_NATIVE`, fallback на CLI; экспорт `LSPDiag`/`LSPDiagnostics` для приёмки и scope-гейта (Ф-5) |
+| `agents/acceptor/lsp.go` | Этап ЛСП-диагностики приёмки (Ф-5): `projectSourceFiles`, `runLSPCheck`, маппинг диагностик в analyze-замечания |
+| `agents/planner/lspgate.go` | Scope-гейт шага плана (Ф-5): `LSP_STEP_GATE`, `scopeSourceFiles`, `checkStepLSP` |
 | `tools/lspcheck_test.go` | Hermetic-тесты: fake-чекер, разбор gopls/tsc/pyright вывода, лимиты, degrade «чекер не найден» |
 | `tools/stackdetect/` (или функции в `tools`) | Детект стека по маркерам (переезд логики из `agents/acceptor/detect.go`, чтобы не было цикла импортов) |
 | `tools/lspclient/` | Нативный JSON-RPC клиент (Ф-3): запуск сервера, `initialize`, `didOpen/didChange`, навигация; `client.go`/`servers.go`/`manager.go` |
@@ -280,6 +285,26 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
       channel-stream-pair + stdio через тестовый бинарник), формат/лимиты/degrade
       инструментов (`tools/lspnav_test.go`), `-race` для `tools/lspclient`/`tools`
 
+### Ф-5: точечные ЛСП-замечания по scope шага (приёмка и волны плана)
+- [x] Экспорт нативного пути: `LSPDiag` + `FileOps.LSPDiagnostics(files)` в
+      `tools/lspnative.go` (без CLI-фолбэка; `handled=false` при недоступном
+      сервере) — единая точка входа для приёмки и scope-гейта
+- [x] Приёмка (`agents/acceptor`): конфиг `CheckLSP` (env `ACCEPT_LSP`, default
+      on), этап приёмки `runLSPCheck` (`agents/acceptor/lsp.go`) — исходники
+      проекта через `projectSourceFiles`, диагностики как analyze-замечания
+      (error → reject, warning нет), поле `Report.LSP`, сводка/FixPrompt,
+      префикс подкаталога в монорепо
+- [x] Волны плана (`agents/planner`): scope-гейт шага `checkStepLSP`
+      (`agents/planner/lspgate.go`, env `LSP_STEP_GATE`, default on) — нативные
+      диагностики строго по scope шага (файлы/директории, `scopeSourceFiles`);
+      error в scope → шаг падает, область откатывается; нет сервера/файлов —
+      гейт молчит (деградация)
+- [x] Тесты: `tools/lspnative_test.go` (`TestFileOpsLSPDiagnostics`),
+      `agents/acceptor/lsp_test.go` (scope-файлы, маппинг, degrade, E2E через
+      Accept в т.ч. монорепо-префикс), `agents/planner/lspgate_test.go`
+      (fail/pass/disabled/no-server/no-source)
+- [x] Docs: env `LSP_STEP_GATE`/`ACCEPT_LSP` в `readme.md` + этот раздел
+
 ### Ф-4: полировка и docs
 - [x] Нативные диагностики для `LspCheck`: `Diagnostic`/`DiagnosticsProvider` +
       кэш публикаций (`diagStore`) в `tools/lspclient/client.go`
@@ -294,8 +319,8 @@ ollama/open-webui/qdrant/redis, Dockerfile агента нет). Команды 
 - [x] Docs: env `LSP_NATIVE`/`LSP_DIAG_WAIT` в `readme.md` и раздел окружения
       (серверы ставятся на хост, см. readme; Dockerfile агента нет — пункт про
       `compose.yaml` переосмыслен)
-- [ ] Опционально: интеграция с приёмкой (`agents/acceptor`) и с волнами плана —
-      ЛСП-замечания по scope шага. НЕ ДЕЛАЕТСЯ (решение пользователя), в бэклог
+- [x] Интеграция с приёмкой (`agents/acceptor`) и с волнами плана — ЛСП-замечания
+      по scope шага (см. Ф-5 выше)
 - [x] Верификация Ф-4: `tools/lspnative_test.go` (native в LspCheck, degrade,
       `LSP_NATIVE=0`, монорепо-префиксы), `TestClientDiagnostics`
       (`tools/lspclient`), дедуп в `runner/autofix_test.go`; `-race` для
@@ -323,9 +348,7 @@ go test . ./agents/... ./tools/ ./board/ ./runner/    # новые — под -r
 
 ## Как продолжить
 
-Все запланированные фазы (Ф-1…Ф-4) выполнены. Дальнейшие шаги (бэклог):
-1. Интеграция ЛСП-замечаний с приёмкой (`agents/acceptor`) и волнами плана —
-   точечные замечания по scope шага.
-2. Опциональные чекеры/серверы: установка на хост и прогон ручного E2E,
+Запланированные фазы (Ф-1…Ф-5) выполнены. Дальнейшие шаги (бэклог):
+1. Опциональные чекеры/серверы: установка на хост и прогон ручного E2E,
    если на машине есть gopls/typescript-language-server/pyright.
-3. Обновление web/API при появлении новых параметров окружения.
+2. Обновление web/API при появлении новых параметров окружения.

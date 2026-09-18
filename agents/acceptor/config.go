@@ -44,6 +44,11 @@ type Config struct {
 	// Находки анализатора — ошибки: ведут к вердикту reject. По умолчанию true.
 	CheckAnalyze bool
 
+	// CheckLSP — выполнять ли точечную ЛСП-диагностику (нативные
+	// publishDiagnostics языкового сервера). Замечания ЛСП — analyze-ошибки:
+	// ведут к reject. Сервер не установлен — проверка пропускается. По умолчанию true.
+	CheckLSP bool
+
 	// FormatCmd — команда проверки стилизатора. Пустая — автодетект по типу
 	// проекта. Задаётся ACCEPT_FORMAT_CMD.
 	FormatCmd string
@@ -79,6 +84,7 @@ func DefaultConfig() Config {
 		CheckFormat:    true,
 		AutoFormat:     true,
 		CheckAnalyze:   true,
+		CheckLSP:       true,
 		InstallDeps:    true,
 		InstallTimeout: 5 * time.Minute,
 		MaxLog:         6000,
@@ -121,6 +127,9 @@ func LoadConfig() Config {
 	}
 	if v := os.Getenv("ACCEPT_ANALYZE"); v != "" {
 		cfg.CheckAnalyze = parseBool(v, true)
+	}
+	if v := os.Getenv("ACCEPT_LSP"); v != "" {
+		cfg.CheckLSP = parseBool(v, true)
 	}
 	if v := os.Getenv("ACCEPT_BUILD_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

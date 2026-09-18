@@ -241,6 +241,20 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 		logging.Detailf("[приёмка] %s: анализатор %q -> %s", rep.Project, analyzeCmd, formatStatus(rep.Analyze))
 	}
 
+	// Точечная ЛСП-диагностика (нативные publishDiagnostics языкового сервера):
+	// отдаёт планировщику точные файлы/строки, из которых строятся точечные
+	// scope для шагов исправления. Замечания — analyze-ошибки (reject);
+	// сервер не установлен — пропускаем без сбоя.
+	if cfg.CheckLSP {
+		lsp, lspIssues := runLSPCheck(dir)
+		rep.LSP = lsp
+		rep.Issues = append(rep.Issues, lspIssues...)
+		if !lsp.OK && !lsp.Skipped {
+			rep.Verdict = VerdictReject
+		}
+		logging.Detailf("[приёмка] %s: ЛСП-диагностика %q -> %s", rep.Project, lsp.Tool, formatStatus(lsp))
+	}
+
 	if strings.TrimSpace(runCmd) == "" {
 		// Точка входа не найдена (например, проект — библиотека): приёмка
 		// по сборке считается успешной, но помечаем предупреждение.
@@ -375,6 +389,16 @@ func summarize(rep *Report) string {
 			parts = append(parts, "анализ OK")
 		default:
 			parts = append(parts, "анализ: ОШИБКА")
+		}
+	}
+	if rep.LSP != nil {
+		switch {
+		case rep.LSP.Skipped:
+			parts = append(parts, "ЛСП: пропущен")
+		case rep.LSP.OK:
+			parts = append(parts, "ЛСП OK")
+		default:
+			parts = append(parts, "ЛСП: ОШИБКА")
 		}
 	}
 	n := len(rep.Issues)

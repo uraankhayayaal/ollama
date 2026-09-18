@@ -152,3 +152,49 @@ func TestLspProjectFiles(t *testing.T) {
 		t.Fatalf("для корня список не должен меняться: %#v", same)
 	}
 }
+
+// Экспортная точка входа LSPDiagnostics (используется приёмкой и scope-гейтом
+// шагов плана): маппинг в LSPDiag и флаг handled. CLI-чекер не участвует.
+func TestFileOpsLSPDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n\ngo 1.26\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package m\n"), 0644)
+
+	fake := &fakeDiagProvider{ds: []lspclient.Diagnostic{
+		{File: "a.go", Line: 2, Col: 3, Severity: "error", Message: "undefined: Foo"},
+		{File: "a.go", Line: 4, Severity: "warning", Message: "unused"},
+	}}
+	withDiagProvider(t, fake, nil)
+
+	ops := &FileOps{OutputDir: dir}
+	diags, checker, handled := ops.LSPDiagnostics([]string{"a.go"})
+	if !handled {
+		t.Fatal("провайдер доступен — handled должен быть true")
+	}
+	if checker != "lsp" {
+		t.Fatalf("checker = %q, want lsp", checker)
+	}
+	if len(diags) != 2 {
+		t.Fatalf("ожидали 2 диагностики, got %#v", diags)
+	}
+	d := diags[0]
+	if d.File != "a.go" || d.Line != 2 || d.Col != 3 || d.Severity != "error" || d.Message != "undefined: Foo" {
+		t.Fatalf("LSPDiag искажён: %+v", d)
+	}
+
+	// Ошибка провайдера → handled=false (деградация потребителя).
+	withDiagProvider(t, nil, errors.New("server down"))
+	if _, _, handled = ops.LSPDiagnostics([]string{"a.go"}); handled {
+		t.Fatal("при ошибке провайдера handled должен быть false")
+	}
+
+	// Без файлов и вне нативного режима — handled=false.
+	if _, _, handled = ops.LSPDiagnostics(nil); handled {
+		t.Fatal("без файлов handled должен быть false")
+	}
+	t.Setenv("LSP_NATIVE", "0")
+	withDiagProvider(t, fake, nil)
+	if _, _, handled = ops.LSPDiagnostics([]string{"a.go"}); handled {
+		t.Fatal("при LSP_NATIVE=0 handled должен быть false")
+	}
+}

@@ -597,6 +597,14 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 		e.auditFileChanges(ctx, step, snap)
 	}
 
+	// Scope-гейт ЛСП (Ф-5): нативные диагностики по области шага. Если
+	// субагент оставил код сломанным в scope — шаг считается упавшим (откат
+	// области). Сервер не установлен для стека → гейт неактивен (деградация).
+	if err := e.checkStepLSP(ctx, step, projects.ProjectDir(projectName), scope); err != nil {
+		e.rollbackStep(projectName, step.ID, snap)
+		return nil, err
+	}
+
 	// Цикл упёрся в лимит раундов (или модель обрезалась по лимиту токенов):
 	// сохраняем историю диалога в чекпоинт, чтобы следующий запуск с --resume
 	// продолжил шаг с раунда resp.Rounds+1, и останавливаем выполнение плана.
