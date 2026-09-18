@@ -271,3 +271,17 @@ func main() {
 
 TODO:
 1. Создать инструмент просмотра логов (приложения, контейнера)
+
+
+
+### YANDEX PROVIDER SETTING
+```json
+{
+  "baseURL": "https://ai.api.cloud.yandex.net/v1",
+  "apiKey": "Ваш_API_Ключ_Сервисного_Аккаунта",
+  "models": {
+    "qwen3-235b-a22b-fp8": "gpt://b1g4i7484no974fajk10/qwen3-235b-a22b-fp8/latest",
+    "qwen3.6-35b-a3b": "gpt://b1g4i7484no974fajk10/qwen3.6-35b-a3b/latest"
+  }
+}
+```

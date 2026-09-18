@@ -4,6 +4,9 @@
 // При нескольких файлах лога доступен переключатель (tabs). Строки с
 // уровнями WARN/ERROR/FATAL подсвечиваются. При открытии лог показывается
 // с последней записи (прокрутка к концу), скролл вверх ведёт к ранним.
+//
+// Real-time: строки из live-через WebSocket-_connection_ актуализируются
+// мгновенно. Потоковые строки приходят через props.logLines.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { projectLogs } from "@/Api";
@@ -14,6 +17,8 @@ export interface LogboardProps {
   project: string;
   showLogboard?: boolean;
   toggleLogboard?: () => void;
+  // Потоковые строки (из App.tsx): «имя файла → массив новых строк».
+  logLines: Map<string, string[]>;
 }
 
 const BASE = "";
@@ -24,9 +29,14 @@ export function Logboard(props: LogboardProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Контейнер строк лога: при открытии/смене файла прокручивается к концу,
-  // чтобы сразу видеть последнюю запись («скролл наоборот»: вверх — к ранним).
   const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  // Счётчик примонтированой строки на файл: при открытии/переключении =
+  // длина HTTP-содержимого, при получении новой строки — увеличивается.
+  const idx = useRef<Map<string, number>>(new Map());
+  // Текущие отрендеренные строки (HTTP + stream). Обновляется через state,
+  // чтобы React корректно ре-рендерал.
+  const [lines, setLines] = useState<string[]>([]);
 
   const scrollToBottom = useCallback(() => {
     const el = bodyRef.current;
@@ -53,13 +63,55 @@ export function Logboard(props: LogboardProps) {
     void load();
   }, [load]);
 
-  const active = (logs?.files ?? []).find((f) => f.name === selected);
-
-  // К концу лога при: появлении содержимого, смене выбранного файла и открытии
-  // панели (showLogboard=true) — даже если выбранный файл не менялся.
+  // Синхронизируем `lines` при открытии/смене файла.
   useEffect(() => {
-    scrollToBottom();
-  }, [active?.name, props.showLogboard, logs, scrollToBottom]);
+    if (!logs || !selected) return;
+    const entry = logs.files.find((f) => f.name === selected);
+    if (!entry) return;
+    const arr = entry.content.split("\n");
+    idx.current.set(selected, arr.length - 1);
+    setLines(arr);
+  }, [logs, selected]);
+
+  // Приход новой строки из stream — append к текущему файлу.
+  useEffect(() => {
+    if (!selected) return;
+    const cur = selected; // capture для сужения типа внутри callback
+    const stream = props.logLines.get(cur);
+    // На вход приходят ВСЕ потоковые строки всех файлов — берём только свой.
+    if (!stream) return;
+    setLines((prev) => {
+      const last = idx.current.get(selected) ?? prev.length - 1;
+      // Если stream меньше предыдущего — сброс (новый заход на тот же файл).
+      if (stream.length <= last) return prev;
+      const next = [...prev];
+      for (let i = last; i < stream.length; i++) {
+        const ln = stream[i]!;
+        next.push(ln);
+      }
+      idx.current.set(cur, stream.length - 1);
+      return next;
+    });
+  }, [selected, props.logLines]);
+
+  // Разрешить отложенный скролл (CSS-анимация drawer сдвигает layout —
+  // нужно дождаться обновления DOM, которое произойдёт после setState).
+  const [scrollPending, setScrollPending] = useState(false);
+
+  useEffect(() => {
+    if (lines.length > 0) {
+      // lines обновлены — откладываем скролл на следующий макет, когда
+      // container уже имеет вычисленную высоту.
+      setScrollPending(true);
+    }
+  }, [lines]);
+
+  useEffect(() => {
+    if (scrollPending) {
+      setScrollPending(false);
+      scrollToBottom();
+    }
+  }, [scrollPending, scrollToBottom]);
 
   return (
     <div className={"logboard" + (props.showLogboard === false ? " hidden" : "")}>
@@ -104,22 +156,26 @@ export function Logboard(props: LogboardProps) {
             </div>
           )}
 
-          {active && (
-            <div className="lgmeta">
-              <span>файл: <code>{active.name}</code></span>
-              <span>{fmtSize(active.size)}</span>
-              <span>изменён: {active.modified}</span>
-            </div>
-          )}
+          {selected && (() => {
+            const active = logs.files.find((f) => f.name === selected);
+            if (!active) return null;
+            return (
+              <div className="lgmeta">
+                <span>
+                  файл: <code>{active.name}</code>
+                </span>
+                <span>{fmtSize(active.size)}</span>
+                <span>изменён: {active.modified}</span>
+              </div>
+            );
+          })()}
 
           <div className="logbody" ref={bodyRef}>
-            {(active?.content ?? "")
-              .split("\n")
-              .map((ln, i) => (
-                <div key={i} className={lineCls(ln)}>
-                  {ln || "\u00a0"}
-                </div>
-              ))}
+            {lines.map((ln, i) => (
+              <div key={i} className={lineCls(ln)}>
+                {ln || "\u00a0"}
+              </div>
+            ))}
           </div>
         </>
       )}

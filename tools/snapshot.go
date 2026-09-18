@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/pmezard/go-difflib/difflib"
 )
 
 // Snap — снимок состояния директории проекта перед работой субагента.
@@ -310,4 +312,48 @@ func (s *Snap) Diff() (added, modified, removed []string, err error) {
 	sort.Strings(modified)
 	sort.Strings(removed)
 	return added, modified, removed, nil
+}
+
+// DiffTextOld возвращает содержимое файла по относительному пути из снимка
+// (baseline). Возвращает ("", false), если файла не было в снимке.
+func (s *Snap) DiffTextOld(rel string) (string, bool) {
+	f, ok := s.files[rel]
+	if !ok {
+		return "", false
+	}
+	return string(f.data), true
+}
+
+// DiffTextNew возвращает текущее содержимое файла с диска.
+func (s *Snap) DiffTextNew(root, rel string) string {
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// DiffText генерирует unified-дифф для одного файла: baseline vs текущее
+// содержимое. Возвращает ("", false) и ошибку, если файла не было в снимке.
+func (s *Snap) DiffText(filepath string) (string, error) {
+	old, ok := s.DiffTextOld(filepath)
+	if !ok {
+		return "", fmt.Errorf("файл не найден в снимке: %s", filepath)
+	}
+	newContent := s.DiffTextNew(s.root, filepath)
+
+	diff, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+		FromFile: filepath,
+		ToFile:   filepath,
+		Context:  3,
+		A:        difflib.SplitLines(old),
+		B:        difflib.SplitLines(newContent),
+	})
+	if err != nil {
+		return "", fmt.Errorf("diff %s: %v", filepath, err)
+	}
+	// Добавляем заголовок diff --git, чтобы sidebyside.ts правильно
+	// парсил пути файлов.
+	return "--- a/" + filepath + "\n+++ b/" + filepath + "\n" + diff, nil
 }

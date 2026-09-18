@@ -8,6 +8,7 @@
 //   tool  — событие инструмента/агента (tool_start/tool_result)
 //   status— статус сессии (running|waiting|done|stopped|error)
 //   diff  — дифф (в Ф-2; пока тип-заглушка)
+//   log   — новая строка лога (real-time, logMessage)
 //
 // Транспорт устойчивый: при разрыве переподключается по возрастающей
 // задержке (до 5 c) и перезапрашивает снимки, которые могли быть пропущены
@@ -28,7 +29,8 @@ export type EventTypeName =
   | "gate"
   | "tool"
   | "status"
-  | "diff";
+  | "diff"
+  | "log";
 
 export interface LiveClient {
   close(): void;

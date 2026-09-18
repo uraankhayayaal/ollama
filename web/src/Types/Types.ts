@@ -97,14 +97,18 @@ export interface DiffView {
   // Ф-3 (ленивая загрузка): для git-проектов вместо полного diff — список файлов;
   // патч конкретного файла отдаётся GET /api/projects/:id/diff?file=<path>.
   files?: DiffFile[];
+  // snap: per-file unified-патчи (path → unified diff patch).
+  patches?: Record<string, string>;
 }
 
 // Один файл в диффе git-проекта (метаданные для ленивой загрузки, Ф-3).
+// patch — unified-патч файла (для lazy-loading git и snap-проектов).
 export interface DiffFile {
   path: string;
   status: "added" | "modified" | "removed" | "renamed";
   added: number;
   deleted: number;
+  patch?: string;
 }
 
 // Патч конкретного файла git-диффа (GET /api/projects/:id/diff?file=<path>).
@@ -175,4 +179,11 @@ export interface LogsView {
   files: LogFileEntry[];
   selected: string;
   truncated?: boolean;
+}
+
+// Событие «log» (WebSocket link=live.ts): новая строка из хвоста файла.
+export interface LogMessage {
+  project: string; // имя проекта
+  file: string;    // имя файла лога
+  line: string;    // одна строка лога
 }

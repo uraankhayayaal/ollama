@@ -39,7 +39,8 @@ type logsResponse struct {
 }
 
 // handleGetLogs возвращает логи проекта: файлы каталога logs/ (глобального
-// и внутри каталога проекта) с содержимым.
+// и внутри каталога проекта) с содержимым. Подписывает проект на
+// real-time обновления (строчки шлются по WS type="log").
 func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	inf, err := s.reg.Get(project)
@@ -55,6 +56,22 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		if local := filepath.Join(inf.Root, "logs"); fileExists(local) {
 			dirs = append(dirs, local)
 		}
+	}
+
+	// Подписываемся на новые строки логов (только первый клиент проекта
+	// реально регистрируется; последующие получают тот же хвост).
+	var files []string
+	for _, dir := range dirs {
+		if infos, _ := os.ReadDir(dir); infos != nil {
+			for _, de := range infos {
+				if !de.IsDir() && strings.HasSuffix(strings.ToLower(de.Name()), ".log") {
+					files = append(files, de.Name())
+				}
+			}
+		}
+	}
+	if len(files) > 0 {
+		s.logBroker.Subscribe(project, dirs, files)
 	}
 
 	out := logsResponse{Dir: strings.Join(dirs, " · ")}

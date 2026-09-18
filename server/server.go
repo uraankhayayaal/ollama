@@ -65,11 +65,15 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 
-	// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
-	// (baselines) и кэш разобранных диффов git-проектов (diffs, Ф-3).
+// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
+	// (baselines) и кэш разобраных диффов git-проектов (diffs, Ф-3).
 	diffMu    sync.Mutex
 	baselines map[string]*tools.Snap
 	diffs     map[string]*cachedDiff
+
+	// logBroker — перематывает лог-файлы проектов: новые линии шлются
+	// в шину проекта (type="log"). Запускается в Run().
+	logBroker *logBroker
 }
 
 // NewServer создаёт сервер. Реестр workspace открывается по cfg.WorkspacesPath.
@@ -81,14 +85,16 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server: open workspace registry: %w", err)
 	}
+	h := NewHub()
 	s := &Server{
 		cfg:       cfg,
 		reg:       reg,
-		hub:       NewHub(),
+		hub:       h,
 		sessions:  make(map[string]*Session),
 		baselines: make(map[string]*tools.Snap),
 		diffs:     make(map[string]*cachedDiff),
 		auth:      newAuth(cfg.Password),
+		logBroker: newLogBroker(h),
 		// Лимиты Ф-3: 5 логинов/мин, 120 API-запросов/мин, 30 сообщений/мин.
 		apiLim:   newRateLimit(120, time.Minute),
 		loginLim: newRateLimit(5, time.Minute),
@@ -115,6 +121,9 @@ func (s *Server) Run(ctx context.Context) error {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
+
+	// Фоновый goroutine logBroker: сканирует файлы логов проектов.
+	s.logBroker.Run(ctx)
 
 	select {
 	case <-ctx.Done():

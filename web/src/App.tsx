@@ -2,10 +2,10 @@
 // зеркалит server/session.go + runevents + chat/store.go (см. web/src/types.ts).
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { authStatus, boardOf, chatHistory, gateDecide, listProjects, logout, openProject, postChat, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { BoardView, ChatMsg, TaskRow, ProjectMeta } from "@/Types";
+import type { BoardView, ChatMsg, TaskRow, ProjectMeta, LogMessage } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
@@ -25,6 +25,9 @@ export function App() {
   const [auth, setAuth] = useState<AuthPhase>("checking");
   const [protectedMode, setProtectedMode] = useState(false);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  // Потоковые строки логов: «имя файла → актуальный список строк».
+  // Обновляется событиями WS type="log"; Logboard объединяет с HTTP-данными.
+  const [logLines, setLogLines] = useState<Map<string, string[]>>(new Map());
   const [project, setProject] = useState<ProjectMeta | null>(null);
   const [board, setBoard] = useState<BoardView | null>(null);
   const [chat, setChat] = useState<ChatMsg[]>([]);
@@ -70,6 +73,14 @@ export function App() {
     }
     setError(fmtErr(e));
   };
+
+  // Обработчик событий «log» — каждая новая строкаappend к списку файла.
+  const handleLog = useCallback((ev: LogMessage) => {
+    setLogLines((prev) => {
+      const entry = prev.get(ev.file) || [];
+      return new Map(prev).set(ev.file, [...entry, ev.line]);
+    });
+  }, []);
 
   const open = async (spec: { path_or_git?: string }) => {
     setBusy(true);
@@ -157,14 +168,24 @@ export function App() {
         setDetail(p.detail ?? "");
       } catch {}
     });
+    l.on("log", (ev) => {
+      try {
+        handleLog(ev.payload as LogMessage);
+      } catch {}
+    });
 
     return () => l.close();
   }, [project?.project_name]);
+
+  // Последнее сообщение пользователя — используется кнопкой «Продолжить»
+  // вместо board.meta.task, чтобы возобновить диалог с актуального ввода.
+  const lastUserMsgRef = useRef<string>("");
 
   const onSend = async (text: string) => {
     if (!project) {
       return;
     }
+    lastUserMsgRef.current = text;
     // Пользовательское сообщение не добавляем локально: сервер сам публикует
     // его в шину (type=chat, role=user) ещё до запуска оркестрации, и оно
     // прилетает через WS. Локальная вставка дублировала бы сообщение (дважды).
@@ -176,8 +197,9 @@ export function App() {
   };
 
   // «Продолжить»: возможен, когда есть задача проекта и оркестрация не идёт
-  // (stopped/error/done/idle). Повторная отправка исходной задачи продолжает
-  // Kanban с текущего состояния доски (эпики/задачи уже в Redis).
+  // (stopped/error/done/idle). Повторная отправка последнего сообщения пользователя
+  // возобновляет диалог с актуальной точки. Если последнее сообщение пустое —
+  // фолбэк на board.meta.task (исходная задача проекта).
   const [continuing, setContinuing] = useState(false);
   // Синхронный флаг: иначе два быстрых клика до ре-рендера прошли бы оба
   // (canContinue читается из замыкания) и отправили бы задачу дважды.
@@ -196,7 +218,8 @@ export function App() {
     continuingRef.current = true;
     setContinuing(true);
     try {
-      await onSend(board!.meta!.task);
+      // Приоритет: последнее сообщение пользователя, иначе — исходная задача.
+      await onSend(lastUserMsgRef.current || board!.meta!.task);
     } finally {
       continuingRef.current = false;
       setContinuing(false);
@@ -346,6 +369,7 @@ export function App() {
           <Logboard
             project={project.project_name}
             showLogboard={showLogboard}
+            logLines={logLines}
             toggleLogboard={() => {
               setShowLogboard(false);
             }}

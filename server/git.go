@@ -207,11 +207,33 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "ошибка диффа: "+err.Error())
 		return
 	}
+	// Перечисляем изменённые файлы в едином списке и генерируем per-file
+	// unified-патчи для отображения line-level изменений в Diffboard.
+	var allFiles []string
+	allFiles = append(allFiles, added...)
+	allFiles = append(allFiles, modified...)
+	allFiles = append(allFiles, removed...)
+
+	patches := make(map[string]string, len(allFiles))
+	s.diffMu.Lock()
+	snap := s.baselines[inf.Name]
+	s.diffMu.Unlock()
+	if snap != nil && len(allFiles) > 0 {
+		for _, f := range allFiles {
+			p, err := snap.DiffText(f)
+			if err != nil {
+				logging.Warnf("diff %s: патч файла %s: %v", inf.Name, f, err)
+				continue
+			}
+			patches[f] = p
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"kind":     "snap",
 		"added":    added,
 		"modified": modified,
 		"removed":  removed,
+		"patches":  patches,
 	})
 }
 
