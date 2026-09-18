@@ -1,0 +1,37 @@
+// Стили карточки задачи. Класс .task — глобальный (ICSS не нужен,
+// см. общий стиль проекта).
+
+.task {
+  padding: 8px 10px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  background: var(--card, #fff);
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--primary, #2563eb);
+  }
+
+  .title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .controls {
+    margin-top: 6px;
+
+    button {
+      font-size: 11px;
+      padding: 2px 7px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 5px;
+      background: var(--btn, #f1f5f9);
+      cursor: pointer;
+
+      &:hover {
+        background: var(--btn-hover, #e2e8f0);
+      }
+    }
+  }
+}

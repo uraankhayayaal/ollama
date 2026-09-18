@@ -1,0 +1,44 @@
+// Стили ячейки доски (эпик × статус). Класс .cell — глобальный.
+
+.cell {
+  min-height: 64px;
+  padding: 6px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  background: var(--card, #fff);
+
+  ul {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .cell-count {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    font-size: 17px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted, #8a94a6);
+
+    &.has {
+      color: var(--ink, #1b2330);
+    }
+  }
+
+  &.new { border-top: 3px solid var(--st-todo, #64748b); }
+  &.analysis { border-top: 3px solid var(--st-analysis, #7c3aed); }
+  &.ready { border-top: 3px solid var(--st-ready, #0891b2); }
+  &.in_progress { border-top: 3px solid var(--st-in-progress, #2563eb); }
+  &.done { border-top: 3px solid var(--st-done, #15803d); }
+  &.cancelled { border-top: 3px solid var(--muted, #8a94a6); }
+
+  &.collapsed {
+    min-height: 0;
+  }
+}

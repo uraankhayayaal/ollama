@@ -11,27 +11,62 @@ export function Chatboard({
   chat,
   live,
   onSend,
-  onContinue,
-  canContinue,
   endRef,
   busy,
+  collapsed = false,
+  onToggleCollapse,
 }: {
   chat: ChatMsg[];
   // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3); рендерится
   // с маркером «…» до прихода финального протокола chat с ролью assistant.
   live: { id: string; agent: string; content: string } | null;
   onSend: (text: string) => void;
-  // Продолжить: повторить текущую задачу проекта (продолжение после
-  // остановки/ошибки). Кнопка неактивна, пока продолжение невозможно
-  // (нет задачи или запуск активен).
-  onContinue: () => void;
-  canContinue: boolean;
   endRef: React.RefObject<HTMLDivElement | null>;
   busy?: boolean;
+  // Свёрнутый режим: тонкая вертикальная полоска слева с кнопкой разворота
+  // и иконками статусов сообщений (доска занимает остальную ширину экрана).
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }) {
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat, live, endRef]);
+    if (!collapsed) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chat, live, endRef, collapsed]);
+
+  if (collapsed) {
+    const counts: Record<string, number> = {};
+    for (const m of chat) {
+      const role = (m.role ?? "agent").toLowerCase();
+      counts[role] = (counts[role] ?? 0) + 1;
+    }
+    return (
+      <div className="chatboard collapsed">
+        <button className="expand" onClick={onToggleCollapse} title="Развернуть чат">
+          »
+        </button>
+        <div className="cstrip">
+          <div className="st user" title={`Сообщений от вас: ${counts.user ?? 0}`}>
+            <IconUser />
+            <b>{counts.user ?? 0}</b>
+          </div>
+          <div className="st agent" title={`Ответов модели: ${counts.agent ?? 0}`}>
+            <IconBot />
+            <b>{counts.agent ?? 0}</b>
+          </div>
+          <div className="st tool" title={`Вызовов инструментов: ${counts.tool ?? 0}`}>
+            <IconTool />
+            <b>{counts.tool ?? 0}</b>
+          </div>
+          {live && (
+            <div className="st live" title="Модель печатает…">
+              <IconLive />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,6 +83,15 @@ export function Chatboard({
 
   return (
     <div className="chatboard">
+      <div className="headbar">
+        <span className="head-title">Чат</span>
+        {onToggleCollapse && (
+          <button className="collapse-btn" onClick={onToggleCollapse} title="Свернуть чат влево">
+            «
+          </button>
+        )}
+      </div>
+
       <ul className="history">
         {chat.map((m) => (
           <li key={m.id} className={"msg " + (m.role ?? "agent").toLowerCase()}>
@@ -68,22 +112,6 @@ export function Chatboard({
         <div ref={endRef} />
       </ul>
 
-      <div className="actions">
-        <button
-          type="button"
-          className="continue"
-          onClick={onContinue}
-          disabled={!canContinue}
-          title={
-            canContinue
-              ? "Продолжить выполнение текущей задачи"
-              : "Продолжение невозможно: нет задачи или запуск уже идёт"
-          }
-        >
-          ▷ Продолжить
-        </button>
-      </div>
-
       <form className="send" onSubmit={submit}>
         <input
           type="text"
@@ -96,6 +124,46 @@ export function Chatboard({
         </button>
       </form>
     </div>
+  );
+}
+
+// Иконки статусов для свёрнутой полоски (inline-SVG, без эмодзи).
+function IconUser() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c.5-4 3.6-6 8-6s7.5 2 8 6" />
+    </svg>
+  );
+}
+
+function IconBot() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <rect x="4" y="8" width="16" height="11" rx="3" />
+      <path d="M12 8V5" />
+      <path d="M2 13v3M22 13v3" />
+      <circle cx="9" cy="13.5" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="13.5" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function IconTool() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+    </svg>
+  );
+}
+
+function IconLive() {
+  return (
+    <svg className="dots" width="16" height="8" viewBox="0 0 24 8" fill="currentColor">
+      <circle cx="4" cy="4" r="3" opacity="0.4" />
+      <circle cx="12" cy="4" r="3" opacity="0.7" />
+      <circle cx="20" cy="4" r="3" />
+    </svg>
   );
 }
 

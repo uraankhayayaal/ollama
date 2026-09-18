@@ -6,8 +6,9 @@
 // показывается side-by-side «до → после» в стиле JetBrains (см. sidebyside.ts).
 // Пропс kind приходит из ProjectMeta (workspace.Info.Kind).
 //
-// Панель скрыта по умолчанию (showDiffboard=false): переключается кнопкой
-// ToolBar, а внутри — кнопкой «×» в шапке (toggleDiffboard).
+// Панель скрыта по умолчанию (showDiffboard=false): выдвигается снизу по
+// плавающей кнопке «Дифф», а внутри — кнопкой «×» сверху справа
+// (toggleDiffboard) сворачивается обратно.
 
 import { useCallback, useEffect, useState } from "react";
 import { acceptProject, projectDiff, projectDiffFile, rejectBranch } from "@/Api";
@@ -105,6 +106,15 @@ export function Diffboard(props: DiffboardProps) {
 
   return (
     <div className={"diffboard" + (props.showDiffboard === false ? " hidden" : "")}>
+      {props.toggleDiffboard && (
+        <div className="head title-head">
+          <p className="hint">Дифф</p>
+          <button className="btn close" onClick={props.toggleDiffboard} title="Свернуть окно">
+            ×
+          </button>
+        </div>
+      )}
+
       {loading && <p className="hint">Загружаю дифф…</p>}
 
       {error && <p className="err">{error}</p>}
@@ -116,11 +126,6 @@ export function Diffboard(props: DiffboardProps) {
               Ветка <strong>{diff.branch}</strong> → <strong>{diff.base}</strong> (base) · remote{" "}
               <code>{diff.remote}</code> · файлов: {gitFiles.length}
             </p>
-            {props.toggleDiffboard && (
-              <button className="btn close" onClick={props.toggleDiffboard} title="Скрыть дифф">
-                ×
-              </button>
-            )}
           </div>
           {gitFiles.length > 0 ? (
             <div className="filelist">

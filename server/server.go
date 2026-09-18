@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -158,6 +159,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/diff", s.handleGetDiff)
 	mux.HandleFunc("POST /api/projects/{id}/accept", s.handleAccept)
 	mux.HandleFunc("POST /api/projects/{id}/reject-branch", s.handleRejectBranch)
+
+	// Логи проекта (панель «Логи», см. logs.go).
+	mux.HandleFunc("GET /api/projects/{id}/logs", s.handleGetLogs)
 
 	// WebSocket
 	mux.HandleFunc("GET /api/projects/{id}/ws", s.handleWS)
@@ -309,31 +313,33 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOpenProject открывает/регистрирует проект по пути или git-URL.
+// Единое поле path_or_git: git-ссылка (схема http(s)/ssh/git или scp-форма
+// git@host:path) уходит в клон, локальный путь — в обычную регистрацию.
 func (s *Server) handleOpenProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PathOrGit string `json:"path_or_git"`
-		GitURL    string `json:"git_url"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, "невалидный JSON")
 		return
 	}
 
-	// git-URL → клон в temp/<имя> с фича-веткой (Ф-2-3).
-	if body.GitURL != "" {
-		s.handleOpenGitProject(w, r, body.GitURL)
+	path := strings.TrimSpace(body.PathOrGit)
+	if path == "" {
+		writeErr(w, http.StatusBadRequest, "укажите путь к папке или git-URL")
 		return
 	}
 
-	path := body.PathOrGit
-	if path == "" {
-		writeErr(w, http.StatusBadRequest, "укажите path_or_git или git_url")
+	// git-URL → клон в temp/<имя> с фича-веткой (Ф-2-3).
+	if isGitURL(path) {
+		s.handleOpenGitProject(w, r, path)
 		return
 	}
 
 	// Проверяем: может, проект уже зарегистрирован?
 	if inf, err := s.reg.Get(path); err == nil {
-		// Уже есть — возвращаем meta.
+		// Уже есть — возвращаем meta (база диффа фиксируется при переоткрытии).
+		s.ensureBaseline(inf)
 		s.writeProjectMeta(w, r, inf.Name)
 		return
 	}
@@ -361,6 +367,10 @@ func (s *Server) handleOpenProject(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "ошибка регистрации: "+err.Error())
 			return
 		}
+		// «Точка отхода» фиксируется сразу при открытии — изменения,
+		// сделанные агентом до первого просмотра Diffboard, иначе были бы
+		// приняты за базу и не показались бы в диффе.
+		s.ensureBaseline(inf)
 		s.writeProjectMetaFromInfo(w, inf)
 		return
 	}
@@ -408,6 +418,18 @@ func (s *Server) writeProjectMetaFromInfo(w http.ResponseWriter, inf workspace.I
 		sess.mu.Unlock()
 	}
 	writeJSON(w, http.StatusOK, projectMeta(inf, meta, running, gating))
+}
+
+// isGitURL определяет, что ввод — git-ссылка, а не путь к локальной папке:
+// HTTP(S)/SSH/git-схема или scp-форма git@host:path.
+func isGitURL(s string) bool {
+	low := strings.ToLower(s)
+	for _, p := range []string{"http://", "https://", "ssh://", "git://", "git@"} {
+		if strings.HasPrefix(low, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // dirBase возвращает последний компонент пути.
@@ -505,6 +527,14 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 	prov, err := s.provider()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
+		return
+	}
+
+	// Вопрос/запрос статуса отвечает Q&A-ассистент (без оркестрации);
+	// задача на разработку запускает ранер.
+	if isChatQuestion(body.Message) {
+		sess.runChatAssist(context.Background(), body.Message, prov)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
 

@@ -215,9 +215,10 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// snapDiff считает изменение каталога не-git проекта через tools.Snap.Diff:
-// первый запрос фиксирует baseline («точка отхода»), последующие — список
-// изменённых файлов относительно неё.
+// snapDiff считает изменение каталога не-git проекта через tools.Snap.Diff
+// относительно baseline-снимка «точки отхода». Обычно снимок уже снят при
+// открытии проекта (ensureBaseline); ленивая фиксация остаётся страховкой
+// для уже открытых проектов после перезапуска сервера.
 func (s *Server) snapDiff(inf workspace.Info) ([]string, []string, []string, error) {
 	s.diffMu.Lock()
 	defer s.diffMu.Unlock()
@@ -228,10 +229,32 @@ func (s *Server) snapDiff(inf workspace.Info) ([]string, []string, []string, err
 			return nil, nil, nil, err
 		}
 		s.baselines[inf.Name] = snap
-		logging.Infof("diff %s: baseline-снимок зафиксирован", inf.Name)
+		logging.Infof("diff %s: baseline-снимок зафиксирован (лениво)", inf.Name)
 		return []string{}, []string{}, []string{}, nil
 	}
 	return snap.Diff()
+}
+
+// ensureBaseline фиксирует baseline-снимок («точку отхода») локального проекта,
+// если его ещё нет. Вызывается при открытии/переоткрытии проекта, чтобы дифф
+// показывал изменения с момента открытия, а не с первого запроса диффа —
+// иначе изменения, сделанные до открытия Diffboard, были бы приняты за базу.
+func (s *Server) ensureBaseline(inf workspace.Info) {
+	if inf.Root == "" {
+		return
+	}
+	s.diffMu.Lock()
+	defer s.diffMu.Unlock()
+	if _, ok := s.baselines[inf.Name]; ok {
+		return
+	}
+	snap, err := tools.NewSnap(inf.Root)
+	if err != nil {
+		logging.Warnf("diff %s: baseline-снимок не зафиксирован: %v", inf.Name, err)
+		return
+	}
+	s.baselines[inf.Name] = snap
+	logging.Infof("diff %s: baseline-снимок зафиксирован при открытии", inf.Name)
 }
 
 // --- REST: приёмка «Принять → MR» ---

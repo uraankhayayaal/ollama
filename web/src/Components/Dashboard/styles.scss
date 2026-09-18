@@ -1,17 +1,25 @@
-// Канон-стили дашборда (канбан-колонки, карточки задач, эпики).
-// Имена классов — глобальные, ICSS-модулизация не нужна (см. styles совместимость).
+// Канон-стили дашборда: баннер, матрица «эпики × статусы», модалки.
+// Ячейки (.cell) — в Cell/styles.scss, карточки (.task) — в TaskCard/
+// styles.scss, заголовки строк (.epic-head) — в EpicRow/styles.scss.
+// Имена классов глобальные, ICSS-модулизация не нужна.
 
 .dashboard {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
 
-  .meta {
+  .banner {
     display: flex;
     align-items: baseline;
-    gap: 10px ;
+    gap: 10px;
     font-size: 13px;
     color: var(--muted, #8a94a6);
+
+    .project {
+      color: var(--ink, #1b2330);
+      font-weight: 600;
+    }
 
     .counts {
       margin-left: auto;
@@ -19,169 +27,50 @@
     }
   }
 
-  .columns {
+  .boardgrid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
+    grid-template-columns: minmax(180px, auto) repeat(6, minmax(130px, 1fr));
+    gap: 6px;
     align-items: start;
 
-    .col {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      padding: 10px;
-      border-radius: 10px;
-      background: var(--col, #f4f6f9);
-
-      header {
-        display: flex;
-        justify-content: space-between;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted, #8a94a6);
-
-        b {
-          color: var(--ink);
-        }
-      }
-
-      &.new header { color: var(--st-todo, #64748b); }
-      &.analysis header { color: var(--st-analysis, #7c3aed); }
-      &.ready header { color: var(--st-ready, #0891b2); }
-      &.in_progress header { color: var(--st-in-progress, #2563eb); }
-      &.done header { color: var(--st-done, #15803d); }
-      &.cancelled header { color: var(--muted, #8a94a6); text-decoration: line-through; }
-
-      ul {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }
-    }
-  }
-
-  .task {
-    padding: 8px 10px;
-    border: 1px solid var(--line, #e2e8f0);
-    border-radius: 8px;
-    background: var(--card, #fff);
-
-    .title {
-      font-size: 14px;
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
-
-    .desc {
-      margin: 4px 0;
-      font-size: 12px;
-      line-height: 1.45;
-      color: var(--muted, #94a3b8);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-
-    .sub {
-      display: flex;
-      gap: 8px;
-      font-size: 12px;
-      color: var(--muted, #94a3b8);
-
-      .epic {
-        text-transform: uppercase;
-        font-size: 11px;
-        letter-spacing: 0.03em;
-      }
-    }
-
-    .controls {
-      margin-top: 6px;
-
-      button {
-        font-size: 11px;
-        padding: 3px 8px;
-        border: 1px solid var(--line, #e2e8f0);
-        border-radius: 6px;
-        background: var(--btn, #f1f5f9);
-        cursor: pointer;
-
-        &:hover {
-          background: var(--btn-hover, #e2e8f0);
-        }
-      }
-    }
-  }
-
-  .epics {
-    h3 {
-      font-size: 12px;
+    .corner,
+    .grid-head {
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--muted, #8a94a6);
-      margin-bottom: 6px;
     }
 
-    ul {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 8px;
+    .corner {
+      position: sticky;
+      top: 0;
+      left: 0;
+      z-index: 4;
+      padding: 6px 10px;
+      background: var(--bg, #f6f8fb);
     }
 
-    li.epic {
+    .grid-head {
+      position: sticky;
+      top: 0;
+      z-index: 3;
       display: flex;
-      flex-direction: column;
-      gap: 6px;
-      padding: 10px 12px;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 10px;
-      font-size: 13px;
-      background: var(--card, #fff);
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 6px;
+      background: var(--bg, #f6f8fb);
 
-      .head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-
-        .id {
-          font-size: 11px;
-          font-family: var(--mono, monospace);
-          color: var(--muted, #8a94a6);
-        }
-
-        .title {
-          font-size: 14px;
-          font-weight: 600;
-        }
-
-        .status {
-          margin-left: auto;
-          font-size: 11px;
-          white-space: nowrap;
-        }
-
-        .status.new { color: var(--st-todo, #64748b); }
-        .status.analysis { color: var(--st-analysis, #7c3aed); }
-        .status.ready { color: var(--st-ready, #0891b2); }
-        .status.in_progress { color: var(--st-in-progress, #2563eb); }
-        .status.done { color: var(--st-done, #15803d); }
-        .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
-      }
-
-      .lead {
-        font-size: 12px;
-        color: var(--primary, #2563eb);
-      }
-
-      .desc {
-        margin: 0;
-        font-size: 12px;
-        line-height: 1.45;
-        color: var(--muted, #94a3b8);
-        white-space: pre-wrap;
-        word-break: break-word;
+      b {
+        color: var(--ink, #1b2330);
+        font-variant-numeric: tabular-nums;
       }
     }
+
+    .grid-head.new { color: var(--st-todo, #64748b); }
+    .grid-head.analysis { color: var(--st-analysis, #7c3aed); }
+    .grid-head.ready { color: var(--st-ready, #0891b2); }
+    .grid-head.in_progress { color: var(--st-in-progress, #2563eb); }
+    .grid-head.done { color: var(--st-done, #15803d); }
   }
 
   &.empty {

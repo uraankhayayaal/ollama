@@ -81,7 +81,7 @@ export function GateBanner(props: {
                       {STATUS_LABEL[e.status] ?? e.status}
                     </span>
                   </div>
-                  {e.assigned_lead && <div className="sub">Лид: {e.assigned_lead}</div>}
+                  {e.assigned_role && <div className="sub">Лид: {e.assigned_role}</div>}
                   {e.description && <p className="desc">{e.description}</p>}
                 </li>
               ))}

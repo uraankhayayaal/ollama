@@ -125,10 +125,10 @@ func TestOpenGitProjectClonesAndRegisters(t *testing.T) {
 	url := "git@gitlab.com:g/myrepo.git"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/projects",
-		bytes.NewBufferString(`{"git_url":"`+url+`"}`))
+		bytes.NewBufferString(`{"path_or_git":"`+url+`"}`))
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST git_url: %d, body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("POST path_or_git: %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	var meta map[string]any
@@ -162,7 +162,7 @@ func TestOpenGitProjectClonesAndRegisters(t *testing.T) {
 	// Повторное открытие идемпотентно (тот же проект возвращается).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/api/projects",
-		bytes.NewBufferString(`{"git_url":"`+url+`"}`))
+		bytes.NewBufferString(`{"path_or_git":"`+url+`"}`))
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("повторное открытие: %d", rec.Code)
@@ -420,5 +420,63 @@ func TestRejectBranchNonGitRejected(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("reject не-git: %d, want 400", rec.Code)
+	}
+}
+
+// TestSnapDiffBaselineAtOpen: у локального проекта «точка отхода» фиксируется
+// при открытии (не при первом запросе диффа), поэтому изменения, сделанные
+// после открытия, показываются в диффе.
+func TestSnapDiffBaselineAtOpen(t *testing.T) {
+	_, handler, _ := newTestServerGit(t, &fakeGit{}, nil)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Открытие проекта сразу фиксирует baseline.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects",
+		bytes.NewBufferString(`{"path_or_git":"`+dir+`"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST projects: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	name := dirBase(dir)
+
+	// Вносим изменения после открытия (так делает агент).
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/projects/"+name+"/diff", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET diff: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Kind     string
+		Added    []string
+		Modified []string
+		Removed  []string
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Kind != "snap" {
+		t.Fatalf("kind = %q, want snap", out.Kind)
+	}
+	if len(out.Added) != 1 || !strings.HasSuffix(out.Added[0], "b.txt") {
+		t.Fatalf("added = %v, want [b.txt]", out.Added)
+	}
+	if len(out.Modified) != 1 || !strings.HasSuffix(out.Modified[0], "a.txt") {
+		t.Fatalf("modified = %v, want [a.txt]", out.Modified)
+	}
+	if len(out.Removed) != 0 {
+		t.Fatalf("removed = %v, want none", out.Removed)
 	}
 }

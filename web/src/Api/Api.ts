@@ -10,6 +10,7 @@ import type {
   ChatMsg,
   DiffFileView,
   DiffView,
+  LogsView,
   ProjectMeta,
   TaskRow,
 } from "@/Types";
@@ -132,7 +133,7 @@ export async function listProjects(base: string): Promise<ProjectMeta[]> {
 
 export async function openProject(
   base: string,
-  spec: { path_or_git?: string; git_url?: string },
+  spec: { path_or_git?: string },
 ): Promise<ProjectMeta> {
   return req<ProjectMeta>("POST", `${base}/api/projects`, spec);
 }
@@ -263,4 +264,14 @@ export async function rejectBranch(
     `${base}/api/projects/${enc(project)}/reject-branch`,
     {},
   );
+}
+
+// --- логи (панель «Логи») ---
+
+// Лог-файлы проекта из каталога logs/ (глобального и внутри проекта).
+export async function projectLogs(
+  base: string,
+  project: string,
+): Promise<LogsView> {
+  return req<LogsView>("GET", `${base}/api/projects/${enc(project)}/logs`);
 }

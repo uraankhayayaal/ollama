@@ -224,6 +224,61 @@ func TestKanbanResumes(t *testing.T) {
 	}
 }
 
+// TestKanbanResumesInProgress: задача осталась «в работе» от прерванной сессии.
+// Раньше перезапуск падал с «нет прогресса» (in_progress никто не исполняет,
+// а она блокировала pipeline) — теперь сбрасывается в «готова к работе» и
+// доводится до конца.
+func TestKanbanResumesInProgress(t *testing.T) {
+	ctx := context.Background()
+	srv := miniredis.RunT(t)
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-test"})
+	projectDir := projects.ProjectDir("kanban-test")
+	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
+
+	if err := store.SaveMeta(ctx, &board.Meta{
+		ProjectName: "kanban-test", Task: "Задача", Status: board.StatusInProgress,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "ARCH-01", Title: "Эпик", Description: "x",
+			AssignedRole: "Backend Lead", SequenceOrder: 1, CanRunParallel: true},
+		Status: board.StatusAnalysis,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTask(ctx, &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "T-01", Title: "A", Description: "x",
+			AssignedRole: "Go Developer", SequenceOrder: 1, Dependencies: []string{}},
+		EpicID: "ARCH-01", Assignee: "Go Developer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTaskStatus(ctx, "T-01", board.StatusAnalysis); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTaskStatus(ctx, "T-01", board.StatusReady); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTaskStatus(ctx, "T-01", board.StatusInProgress); err != nil {
+		t.Fatal(err)
+	}
+
+	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	if err := kr.Run(ctx, "kanban-test", "Задача"); err != nil {
+		t.Fatalf("Kanban Run (resume зависшей задачи): %v", err)
+	}
+
+	done, _ := store.AllDone(ctx)
+	if !done {
+		t.Fatal("доска должна быть решена после перезапуска")
+	}
+	t1, err := store.GetTask(ctx, "T-01")
+	if err != nil || t1.Status != board.StatusDone {
+		t.Fatalf("T-01 должен быть выполнен: %+v err=%v", t1, err)
+	}
+}
+
 // TestKanbanNoProgressOnCancelled: отменённый эпик без задач не даёт прогресса.
 func TestKanbanNoProgressOnCancelled(t *testing.T) {
 	ctx := context.Background()

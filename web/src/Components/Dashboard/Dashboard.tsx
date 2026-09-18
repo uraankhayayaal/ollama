@@ -1,44 +1,18 @@
-// Полный контроль доски: DnD между колонками, ручные статусы (←/→),
-// inline-редактирование assignee. Данные — BoardView (зеркалит
-// server/session.go boardSnapshot). Статусы колонок совпадают с
-// board.entity.go: new -> analysis -> ready -> in_progress -> done.
-// Общая концепция HITL-затворов (одобрение эпиков/задач) — в GateBanner.
+// Матрица доски: строки = эпики, колонки = статусы, ячейки = задачи.
+// Общий заголовок колонок, у каждой строки — эпик с названием эпика
+// (клик → модалка). Клик по задаче → модалка задачи. DnD переносит задачи
+// между соседними статусами внутри своего эпика.
 
 import { useState } from "react";
-import type { BoardView, Status, TaskRow } from "@/Types";
+import type { BoardView, EpicRow, TaskRow } from "@/Types";
+import { STATUS_LABEL, STATUS_ORDER } from "./board";
+import { EpicRow as EpicRowView } from "./EpicRow";
+import { EpicModal } from "./EpicModal";
+import { TaskModal } from "./TaskModal";
 import "./styles.scss";
 
-// Колонки доски: рабочие статусы цепочки + терминальные (cancelled).
-const STATUS_ORDER: Status[] = [
-  "new",
-  "analysis",
-  "ready",
-  "in_progress",
-  "done",
-  "cancelled",
-];
-
-const STATUS_LABEL: Record<Status, string> = {
-  new: "Новые",
-  analysis: "В анализе",
-  ready: "Готовы к работе",
-  in_progress: "В работе",
-  done: "Готово",
-  cancelled: "Отменены",
-};
-
-// Допустимые ручные переходы (строго по ValidateTransition: только между
-// соседними статусами, терминальные — конечные).
-const MOVES: Record<Status, { prev: Status | null; next: Status | null }> = {
-  new: { prev: null, next: "analysis" },
-  analysis: { prev: "new", next: "ready" },
-  ready: { prev: "analysis", next: "in_progress" },
-  in_progress: { prev: "ready", next: "done" },
-  done: { prev: "in_progress", next: null },
-  cancelled: { prev: null, next: null },
-};
-
-let dragID: string | null = null;
+// Строка матрицы: эпик (или null для задач без эпика) + его задачи.
+type Row = { epic: EpicRow | null; epicId: string; tasks: TaskRow[] };
 
 export function Dashboard({
   board,
@@ -47,9 +21,53 @@ export function Dashboard({
   board: BoardView | null;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
 }) {
+  const [epic, setEpic] = useState<EpicRow | null>(null);
+  const [task, setTask] = useState<TaskRow | null>(null);
+  // Свёрнутость эпиков: явный выбор пользователя (toggle[epicId]) перекрывает
+  // значение по умолчанию (неактивные свёрнуты, активные развёрнуты).
+  const [collapseToggle, setCollapseToggle] = useState<Record<string, boolean>>({});
+
   if (!board) {
     return <div className="dashboard">Совет ещё не загружен…</div>;
   }
+
+  // Группируем задачи по эпику; задачи с неизвестным epic_id попадают в
+  // отдельные строки «без эпика», чтобы не теряться с доски.
+  const byEpic = new Map<string, TaskRow[]>();
+  for (const t of board.tasks) {
+    const list = byEpic.get(t.epic_id) ?? [];
+    list.push(t);
+    byEpic.set(t.epic_id, list);
+  }
+  const rows: Row[] = board.epics.map((e) => ({
+    epic: e,
+    epicId: e.task_id,
+    tasks: byEpic.get(e.task_id) ?? [],
+  }));
+  for (const [epicId, tasks] of byEpic) {
+    if (!board.epics.some((e) => e.task_id === epicId)) {
+      rows.push({ epic: null, epicId, tasks });
+    }
+  }
+
+  const statusCounts = STATUS_ORDER.map((s) => ({
+    status: s,
+    count: board.tasks.filter((t) => t.status === s).length,
+  }));
+
+  // Эпик активен, если у него есть незавершённые задачи (new → in_progress);
+  // только такие по умолчанию развёрнуты полностью.
+  const isActive = (tasks: TaskRow[]) =>
+    tasks.some((t) => t.status !== "done" && t.status !== "cancelled");
+
+  const isCollapsed = (epicId: string, tasks: TaskRow[]) =>
+    collapseToggle[epicId] ?? !isActive(tasks);
+
+  const toggleCollapse = (epicId: string, tasks: TaskRow[]) =>
+    setCollapseToggle((prev) => ({
+      ...prev,
+      [epicId]: !isCollapsed(epicId, tasks),
+    }));
 
   return (
     <div className="dashboard" onDragOver={(e) => e.preventDefault()}>
@@ -63,129 +81,30 @@ export function Dashboard({
         </span>
       </div>
 
-      <div className="columns">
-        {STATUS_ORDER.map((status) => (
-          <Column
-            key={status}
-            status={status}
-            tasks={board.tasks}
+      <div className="boardgrid">
+        <div className="corner">Эпик</div>
+        {statusCounts.map(({ status, count }) => (
+          <div key={status} className={"grid-head " + status}>
+            {STATUS_LABEL[status]} <b>{count}</b>
+          </div>
+        ))}
+        {rows.map((r) => (
+          <EpicRowView
+            key={r.epicId}
+            epic={r.epic}
+            epicId={r.epicId}
+            tasks={r.tasks}
+            collapsed={isCollapsed(r.epicId, r.tasks)}
             onTaskUpdate={onTaskUpdate}
+            onTaskOpen={setTask}
+            onEpicOpen={setEpic}
+            onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}
       </div>
 
-      <section className="epics">
-        <h3>Эпики</h3>
-        <ul>
-          {board.epics.map((e) => (
-            <li key={e.task_id} className="epic">
-              <div className="head">
-                <span className="id">{e.task_id}</span>
-                <strong className="title">{e.title}</strong>
-                <span className={"status " + e.status}>{STATUS_LABEL[e.status] ?? e.status}</span>
-              </div>
-              {e.assigned_lead && <div className="lead">Лид: {e.assigned_lead}</div>}
-              {e.description && <p className="desc">{e.description}</p>}
-            </li>
-          ))}
-        </ul>
-      </section>
+      {epic && <EpicModal epic={epic} onClose={() => setEpic(null)} />}
+      {task && <TaskModal task={task} onTaskUpdate={onTaskUpdate} onClose={() => setTask(null)} />}
     </div>
-  );
-}
-
-function Column({
-  status,
-  tasks,
-  onTaskUpdate,
-}: {
-  status: Status;
-  tasks: TaskRow[];
-  onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
-}) {
-  const items = tasks.filter((t) => t.status === status).sort((a, b) => a.order - b.order);
-
-  const onDrop = () => {
-    if (!dragID) {
-      return;
-    }
-    const t = tasks.find((x) => x.task_id === dragID);
-    dragID = null;
-    if (!t || t.status === status) {
-      return;
-    }
-    // Только соседние статусы: нарушение переходов сервер отклонит 400.
-    const m = MOVES[t.status];
-    if (m.prev !== status && m.next !== status) {
-      return;
-    }
-    onTaskUpdate(t, { status });
-  };
-
-  return (
-    <div
-      className={"col " + status}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={onDrop}
-    >
-      <header>
-        {STATUS_LABEL[status]} <b>{items.length}</b>
-      </header>
-      <ul>
-        {items.map((t) => (
-          <TaskCard key={t.task_id} task={t} onTaskUpdate={onTaskUpdate} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function TaskCard({
-  task,
-  onTaskUpdate,
-}: {
-  task: TaskRow;
-  onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
-}) {
-  const m = MOVES[task.status] ?? { prev: null, next: null };
-  const [editing, setEditing] = useState(false);
-  const [assignee, setAssignee] = useState(task.assignee ?? "");
-
-  const save = () => {
-    setEditing(false);
-    if (assignee !== (task.assignee ?? "")) {
-      onTaskUpdate(task, { assignee });
-    }
-  };
-
-  return (
-    <li
-      className="task"
-      draggable
-      onDragStart={() => (dragID = task.task_id)}
-    >
-      <div className="title">{task.title}</div>
-      <div className="sub">
-        <span className="epic">{task.epic_id}</span>
-        {editing ? (
-          <input
-            className="assignee-input"
-            autoFocus
-            value={assignee}
-            onChange={(e) => setAssignee(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && save()}
-            onBlur={save}
-          />
-        ) : (
-          <button className="assignee" onClick={() => setEditing(true)}>
-            {task.assignee || "— + исполнитель"}
-          </button>
-        )}
-      </div>
-      <div className="controls">
-        {m.prev && <button onClick={() => m.prev && onTaskUpdate(task, { status: m.prev })}>←</button>}
-        {m.next && <button onClick={() => m.next && onTaskUpdate(task, { status: m.next })}>→</button>}
-      </div>
-    </li>
   );
 }

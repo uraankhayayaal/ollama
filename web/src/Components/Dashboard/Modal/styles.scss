@@ -1,0 +1,58 @@
+// Стили универсальной модалки (оверлей + панель). Классы .modal-* глобальные.
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+
+  .modal {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 560px;
+    max-height: 85vh;
+    background: var(--card, #fff);
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.25);
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line, #e2e8f0);
+
+      h3 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .close {
+        margin-left: auto;
+        border: none;
+        background: transparent;
+        font-size: 20px;
+        line-height: 1;
+        color: var(--muted, #8a94a6);
+        cursor: pointer;
+
+        &:hover {
+          color: var(--ink, #1b2330);
+        }
+      }
+    }
+
+    .modal-body {
+      padding: 16px;
+      overflow: auto;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  }
+}

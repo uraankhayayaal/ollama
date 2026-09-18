@@ -209,6 +209,9 @@ func (sess *Session) waitGate(ctx context.Context, typ string, notify func()) (p
 
 	select {
 	case d := <-sess.decide:
+		// approve() уже сбросил gating/gateTyp и положил решение в канал.
+		// Возвращаем статус «running»: затвор разрешён, оркестрация идёт.
+		sess.broadcastStatus("running", "")
 		return d, nil
 	case <-ctx.Done():
 		return planner.GateDecision{}, ctx.Err()

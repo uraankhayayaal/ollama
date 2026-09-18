@@ -13,12 +13,11 @@ const BASE = ""; // dev: Vite-прокси /api→backend; прод: embed same-
 export function WorkspacePicker(props: {
   projects: ProjectMeta[];
   current: ProjectMeta | null;
-  onOpen: (spec: { path_or_git?: string; git_url?: string }) => Promise<void>;
+  onOpen: (spec: { path_or_git?: string }) => Promise<void>;
   busy: boolean;
 }) {
   const [mode, setMode] = useState<"browse" | "new">("browse");
-  const [path, setPath] = useState("");
-  const [url, setUrl] = useState("");
+  const [input, setInput] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -33,14 +32,10 @@ export function WorkspacePicker(props: {
     e.preventDefault();
     setError("");
     void props
-      .onOpen({
-        path_or_git: path.trim() || undefined,
-        git_url: url.trim() || undefined,
-      })
+      .onOpen({ path_or_git: input.trim() || undefined })
       .then(() => {
         setMode("browse");
-        setPath("");
-        setUrl("");
+        setInput("");
       })
       .catch((err) => setError(fmtErr(err)));
   };
@@ -69,15 +64,10 @@ export function WorkspacePicker(props: {
         <form className="picker-form" onSubmit={submit}>
           <input
             placeholder="Путь к папке или git-URL"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
           />
-          <input
-            placeholder="git_url (опц.)"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-          <button className="btn primary" disabled={props.busy || (!path && !url)}>
+          <button className="btn primary" disabled={props.busy || !input.trim()}>
             {props.busy ? "…" : "Открыть"}
           </button>
           <button type="button" className="btn" onClick={() => setMode("browse")}>

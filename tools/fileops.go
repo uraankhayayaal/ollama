@@ -698,12 +698,12 @@ func (ops *FileOps) ReadFiles(args map[string]any) ([]byte, error) {
 			if end == 0 || end > len(lines) {
 				end = len(lines)
 			}
-			sliced := make([]string, 0, end-lineStart+1)
-			for i := lineStart; i <= end; i++ {
-				if i-1 < 0 || i-1 >= len(lines) {
-					break
+			var sliced []string
+			if lineStart <= end {
+				sliced = make([]string, 0, end-lineStart+1)
+				for i := lineStart; i <= end; i++ {
+					sliced = append(sliced, lines[i-1])
 				}
-				sliced = append(sliced, lines[i-1])
 			}
 			if len(sliced) == 0 {
 				r["status"] = "error"

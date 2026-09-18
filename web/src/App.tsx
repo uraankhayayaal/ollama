@@ -1,4 +1,4 @@
-// Оболочка: селектор воркспейса, HITL-затворы, три вкладки. React-канон
+// Оболочка: селектор воркспейса, HITL-затворы, чат+доска 30/70. React-канон
 // зеркалит server/session.go + runevents + chat/store.go (см. web/src/types.ts).
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
@@ -8,12 +8,13 @@ import { connectLive, type LiveClient } from "./live";
 import type { BoardView, ChatMsg, TaskRow, ProjectMeta } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
+import { RunButton } from "./Components/RunButton";
 import { Diffboard } from "./Components/Diffboard";
+import { Logboard } from "./Components/Logboard";
 import { Login } from "./Components/Login";
 import { WorkspacePicker } from "./Components/WorkspacePicker";
 import { Badge } from "./Components/Badge";
 import { GateBanner } from "./Components/GateBanner";
-import { ToolBar } from "./Components/ToolBar";
 import { GateEvent } from "./Types";
 
 const BASE = ""; // dev: Vite-прокси /api→backend; прод: embed same-origin.
@@ -33,9 +34,13 @@ export function App() {
   const [gate, setGate] = useState<GateEvent | null>(null);
   const [status, setStatus] = useState<string>("idle");
   const [detail, setDetail] = useState<string>("");
-  const [tab, setTab] = useState<"board" | "chat" | "diff">("board");
-  // Diffboard по умолчанию скрыт; открывается кнопкой ToolBar.
+  // Чат и доска видны всегда (чат 30% / доска 70%); чат можно свернуть
+  // в тонкую вертикальную полоску слева.
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  // Diffboard/Logboard по умолчанию скрыты; открываются плавающими кнопками
+  // справа внизу (взаимоисключающе).
   const [showDiffboard, setShowDiffboard] = useState(false);
+  const [showLogboard, setShowLogboard] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -66,7 +71,7 @@ export function App() {
     setError(fmtErr(e));
   };
 
-  const open = async (spec: { path_or_git?: string; git_url?: string }) => {
+  const open = async (spec: { path_or_git?: string }) => {
     setBusy(true);
     setError("");
     try {
@@ -138,7 +143,6 @@ export function App() {
     l.on("gate", (ev) => {
       try {
         setGate(ev.payload as GateEvent);
-        setTab("board");
         // Затвор мог прийти раньше снимка доски — фоново перечитаем её,
         // чтобы GateBanner показал полные карточки утверждаемых эпиков/задач.
         boardOf(BASE, project.project_name)
@@ -161,14 +165,9 @@ export function App() {
     if (!project) {
       return;
     }
-    const user: ChatMsg = {
-      id: `local-${Date.now()}`,
-      role: "user",
-      content: text,
-      agent: "user",
-      time: new Date().toISOString(),
-    };
-    setChat((prev) => [...prev, user]);
+    // Пользовательское сообщение не добавляем локально: сервер сам публикует
+    // его в шину (type=chat, role=user) ещё до запуска оркестрации, и оно
+    // прилетает через WS. Локальная вставка дублировала бы сообщение (дважды).
     try {
       await postChat(BASE, project.project_name, text);
     } catch (e) {
@@ -180,6 +179,9 @@ export function App() {
   // (stopped/error/done/idle). Повторная отправка исходной задачи продолжает
   // Kanban с текущего состояния доски (эпики/задачи уже в Redis).
   const [continuing, setContinuing] = useState(false);
+  // Синхронный флаг: иначе два быстрых клика до ре-рендера прошли бы оба
+  // (canContinue читается из замыкания) и отправили бы задачу дважды.
+  const continuingRef = useRef(false);
   const canContinue =
     !!project &&
     !!board?.meta?.task &&
@@ -188,13 +190,15 @@ export function App() {
     !continuing;
 
   const onContinue = async () => {
-    if (!canContinue) {
+    if (continuingRef.current || !canContinue) {
       return;
     }
+    continuingRef.current = true;
     setContinuing(true);
     try {
       await onSend(board!.meta!.task);
     } finally {
+      continuingRef.current = false;
       setContinuing(false);
     }
   };
@@ -246,34 +250,18 @@ export function App() {
     return <Login base={BASE} onLoggedIn={() => void onLoggedIn()} />;
   }
 
-  // Активная панель: открытый Diffboard перекрывает вкладку доски/чата.
-  const activeView = showDiffboard ? "diff" : tab;
-
-  const onSelectView = (v: "board" | "chat" | "diff") => {
-    if (v === "diff") {
-      setShowDiffboard(true);
-    } else {
-      setShowDiffboard(false);
-      setTab(v);
-    }
-  };
-
   return (
     <div className="app">
-      <ToolBar
-        hasProject={!!project}
-        activeView={activeView}
-        onSelectView={onSelectView}
-        diffVisible={showDiffboard}
-        onToggleDiff={() => setShowDiffboard((v) => !v)}
-      />
-
       <header className="top">
         <WorkspacePicker projects={projects} current={project} onOpen={open} busy={busy} />
         <div className="head-actions">
-          <button className="btn danger" onClick={onStop} disabled={!project || status !== "running"}>
-            Стоп
-          </button>
+          <RunButton
+            status={status}
+            canContinue={canContinue}
+            busy={continuing}
+            onRun={onContinue}
+            onStop={onStop}
+          />
           {protectedMode && (
             <button className="btn" onClick={() => void onLogout()}>
               Выход
@@ -300,26 +288,68 @@ export function App() {
 
       {project ? (
         <main className="panes">
-          <section className={activeView === "board" ? "pane active" : "pane"}>
-            <Dashboard board={board} onTaskUpdate={onTaskUpdate} />
-          </section>
-          <section className={activeView === "chat" ? "pane active" : "pane"}>
-            <Chatboard chat={chat} live={live} onSend={onSend} onContinue={onContinue} canContinue={canContinue} endRef={chatEnd} />
-          </section>
-          {showDiffboard && (
-            <section className="pane active diff-pane">
-              <Diffboard
-                project={project.project_name}
-                kind={project.kind}
-                showDiffboard={showDiffboard}
-                toggleDiffboard={() => setShowDiffboard(false)}
+          {!chatCollapsed && (
+            <section className="chat-pane">
+              <Chatboard
+                chat={chat}
+                live={live}
+                onSend={onSend}
+                endRef={chatEnd}
+                collapsed={false}
+                onToggleCollapse={() => setChatCollapsed(true)}
               />
             </section>
           )}
+          {chatCollapsed && (
+            <section className="chat-strip">
+              <Chatboard
+                chat={chat}
+                live={live}
+                onSend={onSend}
+                endRef={chatEnd}
+                collapsed
+                onToggleCollapse={() => setChatCollapsed(false)}
+              />
+            </section>
+          )}
+          <section className="dash-pane">
+            <Dashboard board={board} onTaskUpdate={onTaskUpdate} />
+          </section>
         </main>
       ) : (
         <div className="empty">
           <p>Откройте или создайте проект (путь к папке или git-URL).</p>
+        </div>
+      )}
+
+      {project && !showDiffboard && !showLogboard && (
+        <div className="fabs">
+          <button className="fab" onClick={() => setShowDiffboard(true)} title="Показать дифф проекта">
+            Дифф
+          </button>
+          <button className="fab" onClick={() => setShowLogboard(true)} title="Показать логи проекта">
+            Логи
+          </button>
+        </div>
+      )}
+
+      {project && (
+        <div className={"diff-drawer" + (showDiffboard || showLogboard ? " open" : "")}>
+          <Diffboard
+            project={project.project_name}
+            kind={project.kind}
+            showDiffboard={showDiffboard}
+            toggleDiffboard={() => {
+              setShowDiffboard(false);
+            }}
+          />
+          <Logboard
+            project={project.project_name}
+            showLogboard={showLogboard}
+            toggleLogboard={() => {
+              setShowLogboard(false);
+            }}
+          />
         </div>
       )}
     </div>

@@ -1,0 +1,33 @@
+// Стили умной кнопки оркестрации: пульсирующий индикатор активности.
+// База .btn — из глобальных стилей (web/src/styles.scss).
+
+.run {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+
+  .pulse {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--err, #dc2626);
+    animation: run-pulse 1.4s ease-out infinite;
+  }
+
+  &.waiting .pulse {
+    background: var(--st-review, #b45309);
+    animation: run-pulse-wait 1.6s ease-out infinite;
+  }
+}
+
+@keyframes run-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(220, 38, 38, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+
+@keyframes run-pulse-wait {
+  0% { box-shadow: 0 0 0 0 rgba(180, 83, 9, 0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(180, 83, 9, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(180, 83, 9, 0); }
+}

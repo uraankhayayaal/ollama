@@ -164,6 +164,18 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 		return err
 	}
 
+	// Задачи, зависшие «в работе» после остановленной/прерванной сессии,
+	// возвращаем в «готова к работе». Иначе их никто не исполняет (phaseExecute
+	// берёт только готовые), а незавершённая задача блокирует и pipeline
+	// (phaseLeads: очередь лидов не продвигается), и финализацию эпиков
+	// (phaseComplete) — цикл падал бы с «нет прогресса». В этом раунде других
+	// in_progress-задач ещё нет, поэтому сброс безопасен.
+	if n, err := k.resetStaleInProgress(ctx); err != nil {
+		return err
+	} else if n > 0 {
+		logging.Infof("[Kanban] зависших «в работе» задач сброшено в «готова к работе»: %d", n)
+	}
+
 	for round := 1; round <= maxKanbanRounds; round++ {
 		// Задача решена: все эпики и все задачи успешно выполнены.
 		done, err := k.store.AllDone(ctx)
@@ -468,6 +480,33 @@ func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// resetStaleInProgress возвращает задачи, зависшие в статусе «в работе» после
+// остановленной/прерванной сессии, обратно в «готова к работе», чтобы их снова
+// выдал phaseExecute. Используется прямая запись статуса (SaveTask в обход
+// ValidateTransition): перевод «в работе» → «готова к работе» конечным автоматом
+// не предусмотрен (только → «выполнена»/«отменена»), но для восстановления он
+// необходим. Вызывается один раз в начале Run — своего in_progress в тот момент
+// ещё нет.
+func (k *KanbanRunner) resetStaleInProgress(ctx context.Context) (int, error) {
+	tasks, err := k.store.ListTasks(ctx)
+	if err != nil {
+		return 0, err
+	}
+	reset := 0
+	for _, t := range tasks {
+		if t.Status != board.StatusInProgress {
+			continue
+		}
+		t.Status = board.StatusReady
+		if err := k.store.SaveTask(ctx, t); err != nil {
+			return 0, fmt.Errorf("задача %s: сброс «в работе» → «готова к работе»: %w", t.TaskID, err)
+		}
+		logging.Infof("[задача %s] перезапуск: «в работе» → «готова к работе»", t.TaskID)
+		reset++
+	}
+	return reset, nil
 }
 
 // epicPhase классифицирует эпик по фазе разработки (аналог taskPhase для задач):

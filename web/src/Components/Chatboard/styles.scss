@@ -8,6 +8,137 @@
   height: 100%;
   min-height: 0;
 
+  // Шапка: заголовок + кнопка сворачивания чата влево (справа сверху).
+  .headbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 0 0 auto;
+
+    .head-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted, #8a94a6);
+    }
+
+    .collapse-btn {
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 6px;
+      background: var(--btn, #f1f5f9);
+      color: var(--muted, #8a94a6);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--btn-hover, #e2e8f0);
+        color: var(--ink, #1b2330);
+      }
+    }
+  }
+
+  // Свёрнутый режим: тонкая вертикальная полоска слева экрана.
+  &.collapsed {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    height: 100%;
+    background: var(--card, #fff);
+
+    .expand {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      background: var(--btn, #f1f5f9);
+      color: var(--muted, #8a94a6);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--btn-hover, #e2e8f0);
+        color: var(--primary, #2563eb);
+      }
+    }
+
+    // Иконки статусов сообщений + индикатор стриминга.
+    .cstrip {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+      overflow-y: auto;
+
+      .st {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1px;
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--line, #e2e8f0);
+        border-radius: 8px;
+        background: var(--btn, #f1f5f9);
+        color: var(--muted, #8a94a6);
+
+        b {
+          font-size: 9px;
+          font-weight: 700;
+          font-variant-numeric: tabular-nums;
+          line-height: 1;
+        }
+
+        &.user {
+          color: var(--primary, #2563eb);
+        }
+        &.agent {
+          color: var(--add, #16a34a);
+        }
+        &.tool {
+          color: var(--st-analysis, #7c3aed);
+        }
+
+        // Индикатор «модель печатает»: три точки с пульсацией.
+        &.live {
+          border-style: dashed;
+          color: var(--primary, #2563eb);
+          background: #eef2ff;
+
+          .dots circle {
+            animation: dotpulse 1.2s ease-in-out infinite;
+
+            &:nth-child(2) {
+              animation-delay: 0.2s;
+            }
+            &:nth-child(3) {
+              animation-delay: 0.4s;
+            }
+          }
+        }
+      }
+    }
+
+    @keyframes dotpulse {
+      0%,
+      100% {
+        opacity: 0.25;
+      }
+      50% {
+        opacity: 1;
+      }
+    }
+  }
+
   .history {
     display: flex;
     flex-direction: column;
@@ -73,32 +204,6 @@
   @keyframes blink {
     50% {
       opacity: 0;
-    }
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-
-    .continue {
-      padding: 6px 12px;
-      font-size: 13px;
-      border: 1px solid var(--primary, #2563eb);
-      border-radius: 8px;
-      color: var(--primary, #2563eb);
-      background: var(--card, #fff);
-      cursor: pointer;
-
-      &:hover:not(:disabled) {
-        background: #eff6ff;
-      }
-
-      &:disabled {
-        opacity: 0.5;
-        cursor: default;
-        border-color: var(--line, #e2e8f0);
-        color: var(--muted, #8a94a6);
-      }
     }
   }
 

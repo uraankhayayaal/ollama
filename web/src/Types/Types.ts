@@ -28,9 +28,9 @@ export interface EpicRow {
   title: string;
   description: string;
   status: Status;
-  deps: string[];
-  order: number;
-  assigned_lead: string;
+  dependencies: string[];
+  sequence_order: number;
+  assigned_role: string;
   architecture_summary: string;
   created_at: string;
   updated_at: string;
@@ -43,8 +43,8 @@ export interface TaskRow {
   title: string;
   description: string;
   status: Status;
-  deps: string[];
-  order: number;
+  dependencies: string[];
+  sequence_order: number;
   assignee: string;
   created_at: string;
   updated_at: string;
@@ -74,8 +74,8 @@ export interface ProjectMeta {
   status: string;
   created_at: string;
   updated_at: string;
-  // Ф-2-3: для git-проектов (git_url) сервер клонирует репозиторий и ведёт
-  // приёмку через MR. Поля дублируют workspace.Info.
+  // Ф-2-3: для git-проектов (открытых по git-URL) сервер клонирует репозиторий
+  // и ведёт приёмку через MR. Поля дублируют workspace.Info.
   kind?: ProjectKind;
   git_remote?: string;
   git_branch?: string;
@@ -158,4 +158,21 @@ export interface ToolEvent {
   result?: string;
   ok?: boolean;
   time: string;
+}
+
+// Лог-файл проекта (GET /api/projects/<name>/logs).
+export interface LogFileEntry {
+  name: string;
+  path?: string;
+  size: number;
+  modified: string;
+  content: string;
+}
+
+// Ответ панели «Логи».
+export interface LogsView {
+  dir: string;
+  files: LogFileEntry[];
+  selected: string;
+  truncated?: boolean;
 }
