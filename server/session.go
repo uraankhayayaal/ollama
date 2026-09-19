@@ -310,6 +310,7 @@ func (sess *Session) approve(typ string, approved bool, reason string) error {
 // chatEvent транслирует событие агентного цикла: в чат (role=tool) и в шину
 // (type=tool) для live-таймлайна инструментов.
 func (sess *Session) chatEvent(ev runevents.Event) {
+	sess.toolTrace(ev)
 	switch ev.Type {
 	case runevents.TypeMessage:
 		sess.append(chat.RoleAssistant, ev.Content, ev.Agent, "", nil)
@@ -328,6 +329,35 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 		// проекта) и транслируем новые тоталы в шину — фронт обновляет
 		// счётчик рядом с кнопкой «Продолжить» в реальном времени.
 		sess.addTokens(ev.In, ev.Out)
+	}
+}
+
+// toolTrace пишет выбор инструмента моделью и его результат в лог проекта
+// (logs/<проект>.log), чтобы по файлу было видно, какие инструменты модель
+// вызывала и с каким исходом. Остальные типы событий (текст, дельты, токены)
+// в лог не попадают — их место в чате/шине.
+func (sess *Session) toolTrace(ev runevents.Event) {
+	who := ev.Agent
+	if who == "" {
+		who = "?"
+	}
+	switch ev.Type {
+	case runevents.TypeToolStart:
+		if ev.Arguments != "" {
+			sess.log.Detailf("[инструмент] модель (%s) вызывает %s: %s", who, ev.Tool, ev.Arguments)
+		} else {
+			sess.log.Detailf("[инструмент] модель (%s) вызывает %s", who, ev.Tool)
+		}
+	case runevents.TypeToolResult:
+		status := "ok"
+		if !ev.OK {
+			status = "ошибка"
+		}
+		result := ev.Result
+		if len(result) > 500 {
+			result = result[:500] + fmt.Sprintf("…(%d байт всего)", len(ev.Result))
+		}
+		sess.log.Detailf("[инструмент] результат %s (%s, %s): %s", ev.Tool, who, status, result)
 	}
 }
 
