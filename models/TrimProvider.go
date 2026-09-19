@@ -46,6 +46,15 @@ type chatResponse struct {
 			ToolCalls []chatToolCall `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
+	// Usage — фактический подсчёт токенов OpenAI-совместимого ответа.
+	Usage *chatUsage `json:"usage,omitempty"`
+}
+
+// chatUsage — потребление токенов запроса (OpenAI-совместимый usage).
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 // trimMaxTokens — лимит выходных токенов для Trim. Задаётся переменной
@@ -203,10 +212,20 @@ func (t *TrimProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []
 		})
 	}
 
+	// Фактический usage (prompt/completion tokens), если сервер его вернул.
+	var usage *runner.Usage
+	if chat.Usage != nil && (chat.Usage.PromptTokens > 0 || chat.Usage.CompletionTokens > 0) {
+		usage = &runner.Usage{
+			InputTokens:  chat.Usage.PromptTokens,
+			OutputTokens: chat.Usage.CompletionTokens,
+		}
+	}
+
 	return &runner.ModelReply{
 		Content:      message.Content,
 		ToolCalls:    toolCalls,
 		FinishReason: choice.FinishReason,
+		Usage:        usage,
 	}, nil
 }
 

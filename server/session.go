@@ -14,6 +14,7 @@ import (
 	"ai/logging"
 	"ai/models"
 	"ai/runevents"
+	"ai/tokens"
 	"ai/workspace"
 )
 
@@ -40,6 +41,7 @@ type Session struct {
 	router  *runevents.Router
 	chat    *chat.Store
 	board   *board.Store
+	tok     *tokens.Store
 	ctx     context.Context
 	ticks   chan struct{} // сигнал «доска могла измениться» для флашера
 	wg      sync.WaitGroup
@@ -67,6 +69,17 @@ func (s *Server) newSession(project string) (*Session, error) {
 		_ = boardStore.Close()
 		return nil, err
 	}
+	tokStore, err := tokens.NewStore(context.Background(), tokens.StoreConfig{
+		Addr:     architect.LoadConfig().RedisAddr,
+		Password: architect.LoadConfig().RedisPassword,
+		DB:       architect.LoadConfig().RedisDB,
+		Project:  project,
+	})
+	if err != nil {
+		_ = boardStore.Close()
+		_ = chatStore.Close()
+		return nil, err
+	}
 	// Файл проекта открываем сразу: первая запись (и panel логов в Web UI)
 	// не должна ждать ленивого создания каталога.
 	logging.Attach(project)
@@ -76,6 +89,7 @@ func (s *Server) newSession(project string) (*Session, error) {
 		decide:  make(chan planner.GateDecision, 1),
 		chat:    chatStore,
 		board:   boardStore,
+		tok:     tokStore,
 		ticks:   make(chan struct{}, 64),
 		log:     logging.For(project),
 	}
@@ -265,7 +279,29 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 		ok := ev.OK
 		sess.append(chat.RoleTool, ev.Result, ev.Agent, ev.Tool, &ok)
 		sess.srv.hub.publish(sess.project, "tool", ev)
+	case runevents.TypeTokenCount:
+		// Потребление токенов раунда: накапливаем в Redis (за время жизни
+		// проекта) и транслируем новые тоталы в шину — фронт обновляет
+		// счётчик рядом с кнопкой «Продолжить» в реальном времени.
+		sess.addTokens(ev.In, ev.Out)
 	}
+}
+
+// addTokens прибавляет порцию токенов раунда к счётчику проекта и публикует
+// новые итоговые суммы в шину (type=tokens).
+func (sess *Session) addTokens(in, out int64) {
+	totIn, totOut, err := sess.tok.Add(context.Background(), in, out)
+	if err != nil {
+		sess.log.Warnf("server: счётчик токенов %s: %v", sess.project, err)
+		return
+	}
+	sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: totIn, Output: totOut})
+}
+
+// tokenEvent — текущие накопленные токены проекта (вход/выход).
+type tokenEvent struct {
+	Input  int64 `json:"in"`
+	Output int64 `json:"out"`
 }
 
 // append пишет сообщение в чат (стяжку) и транслирует в шину (type=chat).
@@ -357,11 +393,11 @@ func boardView(ctx context.Context, store *board.Store) (boardSnapshot, error) {
 
 // boardSnapshot — полный снимок доски для REST/SSE.
 type boardSnapshot struct {
-	Meta  *board.Meta       `json:"meta,omitempty"`
-	Epics []*board.Epic     `json:"epics"`
-	Tasks []*board.Task     `json:"tasks"`
+	Meta  *board.Meta        `json:"meta,omitempty"`
+	Epics []*board.Epic      `json:"epics"`
+	Tasks []*board.Task      `json:"tasks"`
 	Bugs  []*board.BugReport `json:"bugs"`
-	Total *boardTotal       `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
+	Total *boardTotal        `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
 }
 
 // boardTotal — полные счётчики доски (когда снимок ограничен limit/offset).

@@ -3,12 +3,13 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, boardOf, chatHistory, gateDecide, listProjects, logout, openProject, postChat, sessionStop, updateTask } from "./Api";
+import { authStatus, boardOf, chatHistory, gateDecide, listProjects, logout, openProject, postChat, projectTokens, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { BoardView, ChatMsg, TaskRow, ProjectMeta, LogMessage } from "@/Types";
+import type { BoardView, ChatMsg, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
+import { TokensCounter } from "./Components/TokensCounter";
 import { Diffboard } from "./Components/Diffboard";
 import { Logboard } from "./Components/Logboard";
 import { Login } from "./Components/Login";
@@ -31,6 +32,10 @@ export function App() {
   const [project, setProject] = useState<ProjectMeta | null>(null);
   const [board, setBoard] = useState<BoardView | null>(null);
   const [chat, setChat] = useState<ChatMsg[]>([]);
+  // Счётчик токенов проекта (вход/выход): инициализируется REST-запросом при
+  // открытии проекта, далее обновляется событиями WS type=tokens в реальном
+  // времени (каждый раунд модели прибавляет порцию).
+  const [tokens, setTokens] = useState<ProjectTokens>({ in: 0, out: 0 });
   // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3): заполняется
   // событиями chat_delta и схлопывается в историю при финальном chat.
   const [live, setLive] = useState<{ id: string; agent: string; content: string } | null>(null);
@@ -117,14 +122,22 @@ export function App() {
     setChat([]);
     setLive(null);
     setBoard(null);
+    // Счётчик токенов принадлежит прошлому проекту — обнуляем, иначе
+    // счётчик подмешает чужие значения до прихода свежего REST-ответа.
+    setTokens({ in: 0, out: 0 });
     // Накопитель строк логов принадлежит прошлому проекту — обнуляем, иначе
     // Logboard подмешает чужие строки и заблокирует стрим нового проекта.
     setLogLines(new Map());
     (async () => {
       try {
-        const [b, h] = await Promise.all([boardOf(BASE, project.project_name), chatHistory(BASE, project.project_name)]);
+        const [b, h, tk] = await Promise.all([
+          boardOf(BASE, project.project_name),
+          chatHistory(BASE, project.project_name),
+          projectTokens(BASE, project.project_name),
+        ]);
         setBoard(b);
         setChat(h);
+        setTokens(tk);
       } catch (e) {
         fail(e);
       }
@@ -169,6 +182,11 @@ export function App() {
         const p = ev.payload as { status?: string; detail?: string };
         setStatus(p.status ?? "running");
         setDetail(p.detail ?? "");
+      } catch {}
+    });
+    l.on("tokens", (ev) => {
+      try {
+        setTokens(ev.payload as ProjectTokens);
       } catch {}
     });
     l.on("log", (ev) => {
@@ -281,6 +299,7 @@ export function App() {
       <header className="top">
         <WorkspacePicker projects={projects} current={project} onOpen={open} busy={busy} />
         <div className="head-actions">
+          {project && <TokensCounter in={tokens.in} out={tokens.out} />}
           <RunButton
             status={status}
             canContinue={canContinue}

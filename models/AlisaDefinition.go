@@ -217,10 +217,20 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 		})
 	}
 
+	// Фактический usage (prompt/completion tokens), если Yandex его вернул.
+	var usage *runner.Usage
+	if response.Usage.JSON.PromptTokens.Valid() && response.Usage.JSON.CompletionTokens.Valid() {
+		usage = &runner.Usage{
+			InputTokens:  int(response.Usage.PromptTokens),
+			OutputTokens: int(response.Usage.CompletionTokens),
+		}
+	}
+
 	return &runner.ModelReply{
 		Content:      message.Content,
 		ToolCalls:    toolCalls,
 		FinishReason: string(response.Choices[0].FinishReason),
+		Usage:        usage,
 	}, nil
 }
 

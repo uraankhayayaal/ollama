@@ -9,6 +9,7 @@
 //   status— статус сессии (running|waiting|done|stopped|error)
 //   diff  — дифф (в Ф-2; пока тип-заглушка)
 //   log   — новая строка лога (real-time, logMessage)
+//   tokens— накопленные токены проекта (вход/выход, ProjectTokens)
 //
 // Транспорт устойчивый: при разрыве переподключается по возрастающей
 // задержке (до 5 c) и перезапрашивает снимки, которые могли быть пропущены
@@ -30,7 +31,8 @@ export type EventTypeName =
   | "tool"
   | "status"
   | "diff"
-  | "log";
+  | "log"
+  | "tokens";
 
 export interface LiveClient {
   close(): void;

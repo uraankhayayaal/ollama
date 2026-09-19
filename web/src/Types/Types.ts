@@ -187,3 +187,11 @@ export interface LogMessage {
   file: string;    // имя файла лога
   line: string;    // одна строка лога
 }
+
+// Счётчик токенов проекта (GET /api/projects/:id/tokens и WS type=tokens):
+// накопленные за время жизни проекта входные (in) и выходные (out) токены.
+// Проект может использовать разные LLM — суммы общие для всех раундов.
+export interface ProjectTokens {
+  in: number;
+  out: number;
+}

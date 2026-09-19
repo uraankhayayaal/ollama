@@ -12,6 +12,7 @@ import type {
   DiffView,
   LogsView,
   ProjectMeta,
+  ProjectTokens,
   TaskRow,
 } from "@/Types";
 
@@ -167,6 +168,17 @@ export async function chatHistory(
   return req<ChatMsg[]>(
     "GET",
     `${base}/api/projects/${enc(project)}/chat?limit=${limit}`,
+  );
+}
+
+// Накопленные токены проекта (вход/выход).
+export async function projectTokens(
+  base: string,
+  project: string,
+): Promise<ProjectTokens> {
+  return req<ProjectTokens>(
+    "GET",
+    `${base}/api/projects/${enc(project)}/tokens`,
   );
 }
 

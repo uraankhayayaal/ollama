@@ -129,6 +129,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 	var content strings.Builder
 	var toolCalls []tools.ToolCall
 	var doneReason string
+	var usage *runner.Usage
 
 	err := o.client.Chat(ctx, req, func(resp api.ChatResponse) error {
 		if resp.Message.Content != "" {
@@ -136,6 +137,15 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		}
 		if resp.DoneReason != "" {
 			doneReason = resp.DoneReason
+		}
+
+		// Финальный фрагмент стрима несёт фактический подсчёт токенов
+		// (prompt_eval_count — весь вход, eval_count — выход модели).
+		if resp.Done && (resp.PromptEvalCount > 0 || resp.EvalCount > 0) {
+			usage = &runner.Usage{
+				InputTokens:  resp.PromptEvalCount,
+				OutputTokens: resp.EvalCount,
+			}
 		}
 
 		if len(resp.Message.ToolCalls) > 0 {
@@ -177,5 +187,5 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		return nil, fmt.Errorf("Ошибка выполнения Chat: %v", err)
 	}
 
-	return &runner.ModelReply{Content: content.String(), ToolCalls: toolCalls, FinishReason: doneReason}, nil
+	return &runner.ModelReply{Content: content.String(), ToolCalls: toolCalls, FinishReason: doneReason, Usage: usage}, nil
 }

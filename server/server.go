@@ -65,7 +65,7 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 
-// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
+	// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
 	// (baselines) и кэш разобраных диффов git-проектов (diffs, Ф-3).
 	diffMu    sync.Mutex
 	baselines map[string]*tools.Snap
@@ -163,6 +163,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}", s.handleGetBoard)
 	mux.HandleFunc("POST /api/projects/{id}/chat", s.handlePostChat)
 	mux.HandleFunc("GET /api/projects/{id}/chat", s.handleChatHistory)
+	mux.HandleFunc("GET /api/projects/{id}/tokens", s.handleGetTokens)
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
@@ -581,6 +582,22 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// handleGetTokens возвращает накопленные токены проекта (вход/выход).
+func (s *Server) handleGetTokens(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
+		return
+	}
+	in, out, err := sess.tok.Get(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tokenEvent{Input: in, Output: out})
 }
 
 // --- REST: HITL ---

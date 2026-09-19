@@ -28,21 +28,26 @@ const (
 	TypeToolStart EventType = "tool_start"
 	// TypeToolResult — результат выполнения инструмента.
 	TypeToolResult EventType = "tool_result"
+	// TypeTokenCount — потребление токенов раунда (вход/выход). Сервер
+	// накапливает счётчик в Redis и транслирует тоталы в WS как type=tokens.
+	TypeTokenCount EventType = "tokens"
 )
 
 // Event — событие агентного цикла для трансляции в Web UI.
 type Event struct {
 	Type      EventType `json:"type"`
-	Agent     string    `json:"agent,omitempty"`      // имя агента (через WithAgent)
-	Role      string    `json:"role,omitempty"`       // assistant
-	Content   string    `json:"content,omitempty"`    // текст ответа модели / потоковый фрагмент
-	StreamID  string    `json:"stream_id,omitempty"`  // идентификатор потока (для message_delta)
-	Tool      string    `json:"tool,omitempty"`       // имя инструмента
-	Arguments string    `json:"arguments,omitempty"`  // аргументы вызова (обрезаны)
-	Result    string    `json:"result,omitempty"`     // результат (обрезан)
-	OK        bool      `json:"ok"`                   // успешен ли результат инструмента
-	Truncated bool      `json:"truncated,omitempty"`  // текст/результат обрезаны по лимиту
-	Time      time.Time `json:"time"`                 // момент события (UTC)
+	Agent     string    `json:"agent,omitempty"`     // имя агента (через WithAgent)
+	Role      string    `json:"role,omitempty"`      // assistant
+	Content   string    `json:"content,omitempty"`   // текст ответа модели / потоковый фрагмент
+	StreamID  string    `json:"stream_id,omitempty"` // идентификатор потока (для message_delta)
+	Tool      string    `json:"tool,omitempty"`      // имя инструмента
+	Arguments string    `json:"arguments,omitempty"` // аргументы вызова (обрезаны)
+	Result    string    `json:"result,omitempty"`    // результат (обрезан)
+	OK        bool      `json:"ok"`                  // успешен ли результат инструмента
+	Truncated bool      `json:"truncated,omitempty"` // текст/результат обрезаны по лимиту
+	In        int64     `json:"in,omitempty"`        // входные токены раунда (для TypeTokenCount)
+	Out       int64     `json:"out,omitempty"`       // выходные токены раунда (для TypeTokenCount)
+	Time      time.Time `json:"time"`                // момент события (UTC)
 }
 
 // Reporter — назначение событий от runner.Generate. Небезопасен для вызовов
@@ -56,6 +61,8 @@ type Reporter interface {
 	OnMessageDelta(streamID, content string)
 	OnToolStart(tool, args string)
 	OnToolResult(tool, result string, ok bool)
+	// OnTokens — потребление токенов одного раунда модели (вход/выход).
+	OnTokens(in, out int64)
 }
 
 // Sink — получатель событий. Может вызываться из нескольких горутин.
@@ -108,6 +115,11 @@ func (r *Router) OnToolStart(tool, args string) {
 // OnToolResult сообщает результат инструмента.
 func (r *Router) OnToolResult(tool, result string, ok bool) {
 	r.emit(Event{Type: TypeToolResult, Tool: tool, Result: result, OK: ok})
+}
+
+// OnTokens сообщает потребление токенов одного раунда модели.
+func (r *Router) OnTokens(in, out int64) {
+	r.emit(Event{Type: TypeTokenCount, In: in, Out: out})
 }
 
 func (r *Router) emit(ev Event) {
