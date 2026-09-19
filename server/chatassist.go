@@ -10,6 +10,7 @@ import (
 	"ai/chat"
 	"ai/models"
 	"ai/projects"
+	"ai/runevents"
 )
 
 // --- Q&A-ассистент ---
@@ -74,7 +75,11 @@ func (sess *Session) runChatAssist(ctx context.Context, question string, provide
 			dir = inf.Root
 		}
 		asst := chatassist.NewAssistantInDir(dir, prompt, sess.board)
-		rep, err := provider.Generate(ctx, asst)
+		// Репортёр в контексте диалога: ответ ассистента и потребление токенов
+		// транслируются в живую шину (type=chat_delta/chat, type=tokens), иначе
+		// счётчик токенов чата остаётся на нулях.
+		rctx := runevents.WithReporter(ctx, sess.router.WithAgent("assistant"))
+		rep, err := provider.Generate(rctx, asst)
 		if err != nil {
 			sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)
 			return

@@ -113,6 +113,11 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.running = true
 	sess.stopped = false
 	cctx, cancel := context.WithCancel(ctx)
+	// Репортёр в контексте оркестрации: runner.Generate по нему транслирует
+	// текст модели, вызовы инструментов и потребление токенов в живую шину
+	// (type=chat / type=tool / type=tokens). Без этого Web UI не видит ни
+	// логов раундов, ни счётчика токенов (всё стоит на нулях).
+	cctx = runevents.WithReporter(cctx, sess.router)
 	sess.ctx = cctx
 	sess.cancel = func() { cancel() }
 	sess.mu.Unlock()
