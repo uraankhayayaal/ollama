@@ -1,9 +1,9 @@
 # План: Qdrant — контекстная память (RAG) для ИИ-агентов
 
-Статус: **ПЛАН (реализация позже)**. Источник — прежний `PLAN-qdrant.md`.
-Формат — как в `PLAN-webui.md` / `PLAN-lsp.md`: статус, решения, привязка к
-текущему коду, этапы с чекбоксами, верификация. Обновлять файл по мере
-выполнения этапов (чекбоксы `[x]`).
+Статус: **Ф-1 выполнена** (клиент Qdrant + эмбеддинги); далее Ф-2 — чанкинг и
+полная индексация. Формат — как в `PLAN-webui.md` / `PLAN-lsp.md`: статус,
+решения, привязка к текущему коду, этапы с чекбоксами, верификация. Обновлять
+файл по мере выполнения этапов (чекбоксы `[x]`).
 
 ## Цель
 
@@ -94,15 +94,15 @@
 ## Этапы и чеклист
 
 ### Ф-1 — Инфраструктура: клиент Qdrant + эмбеддинги
-- [ ] `rag/client.go`: gRPC-клиент (`QDRANT_ADDR`, порт 6334), инициализация и
+- [x] `rag/client.go`: gRPC-клиент (`QDRANT_ADDR`, порт 6334), инициализация и
       create-if-not-exists коллекции `project_code_base` (`Distance_Cosine`,
       размерность из модели эмбеддингов)
-- [ ] `rag/embed.go`: `Embed(text) ([]float32, error)` через Ollama —
+- [x] `rag/embed.go`: `Embed(text) ([]float32, error)` через Ollama —
       HTTP `/api/embeddings` (модель `EMBEDDING_MODEL`, по умолчанию
       `nomic-embed-text`)
-- [ ] Hermetic-тесты: fake-клиент Qdrant (интерфейс), маршрут эмбеддингов;
+- [x] Hermetic-тесты: fake-клиент Qdrant (интерфейс), маршрут эмбеддингов;
       degrade при недоступном Qdrant
-- [ ] `.env.example`: `QDRANT_ADDR`, `QDRANT_COLLECTION_NAME`, `EMBEDDING_MODEL`
+- [x] `.env.example`: `QDRANT_ADDR`, `QDRANT_COLLECTION_NAME`, `EMBEDDING_MODEL`
 
 ### Ф-2 — Чанкинг и полная индексация
 - [ ] `rag/chunk.go`: структурная нарезка (функции/методы/структуры Go через
