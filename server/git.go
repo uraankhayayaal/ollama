@@ -67,7 +67,7 @@ func (s *Server) handleOpenGitProject(w http.ResponseWriter, r *http.Request, gi
 		writeErr(w, http.StatusBadRequest, "ошибка регистрации: "+err.Error())
 		return
 	}
-	logging.Infof("git-проект %s: клон %s → ветка %s (база %s)", name, repo.Remote, repo.Branch, repo.Base)
+	logging.For(name).Infof("git-проект %s: клон %s → ветка %s (база %s)", name, repo.Remote, repo.Branch, repo.Base)
 	s.writeProjectMetaFromInfo(w, inf)
 }
 
@@ -222,7 +222,7 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		for _, f := range allFiles {
 			p, err := snap.DiffText(f)
 			if err != nil {
-				logging.Warnf("diff %s: патч файла %s: %v", inf.Name, f, err)
+				logging.For(inf.Name).Warnf("diff %s: патч файла %s: %v", inf.Name, f, err)
 				continue
 			}
 			patches[f] = p
@@ -251,7 +251,7 @@ func (s *Server) snapDiff(inf workspace.Info) ([]string, []string, []string, err
 			return nil, nil, nil, err
 		}
 		s.baselines[inf.Name] = snap
-		logging.Infof("diff %s: baseline-снимок зафиксирован (лениво)", inf.Name)
+		logging.For(inf.Name).Infof("diff %s: baseline-снимок зафиксирован (лениво)", inf.Name)
 		return []string{}, []string{}, []string{}, nil
 	}
 	return snap.Diff()
@@ -272,11 +272,11 @@ func (s *Server) ensureBaseline(inf workspace.Info) {
 	}
 	snap, err := tools.NewSnap(inf.Root)
 	if err != nil {
-		logging.Warnf("diff %s: baseline-снимок не зафиксирован: %v", inf.Name, err)
+		logging.For(inf.Name).Warnf("diff %s: baseline-снимок не зафиксирован: %v", inf.Name, err)
 		return
 	}
 	s.baselines[inf.Name] = snap
-	logging.Infof("diff %s: baseline-снимок зафиксирован при открытии", inf.Name)
+	logging.For(inf.Name).Infof("diff %s: baseline-снимок зафиксирован при открытии", inf.Name)
 }
 
 // --- REST: приёмка «Принять → MR» ---

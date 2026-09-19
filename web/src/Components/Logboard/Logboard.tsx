@@ -8,7 +8,7 @@
 // Real-time: строки из live-через WebSocket-_connection_ актуализируются
 // мгновенно. Потоковые строки приходят через props.logLines.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { projectLogs } from "@/Api";
 import type { LogsView } from "@/Types";
 import "./styles.scss";
@@ -31,11 +31,17 @@ export function Logboard(props: LogboardProps) {
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
-  // Счётчик примонтированой строки на файл: при открытии/переключении =
-  // длина HTTP-содержимого, при получении новой строки — увеличивается.
-  const idx = useRef<Map<string, number>>(new Map());
-  // Текущие отрендеренные строки (HTTP + stream). Обновляется через state,
-  // чтобы React корректно ре-рендерал.
+  // props.logLines — НАКОПИТЕЛЬНЫЙ массив всех строк, присланных по WS с
+  // момента открытия проекта (App.tsx только добавляет). consumed[file] —
+  // сколько из них уже отрисовано. Это разные системы отсчёта, поэтому
+  // сравнивать их длины напрямую нельзя (HTTP-снапшот — весь файл).
+  const consumed = useRef<Map<string, number>>(new Map());
+  // Свежее значение props для эффекта снапшота: не кладём logLines в deps,
+  // иначе каждая строка стрима переставляла бы lines из устаревшего HTTP.
+  const logLinesRef = useRef(props.logLines);
+  logLinesRef.current = props.logLines;
+
+  // Текущие отрендеренные строки (HTTP-снапшот + поток).
   const [lines, setLines] = useState<string[]>([]);
 
   const scrollToBottom = useCallback(() => {
@@ -59,59 +65,60 @@ export function Logboard(props: LogboardProps) {
     }
   }, [props.project]);
 
+  // Смена проекта: накопитель строк App.tsx обнуляется, поэтому счётчики
+  // потреблённого надо сбросить — иначе stream.length <= done заблокирует
+  // добавление строк нового проекта.
+  useEffect(() => {
+    consumed.current.clear();
+    setLines([]);
+  }, [props.project]);
+
   useEffect(() => {
     void load();
   }, [load]);
 
-  // Синхронизируем `lines` при открытии/смене файла.
+  // Лог-файл может появиться позже открытия панели (проект только стартовал),
+  // а список файлов приходит лишь из REST. Добираем его редким поллингом, но
+  // только когда это правда нужно — иначе каждую строку стрима пересобирали
+  // бы весь снапшот.
+  useEffect(() => {
+    if (props.showLogboard === false) return;
+    const known = new Set((logs?.files ?? []).map((f) => f.name));
+    const stale =
+      known.size === 0 || [...props.logLines.keys()].some((f) => !known.has(f));
+    if (!stale) return;
+    const t = window.setInterval(() => void load(), 3000);
+    return () => window.clearInterval(t);
+  }, [props.showLogboard, logs, props.logLines, load]);
+
+  // Синхронизируем `lines` при открытии/смене файла (HTTP-снапшот).
   useEffect(() => {
     if (!logs || !selected) return;
     const entry = logs.files.find((f) => f.name === selected);
     if (!entry) return;
-    const arr = entry.content.split("\n");
-    idx.current.set(selected, arr.length - 1);
-    setLines(arr);
+    // Снапшот уже содержит строки, пришедшие по WS до него, — помечаем их
+    // потреблёнными, иначе стрим-эффект ниже продублирует их в хвост.
+    consumed.current.set(selected, logLinesRef.current.get(selected)?.length ?? 0);
+    setLines(entry.content.split("\n"));
   }, [logs, selected]);
 
-  // Приход новой строки из stream — append к текущему файлу.
+  // Новые строки из потока — дописываем только невиданный хвост.
   useEffect(() => {
     if (!selected) return;
-    const cur = selected; // capture для сужения типа внутри callback
-    const stream = props.logLines.get(cur);
-    // На вход приходят ВСЕ потоковые строки всех файлов — берём только свой.
+    const stream = props.logLines.get(selected);
     if (!stream) return;
-    setLines((prev) => {
-      const last = idx.current.get(selected) ?? prev.length - 1;
-      // Если stream меньше предыдущего — сброс (новый заход на тот же файл).
-      if (stream.length <= last) return prev;
-      const next = [...prev];
-      for (let i = last; i < stream.length; i++) {
-        const ln = stream[i]!;
-        next.push(ln);
-      }
-      idx.current.set(cur, stream.length - 1);
-      return next;
-    });
+    const done = consumed.current.get(selected) ?? 0;
+    if (stream.length <= done) return;
+    consumed.current.set(selected, stream.length);
+    setLines((prev) => [...prev, ...stream.slice(done)]);
   }, [selected, props.logLines]);
 
-  // Разрешить отложенный скролл (CSS-анимация drawer сдвигает layout —
-  // нужно дождаться обновления DOM, которое произойдёт после setState).
-  const [scrollPending, setScrollPending] = useState(false);
-
-  useEffect(() => {
-    if (lines.length > 0) {
-      // lines обновлены — откладываем скролл на следующий макет, когда
-      // container уже имеет вычисленную высоту.
-      setScrollPending(true);
-    }
-  }, [lines]);
-
-  useEffect(() => {
-    if (scrollPending) {
-      setScrollPending(false);
-      scrollToBottom();
-    }
-  }, [scrollPending, scrollToBottom]);
+  // Авто-скролл вниз при появлении/смене строк. useLayoutEffect: DOM уже
+  // содержит новые строки, но браузер ещё не рисовал — scrollHeight
+  // вычисляется синхронно, поэтому CSS-анимация шторки не мешает.
+  useLayoutEffect(() => {
+    scrollToBottom();
+  }, [lines, scrollToBottom]);
 
   return (
     <div className={"logboard" + (props.showLogboard === false ? " hidden" : "")}>

@@ -123,7 +123,9 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() { errCh <- httpSrv.ListenAndServe() }()
 
 	// Фоновый goroutine logBroker: сканирует файлы логов проектов.
-	s.logBroker.Run(ctx)
+	// Обязательно в горутине: Run блокирует до ctx.Done, иначе select ниже
+	// (сигналы SIGINT/SIGTERM и ошибка ListenAndServe) недостижим.
+	go s.logBroker.Run(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -137,6 +139,8 @@ func (s *Server) Run(ctx context.Context) error {
 	log.Println("server: завершение...")
 	_ = httpSrv.Shutdown(context.Background())
 	s.hub.CloseAll()
+	// Закрываем лог-файлы процесса и всех проектов, чтобы хвосты не потерялись.
+	logging.Close()
 	return nil
 }
 
@@ -515,13 +519,14 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Пользовательское сообщение → чат (для истории).
+	// Пользовательское сообщение → чат (для истории) и в лог проекта.
+	sess.log.Infof("[чат] пользователь: %s", truncateText(body.Message, 300))
 	if _, err := sess.chat.Append(context.Background(), chat.Message{
 		Role:    chat.RoleUser,
 		Content: body.Message,
 		Agent:   "user",
 	}); err != nil {
-		logging.Warnf("server: append user msg %s: %v", project, err)
+		sess.log.Warnf("server: append user msg %s: %v", project, err)
 	}
 
 	// Публикуем в шину для live-таймлайна.
@@ -542,13 +547,16 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 	// Вопрос/запрос статуса отвечает Q&A-ассистент (без оркестрации);
 	// задача на разработку запускает ранер.
 	if isChatQuestion(body.Message) {
+		sess.log.Infof("[чат] маршрут: вопрос → Q&A-ассистент (оркестрация не запускается)")
 		sess.runChatAssist(context.Background(), body.Message, prov)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
 
 	// Запускаем runner.
+	sess.log.Infof("[чат] маршрут: задача → оркестрация Kanban")
 	if err := sess.start(context.Background(), body.Message, prov); err != nil {
+		sess.log.Warnf("[чат] запуск оркестрации отклонён: %v", err)
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}

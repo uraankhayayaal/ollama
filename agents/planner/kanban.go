@@ -42,6 +42,10 @@ type KanbanRunner struct {
 	provider models.LLMProvider
 	store    *board.Store
 	gate     HumanGate
+	// log — лог проекта (logs/<проект>.log). Устанавливается в Run, когда имя
+	// проекта известно; до этого nil, и сообщения идут в файл по умолчанию
+	// (нулевой получатель logging.Logger допустим — проверки не нужны).
+	log *logging.Logger
 }
 
 // GateDecision — решение человека по HITL-затвору.
@@ -91,10 +95,10 @@ func (k *KanbanRunner) waitEpics(ctx context.Context) error {
 		return fmt.Errorf("затвор «утвердить эпики»: %w", err)
 	}
 	if dec.Approved {
-		logging.Infof("[HITL] эпики утверждены (%d): %s", len(epics), epicList(epics))
+		k.log.Infof("[HITL] эпики утверждены (%d): %s", len(epics), epicList(epics))
 		return nil
 	}
-	logging.Infof("[HITL] эпики отклонены (%s), переделываем", truncateText(dec.Reason, 120))
+	k.log.Infof("[HITL] эпики отклонены (%s), переделываем", truncateText(dec.Reason, 120))
 	return k.rework(ctx, epics)
 }
 
@@ -114,10 +118,10 @@ func (k *KanbanRunner) waitReadyTasks(ctx context.Context) error {
 		return fmt.Errorf("затвор «утвердить задачи»: %w", err)
 	}
 	if dec.Approved {
-		logging.Infof("[HITL] задачи утверждены (%d)", len(ready))
+		k.log.Infof("[HITL] задачи утверждены (%d)", len(ready))
 		return nil
 	}
-	logging.Infof("[HITL] задачи отклонены (%s), переделываем эпики", truncateText(dec.Reason, 120))
+	k.log.Infof("[HITL] задачи отклонены (%s), переделываем эпики", truncateText(dec.Reason, 120))
 	epicIDs := map[string]struct{}{}
 	for _, t := range ready {
 		epicIDs[t.EpicID] = struct{}{}
@@ -154,12 +158,16 @@ func (k *KanbanRunner) rework(ctx context.Context, epics []*board.Epic) error {
 		}
 		deleted++
 	}
-	logging.Infof("[HITL] переделка: удалено эпиков: %d, проблем: %v", deleted, firstErr)
+	k.log.Infof("[HITL] переделка: удалено эпиков: %d, проблем: %v", deleted, firstErr)
 	return firstErr
 }
 
 // Run исполняет Kanban-оркестрацию до решения задачи пользователя.
 func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) error {
+	// Все сообщения ранера — в лог своего проекта: в режиме serve один процесс
+	// ведёт несколько проектов, и общий файл смешал бы их строки.
+	k.log = logging.For(projectName)
+
 	if err := k.ensureMeta(ctx, projectName, taskText); err != nil {
 		return err
 	}
@@ -173,7 +181,7 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 	if n, err := k.resetStaleInProgress(ctx); err != nil {
 		return err
 	} else if n > 0 {
-		logging.Infof("[Kanban] зависших «в работе» задач сброшено в «готова к работе»: %d", n)
+		k.log.Infof("[Kanban] зависших «в работе» задач сброшено в «готова к работе»: %d", n)
 	}
 
 	for round := 1; round <= maxKanbanRounds; round++ {
@@ -187,7 +195,7 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 				meta.Status = board.StatusDone
 				_ = k.store.SaveMeta(ctx, meta)
 			}
-			logging.Infof("[доска] задача пользователя решена: все эпики и задачи выполнены")
+			k.log.Infof("[доска] задача пользователя решена: все эпики и задачи выполнены")
 			return nil
 		}
 
@@ -271,7 +279,7 @@ func (k *KanbanRunner) ensureMeta(ctx context.Context, projectName, taskText str
 		if err := k.store.SaveMeta(ctx, meta); err != nil {
 			return err
 		}
-		logging.Infof("[доска] проект %q создан: %s", projectName, truncateText(taskText, 80))
+		k.log.Infof("[доска] проект %q создан: %s", projectName, truncateText(taskText, 80))
 	}
 	if meta.Status != board.StatusDone {
 		meta.Status = board.StatusInProgress
@@ -312,7 +320,7 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 	if len(epics) == 0 {
 		return false, fmt.Errorf("фаза архитектора: модель не опубликовала эпики (submit_architecture_backlog не вызван)")
 	}
-	logging.Infof("[Системный архитектор] опубликованы эпики: %s", epicList(epics))
+	k.log.Infof("[Системный архитектор] опубликованы эпики: %s", epicList(epics))
 	return true, nil
 }
 
@@ -371,7 +379,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err)
 		}
 	}
-	logging.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
+	k.log.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
 		leadName(epic), epic.TaskID, truncateText(epic.Title, 60), needResync)
 
 	resp, err := k.provider.Generate(ctx, lead)
@@ -389,7 +397,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 		if len(tasks) == 0 {
 			return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов (задачи не созданы)", epic.TaskID)
 		}
-		logging.Infof("[эпик %s] лимит раундов лида, но опубликовано задач: %d — продолжаем с частичной декомпозицией", epic.TaskID, len(tasks))
+		k.log.Infof("[эпик %s] лимит раундов лида, но опубликовано задач: %d — продолжаем с частичной декомпозицией", epic.TaskID, len(tasks))
 	}
 
 	// Инструментный путь: лид мог создать/изменить задачи прямо на доске
@@ -418,9 +426,9 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 					return false, fmt.Errorf("эпик %s: создание задачи %s: %w", epic.TaskID, ts.TaskID, err)
 				}
 			}
-			logging.Infof("[эпик %s] декомпозирован на %d задач (JSON-fallback)", epic.TaskID, len(dec))
+			k.log.Infof("[эпик %s] декомпозирован на %d задач (JSON-fallback)", epic.TaskID, len(dec))
 		} else {
-			logging.Infof("[эпик %s] декомпозирован на %d задач (инструменты доски)", epic.TaskID, len(tasks))
+			k.log.Infof("[эпик %s] декомпозирован на %d задач (инструменты доски)", epic.TaskID, len(tasks))
 		}
 	}
 
@@ -445,23 +453,23 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 			}
 		}
 	}
-	logging.Infof("[эпик %s] готов (ревизия %d, синхронизировано лидом %d)", epic.TaskID, synced.Revision, synced.LeadSyncedRev)
+	k.log.Infof("[эпик %s] готов (ревизия %d, синхронизировано лидом %d)", epic.TaskID, synced.Revision, synced.LeadSyncedRev)
 	// «Список обновлённых задач»: после декомпозиции/ревизии лида печатаем
 	// в консоль актуальный состав задач эпика, чтобы человек видел итог.
 	published, listErr := k.store.TasksByEpic(ctx, synced.TaskID)
 	if listErr != nil {
 		return false, fmt.Errorf("эпик %s: чтение задач после декомпозиции: %w", synced.TaskID, listErr)
 	}
-	printLeadTasks(synced, published)
+	printLeadTasks(k.log, synced, published)
 	return true, nil
 }
 
-// printLeadTasks выводит в консоль (через logging.Infof) текущие задачи эпика
-// после работы лида: ID, статус, исполнитель, заголовок и приоритет/параллельность.
-func printLeadTasks(epic *board.Epic, tasks []*board.Task) {
-	logging.Infof("[Список обновлённых задач] эпик %s (%s) — %d задач:", epic.TaskID, truncateText(epic.Title, 60), len(tasks))
+// printLeadTasks выводит в консоль и лог проекта текущие задачи эпика после
+// работы лида: ID, статус, исполнитель, заголовок и приоритет/параллельность.
+func printLeadTasks(log *logging.Logger, epic *board.Epic, tasks []*board.Task) {
+	log.Infof("[Список обновлённых задач] эпик %s (%s) — %d задач:", epic.TaskID, truncateText(epic.Title, 60), len(tasks))
 	for _, t := range tasks {
-		logging.Infof("  - %s [%s] -> %s | %s (порядок %d, параллельно: %v)",
+		log.Infof("  - %s [%s] -> %s | %s (порядок %d, параллельно: %v)",
 			t.TaskID, t.Status.Label(), t.Assignee, truncateText(t.Title, 60), t.SequenceOrder.Int(), t.CanRunParallel.Bool())
 	}
 }
@@ -503,7 +511,7 @@ func (k *KanbanRunner) resetStaleInProgress(ctx context.Context) (int, error) {
 		if err := k.store.SaveTask(ctx, t); err != nil {
 			return 0, fmt.Errorf("задача %s: сброс «в работе» → «готова к работе»: %w", t.TaskID, err)
 		}
-		logging.Infof("[задача %s] перезапуск: «в работе» → «готова к работе»", t.TaskID)
+		k.log.Infof("[задача %s] перезапуск: «в работе» → «готова к работе»", t.TaskID)
 		reset++
 	}
 	return reset, nil
@@ -612,7 +620,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusAnalysis); err != nil {
 			return false, fmt.Errorf("задача %s: новая -> в анализе: %w", t.TaskID, err)
 		}
-		logging.Infof("[задача %s] новая → в анализе", t.TaskID)
+		k.log.Infof("[задача %s] новая → в анализе", t.TaskID)
 		progress = true
 	}
 
@@ -636,7 +644,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
 			return false, fmt.Errorf("задача %s: в анализе -> готова к работе: %w", t.TaskID, err)
 		}
-		logging.Infof("[задача %s] в анализе → готова к работе", t.TaskID)
+		k.log.Infof("[задача %s] в анализе → готова к работе", t.TaskID)
 		progress = true
 	}
 	return progress, nil
@@ -660,7 +668,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 	for _, t := range ready {
 		// Одна задача на одного специалиста за цикл.
 		if busy[t.Assignee] {
-			logging.Detailf("[задача %s] ждёт: специалист %s уже занят в этом цикле", t.TaskID, t.Assignee)
+			k.log.Detailf("[задача %s] ждёт: специалист %s уже занят в этом цикле", t.TaskID, t.Assignee)
 			continue
 		}
 		busy[t.Assignee] = true
@@ -681,7 +689,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			sb.SetBoardStore(k.store)
 		}
 
-		logging.Infof("[задача %s] специалист %s выполняет: %s",
+		k.log.Infof("[задача %s] специалист %s выполняет: %s",
 			t.TaskID, t.Assignee, truncateText(t.Title, 60))
 		resp, err := k.provider.Generate(ctx, specialist)
 		if err != nil {
@@ -700,12 +708,12 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("задача %s: чтение статуса после работы: %w", t.TaskID, err)
 		}
 		if current.Status == board.StatusDone {
-			logging.Infof("[задача %s] в работе → выполнена (агент подтвердил сам)", t.TaskID)
+			k.log.Infof("[задача %s] в работе → выполнена (агент подтвердил сам)", t.TaskID)
 		} else {
 			if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
 				return false, fmt.Errorf("задача %s: в работе -> выполнена: %w", t.TaskID, err)
 			}
-			logging.Infof("[задача %s] в работе → выполнена (fallback: агент не сменил статус)", t.TaskID)
+			k.log.Infof("[задача %s] в работе → выполнена (fallback: агент не сменил статус)", t.TaskID)
 		}
 		progress = true
 	}
@@ -753,7 +761,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if resp != nil && resp.Truncated {
 			return false, fmt.Errorf("фаза триажа багрепортов: цикл остановлен по лимиту раундов")
 		}
-		logging.Infof("[QA Lead] триаж %d багрепортов", len(newBugs))
+		k.log.Infof("[QA Lead] триаж %d багрепортов", len(newBugs))
 		progress = true
 	}
 
@@ -768,7 +776,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if resp != nil && resp.Truncated {
 			return false, fmt.Errorf("фаза экспертизы багрепортов: цикл остановлен по лимиту раундов")
 		}
-		logging.Infof("[Системный архитектор] экспертиза %d багрепортов", len(confirmedBugs))
+		k.log.Infof("[Системный архитектор] экспертиза %d багрепортов", len(confirmedBugs))
 		progress = true
 	}
 
@@ -821,14 +829,14 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 				}
 			}
 			if advanced {
-				logging.Infof("[эпик %s] выполнен: %s", epic.TaskID, truncateText(epic.Title, 60))
+				k.log.Infof("[эпик %s] выполнен: %s", epic.TaskID, truncateText(epic.Title, 60))
 				progress = true
 				// Багрепорты, направленные на эпик исправления, закрываются
 				// (fix -> fixed): исправление поставлено и проверено.
 				if n, err := k.store.MarkBugsFixedForEpic(ctx, epic.TaskID); err != nil {
 					return false, fmt.Errorf("эпик %s: закрытие багрепортов: %w", epic.TaskID, err)
 				} else if n > 0 {
-					logging.Infof("[эпик %s] закрыты багрепорты: %d", epic.TaskID, n)
+					k.log.Infof("[эпик %s] закрыты багрепорты: %d", epic.TaskID, n)
 					progress = true
 				}
 			}
@@ -845,7 +853,7 @@ func (k *KanbanRunner) noteEpicProgress(ctx context.Context, epicID string) {
 		return
 	}
 	if err := k.store.SetEpicStatus(ctx, epicID, board.StatusInProgress); err != nil {
-		logging.Detailf("[эпик %s] в работу: %v", epicID, err)
+		k.log.Detailf("[эпик %s] в работу: %v", epicID, err)
 	}
 }
 

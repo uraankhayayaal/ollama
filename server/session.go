@@ -44,6 +44,11 @@ type Session struct {
 	ticks   chan struct{} // сигнал «доска могла измениться» для флашера
 	wg      sync.WaitGroup
 	stopped bool
+
+	// log — лог проекта (logs/<проект>.log). В режиме serve один процесс ведёт
+	// много проектов, поэтому сообщения сессии пишутся в файл своего проекта,
+	// а не в общий logs/server.log.
+	log *logging.Logger
 }
 
 // newSession создаёт сессию проекта (без запуска runner'а).
@@ -62,6 +67,9 @@ func (s *Server) newSession(project string) (*Session, error) {
 		_ = boardStore.Close()
 		return nil, err
 	}
+	// Файл проекта открываем сразу: первая запись (и panel логов в Web UI)
+	// не должна ждать ленивого создания каталога.
+	logging.Attach(project)
 	sess := &Session{
 		srv:     s,
 		project: project,
@@ -69,6 +77,7 @@ func (s *Server) newSession(project string) (*Session, error) {
 		chat:    chatStore,
 		board:   boardStore,
 		ticks:   make(chan struct{}, 64),
+		log:     logging.For(project),
 	}
 	sess.router = runevents.NewRouter(func(ev runevents.Event) {
 		sess.chatEvent(ev)
@@ -94,6 +103,7 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.cancel = func() { cancel() }
 	sess.mu.Unlock()
 
+	sess.log.Infof("=== Оркестрация запущена: %s", truncateText(taskText, 120))
 	sess.append(chat.RoleStatus, "Оркестрация запущена: "+truncateText(taskText, 120), "", "", nil)
 	sess.broadcastStatus("running", "")
 
@@ -117,12 +127,15 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 		// Завершение: публикуем финальный статус и снимок доски.
 		switch {
 		case err == nil:
+			sess.log.Infof("=== Оркестрация завершена: задача решена (все эпики и задачи выполнены)")
 			sess.append(chat.RoleStatus, "Задача решена: все эпики и задачи выполнены.", "", "", nil)
 			sess.broadcastStatus("done", "")
 		case errors.Is(err, context.Canceled):
+			sess.log.Infof("=== Оркестрация остановлена пользователем")
 			sess.append(chat.RoleStatus, "Оркестрация остановлена пользователем.", "", "", nil)
 			sess.broadcastStatus("stopped", "")
 		default:
+			sess.log.Warnf("=== Оркестрация прервана ошибкой: %v", err)
 			sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)
 			sess.broadcastStatus("error", err.Error())
 		}
@@ -259,7 +272,7 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 func (sess *Session) append(role chat.Role, content, agent, tool string, ok *bool) {
 	m := chat.Message{Role: role, Content: content, Agent: agent, Tool: tool, OK: ok}
 	if _, err := sess.chat.Append(context.Background(), m); err != nil {
-		logging.Warnf("server: запись в чат %s: %v", sess.project, err)
+		sess.log.Warnf("server: запись в чат %s: %v", sess.project, err)
 	}
 	sess.srv.hub.publish(sess.project, "chat", m)
 }

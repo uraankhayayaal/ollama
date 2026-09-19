@@ -1,9 +1,14 @@
 // Logboard (REST): чтение лог-файлов проекта для панели «Логи».
-// Логи пишет пакет logging в каталог logs/ (переопределяется LOG_DIR):
-// файл logs/<проект>.log. Чтобы покрыть и вариант «логи внутри каталога
-// проекта», дополнительно сканируется подкаталог logs корня рабочей папки.
-// Эндпоинт GET /api/projects/{id}/logs возвращает все *.log файлы (метаданные
-// + содержимое) и имя выделенного файла для показа в Logboard.
+//
+// У каждого проекта свой лог: пакет logging пишет его в logs/<проект>.log
+// (каталог переопределяется LOG_DIR). Общий каталог сервера содержит файлы
+// ВСЕХ проектов и служебный server.log, поэтому оттуда отдаётся только файл
+// запрашиваемого проекта — чужие логи в панель не попадают. Дополнительно
+// сканируется подкаталог logs корня рабочей папки проекта: там лежат логи
+// самого приложения, и они отдаются все.
+//
+// Эндпоинт GET /api/projects/{id}/logs возвращает метаданные + содержимое и
+// имя выделенного файла для показа в Logboard.
 
 package server
 
@@ -28,6 +33,9 @@ type logFileEntry struct {
 	Size     int64  `json:"size"`
 	Modified string `json:"modified"`
 	Content  string `json:"content"`
+	// cut — содержимое обрезано до logMaxBytes. В JSON не отдаётся: итог
+	// виден в поле Truncated ответа.
+	cut bool `json:"-"`
 }
 
 // logsResponse — ответ GET /api/projects/{id}/logs.
@@ -49,55 +57,53 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Каталоги, где могут лежать лог-файлы: общий каталог логов + подкаталог
-	// logs внутри рабочей папки проекта (если есть).
-	dirs := []string{s.logsDir()}
+	// Каталоги, где могут лежать лог-файлы: общий каталог логов сервера +
+	// подкаталог logs внутри рабочей папки проекта (если есть).
+	globalDir := s.logsDir()
+	dirs := []string{globalDir}
 	if inf.Root != "" {
 		if local := filepath.Join(inf.Root, "logs"); fileExists(local) {
 			dirs = append(dirs, local)
 		}
 	}
 
-	// Подписываемся на новые строки логов (только первый клиент проекта
-	// реально регистрируется; последующие получают тот же хвост).
-	var files []string
-	for _, dir := range dirs {
-		if infos, _ := os.ReadDir(dir); infos != nil {
-			for _, de := range infos {
-				if !de.IsDir() && strings.HasSuffix(strings.ToLower(de.Name()), ".log") {
-					files = append(files, de.Name())
-				}
-			}
-		}
-	}
-	if len(files) > 0 {
-		s.logBroker.Subscribe(project, dirs, files)
-	}
+	// У каждого проекта свой файл logs/<проект>.log. Создаём его сразу, чтобы
+	// панель не показывала «файлов нет» до первого запуска задачи и чтобы
+	// брокер мог подписаться на хвост.
+	own := logging.ProjectLogName(project) + ".log"
+	logging.Attach(project)
+
+	// Подписываем проект на real-time (WS type="log"). Подписка идемпотентна и
+	// нужна даже когда файлов ещё нет: брокер периодически пересканирует
+	// каталоги и подхватит лог, созданный позже (первый запуск задачи).
+	s.logBroker.Subscribe(project, dirs, listLogFiles(dirs))
 
 	out := logsResponse{Dir: strings.Join(dirs, " · ")}
 	seen := map[string]bool{}
 	for _, dir := range dirs {
-		entries, cut := collectLogFiles(dir)
+		entries := collectLogFiles(dir)
+		// В общем каталоге сервера лежат логи ВСЕХ проектов и самого процесса
+		// (server.log) — оставляем только файл этого проекта, иначе панель
+		// показывала бы чужие логи. В локальном logs/ проекта берутся все.
+		if dir == globalDir {
+			entries = filterLogEntries(entries, own)
+		}
 		for _, e := range entries {
 			if seen[e.Name] {
 				continue
 			}
 			seen[e.Name] = true
+			out.Truncated = out.Truncated || e.cut
 			out.Files = append(out.Files, e)
 		}
-		out.Truncated = out.Truncated || cut
 	}
 	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Name < out.Files[j].Name })
 
 	// Выделяем файл проекта: logs/<проект>.log, иначе самый свежий.
 	if out.Selected == "" {
-		want := logging.SanitizeName(project) + ".log"
-		if want == ".log" {
-			want = "unnamed.log"
-		}
 		for _, f := range out.Files {
-			if f.Name == want {
-				out.Selected = want
+			if f.Name == own {
+				out.Selected = own
 				break
 			}
 		}
@@ -129,15 +135,25 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// filterLogEntries оставляет только файл с указанным именем.
+func filterLogEntries(in []logFileEntry, name string) []logFileEntry {
+	var out []logFileEntry
+	for _, e := range in {
+		if e.Name == name {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // collectLogFiles собирает *.log файлы каталога dir: метаданные + содержимое
-// (последние logMaxBytes байт; срезанное помечается Truncated).
-func collectLogFiles(dir string) ([]logFileEntry, bool) {
+// (последние logMaxBytes байт; факт обрезки — в поле cut записи).
+func collectLogFiles(dir string) []logFileEntry {
 	infos, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, false
+		return nil
 	}
 	var out []logFileEntry
-	truncated := false
 	for _, de := range infos {
 		if de.IsDir() || !strings.HasSuffix(strings.ToLower(de.Name()), ".log") {
 			continue
@@ -147,18 +163,16 @@ func collectLogFiles(dir string) ([]logFileEntry, bool) {
 			continue
 		}
 		content, cut := readLogTail(filepath.Join(dir, de.Name()))
-		if cut {
-			truncated = true
-		}
 		out = append(out, logFileEntry{
 			Name:     de.Name(),
 			Path:     filepath.Join(dir, de.Name()),
 			Size:     info.Size(),
 			Modified: info.ModTime().Format("2006-01-02 15:04:05"),
 			Content:  content,
+			cut:      cut,
 		})
 	}
-	return out, truncated
+	return out
 }
 
 // readLogTail читает хвост файла: если размер больше logMaxBytes, берёт

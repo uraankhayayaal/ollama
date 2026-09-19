@@ -117,6 +117,9 @@ export function App() {
     setChat([]);
     setLive(null);
     setBoard(null);
+    // Накопитель строк логов принадлежит прошлому проекту — обнуляем, иначе
+    // Logboard подмешает чужие строки и заблокирует стрим нового проекта.
+    setLogLines(new Map());
     (async () => {
       try {
         const [b, h] = await Promise.all([boardOf(BASE, project.project_name), chatHistory(BASE, project.project_name)]);
