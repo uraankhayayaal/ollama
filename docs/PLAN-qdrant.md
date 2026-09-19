@@ -156,11 +156,19 @@
       `.env.example` (блок RAG) — это и есть env-таблица RAG
 
 ### Ф-6 — Верификация
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./rag/ ./runner/`
-- [ ] `go vet . ./agents/... ./tools/ ./board/ ./rag/ ./runner/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./rag/ ./runner/`
-- [ ] Ручной E2E на реальном проекте: `index` → `CodeSearch` в `plan`
-      (подмешивание контекста) → полупустые ответы без индекса (degrade)
+- [x] `go build . ./agents/... ./tools/ ./board/ ./rag/ ./runner/`
+- [x] `go vet . ./agents/... ./tools/ ./board/ ./rag/ ./runner/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./rag/ ./runner/`
+  → все зелёные (`cached`/`ok`), сборок 15 пакетов, 0 ошибок
+- [x] Ручной E2E на реальном проекте `my-rust-app` (33 файла, 60 чанков, dim=768):
+  - `index my-rust-app` → 33 файла, 60 чанков; повторный прогон = 60 (инкрементальность, нет дублей)
+  - `Search(query="инициализация HTTP-сервера", scope="")` → 3 релевантных чанка (score 0.67–0.70)
+  - `Search(query="обработка HTTP", scope="server")` → 1 результат, `server/` (scope-фильтр корректен)
+  - `BuildProjectMapRAG` → блок «Релевантный код по задаче» успешно подмешан в карту (2762 символа)
+  - Degrade без индекса (несуществующий проект) → 0 результатов, без ошибки (фолбэк безопасен)
+  - Degrade при недоступном Qdrant → `MapRAG` возвращается к обычной карте без RAG-блока
+
+Статус **Ф-1–Ф-6: весь RAG-photoContext_FEATURE**.
 
 ## Верификация
 
