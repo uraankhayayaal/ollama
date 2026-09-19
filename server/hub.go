@@ -94,13 +94,20 @@ func (h *Hub) Unregister(cl *wsClient) {
 
 // CloseAll закрывает все соединения (при завершении сервера).
 func (h *Hub) CloseAll() {
+	// Собираем список клиентов под локом, а закрываем БЕЗ лока: иначе
+	// возникает AB-BA-дедлок — CloseAll держит h.mu и ждёт wg.mu (в shutdown),
+	// а writeLoop-шутдаун другого клиента держит свою wg.mu и ждёт h.mu
+	// (в Unregister при вытеснении из-за полного буфера). См. TestHubConcurrentPublish.
+	var all []*wsClient
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	for project := range h.clients {
 		for cl := range h.clients[project] {
-			cl.shutdown()
+			all = append(all, cl)
 		}
-		delete(h.clients, project)
+	}
+	h.mu.Unlock()
+	for _, cl := range all {
+		cl.shutdown()
 	}
 }
 

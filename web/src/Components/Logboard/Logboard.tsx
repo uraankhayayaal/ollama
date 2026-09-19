@@ -4,8 +4,11 @@
 // При нескольких файлах лога доступен переключатель (tabs). Строки с
 // уровнями WARN/ERROR/FATAL подсвечиваются. При открытии лог показывается
 // с последней записи (прокрутка к концу), скролл вверх ведёт к ранним.
+//
+// Real-time: строки из live-через WebSocket-_connection_ актуализируются
+// мгновенно. Потоковые строки приходят через props.logLines.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { projectLogs } from "@/Api";
 import type { LogsView } from "@/Types";
 import "./styles.scss";
@@ -14,6 +17,8 @@ export interface LogboardProps {
   project: string;
   showLogboard?: boolean;
   toggleLogboard?: () => void;
+  // Потоковые строки (из App.tsx): «имя файла → массив новых строк».
+  logLines: Map<string, string[]>;
 }
 
 const BASE = "";
@@ -24,9 +29,20 @@ export function Logboard(props: LogboardProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Контейнер строк лога: при открытии/смене файла прокручивается к концу,
-  // чтобы сразу видеть последнюю запись («скролл наоборот»: вверх — к ранним).
   const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  // props.logLines — НАКОПИТЕЛЬНЫЙ массив всех строк, присланных по WS с
+  // момента открытия проекта (App.tsx только добавляет). consumed[file] —
+  // сколько из них уже отрисовано. Это разные системы отсчёта, поэтому
+  // сравнивать их длины напрямую нельзя (HTTP-снапшот — весь файл).
+  const consumed = useRef<Map<string, number>>(new Map());
+  // Свежее значение props для эффекта снапшота: не кладём logLines в deps,
+  // иначе каждая строка стрима переставляла бы lines из устаревшего HTTP.
+  const logLinesRef = useRef(props.logLines);
+  logLinesRef.current = props.logLines;
+
+  // Текущие отрендеренные строки (HTTP-снапшот + поток).
+  const [lines, setLines] = useState<string[]>([]);
 
   const scrollToBottom = useCallback(() => {
     const el = bodyRef.current;
@@ -49,17 +65,60 @@ export function Logboard(props: LogboardProps) {
     }
   }, [props.project]);
 
+  // Смена проекта: накопитель строк App.tsx обнуляется, поэтому счётчики
+  // потреблённого надо сбросить — иначе stream.length <= done заблокирует
+  // добавление строк нового проекта.
+  useEffect(() => {
+    consumed.current.clear();
+    setLines([]);
+  }, [props.project]);
+
   useEffect(() => {
     void load();
   }, [load]);
 
-  const active = (logs?.files ?? []).find((f) => f.name === selected);
-
-  // К концу лога при: появлении содержимого, смене выбранного файла и открытии
-  // панели (showLogboard=true) — даже если выбранный файл не менялся.
+  // Лог-файл может появиться позже открытия панели (проект только стартовал),
+  // а список файлов приходит лишь из REST. Добираем его редким поллингом, но
+  // только когда это правда нужно — иначе каждую строку стрима пересобирали
+  // бы весь снапшот.
   useEffect(() => {
+    if (props.showLogboard === false) return;
+    const known = new Set((logs?.files ?? []).map((f) => f.name));
+    const stale =
+      known.size === 0 || [...props.logLines.keys()].some((f) => !known.has(f));
+    if (!stale) return;
+    const t = window.setInterval(() => void load(), 3000);
+    return () => window.clearInterval(t);
+  }, [props.showLogboard, logs, props.logLines, load]);
+
+  // Синхронизируем `lines` при открытии/смене файла (HTTP-снапшот).
+  useEffect(() => {
+    if (!logs || !selected) return;
+    const entry = logs.files.find((f) => f.name === selected);
+    if (!entry) return;
+    // Снапшот уже содержит строки, пришедшие по WS до него, — помечаем их
+    // потреблёнными, иначе стрим-эффект ниже продублирует их в хвост.
+    consumed.current.set(selected, logLinesRef.current.get(selected)?.length ?? 0);
+    setLines(entry.content.split("\n"));
+  }, [logs, selected]);
+
+  // Новые строки из потока — дописываем только невиданный хвост.
+  useEffect(() => {
+    if (!selected) return;
+    const stream = props.logLines.get(selected);
+    if (!stream) return;
+    const done = consumed.current.get(selected) ?? 0;
+    if (stream.length <= done) return;
+    consumed.current.set(selected, stream.length);
+    setLines((prev) => [...prev, ...stream.slice(done)]);
+  }, [selected, props.logLines]);
+
+  // Авто-скролл вниз при появлении/смене строк. useLayoutEffect: DOM уже
+  // содержит новые строки, но браузер ещё не рисовал — scrollHeight
+  // вычисляется синхронно, поэтому CSS-анимация шторки не мешает.
+  useLayoutEffect(() => {
     scrollToBottom();
-  }, [active?.name, props.showLogboard, logs, scrollToBottom]);
+  }, [lines, scrollToBottom]);
 
   return (
     <div className={"logboard" + (props.showLogboard === false ? " hidden" : "")}>
@@ -104,22 +163,26 @@ export function Logboard(props: LogboardProps) {
             </div>
           )}
 
-          {active && (
-            <div className="lgmeta">
-              <span>файл: <code>{active.name}</code></span>
-              <span>{fmtSize(active.size)}</span>
-              <span>изменён: {active.modified}</span>
-            </div>
-          )}
+          {selected && (() => {
+            const active = logs.files.find((f) => f.name === selected);
+            if (!active) return null;
+            return (
+              <div className="lgmeta">
+                <span>
+                  файл: <code>{active.name}</code>
+                </span>
+                <span>{fmtSize(active.size)}</span>
+                <span>изменён: {active.modified}</span>
+              </div>
+            );
+          })()}
 
           <div className="logbody" ref={bodyRef}>
-            {(active?.content ?? "")
-              .split("\n")
-              .map((ln, i) => (
-                <div key={i} className={lineCls(ln)}>
-                  {ln || "\u00a0"}
-                </div>
-              ))}
+            {lines.map((ln, i) => (
+              <div key={i} className={lineCls(ln)}>
+                {ln || "\u00a0"}
+              </div>
+            ))}
           </div>
         </>
       )}

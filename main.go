@@ -337,7 +337,10 @@ func defaultPrompt(args []string) string {
 }
 
 // projectFromArgs определяет имя проекта (имя лог-файла) по аргументам:
-// generate/backend/frontend/plan/accept <имя> → имя; review → "review"; listen → "mrlistener".
+// generate/backend/frontend/plan/accept <имя> → имя; review → "review";
+// listen → "mrlistener"; serve → "server" (в режиме Web UI один процесс ведёт
+// много проектов, поэтому здесь именуется лог самого процесса, а лог каждого
+// проекта — logs/<проект>.log через logging.For(project)).
 func projectFromArgs(args []string) string {
 	if len(args) < 2 {
 		return "unnamed"
@@ -351,6 +354,8 @@ func projectFromArgs(args []string) string {
 		return "review"
 	case "listen":
 		return "mrlistener"
+	case "serve":
+		return "server"
 	}
 	return "unnamed"
 }

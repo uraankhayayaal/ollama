@@ -66,10 +66,14 @@ type Server struct {
 	sessions map[string]*Session
 
 	// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
-	// (baselines) и кэш разобранных диффов git-проектов (diffs, Ф-3).
+	// (baselines) и кэш разобраных диффов git-проектов (diffs, Ф-3).
 	diffMu    sync.Mutex
 	baselines map[string]*tools.Snap
 	diffs     map[string]*cachedDiff
+
+	// logBroker — перематывает лог-файлы проектов: новые линии шлются
+	// в шину проекта (type="log"). Запускается в Run().
+	logBroker *logBroker
 }
 
 // NewServer создаёт сервер. Реестр workspace открывается по cfg.WorkspacesPath.
@@ -81,14 +85,16 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server: open workspace registry: %w", err)
 	}
+	h := NewHub()
 	s := &Server{
 		cfg:       cfg,
 		reg:       reg,
-		hub:       NewHub(),
+		hub:       h,
 		sessions:  make(map[string]*Session),
 		baselines: make(map[string]*tools.Snap),
 		diffs:     make(map[string]*cachedDiff),
 		auth:      newAuth(cfg.Password),
+		logBroker: newLogBroker(h),
 		// Лимиты Ф-3: 5 логинов/мин, 120 API-запросов/мин, 30 сообщений/мин.
 		apiLim:   newRateLimit(120, time.Minute),
 		loginLim: newRateLimit(5, time.Minute),
@@ -116,6 +122,11 @@ func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
 
+	// Фоновый goroutine logBroker: сканирует файлы логов проектов.
+	// Обязательно в горутине: Run блокирует до ctx.Done, иначе select ниже
+	// (сигналы SIGINT/SIGTERM и ошибка ListenAndServe) недостижим.
+	go s.logBroker.Run(ctx)
+
 	select {
 	case <-ctx.Done():
 	case <-quit:
@@ -128,6 +139,8 @@ func (s *Server) Run(ctx context.Context) error {
 	log.Println("server: завершение...")
 	_ = httpSrv.Shutdown(context.Background())
 	s.hub.CloseAll()
+	// Закрываем лог-файлы процесса и всех проектов, чтобы хвосты не потерялись.
+	logging.Close()
 	return nil
 }
 
@@ -150,9 +163,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}", s.handleGetBoard)
 	mux.HandleFunc("POST /api/projects/{id}/chat", s.handlePostChat)
 	mux.HandleFunc("GET /api/projects/{id}/chat", s.handleChatHistory)
+	mux.HandleFunc("POST /api/projects/{id}/continue", s.handleContinue)
+	mux.HandleFunc("GET /api/projects/{id}/tokens", s.handleGetTokens)
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
+	mux.HandleFunc("DELETE /api/projects/{id}/epics/{eid}", s.handleDeleteEpic)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
 	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
@@ -489,7 +505,11 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 
 // --- REST: чат ---
 
-// handlePostChat принимает сообщение и запускает/продолжает оркестрацию.
+// handlePostChat принимает сообщение. Чат работает ПАРАЛЛЕЛЬНО доске:
+//   - ЯВНЫЙ запрос на создание эпика/задачи (isChatTaskRequest) → эпик на
+//     доске планировщику; оркестрацию сам не запускает (берёт кнопка «Продолжить»);
+//   - всё остальное → Q&A-ассистент отвечает свободно (вопросы, статусы,
+//     общий диалог, «подскажи погоду»), не трогая доску.
 func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	var body struct {
@@ -506,13 +526,14 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Пользовательское сообщение → чат (для истории).
+	// Пользовательское сообщение → чат (для истории) и в лог проекта.
+	sess.log.Infof("[чат] пользователь: %s", truncateText(body.Message, 300))
 	if _, err := sess.chat.Append(context.Background(), chat.Message{
 		Role:    chat.RoleUser,
 		Content: body.Message,
 		Agent:   "user",
 	}); err != nil {
-		logging.Warnf("server: append user msg %s: %v", project, err)
+		sess.log.Warnf("server: append user msg %s: %v", project, err)
 	}
 
 	// Публикуем в шину для live-таймлайна.
@@ -523,23 +544,84 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 		Time:    time.Now().UTC(),
 	})
 
-	// LLM-провайдер обязателен для запуска.
+	// Только ЯВНЫЙ запрос на создание эпика/задачи кладёт сообщение на доску
+	// планировщику. Всё остальное — свободный диалог: провайдер нужен
+	// ассистенту для ответа, эпик на доску кладётся без LLM.
+	if isChatTaskRequest(body.Message) {
+		sess.log.Infof("[чат] маршрут: явный запрос задачи → доска планировщику")
+		epic, err := sess.enqueueChatTask(context.Background(), body.Message)
+		if err != nil {
+			sess.log.Warnf("[чат] добавление задачи на доску: %v", err)
+			writeErr(w, http.StatusInternalServerError, "ошибка добавления задачи на доску: "+err.Error())
+			return
+		}
+		sess.append(chat.RoleStatus,
+			"Задача добавлена на доску (эпик "+epic.TaskID+"). Планировщик берёт её в работу по кнопке «Продолжить».",
+			"system", "", nil)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+
+	// Вопрос, статус или просто общение → Q&A-ассистент (без оркестрации).
+	prov, err := s.provider()
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
+		return
+	}
+	sess.log.Infof("[чат] маршрут: диалог → Q&A-ассистент (оркестрация не запускается)")
+	sess.runChatAssist(context.Background(), body.Message, prov)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleContinue запускает/возобновляет оркестрацию на текущей доске (кнопка
+// «Продолжить»). В чат ничего не отправляется: раннер работает над эпиками и
+// задачами доски своим циклом. Доска должна иметь хотя бы одну запись (эпик,
+// задачу или meta-задачу) — иначе 400.
+func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
+		return
+	}
+
+	ctx := context.Background()
+	// Текст задачи для раннера: приоритет meta-задачи проекта; если её нет
+	// (задачи добавлены чатом/вручную до первого запуска) — берём обобщённое
+	// описание доски. Пустая доска продолжать нечего — проверяем до резолва
+	// провайдера, чтобы «нечего продолжать» не зависело от наличия LLM.
+	taskText := ""
+	meta, merr := sess.board.GetMeta(ctx)
+	if merr == nil && meta != nil {
+		taskText = meta.Task
+	}
+	if taskText == "" {
+		epics, eerr := sess.board.ListEpics(ctx)
+		if eerr != nil {
+			writeErr(w, http.StatusInternalServerError, "чтение доски: "+eerr.Error())
+			return
+		}
+		tasks, terr := sess.board.ListTasks(ctx)
+		if terr != nil {
+			writeErr(w, http.StatusInternalServerError, "чтение задач: "+terr.Error())
+			return
+		}
+		if len(epics) == 0 && len(tasks) == 0 {
+			writeErr(w, http.StatusBadRequest, "на доске нет задач — добавьте задачу через чат или на доску")
+			return
+		}
+		taskText = "Продолжить работу над задачами доски"
+	}
+
 	prov, err := s.provider()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
 		return
 	}
 
-	// Вопрос/запрос статуса отвечает Q&A-ассистент (без оркестрации);
-	// задача на разработку запускает ранер.
-	if isChatQuestion(body.Message) {
-		sess.runChatAssist(context.Background(), body.Message, prov)
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-		return
-	}
-
-	// Запускаем runner.
-	if err := sess.start(context.Background(), body.Message, prov); err != nil {
+	if err := sess.start(ctx, taskText, prov); err != nil {
+		sess.log.Warnf("[continue] запуск оркестрации отклонён: %v", err)
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -564,6 +646,22 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// handleGetTokens возвращает накопленные токены проекта (вход/выход).
+func (s *Server) handleGetTokens(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
+		return
+	}
+	in, out, err := sess.tok.Get(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tokenEvent{Input: in, Output: out})
 }
 
 // --- REST: HITL ---
@@ -677,6 +775,34 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	// Публикуем обновлённую доску.
 	s.kickBoard(project)
 	writeJSON(w, http.StatusOK, t)
+}
+
+// handleDeleteEpic удаляет эпик вместе с его задачами. Допустимо только для
+// эпиков, задачи которых ещё не взяты в работу специалистами (статусы
+// new/analysis/ready); иначе Store.DeleteEpic вернёт ошибку.
+func (s *Server) handleDeleteEpic(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	epicID := r.PathValue("eid")
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	if err := store.DeleteEpic(r.Context(), epicID); err != nil {
+		if errors.Is(err, board.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "эпик не найден")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Публикуем обновлённую доску.
+	s.kickBoard(project)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // handleListBugs возвращает список багрепортов проекта.

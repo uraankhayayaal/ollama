@@ -2,13 +2,14 @@
 // зеркалит server/session.go + runevents + chat/store.go (см. web/src/types.ts).
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
-import { useEffect, useRef, useState } from "react";
-import { authStatus, boardOf, chatHistory, gateDecide, listProjects, logout, openProject, postChat, sessionStop, updateTask } from "./Api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { authStatus, boardOf, chatHistory, continueProject, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { BoardView, ChatMsg, TaskRow, ProjectMeta } from "@/Types";
+import type { BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
+import { TokensCounter } from "./Components/TokensCounter";
 import { Diffboard } from "./Components/Diffboard";
 import { Logboard } from "./Components/Logboard";
 import { Login } from "./Components/Login";
@@ -25,9 +26,16 @@ export function App() {
   const [auth, setAuth] = useState<AuthPhase>("checking");
   const [protectedMode, setProtectedMode] = useState(false);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  // Потоковые строки логов: «имя файла → актуальный список строк».
+  // Обновляется событиями WS type="log"; Logboard объединяет с HTTP-данными.
+  const [logLines, setLogLines] = useState<Map<string, string[]>>(new Map());
   const [project, setProject] = useState<ProjectMeta | null>(null);
   const [board, setBoard] = useState<BoardView | null>(null);
   const [chat, setChat] = useState<ChatMsg[]>([]);
+  // Счётчик токенов проекта (вход/выход): инициализируется REST-запросом при
+  // открытии проекта, далее обновляется событиями WS type=tokens в реальном
+  // времени (каждый раунд модели прибавляет порцию).
+  const [tokens, setTokens] = useState<ProjectTokens>({ in: 0, out: 0 });
   // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3): заполняется
   // событиями chat_delta и схлопывается в историю при финальном chat.
   const [live, setLive] = useState<{ id: string; agent: string; content: string } | null>(null);
@@ -71,6 +79,14 @@ export function App() {
     setError(fmtErr(e));
   };
 
+  // Обработчик событий «log» — каждая новая строкаappend к списку файла.
+  const handleLog = useCallback((ev: LogMessage) => {
+    setLogLines((prev) => {
+      const entry = prev.get(ev.file) || [];
+      return new Map(prev).set(ev.file, [...entry, ev.line]);
+    });
+  }, []);
+
   const open = async (spec: { path_or_git?: string }) => {
     setBusy(true);
     setError("");
@@ -106,11 +122,22 @@ export function App() {
     setChat([]);
     setLive(null);
     setBoard(null);
+    // Счётчик токенов принадлежит прошлому проекту — обнуляем, иначе
+    // счётчик подмешает чужие значения до прихода свежего REST-ответа.
+    setTokens({ in: 0, out: 0 });
+    // Накопитель строк логов принадлежит прошлому проекту — обнуляем, иначе
+    // Logboard подмешает чужие строки и заблокирует стрим нового проекта.
+    setLogLines(new Map());
     (async () => {
       try {
-        const [b, h] = await Promise.all([boardOf(BASE, project.project_name), chatHistory(BASE, project.project_name)]);
+        const [b, h, tk] = await Promise.all([
+          boardOf(BASE, project.project_name),
+          chatHistory(BASE, project.project_name),
+          projectTokens(BASE, project.project_name),
+        ]);
         setBoard(b);
         setChat(h);
+        setTokens(tk);
       } catch (e) {
         fail(e);
       }
@@ -157,6 +184,16 @@ export function App() {
         setDetail(p.detail ?? "");
       } catch {}
     });
+    l.on("tokens", (ev) => {
+      try {
+        setTokens(ev.payload as ProjectTokens);
+      } catch {}
+    });
+    l.on("log", (ev) => {
+      try {
+        handleLog(ev.payload as LogMessage);
+      } catch {}
+    });
 
     return () => l.close();
   }, [project?.project_name]);
@@ -175,28 +212,34 @@ export function App() {
     }
   };
 
-  // «Продолжить»: возможен, когда есть задача проекта и оркестрация не идёт
-  // (stopped/error/done/idle). Повторная отправка исходной задачи продолжает
-  // Kanban с текущего состояния доски (эпики/задачи уже в Redis).
+  // «Продолжить»: запускает/возобновляет Kanban-оркестрацию на текущей доске
+  // (кнопка ⏵). В чат ничего не отправляется и не дублируется: раннер работает
+  // над эпиками и задачами доски своим циклом. Чат остаётся независимым —
+  // вопросы и новые задачи для планировщика можно писать параллельно.
+  // Возможно, когда на доске есть работа (исходная задача проекта meta.task
+  // или хоть один эпик), а оркестрация не идёт (stopped/error/done/idle).
   const [continuing, setContinuing] = useState(false);
   // Синхронный флаг: иначе два быстрых клика до ре-рендера прошли бы оба
-  // (canContinue читается из замыкания) и отправили бы задачу дважды.
+  // (canContinue читается из замыкания) и запустили бы раннер дважды.
   const continuingRef = useRef(false);
   const canContinue =
     !!project &&
-    !!board?.meta?.task &&
+    !!board &&
+    (!!board.meta?.task || board.epics.length > 0) &&
     status !== "running" &&
     status !== "waiting" &&
     !continuing;
 
   const onContinue = async () => {
-    if (continuingRef.current || !canContinue) {
+    if (continuingRef.current || !canContinue || !project) {
       return;
     }
     continuingRef.current = true;
     setContinuing(true);
     try {
-      await onSend(board!.meta!.task);
+      await continueProject(BASE, project.project_name);
+    } catch (e) {
+      fail(e);
     } finally {
       continuingRef.current = false;
       setContinuing(false);
@@ -222,6 +265,30 @@ export function App() {
     try {
       const next = await updateTask(BASE, project.project_name, t.task_id, patch);
       setBoard((prev) => (prev ? { ...prev, tasks: prev.tasks.map((x) => (x.task_id === next.task_id ? next : x)) } : prev));
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  const onEpicDelete = async (epic: EpicRow) => {
+    if (!project) {
+      return;
+    }
+    if (!window.confirm(`Удалить эпик «${epic.title}» вместе с его задачами?`)) {
+      return;
+    }
+    try {
+      await deleteEpic(BASE, project.project_name, epic.task_id);
+      // Локально убираем эпик и его задачи; WS-событие board подтвердит сверкой.
+      setBoard((prev) =>
+        prev
+          ? {
+              ...prev,
+              epics: prev.epics.filter((e) => e.task_id !== epic.task_id),
+              tasks: prev.tasks.filter((t) => t.epic_id !== epic.task_id),
+            }
+          : prev,
+      );
     } catch (e) {
       fail(e);
     }
@@ -255,6 +322,7 @@ export function App() {
       <header className="top">
         <WorkspacePicker projects={projects} current={project} onOpen={open} busy={busy} />
         <div className="head-actions">
+          {project && <TokensCounter in={tokens.in} out={tokens.out} />}
           <RunButton
             status={status}
             canContinue={canContinue}
@@ -313,7 +381,7 @@ export function App() {
             </section>
           )}
           <section className="dash-pane">
-            <Dashboard board={board} onTaskUpdate={onTaskUpdate} />
+            <Dashboard board={board} onTaskUpdate={onTaskUpdate} onEpicDelete={onEpicDelete} />
           </section>
         </main>
       ) : (
@@ -346,6 +414,7 @@ export function App() {
           <Logboard
             project={project.project_name}
             showLogboard={showLogboard}
+            logLines={logLines}
             toggleLogboard={() => {
               setShowLogboard(false);
             }}

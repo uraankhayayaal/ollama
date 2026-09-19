@@ -13,10 +13,10 @@ package tools
 
 import (
 	"ai/stackdetect"
+	"ai/tools/binpath"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -299,22 +299,23 @@ func isLSPIgnoredDir(name string) bool {
 func lspCheckerCommand(stack stackdetect.Kind, dir string, files []string) (cmd, checker string, err error) {
 	switch stack {
 	case stackdetect.KindGo:
-		if commandAvailable("gopls") {
-			args := append([]string{"gopls", "check"}, relArgs(dir, files)...)
+		if bin, ok := binCommand("gopls"); ok {
+			args := append([]string{bin, "check"}, relArgs(dir, files)...)
 			return strings.Join(args, " "), "gopls", nil
 		}
 		// go vet — фолбэк: диагностики в том же формате file:line:col: message.
 		return "go vet ./...", "go vet", nil
 	case stackdetect.KindNode:
-		// Локальный tsc (node_modules/.bin) или tsc в PATH. npx не используем:
-		// он качает пакет из сети, что недопустимо для рабочего прогона.
-		// Точечный tsc осмыслен при заданных files или наличии tsconfig.json.
+		// Локальный tsc (node_modules/.bin) или tsc в PATH/каталогах установки.
+		// npx не используем: он качает пакет из сети, что недопустимо для
+		// рабочего прогона. Точечный tsc осмыслен при заданных files или
+		// наличии tsconfig.json.
 		if hasTSInput(dir, files) {
 			if stackdetect.HasFile(dir, "node_modules/.bin/tsc") {
 				return lspTscCommand("./node_modules/.bin/tsc", relArgs(dir, files)), "tsc", nil
 			}
-			if commandAvailable("tsc") {
-				args := append([]string{"tsc", "--noEmit", "--pretty", "false"}, relArgs(dir, files)...)
+			if bin, ok := binCommand("tsc"); ok {
+				args := append([]string{bin, "--noEmit", "--pretty", "false"}, relArgs(dir, files)...)
 				return strings.Join(args, " "), "tsc", nil
 			}
 		}
@@ -323,12 +324,12 @@ func lspCheckerCommand(stack stackdetect.Kind, dir string, files []string) (cmd,
 		}
 		return "", "", fmt.Errorf("не найден tsc (ни в node_modules/.bin, ни в PATH) и нет build-скрипта — используй Run: npm run build")
 	case stackdetect.KindPython:
-		if commandAvailable("pyright") {
-			args := append([]string{"pyright", "--outputjson"}, relArgs(dir, files)...)
+		if bin, ok := binCommand("pyright"); ok {
+			args := append([]string{bin, "--outputjson"}, relArgs(dir, files)...)
 			return strings.Join(args, " "), "pyright", nil
 		}
-		if commandAvailable("ruff") {
-			return "ruff check .", "ruff", nil
+		if bin, ok := binCommand("ruff"); ok {
+			return bin + " check .", "ruff", nil
 		}
 		return "", "", fmt.Errorf("не найден ни pyright, ни ruff — используй Run: python3 -m compileall или свой чекер")
 	default:
@@ -409,10 +410,31 @@ func relArgs(dir string, files []string) []string {
 	return out
 }
 
-// commandAvailable проверяет наличие команды в PATH.
+// commandAvailable проверяет наличие команды: PATH процесса, а затем типовые
+// каталоги установки (~/go/bin, GOBIN/GOPATH, префиксы npm/nvm, Homebrew) —
+// см. tools/binpath. PATH сервера/демона часто урезан, и без этого чекеры
+// «теряются», хотя на хосте установлены.
 func commandAvailable(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+	return binpath.Available(name)
+}
+
+// binCommand возвращает команду запуска бинарника для shell-строки: абсолютный
+// путь (при необходимости экранированный), так как runCommand исполняет
+// команду через sh -c с PATH процесса. false — бинарник не найден.
+func binCommand(name string) (string, bool) {
+	p, ok := binpath.Look(name)
+	if !ok {
+		return "", false
+	}
+	return shellQuote(p), true
+}
+
+// shellQuote экранирует путь для sh, если в нём есть спецсимволы.
+func shellQuote(p string) string {
+	if p == "" || strings.ContainsAny(p, " \t\n\"'`$*?[]{}()<>()|&;\\") {
+		return "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
+	}
+	return p
 }
 
 // parseLSPOutput разбирает вывод чекера в зависимости от стека.

@@ -117,3 +117,23 @@ func TestOnMessageDelta(t *testing.T) {
 		t.Fatalf("второй фрагмент = %+v", ev)
 	}
 }
+
+// TestOnTokens проверяет событие потребления токенов: тип tokens, поля
+// входа/выхода и имя агента из WithAgent.
+func TestOnTokens(t *testing.T) {
+	ch, sink := collect(t, 1)
+	r := NewRouter(sink).WithAgent("backendlead")
+
+	r.OnTokens(1234, 56)
+
+	ev := <-ch
+	if ev.Type != TypeTokenCount {
+		t.Fatalf("тип = %q, want tokens", ev.Type)
+	}
+	if ev.In != 1234 || ev.Out != 56 {
+		t.Fatalf("in/out = %d/%d, want 1234/56", ev.In, ev.Out)
+	}
+	if ev.Agent != "backendlead" {
+		t.Fatalf("agent = %q, want backendlead", ev.Agent)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // AgentResponse содержит ответ модели и все выполненные вызовы функций.
@@ -48,6 +49,18 @@ type ModelReply struct {
 	Content      string
 	ToolCalls    []tools.ToolCall
 	FinishReason string
+	// Usage — фактическое потребление токенов раунда, если провайдер его
+	// отдаёт (Ollama eval_count/prompt_eval_count, OpenAI-совместимые usage).
+	// nil — провайдер не сообщил; runner считает эвристическую оценку.
+	Usage *Usage
+}
+
+// Usage — фактическое потребление токенов одного запроса к модели.
+type Usage struct {
+	// InputTokens — токены, отправленные модели на вход (вся история).
+	InputTokens int
+	// OutputTokens — токены, сгенерированные моделью в ответ.
+	OutputTokens int
 }
 
 // ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели.
@@ -69,6 +82,62 @@ type StreamChunk struct {
 // остаются реализацией только ChatProvider — runner использует fallback.
 type StreamChatProvider interface {
 	ChatStream(ctx context.Context, agent agents.Agent, messages []Message, onChunk func(StreamChunk)) (*ModelReply, error)
+}
+
+// EstimateTextTokens — грубая оценка количества токенов в тексте без словаря
+// токенизатора (проект использует разные LLM — Ollama, Yandex, OpenAI-совместимые).
+// Ориентир: ~4 символа на токен для ASCII/латиницы и более плотные языки
+// (кириллица кодируется токенами чаще), поэтому оценка берёт максимум между
+// «символьной» (len/4) и «словесной» (words × 1.25) эвристиками.
+func EstimateTextTokens(s string) int {
+	if s == "" {
+		return 0
+	}
+	chars := 0
+	words := 0
+	inWord := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			inWord = false
+			continue
+		}
+		chars++
+		if !inWord {
+			words++
+			inWord = true
+		}
+	}
+	if chars == 0 {
+		return 0
+	}
+	byChars := chars/4 + 1
+	byWords := words + words/4 + 1
+	if byChars > byWords {
+		return byChars
+	}
+	return byWords
+}
+
+// EstimateUsage оценивает токены раунда, когда провайдер не сообщает
+// фактический usage: вход — вся история сообщений диалога (включая аргументы
+// вызовов инструментов), выход — ответ модели (текст и аргументы tool_calls).
+func EstimateUsage(messages []Message, reply *ModelReply) (in, out int) {
+	for _, m := range messages {
+		in += EstimateTextTokens(m.Content)
+		if m.Role == "tool" {
+			in += 4 // служебные токены tool-сообщения (tool_call_id и пр.)
+		}
+		for _, tc := range m.ToolCalls {
+			in += EstimateTextTokens(tc.Name) + EstimateTextTokens(tc.Arguments)
+		}
+	}
+	if reply != nil {
+		out += EstimateTextTokens(reply.Content)
+		for _, tc := range reply.ToolCalls {
+			out += EstimateTextTokens(tc.Name) + EstimateTextTokens(tc.Arguments)
+		}
+	}
+	return in, out
 }
 
 // ToolRequiringAgent — необязательный интерфейс агента, который требует,
@@ -509,6 +578,22 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		}
 		if err != nil {
 			return nil, err
+		}
+
+		// Счётчик токенов: предпочитаем фактический usage провайдера, иначе —
+		// эвристическую оценку по истории и ответу. Событие уходит в репортёр
+		// (Web UI) для живой трансляции в шину проекта.
+		in, out := EstimateUsage(messages, reply)
+		if u := reply.Usage; u != nil {
+			if u.InputTokens > 0 {
+				in = u.InputTokens
+			}
+			if u.OutputTokens > 0 {
+				out = u.OutputTokens
+			}
+		}
+		if rep != nil && (in > 0 || out > 0) {
+			rep.OnTokens(int64(in), int64(out))
 		}
 
 		if rep != nil {

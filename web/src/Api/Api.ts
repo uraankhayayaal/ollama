@@ -12,6 +12,7 @@ import type {
   DiffView,
   LogsView,
   ProjectMeta,
+  ProjectTokens,
   TaskRow,
 } from "@/Types";
 
@@ -159,6 +160,20 @@ export async function postChat(
   );
 }
 
+// «Продолжить»: запускает/возобновляет Kanban-оркестрацию на текущей доске.
+// В чат ничего не отправляется — раннер работает над эпиками/задачами доски
+// своим циклом (параллельно чату).
+export async function continueProject(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/continue`,
+    {},
+  );
+}
+
 export async function chatHistory(
   base: string,
   project: string,
@@ -167,6 +182,17 @@ export async function chatHistory(
   return req<ChatMsg[]>(
     "GET",
     `${base}/api/projects/${enc(project)}/chat?limit=${limit}`,
+  );
+}
+
+// Накопленные токены проекта (вход/выход).
+export async function projectTokens(
+  base: string,
+  project: string,
+): Promise<ProjectTokens> {
+  return req<ProjectTokens>(
+    "GET",
+    `${base}/api/projects/${enc(project)}/tokens`,
   );
 }
 
@@ -215,6 +241,19 @@ export async function listBugs(
   project: string,
 ): Promise<BugRow[]> {
   return req<BugRow[]>("GET", `${base}/api/projects/${enc(project)}/bugs`);
+}
+
+// Удаление эпика вместе с его задачами. Допустимо, пока ни одна задача эпика
+// не взята в работу специалистом (иначе сервер вернёт 400).
+export async function deleteEpic(
+  base: string,
+  project: string,
+  epicID: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "DELETE",
+    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}`,
+  );
 }
 
 // --- приёмка (Ф-2-3) ---

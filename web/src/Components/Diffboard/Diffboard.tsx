@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { acceptProject, projectDiff, projectDiffFile, rejectBranch } from "@/Api";
-import type { DiffFileView, DiffView, ProjectKind } from "@/Types";
+import type { DiffFile, DiffFileView, DiffView, ProjectKind } from "@/Types";
 import { sideBySide, type SideRow } from "./sidebyside";
 import "./styles.scss";
 
@@ -157,34 +157,44 @@ export function Diffboard(props: DiffboardProps) {
         </>
       )}
 
-      {!loading && !error && diff?.kind === "snap" && (
-        <>
-          <p className="hint">
-            Локальный проект: изменения файлов относительно точки отхода (baseline-снимка).
-          </p>
-          {(diff.added?.length || diff.modified?.length || diff.removed?.length) ? (
-            <div className="tree">
-              {diff.added?.map((f) => (
-                <div className="entry added" key={f}>
-                  <span>+ {f}</span>
-                </div>
-              ))}
-              {diff.modified?.map((f) => (
-                <div className="entry modified" key={f}>
-                  <span>~ {f}</span>
-                </div>
-              ))}
-              {diff.removed?.map((f) => (
-                <div className="entry removed" key={f}>
-                  <span>− {f}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="hint">Изменений относительно точки отхода нет.</p>
-          )}
-        </>
-      )}
+      {!loading && !error && diff?.kind === "snap" && (() => {
+        const snapFiles: DiffFile[] = [
+          ...(diff.added ?? []).map((f) => ({ path: f, status: "added" as const, added: 0, deleted: 0 })),
+          ...(diff.modified ?? []).map((f) => ({ path: f, status: "modified" as const, added: 0, deleted: 0 })),
+          ...(diff.removed ?? []).map((f) => ({ path: f, status: "removed" as const, added: 0, deleted: 0 })),
+        ];
+        return (
+          <>
+            <p className="hint">
+              Локальный проект: изменения файлов относительно точки отхода (baseline-снимка).
+            </p>
+            {snapFiles.length > 0 ? (
+              <div className="filelist">
+                {snapFiles.map((f) => {
+                  const patch = diff.patches?.[f.path];
+                  return (
+                    <div className="fentry" key={f.path}>
+                      <button className={"frow " + f.status} onClick={() => void toggle(f.path)}>
+                        <span className="fpath">{f.path}</span>
+                        <span className="fstat">
+                          <i className="badge">{statusWord(f.status)}</i>
+                        </span>
+                      </button>
+                      {open[f.path] && patch && (
+                        <div className="fpatch">
+                          <SideDiff patch={patch} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="hint">Изменений относительно точки отхода нет.</p>
+            )}
+          </>
+        );
+      })()}
 
       {!loading && !error && diff && !isGit && (
         <p className="hint">Приёмка через MR доступна только git-проектам (открытым по git-URL).</p>

@@ -14,6 +14,7 @@ import (
 	"ai/logging"
 	"ai/models"
 	"ai/runevents"
+	"ai/tokens"
 	"ai/workspace"
 )
 
@@ -40,10 +41,16 @@ type Session struct {
 	router  *runevents.Router
 	chat    *chat.Store
 	board   *board.Store
+	tok     *tokens.Store
 	ctx     context.Context
 	ticks   chan struct{} // сигнал «доска могла измениться» для флашера
 	wg      sync.WaitGroup
 	stopped bool
+
+	// log — лог проекта (logs/<проект>.log). В режиме serve один процесс ведёт
+	// много проектов, поэтому сообщения сессии пишутся в файл своего проекта,
+	// а не в общий logs/server.log.
+	log *logging.Logger
 }
 
 // newSession создаёт сессию проекта (без запуска runner'а).
@@ -62,13 +69,29 @@ func (s *Server) newSession(project string) (*Session, error) {
 		_ = boardStore.Close()
 		return nil, err
 	}
+	tokStore, err := tokens.NewStore(context.Background(), tokens.StoreConfig{
+		Addr:     architect.LoadConfig().RedisAddr,
+		Password: architect.LoadConfig().RedisPassword,
+		DB:       architect.LoadConfig().RedisDB,
+		Project:  project,
+	})
+	if err != nil {
+		_ = boardStore.Close()
+		_ = chatStore.Close()
+		return nil, err
+	}
+	// Файл проекта открываем сразу: первая запись (и panel логов в Web UI)
+	// не должна ждать ленивого создания каталога.
+	logging.Attach(project)
 	sess := &Session{
 		srv:     s,
 		project: project,
 		decide:  make(chan planner.GateDecision, 1),
 		chat:    chatStore,
 		board:   boardStore,
+		tok:     tokStore,
 		ticks:   make(chan struct{}, 64),
+		log:     logging.For(project),
 	}
 	sess.router = runevents.NewRouter(func(ev runevents.Event) {
 		sess.chatEvent(ev)
@@ -90,10 +113,16 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.running = true
 	sess.stopped = false
 	cctx, cancel := context.WithCancel(ctx)
+	// Репортёр в контексте оркестрации: runner.Generate по нему транслирует
+	// текст модели, вызовы инструментов и потребление токенов в живую шину
+	// (type=chat / type=tool / type=tokens). Без этого Web UI не видит ни
+	// логов раундов, ни счётчика токенов (всё стоит на нулях).
+	cctx = runevents.WithReporter(cctx, sess.router)
 	sess.ctx = cctx
 	sess.cancel = func() { cancel() }
 	sess.mu.Unlock()
 
+	sess.log.Infof("=== Оркестрация запущена: %s", truncateText(taskText, 120))
 	sess.append(chat.RoleStatus, "Оркестрация запущена: "+truncateText(taskText, 120), "", "", nil)
 	sess.broadcastStatus("running", "")
 
@@ -117,12 +146,15 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 		// Завершение: публикуем финальный статус и снимок доски.
 		switch {
 		case err == nil:
+			sess.log.Infof("=== Оркестрация завершена: задача решена (все эпики и задачи выполнены)")
 			sess.append(chat.RoleStatus, "Задача решена: все эпики и задачи выполнены.", "", "", nil)
 			sess.broadcastStatus("done", "")
 		case errors.Is(err, context.Canceled):
+			sess.log.Infof("=== Оркестрация остановлена пользователем")
 			sess.append(chat.RoleStatus, "Оркестрация остановлена пользователем.", "", "", nil)
 			sess.broadcastStatus("stopped", "")
 		default:
+			sess.log.Warnf("=== Оркестрация прервана ошибкой: %v", err)
 			sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)
 			sess.broadcastStatus("error", err.Error())
 		}
@@ -141,6 +173,45 @@ func (sess *Session) stop() {
 	if cancel != nil && running {
 		cancel()
 	}
+}
+
+// enqueueChatTask кладёт задачу из чата на доску планировщику: создаёт новый
+// эпик с текстом сообщения пользователя. Оркестрацию НЕ запускает — Kanban-
+// раннер живёт своим циклом и берёт эпик в работу по кнопке «Продолжить»
+// (или в следующем раунде, если цикл уже идёт).
+func (sess *Session) enqueueChatTask(ctx context.Context, msg string) (*board.Epic, error) {
+	epics, err := sess.board.ListEpics(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("чтение доски: %w", err)
+	}
+	used := make(map[string]struct{}, len(epics))
+	for _, e := range epics {
+		used[e.TaskID] = struct{}{}
+	}
+
+	epic := &board.Epic{
+		TaskSpec: board.TaskSpec{
+			Title:       truncateText(msg, 200),
+			Description: msg,
+		},
+	}
+	for n := 1; n <= len(epics)+10; n++ {
+		id := fmt.Sprintf("epic-%d", n)
+		if _, ok := used[id]; ok {
+			continue
+		}
+		epic.TaskID = id
+		if err := sess.board.CreateEpic(ctx, epic); err != nil {
+			if errors.Is(err, board.ErrExists) {
+				used[id] = struct{}{}
+				continue
+			}
+			return nil, fmt.Errorf("публикация эпика %s: %w", id, err)
+		}
+		sess.kickBoard()
+		return epic, nil
+	}
+	return nil, fmt.Errorf("не удалось сгенерировать свободный ID эпика")
 }
 
 // --- HITL-затворы (реализация planner.HumanGate) ---
@@ -252,14 +323,36 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 		ok := ev.OK
 		sess.append(chat.RoleTool, ev.Result, ev.Agent, ev.Tool, &ok)
 		sess.srv.hub.publish(sess.project, "tool", ev)
+	case runevents.TypeTokenCount:
+		// Потребление токенов раунда: накапливаем в Redis (за время жизни
+		// проекта) и транслируем новые тоталы в шину — фронт обновляет
+		// счётчик рядом с кнопкой «Продолжить» в реальном времени.
+		sess.addTokens(ev.In, ev.Out)
 	}
+}
+
+// addTokens прибавляет порцию токенов раунда к счётчику проекта и публикует
+// новые итоговые суммы в шину (type=tokens).
+func (sess *Session) addTokens(in, out int64) {
+	totIn, totOut, err := sess.tok.Add(context.Background(), in, out)
+	if err != nil {
+		sess.log.Warnf("server: счётчик токенов %s: %v", sess.project, err)
+		return
+	}
+	sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: totIn, Output: totOut})
+}
+
+// tokenEvent — текущие накопленные токены проекта (вход/выход).
+type tokenEvent struct {
+	Input  int64 `json:"in"`
+	Output int64 `json:"out"`
 }
 
 // append пишет сообщение в чат (стяжку) и транслирует в шину (type=chat).
 func (sess *Session) append(role chat.Role, content, agent, tool string, ok *bool) {
 	m := chat.Message{Role: role, Content: content, Agent: agent, Tool: tool, OK: ok}
 	if _, err := sess.chat.Append(context.Background(), m); err != nil {
-		logging.Warnf("server: запись в чат %s: %v", sess.project, err)
+		sess.log.Warnf("server: запись в чат %s: %v", sess.project, err)
 	}
 	sess.srv.hub.publish(sess.project, "chat", m)
 }
@@ -344,11 +437,11 @@ func boardView(ctx context.Context, store *board.Store) (boardSnapshot, error) {
 
 // boardSnapshot — полный снимок доски для REST/SSE.
 type boardSnapshot struct {
-	Meta  *board.Meta       `json:"meta,omitempty"`
-	Epics []*board.Epic     `json:"epics"`
-	Tasks []*board.Task     `json:"tasks"`
+	Meta  *board.Meta        `json:"meta,omitempty"`
+	Epics []*board.Epic      `json:"epics"`
+	Tasks []*board.Task      `json:"tasks"`
 	Bugs  []*board.BugReport `json:"bugs"`
-	Total *boardTotal       `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
+	Total *boardTotal        `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
 }
 
 // boardTotal — полные счётчики доски (когда снимок ограничен limit/offset).
