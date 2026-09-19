@@ -104,6 +104,8 @@ func newTool(name string, deps Deps) Tool {
 		return &lspReferencesTool{ops: deps.FileOps}
 	case LspHover:
 		return &lspHoverTool{ops: deps.FileOps}
+	case CodeSearch:
+		return &codeSearchTool{ops: deps.FileOps, searcher: deps.RAG}
 	case "ReviewMr":
 		return &reviewMrTool{ses: deps.Session}
 	case "ApproveMr":

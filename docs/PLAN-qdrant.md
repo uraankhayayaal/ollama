@@ -1,7 +1,8 @@
 # План: Qdrant — контекстная память (RAG) для ИИ-агентов
 
-Статус: **Ф-1 и Ф-2 выполнены** (клиент Qdrant + эмбеддинги; чанкинг и полная
-индексация); далее Ф-3 — инструмент `CodeSearch`. Формат — как в `PLAN-webui.md`
+Статус: **Ф-1, Ф-2, Ф-3 выполнены** (клиент Qdrant + эмбеддинги; чанкинг и
+полная индексация; инструмент `CodeSearch` у субагентов); далее Ф-4 — планировщик:
+подмешивание контекста RAG. Формат — как в `PLAN-webui.md`
 / `PLAN-lsp.md`: статус, решения, привязка к текущему коду, этапы с чекбоксами,
 верификация. Обновлять файл по мере выполнения этапов (чекбоксы `[x]`).
 
@@ -117,13 +118,13 @@
       прогон не дублирует векторы)
 
 ### Ф-3 — Инструмент `CodeSearch` для субагентов
-- [ ] `tools/codesearch.go`: `query` → `Embed` → gRPC-поиск → топ-N с фильтром
+- [x] `tools/codesearch.go`: `query` → `Embed` → gRPC-поиск → топ-N с фильтром
       по `scope`; лимиты `RAG_MAX_RESULTS`/`RAG_READ_MAX_TOTAL`
-- [ ] Регистрация в `tools/registry.go:79`; `Deps` — опциональный `*rag.Client`;
+- [x] Регистрация в `tools/registry.go:79`; `Deps` — опциональный `*rag.Client`;
       `skipped` при недоступном Qdrant (degrade)
-- [ ] `agents/developer`: `CodeSearch` в `devToolNames`, строка промпта
+- [x] `agents/developer`: `CodeSearch` в `devToolNames`, строка промпта
       («ищи по смыслу, не читай всё подряд»)
-- [ ] Hermetic-тесты инструмента (fake-search), формат ответа, `skipped`
+- [x] Hermetic-тесты инструмента (fake-search), формат ответа, `skipped`
 
 ### Ф-4 — Планировщик: подмешивание контекста RAG
 - [ ] `agents/planner/ragcontext.go`: в `BuildProjectMap` — семантическая

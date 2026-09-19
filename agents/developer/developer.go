@@ -9,6 +9,7 @@ import (
 	"ai/agents"
 	"ai/board"
 	"ai/projects"
+	"ai/rag"
 	"ai/tools"
 	"fmt"
 	"os"
@@ -21,12 +22,13 @@ import (
 // AppendFile, DeleteFiles), вносит точечные правки (SearchReplace — универсальный
 // SEARCH/REPLACE для любого языка, PatchGoFunction — семантическая замена одной
 // Go-функции через go/ast), ходит по коду как в IDE (LspDefinition/LspReferences/
-// LspHover — компактная навигация без чтения файлов целиком), получает точные
-// строки ошибок (LspCheck) и проверяет сборку (Run).
+// LspHover — компактная навигация без чтения файлов целиком), ищет по смыслу в
+// векторной памяти (CodeSearch), получает точные строки ошибок (LspCheck) и
+// проверяет сборку (Run).
 var devToolNames = []string{
 	"WriteFiles", "ReadFiles", "ReadMap", "DeleteFiles", "Run", "List", "AppendFile",
 	"SearchReplace", "PatchGoFunction", tools.LspCheck,
-	tools.LspDefinition, tools.LspReferences, tools.LspHover,
+	tools.LspDefinition, tools.LspReferences, tools.LspHover, tools.CodeSearch,
 }
 
 // devBoardToolNames — инструменты общей Kanban-доски, добавляемые разработчику,
@@ -54,6 +56,10 @@ type base struct {
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
 	Store *board.Store
+	// RAG — клиент векторной памяти (Qdrant) для инструмента CodeSearch.
+	// Создаётся ленивым rag.NewClientSafe: при недоступном Qdrant/degrade
+	// клиент nil, а инструмент возвращает skipped.
+	RAG *rag.Client
 	// label — префикс логов агента ("backend-разработчик"/"frontend-разработчик").
 	label string
 	// roleDesc — инструкция роли для системного промпта (область работы, стек,
@@ -141,13 +147,17 @@ func newFrontendDeveloperInDir(prompt, dir string) *FrontendDeveloper {
 
 // newBase собирает общую часть агента-разработчика в заданной директории:
 // *tools.FileOps с лимитами из конфига и выборку инструментов из реестра.
+// RAG-клиент подключается опционально (CodeSearch недоступен и без него —
+// инструмент отдаст skipped).
 func newBase(prompt, dir string, cfg projects.Config, label, roleDesc string) *base {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
+	ragClient := rag.NewClientSafe(rag.Config{})
 	return &base{
 		FileOps:  ops,
 		Prompt:   prompt,
 		Config:   cfg,
-		Tools:    tools.Select(devToolNames, tools.Deps{FileOps: ops}),
+		Tools:    tools.Select(devToolNames, tools.Deps{FileOps: ops, RAG: ragClient}),
+		RAG:      ragClient,
 		label:    label,
 		roleDesc: roleDesc,
 	}
@@ -169,7 +179,7 @@ func (d *base) SetBoardStore(s *board.Store) {
 	}
 	d.Store = s
 	names := append(append([]string{}, devToolNames...), devBoardToolNames...)
-	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s})
+	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s, RAG: d.RAG})
 }
 
 func (d *base) GetUserMessages() []agents.Message {
@@ -230,7 +240,7 @@ func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {
 
 Твой план работы:
 1. Сначала изучи текущее состояние проекта: используй List для просмотра структуры, затем ReadMap для чтения «карт кода» (декларации без тел: сигнатуры, поля структур, типы — с номерами строк). Чтобы понять конкретный символ (где он объявлен, где ещё используется, его сигнатура/документация) — используй LspDefinition/LspReferences/LspHover по file:line:col, как в IDE, НЕ читая файл целиком. Если в README проекта есть раздел «План работ» — прочитай его: там описано, какой функционал уже реализован другими задачами плана и на каком этапе находится проект. НЕ дублируй и НЕ удаляй уже сделанное.
-2. Изучай НЕ ТОЛЬКО имена файлов, но и их содержимое: определи, что уже реализовано (модули, компоненты, эндпоинты, контракты), прежде чем что-то создавать. Если нужного кода или подпроекта ещё нет — создай его (включая go.mod, package.json, requirements.txt, если требуется) инструментом WriteFiles.
+2. Изучай НЕ ТОЛЬКО имена файлов, но и их содержимое: определи, что уже реализовано (модули, компоненты, эндпоинты, контракты), прежде чем что-то создавать. Если ищешь, где реализована та или иная функциональность, — сначала CodeSearch по смыслу (query одной строкой), а не сплошное чтение файлов. Если нужного кода или подпроекта ещё нет — создай его (включая go.mod, package.json, requirements.txt, если требуется) инструментом WriteFiles.
 3. Вноси ТОЧЕЧНЫЕ изменения, развивая существующий код: добавляй и правь только то, что относится к твоей задаче. Для точечных правок внутри существующих файлов НЕ возвращай файл целиком — используй блоки SEARCH/REPLACE инструментом SearchReplace (для любого языка: Go, TS/TSX, CSS) или для Go заменяй одну функцию инструментом PatchGoFunction (передаёшь только тело функции в body). Для больших единовременных добавлений новых файлов используй WriteFiles, для добавления в конец — AppendFile, для удаления — DeleteFiles.
 4. КАТЕГОРИЧЕСКИ НЕ удаляй и НЕ переписывай с нуля функционал, созданный другими задачами плана: он может понадобиться следующим шагам. Если похожий функционал уже есть — используй его и адаптируй под свою задачу, а не создавай альтернативу с нуля.
 5. После каждого набора изменений проверяй, что проект компилируется и проходит проверки: запускай только сборку и автотесты через Run (для Go — "go build ./...", "go vet ./...", дополнительно "gofmt -l ." для форматирования по эталону, при наличии тестов "go test ./..."; для стеков с npm/pnpm/yarn — "npm run build" / "yarn build", а также "npm test" / "yarn test" по аналогии). НЕ запускай через Run приложение/сервер — ни для бэкенда ("go run server/main.go"), ни для фронтенда ("npm run dev", "npm start", "yarn start", "pnpm dev" и т.п.) — такие процессы не завершаются сами и зависают до таймаута; если запуск нужен для проверки, опиши команду в README, а проверяй код тестами.
@@ -252,6 +262,7 @@ func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {
 3. Для ХИРУРГИЧЕСКОГО ЧТЕНИЯ используй ReadFiles с параметром lines (например "lines": "40-70") — читай ровно тот диапазон строк, куда вносишь правку. Перед SEARCH/REPLACE читай только фрагмент, а не весь файл.
 4. Если нужна сигнатура/тип символа из другого пакета — сначала LspHover/LspDefinition; при недоступности LSP (status skipped) — карта (ReadMap) или диапазон строк (ReadFiles lines). НЕ угадывай имена и типы. Точный SEARCH-блок можно составлять только по реальному коду из ReadFiles/Run.
 5. Если понял, что контекста не хватает для точечной задачи — вместо догадок запроси недостающее одной строкой: "NEED_CONTEXT: путь/к/файлу.go", "NEED_CONTEXT: путь/к/файлу.go:20-45" или "NEED_SIGNATURE: путь/к/файлу.go". Оркестратор дозаправит контекст компактно и продолжит цикл.
+6. Для ПОИСКА ПО СМЫСЛУ (найти, где реализована функциональность, когда конкретный символ/путь неизвестен) используй CodeSearch: опиши назначение одной строкой в query (+ опционально scope — область проекта). Вернёт топ релевантных функций/методов с координатами (file, start_line–end_line), score и сниппетом. Если status skipped (индекс не построен или Qdrant выключен) — читай файлы через ReadMap/ReadFiles.
 
 ### ТОЧЕЧНЫЕ ПРАВКИ СУЩЕСТВУЮЩЕГО КОДА (критично для командной работы):
 Твою задачу выполняют параллельно другие разработчики-агенты: они уже реализовали свой функционал в тех же файлах. ИЗОЛИРУЙ правку, чтобы не стереть чужое:

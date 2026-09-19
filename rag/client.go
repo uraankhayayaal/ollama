@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 
+	"ai/logging"
+
 	"github.com/qdrant/go-client/qdrant"
 )
 
@@ -119,6 +121,20 @@ func NewClient(cfg Config) (*Client, error) {
 // с fake-реализациями QdrantStore/Embedder (hermetic, без сети).
 func newClient(store QdrantStore, embed Embedder, collection string) *Client {
 	return &Client{store: store, embed: embed, collection: collection}
+}
+
+// NewClientSafe создаёт клиент RAG, но при некорректной конфигурации (битый
+// QDRANT_ADDR/EMBEDDING_MODEL и т.п.) возвращает nil вместо ошибки: клиент
+// опционален (tools.Deps.RAG), инструменты без него просто деградируют в
+// skipped. Само подключение к Qdrant по-прежнему откладывается до первого
+// вызова — недоступный Qdrant на этом этапе не ошибка.
+func NewClientSafe(cfg Config) *Client {
+	c, err := NewClient(cfg)
+	if err != nil {
+		logging.Warnf("rag: клиент RAG не создан (%v) — CodeSearch будет возвращать skipped", err)
+		return nil
+	}
+	return c
 }
 
 // parseAddr разбирает адрес Qdrant "host:port" из QDRANT_ADDR. Пустая строка —

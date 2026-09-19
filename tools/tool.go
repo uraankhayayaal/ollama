@@ -1,6 +1,9 @@
 package tools
 
-import "ai/board"
+import (
+	"ai/board"
+	"ai/rag"
+)
 
 // Tool — общий интерфейс инструмента агента. Реализации живут в этом пакете
 // (registry.go), а агенты выбирают нужные по имени через Select.
@@ -21,8 +24,12 @@ type Tool interface {
 //	FileOps  — контекст файловых операций (генератор/рефакторинг кода).
 //	Session  — состояние цикла код-ревью (ReviewMr/ApproveMr/NextChunk).
 //	Board    — общая Kanban-доска проекта (инструменты Board*).
+//	RAG      — клиент векторной памяти (Qdrant, CodeSearch). Опционален:
+//	           при nil или недоступном Qdrant инструмент возвращает skipped
+//	           с подсказкой использовать ReadMap/ReadFiles (degrade, как ЛСП).
 type Deps struct {
 	FileOps *FileOps
 	Session *ReviewSession
 	Board   *board.Store
+	RAG     *rag.Client
 }
