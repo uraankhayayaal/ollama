@@ -784,42 +784,70 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			})
 		}
 
-		// Ф-2: авто-самоисправление. После раунда с мутациями файлов проверяем
-		// затронутые файлы через LspCheck и, если есть ошибки, подмешиваем
-		// СКРЫТЫЙ user-промпт с точными строками — модель правит код, не жгя
-		// раунды на перечитывание сырых логов. Такие же события в Web UI, как
-		// у обычного инструмента. Очередь затронутых файлов сбрасывается всегда.
-		if af, ok := agent.(AutoFixer); ok && autoFixEnabled() {
-			if rep != nil {
-				rep.OnToolStart("LspAutoFix", "диагностика файлов, затронутых раундом")
-			}
-			diags, hadMutation := af.LspAutoFix()
-			fresh := filterNewDiags(diags, sentDiags)
-			if rep != nil {
-				rep.OnToolResult("LspAutoFix", Truncate(strings.Join(diags, "\n"), 8000), !hadMutation || len(diags) == 0)
-			}
-			switch {
-			case !hadMutation:
-				// Ничего не менялось (только чтения) — проверять нечего.
-			case len(diags) == 0:
-				// Раунд мутаций без ошибок: эпизод закрыт, счётчик итераций
-				// сбрасываем (следующая поломка снова получит полный лимит),
-				// а память об отправленном — очищаем.
-				autoFixUsed = 0
-				sentDiags = make(map[string]bool)
-			case len(fresh) == 0:
-				// Все диагностики уже показаны модели ранее — не дублируем
-				// (токен-бюджет, Ф-4); подсказку не подмешиваем.
-				Debugf("RUNNER: раунд %d: авто-лечение: все %d диагностик уже отправлены, подсказка не нужна", round+1, len(diags))
-			case autoFixUsed >= autoFixMaxRounds():
-				Debugf("RUNNER: раунд %d: авто-лечение: лимит итераций (%d) исчерпан, подсказки прекращены", round+1, autoFixUsed)
-			default:
-				autoFixUsed++
-				for _, d := range fresh {
-					sentDiags[d] = true
+		// Ф-2 + Ф-5: хуки после раунда с мутациями. Очередь затронутых файлов
+		// дренится ОДИН раз (TakeTouched) и раздаётся активным хукам: авто-
+		// самоисправление LSP (Ф-2) и частичная переиндексация RAG (Ф-5).
+		// Хук активен, когда включён ЛЮБОЙ из режимов (LSP_AUTO_FIX,
+		// RAG_AUTO_REINDEX). События в Web UI — как у обычного инструмента.
+		autofixOn := autoFixEnabled()
+		reindexOn := reindexEnabled()
+		if af, ok := agent.(AutoFixer); ok && (autofixOn || reindexOn) {
+			touched := af.TakeTouched()
+
+			// Ф-5: частичная переиндексация RAG. Промптов модели не подмешивает —
+			// обновляет векторную память, чтобы последующие CodeSearch/контекст
+			// плана видели свежий код. Деградирует тихо при недоступном Qdrant.
+			if reindexOn && len(touched) > 0 {
+				if ri, ok := agent.(Reindexer); ok {
+					if rep != nil {
+						rep.OnToolStart("RAGReindex", "переиндексация файлов, затронутых раундом")
+					}
+					n, rerr := ri.ReindexTouched(touched)
+					if rep != nil {
+						rep.OnToolResult("RAGReindex", Truncate(fmt.Sprintf("переиндексировано файлов: %d", n), 8000), rerr == nil)
+					}
+					if rerr != nil {
+						Debugf("RUNNER: раунд %d: переиндексация RAG: %v", round+1, rerr)
+					}
 				}
-				Debugf("RUNNER: раунд %d: авто-лечение: подмешиваю подсказку с %d диагностиками (%d/%d)", round+1, len(fresh), autoFixUsed, autoFixMaxRounds())
-				messages = append(messages, Message{Role: "user", Content: autoFixMessage(fresh, autoFixUsed, autoFixMaxRounds())})
+			}
+
+			// Ф-2: авто-самоисправление. Проверяем затронутые файлы через
+			// LspCheck и, если есть ошибки, подмешиваем СКРЫТЫЙ user-промпт
+			// с точными строками — модель правит код, не жгя раунды на
+			// перечитывание сырых логов.
+			if autofixOn {
+				if rep != nil {
+					rep.OnToolStart("LspAutoFix", "диагностика файлов, затронутых раундом")
+				}
+				diags, hadMutation := af.LspCheckFiles(touched)
+				fresh := filterNewDiags(diags, sentDiags)
+				if rep != nil {
+					rep.OnToolResult("LspAutoFix", Truncate(strings.Join(diags, "\n"), 8000), !hadMutation || len(diags) == 0)
+				}
+				switch {
+				case !hadMutation:
+					// Ничего не менялось (только чтения) — проверять нечего.
+				case len(diags) == 0:
+					// Раунд мутаций без ошибок: эпизод закрыт, счётчик итераций
+					// сбрасываем (следующая поломка снова получит полный лимит),
+					// а память об отправленном — очищаем.
+					autoFixUsed = 0
+					sentDiags = make(map[string]bool)
+				case len(fresh) == 0:
+					// Все диагностики уже показаны модели ранее — не дублируем
+					// (токен-бюджет, Ф-4); подсказку не подмешиваем.
+					Debugf("RUNNER: раунд %d: авто-лечение: все %d диагностик уже отправлены, подсказка не нужна", round+1, len(diags))
+				case autoFixUsed >= autoFixMaxRounds():
+					Debugf("RUNNER: раунд %d: авто-лечение: лимит итераций (%d) исчерпан, подсказки прекращены", round+1, autoFixUsed)
+				default:
+					autoFixUsed++
+					for _, d := range fresh {
+						sentDiags[d] = true
+					}
+					Debugf("RUNNER: раунд %d: авто-лечение: подмешиваю подсказку с %d диагностиками (%d/%d)", round+1, len(fresh), autoFixUsed, autoFixMaxRounds())
+					messages = append(messages, Message{Role: "user", Content: autoFixMessage(fresh, autoFixUsed, autoFixMaxRounds())})
+				}
 			}
 		}
 

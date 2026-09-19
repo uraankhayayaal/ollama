@@ -42,6 +42,32 @@ func (ops *FileOps) takeTouched() []string {
 	return out
 }
 
+// TakeTouched атомарно забирает и очищает очередь файлов, затронутых мутацией
+// с прошлого вызова. Единый источник затронутых файлов для хуков раннера
+// (авто-лечение LSP и переиндексация RAG): дренится ОДИН раз за раунд,
+// а полученный список раздаётся включённым хукам.
+func (ops *FileOps) TakeTouched() []string {
+	return ops.takeTouched()
+}
+
+// LspCheckFiles выполняет LspCheck по явному списку относительных файлов
+// (очередь НЕ дренит — список передаёт раннер). hadMutation=true, когда
+// список непуст (файлы менялись), даже если чекер недоступен и диагностик нет.
+func (ops *FileOps) LspCheckFiles(files []string) ([]string, bool) {
+	if ops == nil || len(files) == 0 {
+		return nil, false
+	}
+	args := make([]any, len(files))
+	for i, f := range files {
+		args[i] = f
+	}
+	res, err := ops.LspCheck(map[string]any{"files": args})
+	if err != nil {
+		return nil, true
+	}
+	return lspDiagnosticLines(res), true
+}
+
 // LspAutoFix выполняет LspCheck по файлам, затронутым с предыдущего вызова,
 // сбрасывает очередь и возвращает строки диагностик. hadMutation=true, если
 // файлы вообще менялись (даже когда чекер недоступен и диагностик нет).
@@ -49,19 +75,7 @@ func (ops *FileOps) LspAutoFix() ([]string, bool) {
 	if ops == nil {
 		return nil, false
 	}
-	touched := ops.takeTouched()
-	if len(touched) == 0 {
-		return nil, false
-	}
-	files := make([]any, len(touched))
-	for i, f := range touched {
-		files[i] = f
-	}
-	res, err := ops.LspCheck(map[string]any{"files": files})
-	if err != nil {
-		return nil, true
-	}
-	return lspDiagnosticLines(res), true
+	return ops.LspCheckFiles(ops.takeTouched())
 }
 
 // lspDiagnosticLines разбирает JSON-ответ LspCheck и форматирует диагностики

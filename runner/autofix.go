@@ -25,13 +25,20 @@ const (
 	defaultAutoFixMax   = 3
 )
 
-// AutoFixer — необязательный интерфейс агента для авто-самоисправления (Ф-2).
-// Реализуется *tools.FileOps (встроен в агентов-разработчиков).
+// AutoFixer — необязательный интерфейс агента для координации пост-раундовых
+// хуков (Ф-2 + Ф-5): единый сегмент очереди затронутых файлов + LSP-проверка.
+// Реализуется *tools.FileOps (встроен в агентов-разработчиков). TakeTouched
+// дренит очередь РОВНО ОДИН раз за раунд; полученный список раннер раздаёт
+// включённым хукам — авто-лечению (LspCheckFiles) и переиндексации RAG
+// (Reindexer) — чтобы хуки не конкурировали за одну очередь.
 type AutoFixer interface {
-	// LspAutoFix выполняет LspCheck по файлам, затронутым после предыдущего
-	// вызова, сбрасывает очередь и возвращает готовые строки диагностик
-	// ("file:line:col: message"). hadMutation=true, если файлы менялись.
-	LspAutoFix() (diagnostics []string, hadMutation bool)
+	// TakeTouched забирает и очищает очередь файлов, затронутых мутацией
+	// с прошлого вызова.
+	TakeTouched() []string
+	// LspCheckFiles выполняет LspCheck по явному списку файлов и возвращает
+	// строки диагностик ("file:line:col: message"). hadMutation=true, если
+	// список непуст (файлы менялись).
+	LspCheckFiles(files []string) (diagnostics []string, hadMutation bool)
 }
 
 // autoFixEnabled сообщает, включено ли авто-самоисправление (LSP_AUTO_FIX).

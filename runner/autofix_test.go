@@ -9,11 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"ai/agents"
 	"ai/tools"
 )
 
 // runRecordingGenerate запускает Generate с записывающим провайдером.
-func runRecordingGenerate(t *testing.T, agent *autoFixAgent, provider *recordingProvider) *AgentResponse {
+func runRecordingGenerate(t *testing.T, agent agents.Agent, provider *recordingProvider) *AgentResponse {
 	t.Helper()
 	resp, err := Generate(context.Background(), provider, agent)
 	if err != nil {
@@ -23,15 +24,25 @@ func runRecordingGenerate(t *testing.T, agent *autoFixAgent, provider *recording
 }
 
 // autoFixAgent — fakeAgent + интерфейс AutoFixer. Диагностики отдаются по
-// порядку вызовов (последний сценарий повторяется), как fakeChatProvider.
+// порядку вызовов (последний сценарий повторяется), как fakeChatProvider;
+// touched изображаются непустыми, пока в сценарии есть мутации.
 type autoFixAgent struct {
 	fakeAgent
-	diags   [][]string
-	hasMut  []bool
-	afCalls int
+	diags    [][]string
+	hasMut   []bool
+	afCalls  int
+	fixCalls int
 }
 
-func (a *autoFixAgent) LspAutoFix() ([]string, bool) {
+func (a *autoFixAgent) TakeTouched() []string {
+	if len(a.hasMut) == 0 {
+		return nil
+	}
+	return []string{"main.go"}
+}
+
+func (a *autoFixAgent) LspCheckFiles(_ []string) ([]string, bool) {
+	a.fixCalls++
 	idx := a.afCalls
 	a.afCalls++
 	if len(a.diags) == 0 {

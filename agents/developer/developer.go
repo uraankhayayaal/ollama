@@ -10,9 +10,12 @@ import (
 	"ai/board"
 	"ai/projects"
 	"ai/rag"
+	"ai/runner"
 	"ai/tools"
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/ollama/ollama/api"
 )
@@ -167,6 +170,21 @@ func newBase(prompt, dir string, cfg projects.Config, label, roleDesc string) *b
 func (b *base) withLangDesc(desc string) *base {
 	b.langDesc = desc
 	return b
+}
+
+// ReindexTouched выполняет частичную переиндексацию RAG (Ф-5): относительные
+// пути затронутых мутацией файлов (список передаёт раннер из единой очереди
+// FileOps.touched) перечитываются из OutputDir и заново грузятся в векторную
+// память (старые чанки идемпотентно заменяются), удалённые файлы чистятся
+// из индекса. Реализует runner.Reindexer; вызывается раннером в пост-раундовом
+// хуке при RAG_AUTO_REINDEX=1. Без подключённого RAG — тихий ноль (degrade),
+// ошибки доступа к Qdrant возвращаются: раннер логирует, генерация не падает.
+func (d *base) ReindexTouched(touched []string) (int, error) {
+	if d.RAG == nil || len(touched) == 0 {
+		return 0, nil
+	}
+	project := filepath.Base(filepath.Clean(d.OutputDir))
+	return runner.ReindexFiles(context.Background(), d.RAG, rag.ScopeForPath, d.OutputDir, project, touched)
 }
 
 // SetBoardStore подключает разработчика к общей Kanban-доске проекта: добавляет
