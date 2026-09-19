@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -11,12 +12,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 
+	"ai/board"
 	"ai/web"
 )
 
@@ -253,12 +257,120 @@ func TestGetBoardReturnsSnapshot(t *testing.T) {
 func TestPostChatWithoutProviderFails(t *testing.T) {
 	_, handler, _ := newTestServer(t)
 
+	// Вопрос/запрос статуса требует LLM-провайдера — без него 503.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/projects/proj-1/chat",
-		bytes.NewBufferString(`{"message":"сделай файл"}`))
+		bytes.NewBufferString(`{"message":"что делает проект?"}`))
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("POST chat без LLM: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+		t.Fatalf("POST chat вопрос без LLM: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPostChatTaskEnqueuesEpic(t *testing.T) {
+	srv, handler, _ := newTestServer(t)
+
+	// Явный запрос на создание задачи/эпика кладётся на доску планировщику
+	// (новый эпик) и НЕ требует LLM-провайдера: оркестрация живёт своим циклом
+	// и берёт эпик в работу по кнопке «Продолжить».
+	ctx := context.Background()
+	for i, msg := range []string{"создай задачу: оптимизируй загрузку страницы", "добавь эпик на добавление тестов"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/projects/proj-1/chat",
+			bytes.NewBufferString(`{"message":`+strconv.Quote(msg)+`}`))
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST chat задача #%d: %d, want 200 (body: %s)", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	sess := srv.session("proj-1")
+	if sess == nil {
+		t.Fatal("сессия проекта не создана")
+	}
+	epics, err := sess.board.ListEpics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(epics) != 2 {
+		t.Fatalf("эпиков на доске: %d, want 2", len(epics))
+	}
+	if epics[0].TaskID != "epic-1" || epics[1].TaskID != "epic-2" {
+		t.Fatalf("ID эпиков чата = %q, %q; want epic-1, epic-2", epics[0].TaskID, epics[1].TaskID)
+	}
+	if epics[0].Title != "создай задачу: оптимизируй загрузку страницы" {
+		t.Fatalf("title = %q", epics[0].Title)
+	}
+
+	// Оркестрация не запущена: чат обработал задачу без единого раунда.
+	sess.mu.Lock()
+	running := sess.running
+	sess.mu.Unlock()
+	if running {
+		t.Fatal("оркестрация не должна запускаться при добавлении задачи из чата")
+	}
+}
+
+func TestPostChatDialogueDoesNotCreateEpic(t *testing.T) {
+	srv, handler, _ := newTestServer(t)
+
+	// «Подскажи погоду» и прочий свободный диалог — это НЕ создание задачи:
+	// маршрут уходит в Q&A-ассистента, а без LLM-провайдера отвечает 503,
+	// доску при этом не трогая (эпиков не появляется).
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/proj-chat/chat",
+		bytes.NewBufferString(`{"message":"Подскажи погоду в Москве"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST chat диалог без LLM: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	sess, _, err := srv.getOrCreate("proj-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	epics, err := sess.board.ListEpics(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(epics) != 0 {
+		t.Fatalf("диалог не должен создавать эпики, на доске: %d", len(epics))
+	}
+}
+
+func TestContinueEmptyBoardBadRequest(t *testing.T) {
+	_, handler, _ := newTestServer(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/proj-empty/continue", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("continue пустой доски: %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestContinueOnBoardRequiresProvider(t *testing.T) {
+	_, handler, mr := newTestServer(t)
+
+	// Задача на доске уже есть (эпик добавлен, напр., из чата) — Continue
+	// доходит до резолва LLM-провайдера; в hermetic-тесте его нет → 503.
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-cont"})
+	defer store.Close()
+	if err := store.CreateEpic(context.Background(), &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "задача с чата"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/proj-cont/continue", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("continue с доской без LLM: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	// Ошибка про провайдера, а не про «нет задач» на доске.
+	if !strings.Contains(rec.Body.String(), "провайдер") {
+		t.Fatalf("ожидалась ошибка про провайдера, got: %s", rec.Body.String())
 	}
 }
 

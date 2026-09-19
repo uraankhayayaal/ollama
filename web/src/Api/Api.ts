@@ -160,6 +160,20 @@ export async function postChat(
   );
 }
 
+// «Продолжить»: запускает/возобновляет Kanban-оркестрацию на текущей доске.
+// В чат ничего не отправляется — раннер работает над эпиками/задачами доски
+// своим циклом (параллельно чату).
+export async function continueProject(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/continue`,
+    {},
+  );
+}
+
 export async function chatHistory(
   base: string,
   project: string,

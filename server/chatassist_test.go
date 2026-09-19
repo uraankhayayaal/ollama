@@ -64,33 +64,41 @@ func waitChatRole(t *testing.T, sess *Session, role chat.Role, within time.Durat
 	return chat.Message{}
 }
 
-func TestIsChatQuestion(t *testing.T) {
+func TestIsChatTaskRequest(t *testing.T) {
 	cases := []struct {
 		msg  string
 		want bool
 	}{
-		{"Что сейчас делает проект?", true},
-		{"что", true},
-		{"какой текущий статус задачи X", true},
-		{"Статус отчёта", true},
-		{"Сколько задач в работе", true},
-		{"Расскажи про архитектуру", true},
-		{"Объясни, как работает main", true},
-		{"Покажи структуру проекта", true},
-		{"есть ли баги", true},
-		{"На каком этапе остановились?", true},
-		{"Где лежит конфиг", true},
-		{"Оптимизируй загрузку страницы", false},
-		{"Сделай файл readme", false},
-		{"Проверь, что все тесты проходят", false},
-		{"Добавь статусы в отчёт и сохрани", false},
+		// Явный запрос на создание эпика/задачи → эпик.
+		{"Создай задачу: оптимизируй загрузку", true},
+		{"создай эпик на авторизацию", true},
+		{"добавь задачу в канбан", true},
+		{"добавь на доску баг с формой", true},
+		{"новая задача: сделать витрину", true},
+		{"Заведи эпик на поиск", true},
+		{"задача: упрости разбор json", true},
+		{"оформи задачу на тесты", true},
+		{"поставь задачу на рефакторинг", true},
+		{"создать таску на логирование", true},
+
+		// Свободный диалог — эпиков не создаём.
+		{"Подскажи погоду в Москве", false},
+		{"Что сейчас делает проект?", false},
+		{"какой текущий статус задачи X", false},
+		{"Сколько задач в работе", false},
+		{"Расскажи про архитектуру", false},
+		{"Объясни, как работает main", false},
+		{"спроектируй мне витрину", false},
+		{"оптимизируй загрузку страницы", false},
+		{"добавь статусы в отчёт и сохрани", false},
+		{"проверь, что все тесты проходят", false},
+		{"Привет, как дела?", false},
 		{"", false},
 		{"   ", false},
-		{"123", false},
 	}
 	for _, c := range cases {
-		if got := isChatQuestion(c.msg); got != c.want {
-			t.Errorf("isChatQuestion(%q) = %v, want %v", c.msg, got, c.want)
+		if got := isChatTaskRequest(c.msg); got != c.want {
+			t.Errorf("isChatTaskRequest(%q) = %v, want %v", c.msg, got, c.want)
 		}
 	}
 }

@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, boardOf, chatHistory, gateDecide, listProjects, logout, openProject, postChat, projectTokens, sessionStop, updateTask } from "./Api";
+import { authStatus, boardOf, chatHistory, continueProject, gateDecide, listProjects, logout, openProject, postChat, projectTokens, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { BoardView, ChatMsg, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -198,15 +198,10 @@ export function App() {
     return () => l.close();
   }, [project?.project_name]);
 
-  // Последнее сообщение пользователя — используется кнопкой «Продолжить»
-  // вместо board.meta.task, чтобы возобновить диалог с актуального ввода.
-  const lastUserMsgRef = useRef<string>("");
-
   const onSend = async (text: string) => {
     if (!project) {
       return;
     }
-    lastUserMsgRef.current = text;
     // Пользовательское сообщение не добавляем локально: сервер сам публикует
     // его в шину (type=chat, role=user) ещё до запуска оркестрации, и оно
     // прилетает через WS. Локальная вставка дублировала бы сообщение (дважды).
@@ -217,30 +212,34 @@ export function App() {
     }
   };
 
-  // «Продолжить»: возможен, когда есть задача проекта и оркестрация не идёт
-  // (stopped/error/done/idle). Повторная отправка последнего сообщения пользователя
-  // возобновляет диалог с актуальной точки. Если последнее сообщение пустое —
-  // фолбэк на board.meta.task (исходная задача проекта).
+  // «Продолжить»: запускает/возобновляет Kanban-оркестрацию на текущей доске
+  // (кнопка ⏵). В чат ничего не отправляется и не дублируется: раннер работает
+  // над эпиками и задачами доски своим циклом. Чат остаётся независимым —
+  // вопросы и новые задачи для планировщика можно писать параллельно.
+  // Возможно, когда на доске есть работа (исходная задача проекта meta.task
+  // или хоть один эпик), а оркестрация не идёт (stopped/error/done/idle).
   const [continuing, setContinuing] = useState(false);
   // Синхронный флаг: иначе два быстрых клика до ре-рендера прошли бы оба
-  // (canContinue читается из замыкания) и отправили бы задачу дважды.
+  // (canContinue читается из замыкания) и запустили бы раннер дважды.
   const continuingRef = useRef(false);
   const canContinue =
     !!project &&
-    !!board?.meta?.task &&
+    !!board &&
+    (!!board.meta?.task || board.epics.length > 0) &&
     status !== "running" &&
     status !== "waiting" &&
     !continuing;
 
   const onContinue = async () => {
-    if (continuingRef.current || !canContinue) {
+    if (continuingRef.current || !canContinue || !project) {
       return;
     }
     continuingRef.current = true;
     setContinuing(true);
     try {
-      // Приоритет: последнее сообщение пользователя, иначе — исходная задача.
-      await onSend(lastUserMsgRef.current || board!.meta!.task);
+      await continueProject(BASE, project.project_name);
+    } catch (e) {
+      fail(e);
     } finally {
       continuingRef.current = false;
       setContinuing(false);

@@ -163,6 +163,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}", s.handleGetBoard)
 	mux.HandleFunc("POST /api/projects/{id}/chat", s.handlePostChat)
 	mux.HandleFunc("GET /api/projects/{id}/chat", s.handleChatHistory)
+	mux.HandleFunc("POST /api/projects/{id}/continue", s.handleContinue)
 	mux.HandleFunc("GET /api/projects/{id}/tokens", s.handleGetTokens)
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
@@ -503,7 +504,11 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 
 // --- REST: чат ---
 
-// handlePostChat принимает сообщение и запускает/продолжает оркестрацию.
+// handlePostChat принимает сообщение. Чат работает ПАРАЛЛЕЛЬНО доске:
+//   - ЯВНЫЙ запрос на создание эпика/задачи (isChatTaskRequest) → эпик на
+//     доске планировщику; оркестрацию сам не запускает (берёт кнопка «Продолжить»);
+//   - всё остальное → Q&A-ассистент отвечает свободно (вопросы, статусы,
+//     общий диалог, «подскажи погоду»), не трогая доску.
 func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	var body struct {
@@ -538,26 +543,84 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 		Time:    time.Now().UTC(),
 	})
 
-	// LLM-провайдер обязателен для запуска.
+	// Только ЯВНЫЙ запрос на создание эпика/задачи кладёт сообщение на доску
+	// планировщику. Всё остальное — свободный диалог: провайдер нужен
+	// ассистенту для ответа, эпик на доску кладётся без LLM.
+	if isChatTaskRequest(body.Message) {
+		sess.log.Infof("[чат] маршрут: явный запрос задачи → доска планировщику")
+		epic, err := sess.enqueueChatTask(context.Background(), body.Message)
+		if err != nil {
+			sess.log.Warnf("[чат] добавление задачи на доску: %v", err)
+			writeErr(w, http.StatusInternalServerError, "ошибка добавления задачи на доску: "+err.Error())
+			return
+		}
+		sess.append(chat.RoleStatus,
+			"Задача добавлена на доску (эпик "+epic.TaskID+"). Планировщик берёт её в работу по кнопке «Продолжить».",
+			"system", "", nil)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+
+	// Вопрос, статус или просто общение → Q&A-ассистент (без оркестрации).
+	prov, err := s.provider()
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
+		return
+	}
+	sess.log.Infof("[чат] маршрут: диалог → Q&A-ассистент (оркестрация не запускается)")
+	sess.runChatAssist(context.Background(), body.Message, prov)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleContinue запускает/возобновляет оркестрацию на текущей доске (кнопка
+// «Продолжить»). В чат ничего не отправляется: раннер работает над эпиками и
+// задачами доски своим циклом. Доска должна иметь хотя бы одну запись (эпик,
+// задачу или meta-задачу) — иначе 400.
+func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
+		return
+	}
+
+	ctx := context.Background()
+	// Текст задачи для раннера: приоритет meta-задачи проекта; если её нет
+	// (задачи добавлены чатом/вручную до первого запуска) — берём обобщённое
+	// описание доски. Пустая доска продолжать нечего — проверяем до резолва
+	// провайдера, чтобы «нечего продолжать» не зависело от наличия LLM.
+	taskText := ""
+	meta, merr := sess.board.GetMeta(ctx)
+	if merr == nil && meta != nil {
+		taskText = meta.Task
+	}
+	if taskText == "" {
+		epics, eerr := sess.board.ListEpics(ctx)
+		if eerr != nil {
+			writeErr(w, http.StatusInternalServerError, "чтение доски: "+eerr.Error())
+			return
+		}
+		tasks, terr := sess.board.ListTasks(ctx)
+		if terr != nil {
+			writeErr(w, http.StatusInternalServerError, "чтение задач: "+terr.Error())
+			return
+		}
+		if len(epics) == 0 && len(tasks) == 0 {
+			writeErr(w, http.StatusBadRequest, "на доске нет задач — добавьте задачу через чат или на доску")
+			return
+		}
+		taskText = "Продолжить работу над задачами доски"
+	}
+
 	prov, err := s.provider()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
 		return
 	}
 
-	// Вопрос/запрос статуса отвечает Q&A-ассистент (без оркестрации);
-	// задача на разработку запускает ранер.
-	if isChatQuestion(body.Message) {
-		sess.log.Infof("[чат] маршрут: вопрос → Q&A-ассистент (оркестрация не запускается)")
-		sess.runChatAssist(context.Background(), body.Message, prov)
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-		return
-	}
-
-	// Запускаем runner.
-	sess.log.Infof("[чат] маршрут: задача → оркестрация Kanban")
-	if err := sess.start(context.Background(), body.Message, prov); err != nil {
-		sess.log.Warnf("[чат] запуск оркестрации отклонён: %v", err)
+	if err := sess.start(ctx, taskText, prov); err != nil {
+		sess.log.Warnf("[continue] запуск оркестрации отклонён: %v", err)
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
