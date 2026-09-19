@@ -167,12 +167,31 @@
         background: var(--chat-agent, #f8fafc);
       }
 
+      // Шапка строки сообщения: кто/инструмент/время в одну линию.
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: default;
+      }
+
       .who {
         font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.04em;
         color: var(--muted, #94a3b8);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .content {
@@ -185,7 +204,114 @@
       .when {
         font-size: 11px;
         color: var(--muted, #94a3b8);
-        align-self: flex-end;
+        margin-left: auto;
+        white-space: nowrap;
+      }
+
+      // --- сворачиваемые сообщения (tool-результаты / длинные тексты) ---
+
+      &.foldable {
+        padding: 0;
+        overflow: hidden;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+
+        .head {
+          padding: 7px 10px;
+        }
+
+        &:hover {
+          border-color: var(--primary, #2563eb);
+        }
+
+        &:focus-visible {
+          outline: 2px solid var(--primary, #2563eb);
+          outline-offset: 1px;
+        }
+
+        // Развёрнутое сообщение: шапка-кнопка + тело с контентом.
+        &.open {
+          cursor: pointer;
+
+          .head {
+            padding-bottom: 4px;
+          }
+
+          .content {
+            border-top: 1px solid var(--line, #e2e8f0);
+            padding: 6px 10px 2px;
+          }
+        }
+
+        // Свёрнутое: шапка + однострочная выжимка первого значимого фрагмента.
+        &.closed .preview {
+          padding: 0 10px 7px;
+          margin: 0;
+          font-size: 12px;
+          line-height: 1.5;
+          color: var(--muted, #8a94a6);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+      }
+
+      // Технический контент (результат инструмента) — моноширинный, компактнее.
+      &.tool .content.mono {
+        font-family: var(--mono, ui-monospace, Menlo, monospace);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      // Пустые сообщения: компактный плейсхолдер вместо пустого пузыря.
+      &.empty-msg {
+        padding: 4px 10px;
+        opacity: 0.7;
+        border-style: dashed;
+
+        .content.nil {
+          color: var(--muted, #94a3b8);
+          font-size: 12px;
+          line-height: 1.3;
+          font-style: italic;
+        }
+      }
+
+      // Бейдж инструмента (для role=tool): имя + статус успеха цветом.
+      .tool {
+        flex: 0 0 auto;
+        padding: 1px 7px;
+        border-radius: 999px;
+        font-family: var(--mono, ui-monospace, Menlo, monospace);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        background: var(--btn, #f1f5f9);
+        color: var(--muted, #8a94a6);
+        border: 1px solid var(--line, #e2e8f0);
+
+        &.ok {
+          background: #ecfdf5;
+          color: var(--add, #16a34a);
+          border-color: #bbf7d0;
+        }
+
+        &.err {
+          background: #fef2f2;
+          color: var(--err, #dc2626);
+          border-color: #fecaca;
+        }
+      }
+
+      // Шеврон раскрытия.
+      .chev {
+        flex: 0 0 auto;
+        color: var(--muted, #94a3b8);
+        transition: transform 0.15s ease;
+
+        &.open {
+          transform: rotate(90deg);
+        }
       }
 
       // «Плавающее» потоковое сообщение (стриминг, Ф-3): неполный текст,
