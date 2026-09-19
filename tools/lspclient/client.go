@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ai/stackdetect"
+	"ai/tools/binpath"
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -212,7 +213,10 @@ func Start(ctx context.Context, cfg Config) (*Client, error) {
 
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), cfg.Env...)
+	// PATH расширяется каталогами binpath (~/go/bin, префиксы npm/nvm,
+	// Homebrew): серверу и его детям (gopls → go, tsserver → node/tsc) нужен
+	// тот же набор бинарников, что и нам при поиске самого сервера.
+	cmd.Env = binpath.Env(append(os.Environ(), cfg.Env...))
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

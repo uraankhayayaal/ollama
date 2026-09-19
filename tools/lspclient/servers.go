@@ -10,9 +10,9 @@ package lspclient
 
 import (
 	"ai/stackdetect"
+	"ai/tools/binpath"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -23,30 +23,41 @@ import (
 // для стека проекта. Команду можно переопределить переменной окружения
 // LSP_SERVER (готовая строка, например "gopls" или
 // "typescript-language-server --stdio") — тогда стек не важен.
+//
+// Бинарник ищется не только в PATH процесса (он у сервера/демона часто урезан),
+// но и в типовых каталогах установки через binpath.Look: ~/go/bin (gopls),
+// префиксы npm/nvm (typescript-language-server, pyright-langserver), Homebrew.
+// Возвращается АБСОЛЮТНЫЙ путь, чтобы запуск не зависел от PATH.
 func ServerCommand(kind stackdetect.Kind, dir string) ([]string, error) {
 	if v := strings.TrimSpace(os.Getenv("LSP_SERVER")); v != "" {
 		fields := strings.Fields(v)
 		if len(fields) == 0 {
 			return nil, fmt.Errorf("LSP_SERVER пуст")
 		}
+		if bin, ok := binpath.Look(fields[0]); ok {
+			fields[0] = bin
+		}
 		return fields, nil
 	}
 	switch kind {
 	case stackdetect.KindGo:
-		if _, err := exec.LookPath("gopls"); err != nil {
-			return nil, fmt.Errorf("языковой сервер для Go не найден: нужен gopls в PATH (go install golang.org/x/tools/gopls@latest) — навигация недоступна, используй ReadMap/ReadFiles")
+		bin, ok := binpath.Look("gopls")
+		if !ok {
+			return nil, fmt.Errorf("языковой сервер для Go не найден: нужен gopls в PATH или ~/go/bin (go install golang.org/x/tools/gopls@latest) — навигация недоступна, используй ReadMap/ReadFiles")
 		}
-		return []string{"gopls"}, nil
+		return []string{bin}, nil
 	case stackdetect.KindNode:
-		if _, err := exec.LookPath("typescript-language-server"); err != nil {
+		bin, ok := binpath.Look("typescript-language-server")
+		if !ok {
 			return nil, fmt.Errorf("языковой сервер для TypeScript/JavaScript не найден: нужен typescript-language-server (npm i -g typescript-language-server typescript) — навигация недоступна, используй ReadMap/ReadFiles")
 		}
-		return []string{"typescript-language-server", "--stdio"}, nil
+		return []string{bin, "--stdio"}, nil
 	case stackdetect.KindPython:
-		if _, err := exec.LookPath("pyright-langserver"); err != nil {
+		bin, ok := binpath.Look("pyright-langserver")
+		if !ok {
 			return nil, fmt.Errorf("языковой сервер для Python не найден: нужен pyright-langserver (npm i -g pyright) — навигация недоступна, используй ReadMap/ReadFiles")
 		}
-		return []string{"pyright-langserver", "--stdio"}, nil
+		return []string{bin, "--stdio"}, nil
 	default:
 		return nil, fmt.Errorf("стек проекта не определён — навигация по коду недоступна")
 	}
