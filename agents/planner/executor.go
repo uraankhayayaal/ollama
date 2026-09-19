@@ -65,6 +65,10 @@ type Executor struct {
 	// несколько проектов, поэтому сообщения исполнителя пишутся в файл своего
 	// проекта, а не в общий файл процесса.
 	log *logging.Logger
+	// rag — клиент векторной памяти для подмешивания контекста RAG в промпты
+	// шагов (Ф-4). nil — подмешивание выключено (исполнитель работает как
+	// раньше); недоступный Qdrant/эмбеддинги — graceful degrade (шаг без блока).
+	rag RAGSearcher
 }
 
 // NewExecutor создаёт исполнителя плана.
@@ -94,6 +98,15 @@ func planProject(plan *Plan) string {
 func (e *Executor) SetCheckpoint(store *checkpoint.Store, resume bool) *Executor {
 	e.store = store
 	e.resume = resume
+	return e
+}
+
+// SetRAG подключает клиент векторной памяти для контекста RAG по шагам (Ф-4):
+// промпт кодирующего шага обогащается блоком «релевантный код по шагу»
+// (семантический поиск по тексту шага с фильтром его scope). nil — выключено.
+// Возвращает сам исполнитель для цепочек вызовов.
+func (e *Executor) SetRAG(r RAGSearcher) *Executor {
+	e.rag = r
 	return e
 }
 
@@ -518,6 +531,19 @@ func newStepAgent(step *Step, projectName string) agents.Agent {
 // пишут/читают только указанные файлы. Возвращает ответ модели (нужен циклу
 // QA-багрепортов: observable из него парсятся репорты дефектов).
 func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName string) (*runner.AgentResponse, error) {
+	// Подмешивание контекста RAG по шагу (Ф-4): семантическая выборка
+	// релевантного кода по тексту шага с фильтром его scope. Клонируем шаг,
+	// чтобы чекпоинт/PLAN.md хранили исходный промпт (без служебного блока);
+	// RAG недоступен/выключен — блок пуст, шаг исполняется как раньше.
+	if e.rag != nil {
+		if blk := stepRAGContext(ctx, projectName, step, e.rag); blk != "" {
+			cp := *step
+			cp.Prompt = blk + "\n\n" + step.Prompt
+			step = &cp
+			e.log.Detailf("[%s] шаг %s: в промпт подмешан контекст RAG по scope", agentLabel(step.Agent, step.Role), step.ID)
+		}
+	}
+
 	agent := newStepAgent(step, projectName)
 	if agent == nil {
 		return nil, fmt.Errorf("неизвестный тип агента: %s", step.Agent)

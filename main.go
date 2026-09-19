@@ -610,6 +610,11 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, 
 
 	exec := planner.NewExecutor(provider, plan)
 	exec.SetCheckpoint(store, resume)
+	// Контекст RAG по шагам (Ф-4): промпты кодирующих шагов обогащаются
+	// релевантным кодом из векторной памяти с фильтром по scope шага.
+	// Клиент ленивый: при недоступном Qdrant/эмбеддингах — nil/деградация
+	// (блок просто не добавляется, шаги работают как раньше).
+	exec.SetRAG(rag.NewClientSafe(rag.Config{}))
 	if err := exec.Run(ctx); err != nil {
 		logging.Fatalf("Ошибка выполнения плана: %v", err)
 	}

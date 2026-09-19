@@ -3,6 +3,7 @@ package planner
 import (
 	"ai/agents"
 	"ai/projects"
+	"ai/rag"
 	"ai/tools"
 	"fmt"
 
@@ -28,13 +29,17 @@ type Planner struct {
 // NewPlanner создаёт планировщик для заданного проекта.
 // Инструменты планировщика указывают на директорию проекта temp/<projectName>,
 // чтобы модель могла изучить существующий код перед составлением плана.
+// Карта проекта обогащается блоком «релевантный код по задаче» (Ф-4):
+// семантическая выборка по тексту промпта из RAG, если Qdrant/эмбеддинги
+// доступны (клиент ленивый, недоступность — деградация к обычной карте).
 func NewPlanner(projectName, prompt string) *Planner {
 	dir := projects.ProjectDir(projectName)
 	ops := &tools.FileOps{OutputDir: dir}
+	ragClient := rag.NewClientSafe(rag.Config{})
 	return &Planner{
 		Prompt:      prompt,
 		ProjectName: projectName,
-		ProjectMap:  BuildProjectMap(projectName),
+		ProjectMap:  BuildProjectMapRAG(projectName, prompt, ragClient),
 		Tools:       tools.Select(plannerToolNames, tools.Deps{FileOps: ops}),
 	}
 }
