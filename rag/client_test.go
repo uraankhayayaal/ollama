@@ -15,6 +15,7 @@ type fakeStore struct {
 	exists    bool
 	existsErr error
 	createErr error
+	deleteErr error
 
 	created     *qdrant.CreateCollection
 	upsertCalls int
@@ -48,6 +49,9 @@ func (f *fakeStore) Upsert(ctx context.Context, request *qdrant.UpsertPoints) (*
 
 func (f *fakeStore) Delete(ctx context.Context, request *qdrant.DeletePoints) (*qdrant.UpdateResult, error) {
 	f.deleteCalls++
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
 	return &qdrant.UpdateResult{}, nil
 }
 

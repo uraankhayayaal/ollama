@@ -22,11 +22,13 @@ import (
 	"ai/logging"
 	"ai/models"
 	"ai/projects"
+	"ai/rag"
 	"ai/server"
 	"ai/services/mrlistener"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +63,17 @@ func main() {
 			logging.Fatalf("Использование: go run . accept <имя_проекта>\nПример: go run . accept storageService")
 		}
 		runAcceptCommand(os.Args[2])
+		os.Exit(0)
+	}
+
+	// Индексация кодовой базы проекта в Qdrant (RAG, см. PLAN-qdrant.md, Ф-2).
+	// Не требует провайдера модели — только эмбеддинги Ollama и Qdrant.
+	// go run . index <имя_проекта>
+	if len(os.Args) > 1 && os.Args[1] == "index" {
+		if len(os.Args) < 3 || os.Args[2] == "" {
+			logging.Fatalf("Использование: go run . index <имя_проекта>\nПример: go run . index storageService")
+		}
+		runIndexCommand(os.Args[2])
 		os.Exit(0)
 	}
 
@@ -167,7 +180,7 @@ func main() {
 			logging.Fatalf("Использование: go run . qa <имя_проекта> <промпт>\n" +
 				"Пример: go run . qa billingService \"Проверь соответствие Backend и Frontend API-контрактам и напиши автотесты\"")
 		}
-projectName := agentArgs[0]
+		projectName := agentArgs[0]
 		prompt := strings.Join(agentArgs[1:], " ")
 		// Объединённый агент QA-приёмки: сборка → автотесты → приёмка.
 		agent = qaengineer.NewQAEngineer(projectName, prompt)
@@ -227,7 +240,7 @@ projectName := agentArgs[0]
 		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devopslead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
-// Режим планировщика обрабатывается отдельно и до общего прогона:
+	// Режим планировщика обрабатывается отдельно и до общего прогона:
 	// при resume план восстанавливается из чекпоинта без повторного вызова
 	// планировщика (экономим токены), иначе планировщик строит план,
 	// а затем исполнитель выполняет шаги по волнам параллельности.
@@ -337,7 +350,7 @@ func defaultPrompt(args []string) string {
 }
 
 // projectFromArgs определяет имя проекта (имя лог-файла) по аргументам:
-// generate/backend/frontend/plan/accept <имя> → имя; review → "review";
+// generate/backend/frontend/plan/accept/index <имя> → имя; review → "review";
 // listen → "mrlistener"; serve → "server" (в режиме Web UI один процесс ведёт
 // много проектов, поэтому здесь именуется лог самого процесса, а лог каждого
 // проекта — logs/<проект>.log через logging.For(project)).
@@ -346,7 +359,7 @@ func projectFromArgs(args []string) string {
 		return "unnamed"
 	}
 	switch args[1] {
-	case "generate", "backend", "frontend", "devops", "devopslead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept":
+	case "generate", "backend", "frontend", "devops", "devopslead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept", "index":
 		if len(args) >= 3 && args[2] != "" {
 			return args[2]
 		}
@@ -382,6 +395,55 @@ func parseTimeout(raw string) time.Duration {
 		return def
 	}
 	return d
+}
+
+// runIndexCommand индексирует кодовую базу temp/<projectName> в Qdrant
+// (см. PLAN-qdrant.md, Ф-2): обходит дерево (игнор .git/node_modules/бинарных/
+// .gitignore), нарезает файлы на структурные чанки и пакетно грузит векторы.
+// Коллекция создаётся при первом запуске (create-if-not-exists).
+func runIndexCommand(projectName string) {
+	dir := projects.ProjectDir(projectName)
+
+	client, err := rag.NewClient(rag.Config{})
+	if err != nil {
+		logging.Fatalf("index: %v", err)
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	dim, err := client.EnsureCollection(ctx)
+	if err != nil {
+		logging.Fatalf("index: %v", err)
+	}
+
+	files, err := rag.WalkProject(dir)
+	if err != nil {
+		logging.Fatalf("index: обход %s: %v", dir, err)
+	}
+	if len(files) == 0 {
+		logging.Warnf("index: в %s не найдено индексируемых файлов", dir)
+	}
+
+	items := make([]rag.IndexItem, 0, len(files))
+	for _, rel := range files {
+		content, rerr := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if rerr != nil {
+			logging.Warnf("index: не прочитан %s: %v", rel, rerr)
+			continue
+		}
+		items = append(items, rag.IndexItem{Path: rel, Scope: rag.ScopeForPath(rel), Content: string(content)})
+	}
+
+	res, err := client.IndexProject(ctx, projectName, items)
+	if err != nil {
+		logging.Fatalf("index: %v", err)
+	}
+
+	logging.Infof("Индексация %q завершена: файлов %d, чанков %d, размерность %d, коллекция %s",
+		projectName, res.Files, res.Chunks, dim, client.Collection())
+	for _, e := range res.Errors {
+		logging.Warnf("index: %s", e)
+	}
 }
 
 // runAcceptCommand выполняет приёмку собранного приложения в temp/<projectName>:
