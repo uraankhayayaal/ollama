@@ -17,9 +17,11 @@ type Row = { epic: EpicRow | null; epicId: string; tasks: TaskRow[] };
 export function Dashboard({
   board,
   onTaskUpdate,
+  onEpicDelete,
 }: {
   board: BoardView | null;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
+  onEpicDelete: (e: EpicRow) => void;
 }) {
   const [epic, setEpic] = useState<EpicRow | null>(null);
   const [task, setTask] = useState<TaskRow | null>(null);
@@ -98,6 +100,7 @@ export function Dashboard({
             onTaskUpdate={onTaskUpdate}
             onTaskOpen={setTask}
             onEpicOpen={setEpic}
+            onEpicDelete={onEpicDelete}
             onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}

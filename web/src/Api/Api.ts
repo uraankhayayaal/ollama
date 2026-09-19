@@ -243,6 +243,19 @@ export async function listBugs(
   return req<BugRow[]>("GET", `${base}/api/projects/${enc(project)}/bugs`);
 }
 
+// Удаление эпика вместе с его задачами. Допустимо, пока ни одна задача эпика
+// не взята в работу специалистом (иначе сервер вернёт 400).
+export async function deleteEpic(
+  base: string,
+  project: string,
+  epicID: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "DELETE",
+    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}`,
+  );
+}
+
 // --- приёмка (Ф-2-3) ---
 
 // Дифф предложенных изменений: для git-проектов — список файлов (метаданные,

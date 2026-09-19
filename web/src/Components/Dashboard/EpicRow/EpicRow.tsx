@@ -5,6 +5,7 @@
 import type { EpicRow as Epic, TaskRow } from "@/Types";
 import { STATUS_LABEL, STATUS_ORDER } from "../board";
 import { Cell } from "../Cell";
+import { EpicActionBar } from "../EpicActionBar";
 import "./styles.scss";
 
 export function EpicRow({
@@ -15,6 +16,7 @@ export function EpicRow({
   onTaskUpdate,
   onTaskOpen,
   onEpicOpen,
+  onEpicDelete,
   onToggle,
 }: {
   epic: Epic | null;
@@ -24,6 +26,7 @@ export function EpicRow({
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onTaskOpen: (t: TaskRow) => void;
   onEpicOpen: (e: Epic) => void;
+  onEpicDelete: (e: Epic) => void;
   onToggle: () => void;
 }) {
   const plain = epic ? "" : " plain";
@@ -52,6 +55,7 @@ export function EpicRow({
           <>
             <span className="id">{epic.task_id}</span>
             <span className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</span>
+            <EpicActionBar tasks={tasks} onDelete={() => onEpicDelete(epic)} />
           </>
         )}
       </div>

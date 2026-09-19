@@ -1,0 +1,25 @@
+// Быстрые действия эпика: полоса под названием эпика в заголовке строки.
+// Сейчас — кнопка удаления эпика (видна, пока нет начатых задач).
+
+.epic-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+
+  .epic-delete {
+    padding: 2px 8px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 6px;
+    background: transparent;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--danger, #dc2626);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--danger, #dc2626);
+      border-color: var(--danger, #dc2626);
+      color: #fff;
+    }
+  }
+}

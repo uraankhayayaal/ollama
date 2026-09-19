@@ -3,9 +3,9 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, boardOf, chatHistory, continueProject, gateDecide, listProjects, logout, openProject, postChat, projectTokens, sessionStop, updateTask } from "./Api";
+import { authStatus, boardOf, chatHistory, continueProject, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { BoardView, ChatMsg, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
+import type { BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
@@ -270,6 +270,30 @@ export function App() {
     }
   };
 
+  const onEpicDelete = async (epic: EpicRow) => {
+    if (!project) {
+      return;
+    }
+    if (!window.confirm(`Удалить эпик «${epic.title}» вместе с его задачами?`)) {
+      return;
+    }
+    try {
+      await deleteEpic(BASE, project.project_name, epic.task_id);
+      // Локально убираем эпик и его задачи; WS-событие board подтвердит сверкой.
+      setBoard((prev) =>
+        prev
+          ? {
+              ...prev,
+              epics: prev.epics.filter((e) => e.task_id !== epic.task_id),
+              tasks: prev.tasks.filter((t) => t.epic_id !== epic.task_id),
+            }
+          : prev,
+      );
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const onStop = async () => {
     if (!project) {
       return;
@@ -357,7 +381,7 @@ export function App() {
             </section>
           )}
           <section className="dash-pane">
-            <Dashboard board={board} onTaskUpdate={onTaskUpdate} />
+            <Dashboard board={board} onTaskUpdate={onTaskUpdate} onEpicDelete={onEpicDelete} />
           </section>
         </main>
       ) : (

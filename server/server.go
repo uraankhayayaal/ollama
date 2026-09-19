@@ -168,6 +168,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
+	mux.HandleFunc("DELETE /api/projects/{id}/epics/{eid}", s.handleDeleteEpic)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
 	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
@@ -774,6 +775,34 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	// Публикуем обновлённую доску.
 	s.kickBoard(project)
 	writeJSON(w, http.StatusOK, t)
+}
+
+// handleDeleteEpic удаляет эпик вместе с его задачами. Допустимо только для
+// эпиков, задачи которых ещё не взяты в работу специалистами (статусы
+// new/analysis/ready); иначе Store.DeleteEpic вернёт ошибку.
+func (s *Server) handleDeleteEpic(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	epicID := r.PathValue("eid")
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	if err := store.DeleteEpic(r.Context(), epicID); err != nil {
+		if errors.Is(err, board.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "эпик не найден")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Публикуем обновлённую доску.
+	s.kickBoard(project)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // handleListBugs возвращает список багрепортов проекта.

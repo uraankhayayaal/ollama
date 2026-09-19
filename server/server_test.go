@@ -254,6 +254,65 @@ func TestGetBoardReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestDeleteEpic(t *testing.T) {
+	_, handler, mr := newTestServer(t)
+	ctx := context.Background()
+
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-del"})
+	defer store.Close()
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Удаляемый"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "epic-2", Title: "С начатой задачей"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTask(ctx, &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-2", Title: "в работе"},
+		EpicID:   "epic-2",
+		Status:   board.StatusInProgress,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Удаление эпика без начатых задач — 200, эпика с доски больше нет.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/api/projects/proj-del/epics/epic-1", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE эпик без задач: %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if _, err := store.GetEpic(ctx, "epic-1"); err == nil {
+		t.Fatal("эпик epic-1 должен быть удалён")
+	}
+
+	// Эпик, у которого задача уже в работе, удалять нельзя — 400.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("DELETE", "/api/projects/proj-del/epics/epic-2", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("DELETE эпик с задачей в работе: %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	epics, err := store.ListEpics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(epics) != 1 || epics[0].TaskID != "epic-2" {
+		t.Fatalf("эпики после попытки удаления: %+v, want [epic-2]", epics)
+	}
+
+	// Несуществующий эпик — 404.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("DELETE", "/api/projects/proj-del/epics/nope", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("DELETE несуществующего эпика: %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPostChatWithoutProviderFails(t *testing.T) {
 	_, handler, _ := newTestServer(t)
 
