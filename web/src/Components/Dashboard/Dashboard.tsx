@@ -18,10 +18,12 @@ export function Dashboard({
   board,
   onTaskUpdate,
   onEpicDelete,
+  onEpicRelease,
 }: {
   board: BoardView | null;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onEpicDelete: (e: EpicRow) => void;
+  onEpicRelease: (e: EpicRow) => Promise<void>;
 }) {
   const [epic, setEpic] = useState<EpicRow | null>(null);
   const [task, setTask] = useState<TaskRow | null>(null);
@@ -101,6 +103,7 @@ export function Dashboard({
             onTaskOpen={setTask}
             onEpicOpen={setEpic}
             onEpicDelete={onEpicDelete}
+            onEpicRelease={onEpicRelease}
             onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}

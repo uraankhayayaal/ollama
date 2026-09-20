@@ -120,6 +120,24 @@ func (r *Repo) Commit(ctx context.Context, message string) error {
 	return nil
 }
 
+// CommitAllowEmpty фиксирует изменения, даже если индекс пуст (рабочая копия
+// совпадает с HEAD). Используется для завершения merge-процесса, когда резолв
+// оставляет дерево равным HEAD-дереву: MERGE_HEAD требует merge-коммит, а
+// без --allow-empty git откажется его создать.
+func (r *Repo) CommitAllowEmpty(ctx context.Context, message string) error {
+	if r == nil || r.Root == "" {
+		return fmt.Errorf("gitops: пустой Repo")
+	}
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return fmt.Errorf("gitops: пустое сообщение коммита")
+	}
+	if _, err := r.ex.Exec(ctx, r.Root, "git", "commit", "--allow-empty", "-m", msg); err != nil {
+		return fmt.Errorf("gitops: git commit --allow-empty: %w", err)
+	}
+	return nil
+}
+
 // Push пушит фича-ветку в remote (origin) с upstream.
 // При отсутствии remote (локальный проект без origin) — ничего не делает.
 func (r *Repo) Push(ctx context.Context) error {

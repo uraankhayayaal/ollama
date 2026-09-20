@@ -34,13 +34,22 @@ const (
 
 // Info — запись реестра: имя проекта → абсолютный путь Root.
 type Info struct {
-	Name      string    `json:"name"`
-	Kind      Kind      `json:"kind"`
-	Root      string    `json:"root"`
-	GitRemote string    `json:"git_remote,omitempty"`
-	GitBranch string    `json:"git_branch,omitempty"` // фича-ветка (KindGit)
-	GitBase   string    `json:"git_base,omitempty"`   // точка отхода (ветка по умолчанию)
-	CreatedAt time.Time `json:"created_at"`
+	Name      string `json:"name"`
+	Kind      Kind   `json:"kind"`
+	Root      string `json:"root"`
+	GitRemote string `json:"git_remote,omitempty"`
+	GitBranch string `json:"git_branch,omitempty"` // фича-ветка (KindGit)
+	GitBase   string `json:"git_base,omitempty"`   // точка отхода (ветка по умолчанию)
+	// GitBranches — side-реестр веток эпиков/задач git-workflow (Ф-1):
+	// epic_id/task_id → имя ветки + точка отхода. Пустой (nil) — workflow
+	// не активирован, работает прежняя приёмка «Принять → MR».
+	GitBranches *GitBranchMap `json:"git_branches,omitempty"`
+	// GitResolving — активный процесс решения конфликтов эпика (Ф-4):
+	// «main → релизная ветка» выполняется в постоянном конфликтном worktree,
+	// файлы правит модель/inструмент, финализирует POST .../epics/:eid/resolve.
+	// Наличие записи блокирует повторный rebase и отмечает состояние в UI.
+	GitResolving *EpicResolve `json:"git_resolving,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
 }
 
 // AddParams — параметры регистрации нового проекта.

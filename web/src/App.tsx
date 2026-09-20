@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, boardOf, chatHistory, continueProject, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, sessionStop, updateTask } from "./Api";
+import { authStatus, boardOf, chatHistory, continueProject, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -294,6 +294,13 @@ export function App() {
     }
   };
 
+  const onEpicRelease = async (epic: EpicRow) => {
+    if (!project) {
+      return;
+    }
+    await releaseEpic(BASE, project.project_name, epic.task_id);
+  };
+
   const onStop = async () => {
     if (!project) {
       return;
@@ -381,7 +388,7 @@ export function App() {
             </section>
           )}
           <section className="dash-pane">
-            <Dashboard board={board} onTaskUpdate={onTaskUpdate} onEpicDelete={onEpicDelete} />
+            <Dashboard board={board} onTaskUpdate={onTaskUpdate} onEpicDelete={onEpicDelete} onEpicRelease={onEpicRelease} />
           </section>
         </main>
       ) : (

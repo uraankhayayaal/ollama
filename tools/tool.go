@@ -2,6 +2,7 @@ package tools
 
 import (
 	"ai/board"
+	"ai/gitops"
 	"ai/rag"
 )
 
@@ -27,9 +28,12 @@ type Tool interface {
 //	RAG      — клиент векторной памяти (Qdrant, CodeSearch). Опционален:
 //	           при nil или недоступном Qdrant инструмент возвращает skipped
 //	           с подсказкой использовать ReadMap/ReadFiles (degrade, как ЛСП).
+//	GitExec  — исполнитель git (по умолчанию git CLI). Использует только
+//	           ResolveGitConflicts (Ф-4), работающий в конфликтном worktree.
 type Deps struct {
 	FileOps *FileOps
 	Session *ReviewSession
 	Board   *board.Store
 	RAG     *rag.Client
+	GitExec gitops.Executor
 }

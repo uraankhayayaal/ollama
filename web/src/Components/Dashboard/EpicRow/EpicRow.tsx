@@ -17,6 +17,7 @@ export function EpicRow({
   onTaskOpen,
   onEpicOpen,
   onEpicDelete,
+  onEpicRelease,
   onToggle,
 }: {
   epic: Epic | null;
@@ -27,6 +28,7 @@ export function EpicRow({
   onTaskOpen: (t: TaskRow) => void;
   onEpicOpen: (e: Epic) => void;
   onEpicDelete: (e: Epic) => void;
+  onEpicRelease: (e: Epic) => Promise<void>;
   onToggle: () => void;
 }) {
   const plain = epic ? "" : " plain";
@@ -55,7 +57,7 @@ export function EpicRow({
           <>
             <span className="id">{epic.task_id}</span>
             <span className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</span>
-            <EpicActionBar tasks={tasks} onDelete={() => onEpicDelete(epic)} />
+            <EpicActionBar epic={epic} tasks={tasks} onDelete={() => onEpicDelete(epic)} onRelease={() => onEpicRelease(epic)} />
           </>
         )}
       </div>

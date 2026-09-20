@@ -96,6 +96,8 @@ func newTool(name string, deps Deps) Tool {
 		return &patchGoFunctionTool{ops: deps.FileOps}
 	case "SearchReplace":
 		return &searchReplaceTool{ops: deps.FileOps}
+	case ResolveGitConflicts:
+		return &resolveGitConflictsTool{ops: deps.FileOps, ex: deps.GitExec}
 	case LspCheck:
 		return &lspCheckTool{ops: deps.FileOps}
 	case LspDefinition:

@@ -134,6 +134,19 @@ func gitToken(remote string) string {
 	}
 }
 
+// tokenPushURL возвращает URL-адрес push с токеном для HTTPS-remotes GitHub/
+// GitLab, если токен задан в окружении (https://x-access-token:<токен>@host/…);
+// для остальных remote — пустая строка (push идёт штатным origin/SSH).
+func tokenPushURL(remote string) string {
+	if tok := gitToken(remote); tok != "" {
+		if u, err := url.Parse(remote); err == nil && u.Scheme == "https" {
+			u.User = url.UserPassword("x-access-token", tok)
+			return u.String()
+		}
+	}
+	return ""
+}
+
 // pushRepo пушит фича-ветку в remote. Для HTTPS-remote GitHub/GitLab с токеном
 // в окружении встраивает его в URL push (https://x-access-token:<токен>@host/…):
 // headless-сервер может не иметь credentialed credential-helper, и обычный
@@ -141,11 +154,8 @@ func gitToken(remote string) string {
 // сохраняется в конфиг git (см. gitops.Repo.PushTo). SSH-remote токеном не
 // помогает — там остаётся штатный `git push origin` (SSH-ключ).
 func (s *Server) pushRepo(ctx context.Context, repo *gitops.Repo, remote string) error {
-	if tok := gitToken(remote); tok != "" {
-		if u, err := url.Parse(remote); err == nil && u.Scheme == "https" {
-			u.User = url.UserPassword("x-access-token", tok)
-			return repo.PushTo(ctx, u.String())
-		}
+	if u := tokenPushURL(remote); u != "" {
+		return repo.PushTo(ctx, u)
 	}
 	return repo.Push(ctx)
 }

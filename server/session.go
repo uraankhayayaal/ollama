@@ -59,6 +59,9 @@ func (s *Server) newSession(project string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Ф-2: перевод задачи в done (инструменты агентов, kanban) автоматически
+	// вливает её ветку в релизную ветку эпика.
+	s.attachTaskDoneHook(project, boardStore)
 	chatStore, err := chat.NewStore(context.Background(), chat.StoreConfig{
 		Addr:     architect.LoadConfig().RedisAddr,
 		Password: architect.LoadConfig().RedisPassword,

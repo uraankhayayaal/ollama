@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +28,7 @@ type fakeGit struct {
 	mu     sync.Mutex
 	calls  []string          // "dir | git ..."
 	starts map[string]string // префикс команды → вывод
+	fails  map[string]string // префикс команды → текст ошибки
 }
 
 func (f *fakeGit) Exec(_ context.Context, dir string, argv ...string) (string, error) {
@@ -35,6 +37,11 @@ func (f *fakeGit) Exec(_ context.Context, dir string, argv ...string) (string, e
 	f.calls = append(f.calls, call)
 	f.mu.Unlock()
 	cmd := "git " + strings.Join(argv[1:], " ")
+	for prefix, errMsg := range f.fails {
+		if strings.HasPrefix(cmd, prefix) {
+			return "", errors.New(errMsg)
+		}
+	}
 	for prefix, out := range f.starts {
 		if strings.HasPrefix(cmd, prefix) {
 			return out, nil

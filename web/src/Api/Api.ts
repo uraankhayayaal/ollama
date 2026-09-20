@@ -256,6 +256,26 @@ export async function deleteEpic(
   );
 }
 
+// «Залить в main» (Ф-3): вливает релизную ветку эпика в базовую ветку проекта
+// (git_base) без конфликтов — merge-коммит + push. Только для done-эпиков;
+// при конфликтах сервер вернёт 409 (вход инструмента авто-резолва Ф-4).
+export async function releaseEpic(
+  base: string,
+  project: string,
+  epicID: string,
+): Promise<{
+  status: string;
+  branch: string;
+  source: string;
+  already_merged: boolean;
+}> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/release`,
+    {},
+  );
+}
+
 // --- приёмка (Ф-2-3) ---
 
 // Дифф предложенных изменений: для git-проектов — список файлов (метаданные,

@@ -74,6 +74,12 @@ type Server struct {
 	// logBroker — перематывает лог-файлы проектов: новые линии шлются
 	// в шину проекта (type="log"). Запускается в Run().
 	logBroker *logBroker
+
+	// syncMetaMu защищает map syncLocks: по одному мьютексу git-слияний на
+	// проект (Ф-2). Слияния веток задач в релизную ветку сериализуются, чтобы
+	// параллельные done→merge и явные REST-мёрджи не конкурировали за ветки.
+	syncMetaMu sync.Mutex
+	mergeLocks map[string]*sync.Mutex
 }
 
 // NewServer создаёт сервер. Реестр workspace открывается по cfg.WorkspacesPath.
@@ -99,6 +105,8 @@ func NewServer(cfg Config) (*Server, error) {
 		apiLim:   newRateLimit(120, time.Minute),
 		loginLim: newRateLimit(5, time.Minute),
 		chatLim:  newRateLimit(30, time.Minute),
+		// Ф-2: локи git-слияний — один на проект.
+		mergeLocks: make(map[string]*sync.Mutex),
 	}
 	s.gitExec = cfg.GitExec
 	if s.gitExec == nil {
@@ -175,6 +183,18 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/diff", s.handleGetDiff)
 	mux.HandleFunc("POST /api/projects/{id}/accept", s.handleAccept)
 	mux.HandleFunc("POST /api/projects/{id}/reject-branch", s.handleRejectBranch)
+
+	// Git-workflow (Ф-1): ветки эпиков и задач.
+	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/branch", s.handleCreateEpicBranch)
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/branch", s.handleCreateTaskBranch)
+	// Git-workflow (Ф-2): мёрдж фича-ветки задачи в релизную ветку эпика.
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/merge", s.handleMergeTask)
+	// Git-workflow (Ф-3): кнопка «Залить в main» — релизная ветка эпика → main.
+	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/release", s.handleReleaseEpic)
+	// Git-workflow (Ф-4): авто-резолв конфликтов «main ↔ релизная ветка».
+	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/rebase", s.handleEpicRebase)
+	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/resolve", s.handleEpicResolve)
+	mux.HandleFunc("GET /api/projects/{id}/epics/{eid}/resolve", s.handleResolveStatus)
 
 	// Логи проекта (панель «Логи», см. logs.go).
 	mux.HandleFunc("GET /api/projects/{id}/logs", s.handleGetLogs)
@@ -728,6 +748,8 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer store.Close()
+	// Ф-2: перевод задачи в done автоматически вливает её ветку в релизную.
+	s.attachTaskDoneHook(project, store)
 
 	t, err := store.GetTask(r.Context(), taskID)
 	if err != nil {
@@ -791,6 +813,12 @@ func (s *Server) handleDeleteEpic(w http.ResponseWriter, r *http.Request) {
 	}
 	defer store.Close()
 
+	// Список задач эпика нужен до удаления — после DeleteEpic их уже нет.
+	var epicTasks []string
+	if e, gerr := store.GetEpic(r.Context(), epicID); gerr == nil {
+		epicTasks = e.Tasks
+	}
+
 	if err := store.DeleteEpic(r.Context(), epicID); err != nil {
 		if errors.Is(err, board.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "эпик не найден")
@@ -799,6 +827,9 @@ func (s *Server) handleDeleteEpic(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Git-workflow (Ф-1): снимаем из side-реестра ветки эпика и его задач.
+	s.deleteEpicBranches(project, epicID, epicTasks)
 
 	// Публикуем обновлённую доску.
 	s.kickBoard(project)

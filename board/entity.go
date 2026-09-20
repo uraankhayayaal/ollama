@@ -148,6 +148,9 @@ type Epic struct {
 	Status      Status   `json:"status"`
 	CreatedAt   string   `json:"created_at"`
 	UpdatedAt   string   `json:"updated_at"`
+	// GitBranch — релизная ветка эпика (git-workflow Ф-1, префикс
+	// ai/epic/<id>). Пусто, пока ветка не создана.
+	GitBranch string `json:"git_branch,omitempty"`
 	// Summary — сводка архитектурного решения из бэклога Системного
 	// архитектора (architecture_summary); передаётся лиду направления для
 	// декомпозиции эпика.
@@ -173,6 +176,9 @@ type Task struct {
 	Assignee    string `json:"assignee"` // специалист, назначенный на задачу (одна задача на одного специалиста)
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
+	// GitBranch — фича-ветка задачи (git-workflow Ф-1, префикс
+	// ai/task/<id>, база = ветка эпика). Пусто, пока ветка не создана.
+	GitBranch string `json:"git_branch,omitempty"`
 }
 
 // BugStatus — статус багрепорта на общей доске.

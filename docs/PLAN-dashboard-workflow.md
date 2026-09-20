@@ -98,58 +98,138 @@ POST /api/projects/:id/epics/:eid/rebase       — main → релизная в�
 ## Этапы и чеклист
 
 ### Ф-1 — Ветки эпиков и задач, реестр (основа)
-- [ ] `gitops/merge.go`: `MergeBranch`, детектор конфликтов через `git merge-tree`
+- [x] `gitops/merge.go`: `MergeBranch`, детектор конфликтов через `git merge-tree`
       (не трогает рабочую копию), `ConflictingFiles`; hermetic-тесты (dry-run
       исполнитель, как в `gitops/cli_test.go`)
-- [ ] `workspace/`: side-реестр веток эпиков/задач (или поля в `Info`);
+- [x] `workspace/`: side-реестр веток эпиков/задач (или поля в `Info`);
       сохранение/чтение JSON, тесты
-- [ ] `server/gitflow.go`: REST `.../epics/:eid/branch`, `.../tasks/:tid/branch`;
+- [x] `server/gitflow.go`: REST `.../epics/:eid/branch`, `.../tasks/:tid/branch`;
       создание ветки от main (эпик) и от релизной (задача) через `gitops`
-- [ ] `board/entity.go` (опционально): поле `git_branch` у эпика/задачи,
+- [x] `board/entity.go` (опционально): поле `git_branch` у эпика/задачи,
       проставляется при создании ветки
-- [ ] Регистрация маршрутов в `server/server.go:150` (`authHandler` — CSRF)
-- [ ] Верификация Ф-1: сборка/вет/тесты; ручной E2E: открыть git-проект,
+- [x] Регистрация маршрутов в `server/server.go:150` (`authHandler` — CSRF)
+- [x] Верификация Ф-1: сборка/вет/тесты; ручной E2E: открыть git-проект,
       создать ветку эпика и задачи, убедиться в `git branch` клона
 
+Статус Ф-1 (реализовано):
+- git 2.35 на машине не имеет `git merge-tree --write-tree` (появился в 2.38),
+  поэтому ЕДИНЫЙ путь детекции конфликтов — старый трёхаргументный
+  `git merge-tree <base> <ours> <theirs>`: конфликтующие пути извлекаются из
+  diff-вывода по маркерам `<<<<<<< .our`/`=======`/`>>>>>>> .their`
+  (`gitops/merge.go:mergeTreeConflicts`), рабочая копия/index не трогаются.
+- `gitops`: `CreateBranch`/`BranchExists` заводят ветки эпиков/задач БЕЗ
+  переключения (текущая ветка агента `ai/<имя>` и рабочая копия не трогаются),
+  поэтому прежний flow «Принять → MR» не ломается. `SanitizeBranchName` чистит
+  ID (юникод сохраняется, пробелы/`..`/запрещённые символы → `_`).
+- `workspace`: side-реестр в поле `Info.GitBranches` (`Epics`/`Tasks` карты
+  `epic_id|task_id → {ветка, база}`), сохраняется через штатный `saveLocked`
+  того же JSON; методы `Set/Get/Delete{Epic,Task}Branch`.
+- `server`: `POST /api/projects/{id}/epics/{eid}/branch` (база = `git_base`,
+  т.е. main) и `.../tasks/{tid}/branch` (база = ветка эпика; без неё — 400),
+  идемпотентны; проставляют `git_branch` на доске; `handleDeleteEpic` снимает
+  ветки эпика/задач из реестра. Hermetic-тесты (fake-git) + E2E на реальном
+  git (`TestGitflowRestEndToEndRealGit`: клон → ветки через REST → `git branch`
+  клона показывает `ai/epic/epic-1`, `ai/task/task-1`; HEAD не переключается).
+
 ### Ф-2 — Мёрдж задач в релизную ветку
-- [ ] `gitops.MergeFeature`: задача (ветка `ai/task/<id>`) → релизная ветка
+- [x] `gitops.MergeFeature`: задача (ветка `ai/task/<id>`) → релизная ветка
       (ff-возможный → `--no-ff`), push через `PushTo`
-- [ ] REST `.../tasks/:tid/merge`; авто-вызов при статусе задачи `done`
+- [x] REST `.../tasks/:tid/merge`; авто-вызов при статусе задачи `done`
       (хук в `runner` или при `SetTaskStatus`, как авто-лечение `runner/autofix.go`)
-- [ ] Конфликты задачи → вернуть список путей + перейти в Ф-4-инструмент
+- [x] Конфликты задачи → вернуть список путей + перейти в Ф-4-инструмент
       (общая механика резолва)
-- [ ] Тесты: dry-run git, маппинг «done → merge», отказ при конфликте
+- [x] Тесты: dry-run git, маппинг «done → merge», отказ при конфликте
+
+Статус Ф-2 (реализовано):
+- `gitops.MergeFeature` — вливание `ai/task/<id>` → `ai/epic/<eid>` во временном
+  git worktree (`worktree add` → `merge --no-ff` → `push` → `worktree remove`):
+  рабочая копия клона и HEAD (ветка агента `ai/<имя>`) НЕ трогаются, ветки живут
+  в одном репозитории. Перед merge — прогноз конфликтов через старый
+  `merge-tree` (унифицирован с Ф-1); конфликт → `*MergeConflictError{Files}` без
+  единой git-мутации. Идемпотентность — `MergedInto` (merge-base == tip фичи):
+  повторный мёрдж не плодит пустые merge-коммиты. Push инжектится URL-ом
+  (`PushTo`, токен в URL для HTTPS, см. Ф-2-3) — сервер выбирает его из `inf.GitRemote`.
+- `board.Store.TaskDoneHook` — опциональный колбэк после перевода задачи в done
+  (вне блокировок, после сохранения; доска о git не знает). Сервер внедряет его
+  в `boardStore()` (+ `handleUpdateTask`, `newSession` — покрывает REST, инструмент
+  `BoardSetTaskStatus` агентов и kanban): **done → авто-мёрдж** ветки в релизную.
+  Ошибки хука не ломают переход статуса; конфликты логируются и ждут Ф-4.
+  Слияния проекта сериализуются пер-проектным локом (`s.mergeLocks`).
+- `POST /api/projects/{id}/tasks/{tid}/merge`: 200 `{status:"ok", already_merged}`;
+  409 `{status:"conflicts", files}` (вход Ф-4); 400 — нет веток/не git.
+- Унифицированный `tokenPushURL`/`remotePushURL` (вынесен из `pushRepo`).
+- Тесты: dry-run в gitops (happy/конфликт/уже слито/без push)+ реальный-git E2E
+  `TestGitCLIMergeFeatureEndToEnd` (мёрдж, push в origin, идемпотентность,
+  конфликт не трогает релиз); server hermetic: REST-мёрдж happy/409/already/400,
+  маппинг «done → merge» и «done при конфликте».
 
 ### Ф-3 — Кнопка «Залить в main» + быстрый путь без конфликтов
-- [ ] REST `.../epics/:eid/release`: `git merge` релизной ветки в main;
+- [x] REST `.../epics/:eid/release`: `git merge` релизной ветки в main;
       нет конфликтов → сразу результат (`ok`, главный MR/commit)
-- [ ] `EpicActionBar.tsx`: кнопка «Залить в main», видна только при
+- [x] `EpicActionBar.tsx`: кнопка «Залить в main», видна только при
       `epic.status === "done"`; обращение к REST, показ ошибки/успеха
-- [ ] WS-событие `board` после мержа (переиспользуем `s.kickBoard`,
+- [x] WS-событие `board` после мержа (переиспользуем `s.kickBoard`,
       `server/server.go:797`)
-- [ ] Тесты сервера (hermetic: fake-git), фронт-сборка `npm run build`
+- [x] Тесты сервера (hermetic: fake-git), фронт-сборка `npm run build`
+
+Статус Ф-3 (реализовано):
+- ЕДИНЫЙ примитив вливания без трогания рабочей копии — `gitops.MergeFeature`
+  (Ф-2): переиспользуется для «Залить в main» с аргументами
+  `MergeFeature(main, ai/epic/<id>, {Message, PushURL})`. merge-tree-прогноз
+  конфликтов → 409 без мутаций; идемпотентность — `MergedInto(main, релиз)`
+  (`already_merged:true`, без git-вызовов); merge-коммит `--no-ff` — во
+  временном worktree, push main через `PushTo` (токен в URL для HTTPS).
+- `POST /api/projects/{id}/epics/{eid}/release` (`server/gitflow.go`,
+  маршрут в `server/server.go`): 200 `{status:"ok", branch:main, source,
+  already_merged}`; 409 `{status:"conflicts", files}` (вход Ф-4); 400 — эпик не
+  done / нет ветки эпика / проект не git / нет git_base. Кнопка ручная:
+  **сервер тоже требует `epic.status == done`** (необратимая операция) +
+  статус в чат (`sess.append`) и `s.kickBoard` → WS-board.
+- `web`: `releaseEpic` в `Api.ts`; `EpicActionBar` принимает `epic`+`onRelease`,
+  кнопка «Залить в main» видна при `status==="done"` рядом с «Удалить»
+  (локальный busy/ошибка/успех); пропсы проброшены `App → Dashboard →
+  EpicRow → EpicActionBar`.
+- Тесты: hermetic fake-git happy/409/уже-слито/не-done/без-ветки/не-git/404 +
+  реальный-git E2E `TestReleaseEpicEndToEndRealGit` (клон → ветки → коммит
+  задачи → merge в релиз → release в main: main продвинута и запушена в
+  origin, HEAD агента не тронут, worktree сняты). `npm run build` web/ зелёный.
 
 ### Ф-4 — Инструмент авто-решения конфликтов
-- [ ] `gitops/conflicts.go`: детект конфликтных файлов; авто-резолв тривиальных
+- [x] `gitops/conflicts.go`: детект конфликтных файлов; авто-резолв тривиальных
       (маркеры обоих деревьев, форматтеры); список «сложных» путей наружу
-- [ ] `tools/gitresolve.go`: инструмент `ResolveGitConflicts` — модель получает
+- [x] `tools/gitresolve.go`: инструмент `ResolveGitConflicts` — модель получает
       конфликтный unified-дифф (`git diff`), правит файлы через
       `SearchReplace`/`WriteFiles` (переиспользуем `FileOps.touched` для
       повторной ЛСП-проверки, `runner/autofix.go`)
-- [ ] CSP: «сначала вливаем main в релизную ветку» (`.../epics/:eid/rebase`),
+- [x] CSP: «сначала вливаем main в релизную ветку» (`.../epics/:eid/rebase`),
       решаем конфликты там, потом **обязательно** приёмка (`agents/acceptor`)
       и только потом merge в main
-- [ ] Hermetic-тесты: fake-git конфликт → список путей; E2E инструмента
+- [x] Hermetic-тесты: fake-git конфликт → список путей; E2E инструмента
       резолва на сгенерированном конфликте
 
 ### Ф-5 — Верификация и полировка
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go vet . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `npm run build` (web/)
-- [ ] Ручной E2E на реальном git-проекте: эпик → ветки задач → done →
+- [x] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go vet . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `npm run build` (web/)
+- [x] Ручной E2E на реальном git-проекте: эпик → ветки задач → done →
       «Залить в main» без конфликтов; второй прогон с намеренным конфликтом →
       rebase main→release → авто-резолв → приёмка → merge
+
+Статус Ф-5 (реализовано):
+- Сборка/вет/тесты по перечню выше — зелёные (без кеша `-count=1` для E2E).
+- `npm run build` web/ — зелёный (vite: 85 модулей, JS 263 КБ).
+- Оба сценария «ручного» E2E автоматизированы на реальном git (без сети):
+  - без конфликтов — `TestReleaseEpicEndToEndRealGit` (клон → ветка эпика →
+    ветка задачи → мёрдж задачи в релиз → «Залить в main»: main продвинута и
+    запушена в origin, HEAD агента не тронут, worktree сняты);
+  - с намеренным конфликтом — `TestEpicRebaseResolveEndToEndRealGit`
+    (main «v2» vs релиз «v1» → release 409 → rebase в конфликтный worktree →
+    резолв «моделью» → обязательная приёмка acceptor (go build/go run в
+    worktree) → merge в main → cleanup worktree, HEAD не тронут).
+  Прогон подтверждён `-count=1 -v`: все 6 real-git E2E (gitops + server) PASS.
+- Полировка: правки кода не потребовались — все Ф-1..Ф-4 накопленные изменения
+  в рабочем дереве, фаза завершена. План целиком выполнен (Ф-1..Ф-5).
 
 ## Верификация
 

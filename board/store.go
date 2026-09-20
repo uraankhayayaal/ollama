@@ -48,6 +48,14 @@ type Store struct {
 	client  *redis.Client
 	project string
 	ttl     time.Duration
+
+	// TaskDoneHook — опциональный обратный вызов после перевода задачи в
+	// StatusDone (Ф-2). Вызывается из SetTaskStatus вне блокировок, после
+	// успешного сохранения (входной task — сохранённый). Доска не знает про
+	// git/workflow — назначение: сервер внедряет сюда авто-вливание ветки
+	// задачи в релизную ветку эпика при достижении done. nil — хука нет
+	// (значение по умолчанию, поведение прежних вызовов не меняется).
+	TaskDoneHook func(ctx context.Context, task *Task, from Status)
 }
 
 // key возвращает полный ключ Redis для относительного имени.
@@ -357,8 +365,17 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 	if err := ValidateTransition(t.Status, st); err != nil {
 		return err
 	}
+	from := t.Status
 	t.Status = st
-	return s.SaveTask(ctx, t)
+	if err := s.SaveTask(ctx, t); err != nil {
+		return err
+	}
+	// Ф-2: авто-действия при достижении done (gitflow: ветка задачи → релизная
+	// ветка эпика). Хук внедряется сервером; ошибки хука не ломают сам переход.
+	if st == StatusDone && s.TaskDoneHook != nil {
+		s.TaskDoneHook(ctx, t, from)
+	}
+	return nil
 }
 
 // MoveTask переносит задачу в другой эпик: обновляет двусторонние связи
