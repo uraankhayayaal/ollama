@@ -103,7 +103,12 @@ export function Chatboard({
       </div>
 
       <ul className="history">
-        {chat.map((m) => (
+        {chat.filter((m) => {
+          const role = (m.role ?? "").toLowerCase();
+          if (role === "tool") return false;
+          if (role === "assistant" && !(m.content ?? "").trim()) return false;
+          return true;
+        }).map((m) => (
           <Msg key={m.id} m={m} />
         ))}
         {live && (
