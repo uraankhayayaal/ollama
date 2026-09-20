@@ -73,6 +73,7 @@ func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
 	for _, w := range []string{
 		"List", "ReadFiles", "ReadMap",
 		tools.CodeSearch,
+		tools.WebSearch,
 		tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
 		tools.BoardListBugs, tools.BoardGetBug,
 		tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
@@ -180,6 +181,20 @@ func TestAssistantSystemMessagesWithoutRAG(t *testing.T) {
 	}
 	if !strings.Contains(msgs[0].Message, "ассистент") {
 		t.Fatalf("системный промпт ассистента должен сохраниться:\n%s", msgs[0].Message)
+	}
+}
+
+// TestAssistantPromptHasWebSearchRule — системный промпт содержит правило
+// живой информации: свежие данные (новости/факты/справка/погода) — через
+// WebSearch, degraded — честно ответить из знаний с пометкой «не живые».
+func TestAssistantPromptHasWebSearchRule(t *testing.T) {
+	a := newTestAssistant(t, "какая погода в Москве?")
+	msgs := a.GetSystemMessages(nil)
+	p := msgs[0].Message
+	for _, want := range []string{"WebSearch", "degraded", "не живые", "новости", "погода"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
 	}
 }
 
