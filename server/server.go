@@ -525,11 +525,11 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 
 // --- REST: чат ---
 
-// handlePostChat принимает сообщение. Чат работает ПАРАЛЛЕЛЬНО доске:
-//   - ЯВНЫЙ запрос на создание эпика/задачи (isChatTaskRequest) → эпик на
-//     доске планировщику; оркестрацию сам не запускает (берёт кнопка «Продолжить»);
-//   - всё остальное → Q&A-ассистент отвечает свободно (вопросы, статусы,
-//     общий диалог, «подскажи погоду»), не трогая доску.
+// handlePostChat принимает сообщение. Чат работает ПАРАЛЛЕЛЬНО доске: сообщение
+// идёт единому ассистенту (Ф-1), который сам по смыслу решает — создать
+// эпик/задачу/баг инструментами Board* или ответить текстом. Бинарный сплит
+// по ключевым словам убран: оркестрацию ассистент не запускает (берёт кнопка
+// «Продолжить»).
 func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	var body struct {
@@ -564,32 +564,15 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 		Time:    time.Now().UTC(),
 	})
 
-	// Только ЯВНЫЙ запрос на создание эпика/задачи кладёт сообщение на доску
-	// планировщику. Всё остальное — свободный диалог: провайдер нужен
-	// ассистенту для ответа, эпик на доску кладётся без LLM.
-	if isChatTaskRequest(body.Message) {
-		sess.log.Infof("[чат] маршрут: явный запрос задачи → доска планировщику")
-		epic, err := sess.enqueueChatTask(context.Background(), body.Message)
-		if err != nil {
-			sess.log.Warnf("[чат] добавление задачи на доску: %v", err)
-			writeErr(w, http.StatusInternalServerError, "ошибка добавления задачи на доску: "+err.Error())
-			return
-		}
-		sess.append(chat.RoleStatus,
-			"Задача добавлена на доску (эпик "+epic.TaskID+"). Планировщик берёт её в работу по кнопке «Продолжить».",
-			"system", "", nil)
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-		return
-	}
-
-	// Вопрос, статус или просто общение → Q&A-ассистент (без оркестрации).
+	// Единый ассистент: решает по смыслу (создание эпика/задачи/бага — через
+	// его board-инструменты, а не по регэкспепу).
 	prov, err := s.provider()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
 		return
 	}
-	sess.log.Infof("[чат] маршрут: диалог → Q&A-ассистент (оркестрация не запускается)")
-	sess.runChatAssist(context.Background(), body.Message, prov)
+	sess.log.Infof("[чат] маршрут: единый ассистент (действия по смыслу, без сплита)")
+	sess.runChatAssistant(context.Background(), body.Message, prov)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

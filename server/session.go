@@ -178,45 +178,6 @@ func (sess *Session) stop() {
 	}
 }
 
-// enqueueChatTask кладёт задачу из чата на доску планировщику: создаёт новый
-// эпик с текстом сообщения пользователя. Оркестрацию НЕ запускает — Kanban-
-// раннер живёт своим циклом и берёт эпик в работу по кнопке «Продолжить»
-// (или в следующем раунде, если цикл уже идёт).
-func (sess *Session) enqueueChatTask(ctx context.Context, msg string) (*board.Epic, error) {
-	epics, err := sess.board.ListEpics(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("чтение доски: %w", err)
-	}
-	used := make(map[string]struct{}, len(epics))
-	for _, e := range epics {
-		used[e.TaskID] = struct{}{}
-	}
-
-	epic := &board.Epic{
-		TaskSpec: board.TaskSpec{
-			Title:       truncateText(msg, 200),
-			Description: msg,
-		},
-	}
-	for n := 1; n <= len(epics)+10; n++ {
-		id := fmt.Sprintf("epic-%d", n)
-		if _, ok := used[id]; ok {
-			continue
-		}
-		epic.TaskID = id
-		if err := sess.board.CreateEpic(ctx, epic); err != nil {
-			if errors.Is(err, board.ErrExists) {
-				used[id] = struct{}{}
-				continue
-			}
-			return nil, fmt.Errorf("публикация эпика %s: %w", id, err)
-		}
-		sess.kickBoard()
-		return epic, nil
-	}
-	return nil, fmt.Errorf("не удалось сгенерировать свободный ID эпика")
-}
-
 // --- HITL-затворы (реализация planner.HumanGate) ---
 
 func (sess *Session) Epics(ctx context.Context, epics []*board.Epic) (planner.GateDecision, error) {

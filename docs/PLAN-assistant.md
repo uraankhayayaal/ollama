@@ -155,16 +155,16 @@ DELETE /api/projects/{id}/tasks/{tid}   — удалить задачу (обр�
 ## Этапы и чеклист
 
 ### Ф-1 — Семантический ассистент (убрать бинарный сплит, включить RAG)
-- [ ] `server/chatassist.go`: убрать `isChatTaskRequest`/`taskRequestPhrases`;
+- [x] `server/chatassist.go`: убрать `isChatTaskRequest`/`taskRequestPhrases`;
       `runChatAssist` → единый `runChatAssistant` со всеми сообщениями
-- [ ] `agents/chatassist/agent.go`: новый `*SystemMessages` — ассистент-
+- [x] `agents/chatassist/agent.go`: новый `*SystemMessages` — ассистент-
       исполнитель (создаёт эпики/задачи/баги по смыслу, отвечает по RAG/доске,
       задаёт уточняющие вопросы)
-- [ ] RAG-блок в промпт первого ответа по образцу
+- [x] RAG-блок в промпт первого ответа по образцу
       `agents/planner/ragcontext.go:39-49` (`ragProjectBlock` для вопроса)
-- [ ] `tools/registry.go`: `CodeSearch` в набор ассистента (RAG dep);
+- [x] `tools/registry.go`: `CodeSearch` в набор ассистента (RAG dep);
       hermetic-тест: набор ассистента содержит Board-записи и CodeSearch
-- [ ] Тесты: сообщения «создай эпик», «хочу канбан на рефакторинг»,
+- [x] Тесты: сообщения «создай эпик», «хочу канбан на рефакторинг»,
       «заведи баг про тормоза» → доска меняется; «привет», «как дела» →
       доска не трогается; без RAG (nil) — промпт без блока, ассистент жив
 

@@ -326,20 +326,20 @@ func TestPostChatWithoutProviderFails(t *testing.T) {
 	}
 }
 
-func TestPostChatTaskEnqueuesEpic(t *testing.T) {
+func TestPostChatTaskMessageRequiresProvider(t *testing.T) {
 	srv, handler, _ := newTestServer(t)
 
-	// Явный запрос на создание задачи/эпика кладётся на доску планировщику
-	// (новый эпик) и НЕ требует LLM-провайдера: оркестрация живёт своим циклом
-	// и берёт эпик в работу по кнопке «Продолжить».
+	// Ф-1: «создай задачу …» — как и любой вопрос, обрабатывает ассистент
+	// (решение ПО СМЫСЛУ инструментами доски), а не регэкспеп. Без LLM-
+	// провайдера — 503, доска при этом не трогается (эпиков не появляется).
 	ctx := context.Background()
 	for i, msg := range []string{"создай задачу: оптимизируй загрузку страницы", "добавь эпик на добавление тестов"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/api/projects/proj-1/chat",
 			bytes.NewBufferString(`{"message":`+strconv.Quote(msg)+`}`))
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("POST chat задача #%d: %d, want 200 (body: %s)", i, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("POST chat задача #%d: %d, want 503 (body: %s)", i, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -351,22 +351,8 @@ func TestPostChatTaskEnqueuesEpic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(epics) != 2 {
-		t.Fatalf("эпиков на доске: %d, want 2", len(epics))
-	}
-	if epics[0].TaskID != "epic-1" || epics[1].TaskID != "epic-2" {
-		t.Fatalf("ID эпиков чата = %q, %q; want epic-1, epic-2", epics[0].TaskID, epics[1].TaskID)
-	}
-	if epics[0].Title != "создай задачу: оптимизируй загрузку страницы" {
-		t.Fatalf("title = %q", epics[0].Title)
-	}
-
-	// Оркестрация не запущена: чат обработал задачу без единого раунда.
-	sess.mu.Lock()
-	running := sess.running
-	sess.mu.Unlock()
-	if running {
-		t.Fatal("оркестрация не должна запускаться при добавлении задачи из чата")
+	if len(epics) != 0 {
+		t.Fatalf("запрос задачи без LLM не должен создавать эпики, на доске: %d", len(epics))
 	}
 }
 

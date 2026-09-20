@@ -14,10 +14,12 @@ import (
 	"ai/board"
 	"ai/chat"
 	"ai/runner"
+	"ai/tools"
 	"ai/workspace"
 )
 
-// qaStubProvider — заглушка LLM-провайдера для runChatAssist.
+// qaStubProvider — заглушка LLM-провайдера для runChatAssistant.
+
 type qaStubProvider struct {
 	called   chan struct{}
 	gotAgent agents.Agent
@@ -64,43 +66,34 @@ func waitChatRole(t *testing.T, sess *Session, role chat.Role, within time.Durat
 	return chat.Message{}
 }
 
-func TestIsChatTaskRequest(t *testing.T) {
-	cases := []struct {
-		msg  string
-		want bool
-	}{
-		// Явный запрос на создание эпика/задачи → эпик.
-		{"Создай задачу: оптимизируй загрузку", true},
-		{"создай эпик на авторизацию", true},
-		{"добавь задачу в канбан", true},
-		{"добавь на доску баг с формой", true},
-		{"новая задача: сделать витрину", true},
-		{"Заведи эпик на поиск", true},
-		{"задача: упрости разбор json", true},
-		{"оформи задачу на тесты", true},
-		{"поставь задачу на рефакторинг", true},
-		{"создать таску на логирование", true},
+// scriptedChatProvider — провайдер одного раунда диалога (ChatOnce), отдаёт
+// ответы по порядку (последний повторяется). Используется для прогона полного
+// цикла ассистента (runner.Generate) в hermetic-тесте.
+type scriptedChatProvider struct {
+	replies []*runner.ModelReply
+	calls   int
+}
 
-		// Свободный диалог — эпиков не создаём.
-		{"Подскажи погоду в Москве", false},
-		{"Что сейчас делает проект?", false},
-		{"какой текущий статус задачи X", false},
-		{"Сколько задач в работе", false},
-		{"Расскажи про архитектуру", false},
-		{"Объясни, как работает main", false},
-		{"спроектируй мне витрину", false},
-		{"оптимизируй загрузку страницы", false},
-		{"добавь статусы в отчёт и сохрани", false},
-		{"проверь, что все тесты проходят", false},
-		{"Привет, как дела?", false},
-		{"", false},
-		{"   ", false},
+func (c *scriptedChatProvider) ChatOnce(_ context.Context, _ agents.Agent, _ []runner.Message) (*runner.ModelReply, error) {
+	idx := c.calls
+	if idx >= len(c.replies) {
+		idx = len(c.replies) - 1
 	}
-	for _, c := range cases {
-		if got := isChatTaskRequest(c.msg); got != c.want {
-			t.Errorf("isChatTaskRequest(%q) = %v, want %v", c.msg, got, c.want)
-		}
+	c.calls++
+	if idx < 0 || idx >= len(c.replies) {
+		return &runner.ModelReply{Content: "готово", FinishReason: "stop"}, nil
 	}
+	return c.replies[idx], nil
+}
+
+// scriptedGenerateProvider — LLMProvider-обёртка над scriptedChatProvider: гоняет
+// полный агентский цикл инструментов (runner.Generate), как реальные провайдеры.
+type scriptedGenerateProvider struct {
+	chat *scriptedChatProvider
+}
+
+func (p *scriptedGenerateProvider) Generate(ctx context.Context, a agents.Agent) (*runner.AgentResponse, error) {
+	return runner.Generate(ctx, p.chat, a)
 }
 
 func TestChatAssistAnswersQuestion(t *testing.T) {
@@ -116,7 +109,7 @@ func TestChatAssistAnswersQuestion(t *testing.T) {
 	}
 
 	prov := &qaStubProvider{called: make(chan struct{}), resp: &runner.AgentResponse{Content: "В работе: эпик «Логин». Задач в работе: 1."}}
-	sess.runChatAssist(context.Background(), "что делает проект?", prov)
+	sess.runChatAssistant(context.Background(), "что делает проект?", prov)
 
 	m := waitChatRole(t, sess, chat.RoleAssistant, 3*time.Second)
 	if m.Content != "В работе: эпик «Логин». Задач в работе: 1." {
@@ -139,7 +132,7 @@ func TestChatAssistEmptyAnswerFallback(t *testing.T) {
 	}
 
 	prov := &qaStubProvider{called: make(chan struct{}), resp: &runner.AgentResponse{Content: "  "}}
-	sess.runChatAssist(context.Background(), "как дела?", prov)
+	sess.runChatAssistant(context.Background(), "как дела?", prov)
 
 	m := waitChatRole(t, sess, chat.RoleAssistant, 3*time.Second)
 	if !strings.Contains(m.Content, "Не расслышал") {
@@ -156,7 +149,7 @@ func TestChatAssistErrorAppendsStatus(t *testing.T) {
 	}
 
 	prov := &qaStubProvider{called: make(chan struct{}), err: errors.New("сбой модели")}
-	sess.runChatAssist(context.Background(), "что делает проект?", prov)
+	sess.runChatAssistant(context.Background(), "что делает проект?", prov)
 
 	m := waitChatRole(t, sess, chat.RoleStatus, 3*time.Second)
 	if !strings.Contains(m.Content, "Ошибка") || !strings.Contains(m.Content, "сбой модели") {
@@ -179,7 +172,7 @@ func TestChatAssistPromptHasBoardContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := sess.chatAssistPrompt("сколько задач в работе?")
+	p := sess.chatAssistantPrompt("сколько задач в работе?")
 	for _, want := range []string{
 		"Вопрос пользователя", "сколько задач в работе",
 		"Эпики:", "Логин",
@@ -189,4 +182,168 @@ func TestChatAssistPromptHasBoardContext(t *testing.T) {
 			t.Errorf("промпт не содержит %q:\n%s", want, p)
 		}
 	}
+}
+
+// waitBoard waits until predicates on the board are satisfied (hermetic helper
+// для асинхронного runChatAssistant).
+func waitBoard(t *testing.T, sess *Session, within time.Duration, pred func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if pred() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("состояние доски не наступило за", within)
+}
+
+// waitChatAssistant ждёт появления НЕПУСТОГО сообщения ассистента в истории:
+// пустые assistant-сообщения с промежуточными tool_calls (транслирует
+// репортёр агентского цикла) пропускаются.
+func waitChatAssistant(t *testing.T, sess *Session, within time.Duration) chat.Message {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		hist, err := sess.chat.History(context.Background(), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range hist {
+			if m.Role == chat.RoleAssistant && strings.TrimSpace(m.Content) != "" {
+				return m
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("нет непустого сообщения ассистента за %v", within)
+	return chat.Message{}
+}
+
+// runScriptedChatAssistant запускает runChatAssistant с моделью, которая играет
+// заданные раунды (tool_calls → текст), и ждёт ответ ассистента в чате.
+func runScriptedChatAssistant(t *testing.T, sess *Session, question string, replies ...*runner.ModelReply) chat.Message {
+	t.Helper()
+	prov := &scriptedGenerateProvider{chat: &scriptedChatProvider{replies: replies}}
+	sess.runChatAssistant(context.Background(), question, prov)
+	return waitChatAssistant(t, sess, 3*time.Second)
+}
+
+// TestChatAssistantCreatesEpic — «создай эпик …»: модель в цикле инструментов
+// вызывает BoardCreateEpic, эпик попадает на доску. Бинарный сплит убран:
+// доска меняется инструментом ассистента, а не регэкспепом.
+func TestChatAssistantCreatesEpic(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-act-epic")
+	sess, _, err := srv.getOrCreate("proj-act-epic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := runScriptedChatAssistant(t, sess, "создай эпик на порт на Rust",
+		&runner.ModelReply{
+			ToolCalls: []tools.ToolCall{{
+				Name:      tools.BoardCreateEpic,
+				Arguments: `{"task_id":"CHAT-01","title":"Порт на Rust","description":"Перевести сервер на Rust","assigned_role":"Backend Lead"}`,
+			}},
+			FinishReason: "tool_calls",
+		},
+		&runner.ModelReply{Content: "Эпик создан на доске.", FinishReason: "stop"},
+	)
+	if !strings.Contains(m.Content, "Эпик создан") {
+		t.Fatalf("ответ ассистента = %q", m.Content)
+	}
+
+	waitBoard(t, sess, 3*time.Second, func() bool {
+		epics, err := sess.board.ListEpics(context.Background())
+		if err != nil {
+			return false
+		}
+		return len(epics) == 1 && epics[0].TaskID == "CHAT-01" && epics[0].Title == "Порт на Rust"
+	})
+}
+
+// TestChatAssistantCreatesBugAndTask — «хочу канбан на рефакторинг» и «заведи
+// баг про тормоза» приводят к действиям на доске (эпик+задача, баг).
+func TestChatAssistantCreatesBugAndTask(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-act-bug")
+	sess, _, err := srv.getOrCreate("proj-act-bug")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Раунд 1: канбан на рефакторинг → эпик + задача. Раунд 2: баг → баг.
+	runScriptedChatAssistant(t, sess, "хочу канбан на рефакторинг сервера",
+		&runner.ModelReply{
+			ToolCalls: []tools.ToolCall{{
+				Name:      tools.BoardCreateEpic,
+				Arguments: `{"task_id":"CHAT-01","title":"Канбан на рефакторинг","description":"рефакторинг сервера","assigned_role":"Backend Lead"}`,
+			}, {
+				Name:      tools.BoardCreateTask,
+				Arguments: `{"epic_id":"CHAT-01","task_id":"T-01","title":"Разбить сервер","description":"декомпозировать","assigned_role":"Senior Go Developer"}`,
+			}},
+			FinishReason: "tool_calls",
+		},
+		&runner.ModelReply{Content: "Канбан заведён.", FinishReason: "stop"},
+	)
+
+	waitBoard(t, sess, 3*time.Second, func() bool {
+		epics, err := sess.board.ListEpics(context.Background())
+		if err != nil {
+			return false
+		}
+		if len(epics) != 1 {
+			return false
+		}
+		tasks, err := sess.board.ListTasks(context.Background())
+		return err == nil && len(tasks) == 1 && tasks[0].EpicID == "CHAT-01"
+	})
+
+	runScriptedChatAssistant(t, sess, "заведи баг про тормоза интерфейса",
+		&runner.ModelReply{
+			ToolCalls: []tools.ToolCall{{
+				Name:      tools.BoardCreateBug,
+				Arguments: `{"bug_id":"BUG-01","title":"Тормоза интерфейса","description":"UI фризит при открытии","epic_id":"CHAT-01"}`,
+			}},
+			FinishReason: "tool_calls",
+		},
+		&runner.ModelReply{Content: "Баг заведён.", FinishReason: "stop"},
+	)
+
+	waitBoard(t, sess, 3*time.Second, func() bool {
+		bugs, err := sess.board.ListBugReports(context.Background())
+		return err == nil && len(bugs) == 1 && bugs[0].BugID == "BUG-01"
+	})
+}
+
+// TestChatAssistantLeavesBoardUntouched — «привет»/«как дела»: модель отвечает
+// текстом без вызовов инструментов, доска не трогается.
+func TestChatAssistantLeavesBoardUntouched(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-act-chat")
+	sess, _, err := srv.getOrCreate("proj-act-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := runScriptedChatAssistant(t, sess, "привет, как дела?",
+		&runner.ModelReply{Content: "Привет! Всё спокойно.", FinishReason: "stop"},
+	)
+	if !strings.Contains(m.Content, "Привет") {
+		t.Fatalf("ответ ассистента = %q", m.Content)
+	}
+
+	waitBoard(t, sess, 500*time.Millisecond, func() bool {
+		epics, err := sess.board.ListEpics(context.Background())
+		if err != nil {
+			return false
+		}
+		tasks, err := sess.board.ListTasks(context.Background())
+		if err != nil {
+			return false
+		}
+		bugs, err := sess.board.ListBugReports(context.Background())
+		return err == nil && len(epics) == 0 && len(tasks) == 0 && len(bugs) == 0
+	})
 }

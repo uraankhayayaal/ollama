@@ -2,15 +2,46 @@ package chatassist
 
 import (
 	"ai/agents"
+	"ai/board"
+	"ai/rag"
+	"ai/tools"
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
-// newTestAssistant создаёт ассистента во временной директории без доски.
+// newTestAssistant создаёт ассистента во временной директории без доски и RAG.
 func newTestAssistant(t *testing.T, prompt string) *Assistant {
 	t.Helper()
-	return newAssistant(filepath.Join(t.TempDir(), "proj"), prompt, nil)
+	return newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, nil, nil)
+}
+
+// newTestAssistantBoard создаёт ассистента с подключённой in-memory доской.
+// Доску возвращаем для контроля состояния.
+func newTestAssistantBoard(t *testing.T, prompt string) (*Assistant, *board.Store) {
+	t.Helper()
+	srv := miniredis.RunT(t)
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
+	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, store, nil)
+	return a, store
+}
+
+// fakeAssistantSearcher — управляемая реализация поисковика для тестов без сети.
+type fakeAssistantSearcher struct {
+	results []rag.SearchResult
+	err     error
+	last    rag.SearchParams
+}
+
+func (f *fakeAssistantSearcher) Ping(context.Context) error { return nil }
+
+func (f *fakeAssistantSearcher) Search(_ context.Context, p rag.SearchParams) ([]rag.SearchResult, error) {
+	f.last = p
+	return f.results, f.err
 }
 
 var _ agents.Agent = (*Assistant)(nil)
@@ -29,25 +60,45 @@ func TestAssistantInterface(t *testing.T) {
 	}
 }
 
-func TestAssistantToolsAreReadOnly(t *testing.T) {
+// TestAssistantToolsIncludeBoardWritesAndCodeSearch — набор ассистента содержит
+// чтение файлов, семантический поиск по коду (CodeSearch) и write-инструменты
+// доски (создание эпиков/задач/багов), чтобы ассистент мог действовать по
+// смыслу сообщения. Пишущих файловых инструментов быть не должно (Ф-1).
+func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
+	a, _ := newTestAssistantBoard(t, "создай эпик порт на Rust")
+	names := map[string]bool{}
+	for _, td := range a.GetTools() {
+		names[td.Name] = true
+	}
+	for _, w := range []string{
+		"List", "ReadFiles", "ReadMap",
+		tools.CodeSearch,
+		tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
+		tools.BoardListBugs, tools.BoardGetBug,
+		tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
+		tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask, tools.BoardSetTaskStatus,
+		tools.BoardCreateBug, tools.BoardSetBugStatus, tools.BoardReviewBug,
+	} {
+		if !names[w] {
+			t.Errorf("ассистент не включает инструмент %q", w)
+		}
+	}
+	// Файлы проекта ассистент не пишет — за разработку отвечают агенты.
+	for _, w := range []string{"WriteFiles", "AppendFile", "DeleteFiles", "Run", "SearchReplace"} {
+		if names[w] {
+			t.Errorf("ассистент не должен включать инструмент %q", w)
+		}
+	}
+}
+
+// TestAssistantWithoutBoardSkipsBoardTools — без доски (store == nil) Board-инструменты
+// не попадают в набор: их вызов вернул бы «доска не подключена».
+func TestAssistantWithoutBoardSkipsBoardTools(t *testing.T) {
 	a := newTestAssistant(t, "вопрос")
 	names := map[string]bool{}
 	for _, td := range a.GetTools() {
 		names[td.Name] = true
 	}
-	want := []string{"List", "ReadFiles", "ReadMap"}
-	for _, w := range want {
-		if !names[w] {
-			t.Errorf("ассистент не включает инструмент %q", w)
-		}
-	}
-	// Пишущих и исполняющих инструментов в наборе быть не должно.
-	for _, w := range []string{"WriteFiles", "AppendFile", "DeleteFiles", "Run", "SearchReplace"} {
-		if names[w] {
-			t.Errorf("read-only ассистент не должен включать инструмент %q", w)
-		}
-	}
-	// Доска не подключена (store == nil): Board-инструменты в набор не входят.
 	for _, w := range []string{"BoardListEpics", "BoardCreateEpic", "BoardSetTaskStatus"} {
 		if names[w] {
 			t.Errorf("ассистент без доски не должен включать Board-инструмент %q", w)
@@ -58,7 +109,7 @@ func TestAssistantToolsAreReadOnly(t *testing.T) {
 func TestAssistantCallFunctionRejectsWrite(t *testing.T) {
 	a := newTestAssistant(t, "вопрос")
 	if _, err := a.CallFunction("WriteFiles", nil); err == nil {
-		t.Fatal("попытка вызвать записывающий инструмент должна завершиться ошибкой (not in tool set)")
+		t.Fatal("попытка вызвать записывающий файл инструмент должна завершиться ошибкой (not in tool set)")
 	}
 }
 
@@ -74,5 +125,84 @@ func TestAssistantWritesIntoOutputDir(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatal("List не вернул содержимое проекта")
+	}
+}
+
+// TestAssistantCreatesEpicOnBoardDirectly — ассистент сам выполняет действие на
+// доске через свой набор: BoardCreateEpic доступен и реально создаёт эпик.
+func TestAssistantCreatesEpicOnBoardDirectly(t *testing.T) {
+	a, store := newTestAssistantBoard(t, "создай эпик")
+	out, err := a.CallFunction(tools.BoardCreateEpic, map[string]any{
+		"task_id": "CHAT-01", "title": "Порт на Rust", "description": "перенести сервер",
+		"assigned_role": "Backend Lead",
+	})
+	if err != nil {
+		t.Fatalf("BoardCreateEpic: %v", err)
+	}
+	if !strings.Contains(string(out), "success") {
+		t.Fatalf("ожидался success, got %s", out)
+	}
+	e, err := store.GetEpic(context.Background(), "CHAT-01")
+	if err != nil {
+		t.Fatalf("эпик не на доске: %v", err)
+	}
+	if e.Title != "Порт на Rust" {
+		t.Fatalf("title = %q", e.Title)
+	}
+}
+
+// TestAssistantSystemMessagesIncludeRAGBlock — при доступном RAG в системный
+// промпт попадает блок «Релевантный код по вопросу» (поиск — по проекту).
+func TestAssistantSystemMessagesIncludeRAGBlock(t *testing.T) {
+	fake := &fakeAssistantSearcher{results: []rag.SearchResult{
+		{File: "server/token.go", StartLine: 1, EndLine: 3, Score: 0.91, Snippet: "package server"},
+	}}
+	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "proj-x", "где валидация токена?", nil, fake)
+	msgs := a.GetSystemMessages(nil)
+	if len(msgs) != 1 {
+		t.Fatalf("ожидался 1 системный промпт, got %d", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Message, "Релевантный код по вопросу") || !strings.Contains(msgs[0].Message, "server/token.go") {
+		t.Fatalf("промпт не содержит RAG-блок:\n%s", msgs[0].Message)
+	}
+	if fake.last.Project != "proj-x" {
+		t.Fatalf("поиск по проекту = %q, ожидался proj-x", fake.last.Project)
+	}
+}
+
+// TestAssistantSystemMessagesWithoutRAG — nil-клиент RAG (или пустой проект) не
+// ломает ассистента: промпт строится без блока «релевантный код».
+func TestAssistantSystemMessagesWithoutRAG(t *testing.T) {
+	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "proj-x", "где валидация?", nil, nil)
+	msgs := a.GetSystemMessages(nil)
+	if strings.Contains(msgs[0].Message, "Релевантный код по вопросу") {
+		t.Fatalf("без RAG промпт не должен содержать блок:\n%s", msgs[0].Message)
+	}
+	if !strings.Contains(msgs[0].Message, "ассистент") {
+		t.Fatalf("системный промпт ассистента должен сохраниться:\n%s", msgs[0].Message)
+	}
+}
+
+// TestAssistantRAGBlockSearchParams — блок ищет по проекту, scope пуст (весь
+// проект); ошибка поиска деградирует в пустую строку.
+func TestAssistantRAGBlockSearchParams(t *testing.T) {
+	fake := &fakeAssistantSearcher{results: []rag.SearchResult{{File: "a.go", Snippet: "x"}}}
+	blk := assistantRAGBlock("proj-x", "где токен?", fake)
+	if blk == "" {
+		t.Fatal("блок должен быть непустым")
+	}
+	if fake.last.Scope != "" {
+		t.Fatalf("scope должен быть пустым (весь проект), got %q", fake.last.Scope)
+	}
+
+	// Ошибка поиска (Qdrant недоступен) → блок пуст (degrade, как планировщик).
+	fail := &fakeAssistantSearcher{err: &rag.UnavailableError{Err: context.Canceled}}
+	if got := assistantRAGBlock("proj-x", "где токен?", fail); got != "" {
+		t.Fatalf("ошибка поиска должна деградировать в пустой блок, got %q", got)
+	}
+
+	// nil-поисковик → пустой блок.
+	if got := assistantRAGBlock("proj-x", "где токен?", nil); got != "" {
+		t.Fatalf("nil-поисковик должен давать пустой блок, got %q", got)
 	}
 }
