@@ -567,3 +567,49 @@ func TestGenerateLoopGuardNudgesAfterRepeatedCalls(t *testing.T) {
 		t.Fatalf("ожидали подсказку о повторяющемся цикле в истории, got %#v", resp.Messages)
 	}
 }
+
+// Модель «исследует» проект РАЗНЫМИ вызовами (детекторы повтора и провалов
+// молчат) и до самого лимита раундов не выполняет обязательное действие
+// (лид не публикует задачи эпика). Раннер должен периодически возвращать её к
+// публикации, иначе цикл сгорает впустую, а доска остаётся пустой.
+func TestGenerateNudgesPendingRequiredGroupDuringRounds(t *testing.T) {
+	agent := &fakeAgent{
+		requiredGroups: [][]string{{"BoardCreateTask"}},
+		callResults:    [][]byte{[]byte(`[{"filename":"main.go","status":"success"}]`)},
+	}
+	// Каждый раунд — новое чтение (аргументы различаются): защита от повторов
+	// не срабатывает, модель просто не доходит до публикации.
+	var replies []*ModelReply
+	for i := 1; i <= 12; i++ {
+		replies = append(replies, &ModelReply{
+			ToolCalls: []tools.ToolCall{{
+				Name:      "ReadFiles",
+				Arguments: `{"filenames":["file` + string(rune('0'+i%10)) + `.go"]}`,
+			}},
+			FinishReason: "tool_calls",
+		})
+	}
+	provider := &fakeChatProvider{replies: replies}
+
+	resp := testGenerate(t, agent, provider)
+	if !resp.Truncated {
+		t.Fatal("ожидали упор в лимит раундов (модель так и не опубликовала задачи)")
+	}
+
+	nudges := 0
+	for _, m := range resp.Messages {
+		if m.Role != "user" || !strings.Contains(m.Content, "обязательное действие") {
+			continue
+		}
+		nudges++
+		if !strings.Contains(m.Content, "BoardCreateTask") {
+			t.Fatalf("подсказка должна называть невыполненный инструмент, got %q", m.Content)
+		}
+	}
+	if nudges == 0 {
+		t.Fatalf("ожидали подсказки о невыполненном обязательном действии, got %#v", resp.Messages)
+	}
+	if nudges > maxRequiredProgressNudges {
+		t.Fatalf("подсказок %d — больше лимита %d (история раздувается)", nudges, maxRequiredProgressNudges)
+	}
+}

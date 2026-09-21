@@ -188,7 +188,12 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Ошибка выполнения Chat: %v", err)
+		// Оборачиваем через %w: отмена контекста (остановка пользователем,
+		// graceful shutdown, таймаут шага) должна оставаться различимой для
+		// errors.Is(err, context.Canceled) наверху — иначе server/session
+		// трактует остановку как «оркестрация прервана ошибкой» и публикует
+		// статус error вместо stopped.
+		return nil, fmt.Errorf("Ошибка выполнения Chat: %w", err)
 	}
 
 	return &runner.ModelReply{Content: content.String(), ToolCalls: toolCalls, FinishReason: doneReason, Usage: usage}, nil

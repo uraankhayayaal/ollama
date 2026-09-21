@@ -95,3 +95,33 @@ func TestLongRunningHintBlocked(t *testing.T) {
 		}
 	}
 }
+
+// TestRunCommandMissingToolHint — команда несуществующим в окружении хоста
+// инструментом (cargo, модуль Python) не должна оставлять модель в догадках:
+// в результате появляется подсказка выполнять проверки в окружении проекта
+// (контейнер), иначе агент тратит раунды на which/find/pip install.
+func TestRunCommandMissingToolHint(t *testing.T) {
+	out, err := runCommand("definitely-not-installed-xyz build", t.TempDir())
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	if out["status"] != "error" {
+		t.Fatalf("ожидался статус error, got %q", out["status"])
+	}
+	hint := out["hint"]
+	if !strings.Contains(hint, "docker compose run") {
+		t.Fatalf("ожидалась подсказка про окружение проекта, got %q", hint)
+	}
+	if !strings.Contains(hint, "definitely-not-installed-xyz") {
+		t.Fatalf("подсказка должна называть команду, got %q", hint)
+	}
+
+	// Успешная команда подсказки не получает.
+	ok, err := runCommand("echo hi", t.TempDir())
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	if ok["hint"] != "" {
+		t.Fatalf("успешной команде подсказка не нужна, got %q", ok["hint"])
+	}
+}

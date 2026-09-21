@@ -376,3 +376,35 @@ func TestBoardToolsBugPipeline(t *testing.T) {
 		t.Fatalf("после фикса список fixed = %d, ожидался 1", len(fixed))
 	}
 }
+
+// Модель обратилась к несуществующему эпику (выдумала ID): ответ должен
+// перечислять реальные записи доски, иначе модель продолжает перебирать
+// несуществующие идентификаторы и оркестрация стоит на месте.
+func TestBoardNotFoundListsExistingIDs(t *testing.T) {
+	set, store := newBoardToolSet(t)
+	ctx := context.Background()
+
+	if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{
+		TaskID: "CHAT-001", Title: "Оптимизация логгирования", Description: "d", AssignedRole: "DevOps Lead",
+	}}); err != nil {
+		t.Fatalf("создание эпика: %v", err)
+	}
+	if err := store.CreateTask(ctx, &board.Task{TaskSpec: board.TaskSpec{
+		TaskID: "DOL-01", Title: "Compose", Description: "d", AssignedRole: "DevOps Engineer",
+	}, EpicID: "CHAT-001"}); err != nil {
+		t.Fatalf("создание задачи: %v", err)
+	}
+
+	msg := errExec(t, set, BoardGetEpic, map[string]any{"epic_id": "REWRITE-01"})
+	for _, want := range []string{"CHAT-001", "DOL-01", "Не выдумывай ID"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("в сообщении не хватает %q: %s", want, msg)
+		}
+	}
+
+	// Пустая доска: подсказка не перечисляет ID, а сообщает, что их нет.
+	empty, _ := newBoardToolSet(t)
+	if msg := errExec(t, empty, BoardGetTask, map[string]any{"task_id": "T-01"}); !strings.Contains(msg, "нет ни эпиков, ни задач") {
+		t.Fatalf("для пустой доски ожидалось сообщение об отсутствии записей, got %q", msg)
+	}
+}

@@ -947,10 +947,41 @@ func runCommand(command, workdir string) (map[string]string, error) {
 	} else if runErr != nil {
 		result["exit_error"] = runErr.Error()
 		result["status"] = "error"
+		if h := missingToolHint(command, stdout.String()+"\n"+stderr.String(), runErr); h != "" {
+			result["hint"] = h
+		}
 	} else {
 		result["status"] = "success"
 	}
 	return result, nil
+}
+
+// missingToolHint распознаёт «инструмент/модуль недоступен в окружении хоста»
+// (sh: cargo: command not found, exit 127, ModuleNotFoundError) и возвращает
+// подсказку модели. Без неё агент начинает перебирать окружение — which/find по
+// всей файловой системе (минуты до таймаута), pip install, повторные запуски
+// той же команды — и сжигает раунды, хотя тулчейн проекта живёт в контейнере.
+func missingToolHint(command, output string, runErr error) string {
+	lower := strings.ToLower(output)
+	missing := strings.Contains(lower, "command not found") ||
+		strings.Contains(lower, "modulenotfounderror") ||
+		strings.Contains(lower, "no module named") ||
+		strings.Contains(lower, "not recognized as an internal or external command")
+	if !missing {
+		if ee, ok := runErr.(*exec.ExitError); ok && ee.ExitCode() == 127 {
+			missing = true
+		}
+	}
+	if !missing {
+		return ""
+	}
+	tool := strings.TrimSpace(command)
+	if f := strings.Fields(command); len(f) > 0 {
+		tool = f[0]
+	}
+	return fmt.Sprintf("Инструмент/модуль для %q отсутствует в окружении хоста — НЕ ищи его (which/find), НЕ устанавливай (pip/brew/apt) и НЕ повторяй команду. "+
+		"Сборку и тесты проекта выполняй в его собственном окружении: docker compose run --rm <сервис> <команда> (сервис и команды см. в docker-compose.yml и README проекта). "+
+		"Если контейнерного стека нет — проверь результат статически (чтение файлов, LSP-диагностика) и честно укажи в отчёте, что проверка на хосте недоступна.", tool)
 }
 
 func (ops *FileOps) Run(args map[string]any) ([]byte, error) {

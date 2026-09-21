@@ -335,6 +335,32 @@ func loopMessage(toolName string, n int) string {
 	return fmt.Sprintf("Ты уже %d раз вызвал инструмент %q с одинаковыми аргументами — это повторяющийся цикл. Прекрати его: опирайся на уже полученные результаты и заверши работу итоговым ответом по требуемой схеме (не вызывая повторно те же инструменты).", n, toolName)
 }
 
+// requiredProgressAfter — сколько раундов цикла может пройти без успешно
+// выполненной обязательной группы инструментов, прежде чем раннер начнёт
+// возвращать модель к публикации результата. Детекторы повтора (одинаковая
+// сигнатура) и провалов (один инструмент error'ит) здесь не помогают: лид
+// направления может до самого лимита раундов читать проект РАЗНЫМИ вызовами
+// (List, ReadFiles, ReadMap по разным файлам) и не создать ни одной задачи —
+// эпик остаётся пустым, специалистам нечего брать в работу, а оркестрация
+// «зависает» на декомпозиции.
+const requiredProgressAfter = 5
+
+// requiredProgressEvery — периодичность повторных подсказок (в раундах) после
+// первой (requiredProgressAfter). Ограничено maxRequiredProgressNudges, чтобы
+// не раздувать историю и не «заболтать» модель.
+const requiredProgressEvery = 4
+
+// maxRequiredProgressNudges — максимум подсказок «обязательное действие не
+// выполнено» за один цикл.
+const maxRequiredProgressNudges = 4
+
+// progressNudgeMessage — подсказка модели, что обязательное действие всё ещё
+// не выполнено, хотя раунды цикла уже потрачены на исследование.
+func progressNudgeMessage(toolName string, round, total, nudge int) string {
+	return fmt.Sprintf("Раунд %d из %d: обязательное действие %q до сих пор не выполнено успешно (напоминание %d из %d). Исследования достаточно — опирайся на уже полученные данные и НЕМЕДЛЕННО вызови %q с реальными аргументами, доведя вызов до успешного результата. Только после этого завершай работу итоговым ответом.",
+		round, total, toolName, nudge, maxRequiredProgressNudges, toolName)
+}
+
 // toolFailMessage — подсказка модели, когда один и тот же инструмент много раз
 // подряд возвращает ошибку (аргументы могут меняться). Модель должна
 // перестать перебирать провальные варианты: проверить состояние, сменить
@@ -536,6 +562,9 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// sentDiags — диагностики, уже показанные модели в этом эпизоде: повторные
 	// строки не дублируются (токен-бюджет, Ф-4). Сбрасывается на чистом раунде.
 	sentDiags := make(map[string]bool)
+	// progressNudges — сколько раз за цикл модели уже напомнили о невыполненном
+	// обязательном действии (подсказки по раундам, см. requiredProgressAfter).
+	progressNudges := 0
 
 	// pendingRequired возвращает имя первого ещё не выполненного обязательного
 	// инструмента — им runner подсказывает модели в подсказках.
@@ -886,6 +915,24 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 					messages = append(messages, Message{Role: "user", Content: toolFailMessage(name, n, pendingRequired())})
 					break
 				}
+			}
+		}
+
+		// Обязательное действие так и не выполнено, а раунды уходят на
+		// исследование РАЗНЫМИ вызовами (детекторы повтора/провалов молчат):
+		// возвращаем модель к публикации результата. Без этого цикл догорает до
+		// лимита раундов, шаг падает «исчерпан лимит раундов», а доска остаётся
+		// пустой (например, лид не создал задач эпика — оркестрация стоит).
+		if pending := pendingRequired(); pending != "" && progressNudges < maxRequiredProgressNudges {
+			done := round - startRound + 1
+			if done >= requiredProgressAfter && (done-requiredProgressAfter)%requiredProgressEvery == 0 {
+				progressNudges++
+				Debugf("RUNNER: раунд %d: обязательное действие %q не выполнено (%d раундов), подсказываю перейти к публикации (%d/%d)",
+					round+1, pending, done, progressNudges, maxRequiredProgressNudges)
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: progressNudgeMessage(pending, round+1, startRound+mx, progressNudges),
+				})
 			}
 		}
 	}
