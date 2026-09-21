@@ -346,3 +346,53 @@ func (f *Forge) CreateMergeRequest(opts forges.MergeRequestOptions) (string, err
 	}
 	return pr.HTMLURL, nil
 }
+
+// FindMergeRequest ищет Pull Request с веткой-источником source и целью
+// target (Ф-5, сверка MR при открытии дашборда). GitHub умеет фильтровать
+// по head (owner:branch) и base. Возвращает первый найденный открытый PR;
+// если открытых нет — any-state, чтобы мы могли показать слитый/закрытый.
+// Когда подходящего PR нет — forges.ErrNoMergeRequest.
+func (f *Forge) FindMergeRequest(source, target string) (*forges.MergeRequestInfo, error) {
+	if f.cfg.Owner == "" || f.cfg.Repo == "" {
+		return nil, forges.ErrNoMergeRequest
+	}
+	head := fmt.Sprintf("%s:%s", f.cfg.Owner, source)
+	// Сначала открытые PR, потом all-state (вдруг PR слит/закрыт).
+	for _, state := range []string{"open", "all"} {
+		apiPath := fmt.Sprintf("/repos/%s/%s/pulls?state=%s&head=%s",
+			f.cfg.Owner, f.cfg.Repo, state, url.QueryEscape(head))
+		if target != "" {
+			apiPath += "&base=" + url.QueryEscape(target)
+		}
+		data, status, err := f.do("GET", apiPath, nil)
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK {
+			// Не найденная ветка/repo GitHub и так дадут пустой список (200).
+			return nil, fmt.Errorf("GitHub: поиск PR по ветке %s: статус %d: %s", source, status, string(data))
+		}
+		var prs []struct {
+			HTMLURL  string  `json:"html_url"`
+			State    string  `json:"state"`
+			MergedAt *string `json:"merged_at"`
+			Head     struct {
+				Ref string `json:"ref"`
+			} `json:"head"`
+		}
+		if err := json.Unmarshal(data, &prs); err != nil {
+			return nil, err
+		}
+		for _, pr := range prs {
+			if pr.Head.Ref != source {
+				continue
+			}
+			st := pr.State
+			if st == "closed" && pr.MergedAt != nil {
+				st = "merged"
+			}
+			return &forges.MergeRequestInfo{URL: pr.HTMLURL, State: st}, nil
+		}
+	}
+	return nil, forges.ErrNoMergeRequest
+}

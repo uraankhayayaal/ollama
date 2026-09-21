@@ -276,6 +276,63 @@ export async function releaseEpic(
   );
 }
 
+// Создание релизной ветки эпика ai/epic/<id> от базовой ветки проекта
+// (git-workflow, Ф-5). Идемпотентно. Кнопка «Создать ветку эпика» в модалке.
+export async function createEpicBranch(
+  base: string,
+  project: string,
+  epicID: string,
+): Promise<{ epic_id: string; branch: string; base: string }> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/branch`,
+    {},
+  );
+}
+
+// Создание фича-ветки задачи ai/task/<id> от ветки её эпика. Требует, чтобы
+// ветка эпика уже была создана. Идемпотентно. Кнопка «Создать ветку задачи».
+export async function createTaskBranch(
+  base: string,
+  project: string,
+  taskID: string,
+): Promise<{ task_id: string; branch: string; base: string }> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/branch`,
+    {},
+  );
+}
+
+// «Создать MR» эпика (Ф-5): пушит релизную ветку ai/epic/<id> в remote и
+// открывает MR → main через фордж. Идемпотентно: повторный вызов возвращает
+// существующую ссылку. Блок «ветка/MR» в модалке эпика.
+export async function createEpicMR(
+  base: string,
+  project: string,
+  epicID: string,
+): Promise<{ epic_id: string; mr_url: string; source: string; target: string }> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/mr`,
+    {},
+  );
+}
+
+// «Создать MR» задачи (Ф-5): пушит фича-ветку ai/task/<id> и открывает MR →
+// ветку эпика. Идемпотентно (см. createEpicMR). Блок «ветка/MR» в модалке задачи.
+export async function createTaskMR(
+  base: string,
+  project: string,
+  taskID: string,
+): Promise<{ task_id: string; mr_url: string; source: string; target: string }> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/mr`,
+    {},
+  );
+}
+
 // --- приёмка (Ф-2-3) ---
 
 // Дифф предложенных изменений: для git-проектов — список файлов (метаданные,

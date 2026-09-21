@@ -47,6 +47,7 @@ type Event struct {
 	Truncated bool      `json:"truncated,omitempty"` // текст/результат обрезаны по лимиту
 	In        int64     `json:"in,omitempty"`        // входные токены раунда (для TypeTokenCount)
 	Out       int64     `json:"out,omitempty"`       // выходные токены раунда (для TypeTokenCount)
+	TPS       float64   `json:"tps,omitempty"`       // скорость генерации (вых. ток/с) — реальный eval провайдера
 	Time      time.Time `json:"time"`                // момент события (UTC)
 }
 
@@ -62,7 +63,9 @@ type Reporter interface {
 	OnToolStart(tool, args string)
 	OnToolResult(tool, result string, ok bool)
 	// OnTokens — потребление токенов одного раунда модели (вход/выход).
-	OnTokens(in, out int64)
+	// tps — реальная скорость генерации выхода (ток/с), когда провайдер её
+	// сообщает (Ollama eval_count/eval_duration); 0, если неизвестна.
+	OnTokens(in, out int64, tps float64)
 }
 
 // Sink — получатель событий. Может вызываться из нескольких горутин.
@@ -118,8 +121,8 @@ func (r *Router) OnToolResult(tool, result string, ok bool) {
 }
 
 // OnTokens сообщает потребление токенов одного раунда модели.
-func (r *Router) OnTokens(in, out int64) {
-	r.emit(Event{Type: TypeTokenCount, In: in, Out: out})
+func (r *Router) OnTokens(in, out int64, tps float64) {
+	r.emit(Event{Type: TypeTokenCount, In: in, Out: out, TPS: tps})
 }
 
 func (r *Router) emit(ev Event) {

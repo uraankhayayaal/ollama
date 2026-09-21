@@ -119,12 +119,12 @@ func TestOnMessageDelta(t *testing.T) {
 }
 
 // TestOnTokens проверяет событие потребления токенов: тип tokens, поля
-// входа/выхода и имя агента из WithAgent.
+// входа/выхода, реальную скорость генерации и имя агента из WithAgent.
 func TestOnTokens(t *testing.T) {
 	ch, sink := collect(t, 1)
 	r := NewRouter(sink).WithAgent("backendlead")
 
-	r.OnTokens(1234, 56)
+	r.OnTokens(1234, 56, 42.5)
 
 	ev := <-ch
 	if ev.Type != TypeTokenCount {
@@ -132,6 +132,9 @@ func TestOnTokens(t *testing.T) {
 	}
 	if ev.In != 1234 || ev.Out != 56 {
 		t.Fatalf("in/out = %d/%d, want 1234/56", ev.In, ev.Out)
+	}
+	if ev.TPS != 42.5 {
+		t.Fatalf("tps = %v, want 42.5", ev.TPS)
 	}
 	if ev.Agent != "backendlead" {
 		t.Fatalf("agent = %q, want backendlead", ev.Agent)

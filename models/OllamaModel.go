@@ -140,11 +140,15 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		}
 
 		// Финальный фрагмент стрима несёт фактический подсчёт токенов
-		// (prompt_eval_count — весь вход, eval_count — выход модели).
+		// (prompt_eval_count — весь вход, eval_count — выход модели), а
+		// eval_count/eval_duration дают реальную скорость генерации.
 		if resp.Done && (resp.PromptEvalCount > 0 || resp.EvalCount > 0) {
 			usage = &runner.Usage{
 				InputTokens:  resp.PromptEvalCount,
 				OutputTokens: resp.EvalCount,
+			}
+			if resp.EvalCount > 0 && resp.EvalDuration > 0 {
+				usage.OutputTPS = float64(resp.EvalCount) / resp.EvalDuration.Seconds()
 			}
 		}
 

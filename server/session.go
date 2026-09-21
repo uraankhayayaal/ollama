@@ -47,6 +47,11 @@ type Session struct {
 	wg      sync.WaitGroup
 	stopped bool
 
+	// rate — последняя реальная скорость генерации (вых. ток/с) из usage
+	// провайдера (Ollama eval_count/eval_duration). Не сбрасывается между
+	// генерациями: показывает актуальную производительность модели.
+	rate float64
+
 	// log — лог проекта (logs/<проект>.log). В режиме serve один процесс ведёт
 	// много проектов, поэтому сообщения сессии пишутся в файл своего проекта,
 	// а не в общий logs/server.log.
@@ -321,7 +326,7 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 		// Потребление токенов раунда: накапливаем в Redis (за время жизни
 		// проекта) и транслируем новые тоталы в шину — фронт обновляет
 		// счётчик рядом с кнопкой «Продолжить» в реальном времени.
-		sess.addTokens(ev.In, ev.Out)
+		sess.addTokens(ev.In, ev.Out, ev.TPS)
 	}
 }
 
@@ -354,21 +359,30 @@ func (sess *Session) toolTrace(ev runevents.Event) {
 	}
 }
 
-// addTokens прибавляет порцию токенов раунда к счётчику проекта и публикует
-// новые итоговые суммы в шину (type=tokens).
-func (sess *Session) addTokens(in, out int64) {
+// addTokens прибавляет порцию токенов раунда к счётчику проекта, запоминает
+// последнюю реальную скорость генерации и публикует новые итоговые суммы (+
+// скорость) в шину (type=tokens).
+func (sess *Session) addTokens(in, out int64, tps float64) {
 	totIn, totOut, err := sess.tok.Add(context.Background(), in, out)
 	if err != nil {
 		sess.log.Warnf("server: счётчик токенов %s: %v", sess.project, err)
 		return
 	}
-	sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: totIn, Output: totOut})
+	sess.mu.Lock()
+	if tps > 0 {
+		sess.rate = tps
+	}
+	rate := sess.rate
+	sess.mu.Unlock()
+	sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: totIn, Output: totOut, TPS: rate})
 }
 
-// tokenEvent — текущие накопленные токены проекта (вход/выход).
+// tokenEvent — текущие накопленные токены проекта (вход/выход) и последняя
+// скорость генерации (вых. ток/с), когда провайдер её сообщает.
 type tokenEvent struct {
-	Input  int64 `json:"in"`
-	Output int64 `json:"out"`
+	Input  int64   `json:"in"`
+	Output int64   `json:"out"`
+	TPS    float64 `json:"tps,omitempty"`
 }
 
 // append пишет сообщение в чат (стяжку) и транслирует в шину (type=chat).
@@ -389,10 +403,15 @@ func (sess *Session) kickBoard() {
 }
 
 // boardFlusher раз в 500 мс публикует снимок доски, если были изменения.
+// Параллельно, раз в минуту (Ф-5, гибрид), фоном сверяет MR с форджем,
+// чтобы состояние MR-кнопок обновлялось и при активной оркестрации без
+// перезахода на дашборд.
 func (sess *Session) boardFlusher(ctx context.Context) {
 	defer sess.wg.Done()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	mrTicker := time.NewTicker(60 * time.Second)
+	defer mrTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -405,6 +424,14 @@ func (sess *Session) boardFlusher(ctx context.Context) {
 			}
 		case <-sess.ticks:
 			sess.publishBoard(ctx)
+		case <-mrTicker.C:
+			changed, err := sess.srv.reconcileMRs(ctx, sess.project)
+			if err != nil {
+				continue
+			}
+			if changed {
+				sess.kickBoard()
+			}
 		}
 	}
 }
@@ -415,7 +442,43 @@ func (sess *Session) publishBoard(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	v.Git = sess.srv.gitStatus(sess.project, v.Epics, v.Tasks)
 	sess.srv.hub.publish(sess.project, "board", v)
+}
+
+// publishBoardNow публикует снимок доски в шину немедленно — для idle-сессий
+// (boardFlusher живёт только на время оркестрации и тик бы не дренул).
+func (sess *Session) publishBoardNow() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sess.publishBoard(ctx)
+}
+
+// broadcastSnapshot публикует клиенту снапшот текущего состояния сессии:
+// status + board + tokens. Вызывается сразу после WS-подписки — клиент
+// получает авторитетное состояние при подключении, а не ждёт следующего
+// события (иначе открытие/рефреш проекта с уже идущей оркестрацией показали
+// бы устаревший «idle» до первой смены статуса).
+func (sess *Session) broadcastSnapshot() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	sess.mu.Lock()
+	running, gating, gateTyp := sess.running, sess.gating, sess.gateTyp
+	sess.mu.Unlock()
+	meta, _ := sess.board.GetMeta(ctx)
+	sess.srv.hub.publish(sess.project, "status", statusEvent{
+		Status: computeStatus(running, gating, meta),
+		Gating: gating,
+		Gate:   gateTyp,
+	})
+	if v, err := boardView(ctx, sess.board); err == nil {
+		v.Git = sess.srv.gitStatus(sess.project, v.Epics, v.Tasks)
+		sess.srv.hub.publish(sess.project, "board", v)
+	}
+	if in, out, err := sess.tok.Get(ctx); err == nil {
+		sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: in, Output: out})
+	}
 }
 
 // broadcastStatus шлёт статус сессии в шину (type=status).
@@ -465,6 +528,9 @@ type boardSnapshot struct {
 	Tasks []*board.Task      `json:"tasks"`
 	Bugs  []*board.BugReport `json:"bugs"`
 	Total *boardTotal        `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
+	// Git — git-статус проекта (ветки/MR эпиков и задач, Ф-5). Только для
+	// git-проектов с созданными ветками; иначе nil.
+	Git *gitView `json:"git,omitempty"`
 }
 
 // boardTotal — полные счётчики доски (когда снимок ограничен limit/offset).

@@ -1,14 +1,20 @@
 // Счётчик токенов проекта: накопленные вход (in) и выход (out) токены за
-// время жизни проекта. Отображается в шапке рядом с кнопкой «Продолжить»,
-// обновляется в реальном времени событиями WS type=tokens (см. Api.projectTokens).
+// время жизни проекта и последняя реальная скорость генерации (tps, вых.
+// ток/с — из usage провайдера, Ollama eval_count/eval_duration). Отображается
+// в шапке рядом с кнопкой «Продолжить», обновляется событиями WS type=tokens
+// (см. Api.projectTokens). Скорость не сбрасывается между генерациями.
 import "./styles.scss";
 
 function fmt(n: number): string {
   return n.toLocaleString("ru-RU");
 }
 
-export function TokensCounter(props: { in: number; out: number }) {
+export function TokensCounter(props: { in: number; out: number; tps?: number | null }) {
   const total = props.in + props.out;
+  const speed =
+    props.tps != null && Number.isFinite(props.tps) && props.tps > 0
+      ? `${props.tps.toFixed(1)} ток/с`
+      : null;
   return (
     <span
       className="tokens"
@@ -21,6 +27,11 @@ export function TokensCounter(props: { in: number; out: number }) {
         вых. {fmt(props.out)}
       </span>
       <span className="tokens-total">итого {fmt(total)}</span>
+      {speed && (
+        <span className="tokens-speed" title="Скорость генерации (реальная)">
+          {speed}
+        </span>
+      )}
     </span>
   );
 }

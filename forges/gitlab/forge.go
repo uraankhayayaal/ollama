@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"ai/forges"
@@ -345,4 +346,51 @@ func (f *Forge) CreateMergeRequest(opts forges.MergeRequestOptions) (string, err
 		return "", fmt.Errorf("GitLab не вернул ссылку на созданный Merge Request")
 	}
 	return mr.WebURL, nil
+}
+
+// FindMergeRequest ищет Merge Request с веткой-источником source и целью
+// target (Ф-5, сверка MR при открытии дашборда). GitLab фильтрует по
+// source_branch и target_branch в любом состоянии. Если подходящего MR нет —
+// forges.ErrNoMergeRequest.
+func (f *Forge) FindMergeRequest(source, target string) (*forges.MergeRequestInfo, error) {
+	if f.cfg.ProjID == "" || source == "" {
+		return nil, forges.ErrNoMergeRequest
+	}
+	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests?state=all&source_branch=%s",
+		f.cfg.ProjID, url.QueryEscape(source))
+	if target != "" {
+		path += "&target_branch=" + url.QueryEscape(target)
+	}
+
+	data, status, err := f.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("GitLab: поиск MR по ветке %s: статус %d: %s", source, status, string(data))
+	}
+
+	var mrs []struct {
+		WebURL       string `json:"web_url"`
+		State        string `json:"state"`
+		SourceBranch string `json:"source_branch"`
+	}
+	if err := json.Unmarshal(data, &mrs); err != nil {
+		return nil, err
+	}
+	for _, mr := range mrs {
+		if mr.SourceBranch != source {
+			continue
+		}
+		st := mr.State
+		switch st {
+		case "opened":
+			st = "open"
+		case "merged", "closed":
+		default:
+			st = ""
+		}
+		return &forges.MergeRequestInfo{URL: mr.WebURL, State: st}, nil
+	}
+	return nil, forges.ErrNoMergeRequest
 }

@@ -3,8 +3,10 @@
 //   - «Удалить» — видна, пока ни одна задача эпика ещё не взята в работу
 //     специалистом (статусы new/analysis/ready).
 //   - «Залить в main» (Ф-3) — ручная кнопка релиза: видна только у эпика со
-//     статусом done и говорит серверу влить релизную ветку эпика в базовую
-//     (main). Показывает процесс / ошибку / успех прямо под кнопкой.
+//     статусом done И с созданной релизной веткой (hasBranch по board.git —
+//     регистр-статус сервера). Без ветки кнопки нет, вместо неё — подсказка:
+//     релиз невозможен, пока у эпика нет ветки (Ф-5). Показывает процесс /
+//     ошибку / успех прямо под кнопкой.
 import { useState } from "react";
 import type { EpicRow, TaskRow } from "@/Types";
 import "./styles.scss";
@@ -12,11 +14,13 @@ import "./styles.scss";
 export function EpicActionBar({
   epic,
   tasks,
+  hasBranch,
   onDelete,
   onRelease,
 }: {
   epic: EpicRow;
   tasks: TaskRow[];
+  hasBranch?: boolean;
   onDelete: () => void;
   onRelease: () => Promise<void>;
 }) {
@@ -30,8 +34,12 @@ export function EpicActionBar({
       t.status !== "done" &&
       t.status !== "cancelled",
   );
-  const canRelease = epic.status === "done";
-  if (!canDelete && !canRelease) {
+  // done-эпик без релизной ветки релизить нечем: «Залить в main» не показываем.
+  const canRelease = epic.status === "done" && hasBranch === true;
+  // Подсказка вместо кнопки — только для git-проектов (hasBranch === false),
+  // где ветка ещё не создана; для не-git проектов hasBranch === undefined.
+  const noBranchHint = epic.status === "done" && hasBranch === false;
+  if (!canDelete && !canRelease && !noBranchHint) {
     return null;
   }
 
@@ -55,6 +63,14 @@ export function EpicActionBar({
 
   return (
     <div className="epic-actions">
+      {noBranchHint && (
+        <span
+          className="epic-release-hint"
+          title="У эпика нет релизной ветки (ai/epic/…). Создайте ветку эпика, чтобы можно было влить его в main."
+        >
+          нет релизной ветки
+        </span>
+      )}
       {canRelease && (
         <>
           <button

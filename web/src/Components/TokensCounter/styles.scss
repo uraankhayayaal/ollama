@@ -31,4 +31,11 @@
     opacity: 0.6;
     font-variant-numeric: tabular-nums;
   }
+
+  // Скорость генерации «N ток/с» — последняя реальная скорость из usage
+  // провайдера; живёт постоянно, а не только во время стриминга.
+  .tokens-speed {
+    color: var(--ok, #15803d);
+    font-variant-numeric: tabular-nums;
+  }
 }

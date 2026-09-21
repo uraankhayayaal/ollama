@@ -337,7 +337,7 @@ func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*gito
 	if err != nil {
 		return nil, "", "", &apiError{
 			code: http.StatusBadRequest,
-			msg:  fmt.Sprintf("сначала создайте ветку эпика %s: %v", epicID, err),
+			msg:  fmt.Sprintf("у эпика %s нет релизной ветки — «Залить в main» невозможно (создайте ветку эпика %s)", epicID, epicBranchPrefix+gitops.SanitizeBranchName(epicID)),
 		}
 	}
 
@@ -485,9 +485,15 @@ func (s *Server) deleteEpicBranches(project, epicID string, epicTasks []string) 
 	if err := s.reg.DeleteEpicBranch(project, epicID); err != nil {
 		logging.For(project).Warnf("gitflow: снятие ветки эпика %s: %v", epicID, err)
 	}
+	if err := s.reg.DeleteEpicMR(project, epicID); err != nil {
+		logging.For(project).Warnf("gitflow: снятие MR эпика %s: %v", epicID, err)
+	}
 	for _, tid := range epicTasks {
 		if err := s.reg.DeleteTaskBranch(project, tid); err != nil {
 			logging.For(project).Warnf("gitflow: снятие ветки задачи %s: %v", tid, err)
+		}
+		if err := s.reg.DeleteTaskMR(project, tid); err != nil {
+			logging.For(project).Warnf("gitflow: снятие MR задачи %s: %v", tid, err)
 		}
 	}
 }

@@ -50,8 +50,8 @@ func TestTokensAccumulatePerProject(t *testing.T) {
 		t.Fatalf("getOrCreate tok-b: %v", err)
 	}
 
-	sess.addTokens(100, 40)
-	sess.addTokens(50, 60)
+	sess.addTokens(100, 40, 12.5)
+	sess.addTokens(50, 60, 0)
 
 	// tok-a накопил 150/100.
 	rec := httptest.NewRecorder()
@@ -66,6 +66,10 @@ func TestTokensAccumulatePerProject(t *testing.T) {
 	}
 	if ev.Input != 150 || ev.Output != 100 {
 		t.Fatalf("tok-a tokens = %d/%d, want 150/100", ev.Input, ev.Output)
+	}
+	// Вторая порция не имела скорости генерации — сохраняется последняя (12.5).
+	if ev.TPS != 12.5 {
+		t.Fatalf("tok-a tps = %v, want 12.5", ev.TPS)
 	}
 
 	// tok-b остался пустым.
@@ -94,7 +98,7 @@ func (p *wiredReporterProvider) Generate(ctx context.Context, _ agents.Agent) (*
 	if rep == nil {
 		p.t.Fatal("сессия не внедрила репортёр в контекст провайдера — токены не будут считаться")
 	}
-	rep.OnTokens(7, 3)
+	rep.OnTokens(7, 3, 0)
 	return nil, errors.New("стоп: тестовый провайдер")
 }
 

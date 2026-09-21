@@ -40,6 +40,12 @@
     color: var(--danger, #dc2626);
   }
 
+  .epic-release-hint {
+    font-size: 11px;
+    color: var(--muted, #64748b);
+    opacity: 0.9;
+  }
+
   .epic-delete {
     padding: 2px 8px;
     border: 1px solid var(--line, #e2e8f0);

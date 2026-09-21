@@ -1,11 +1,25 @@
 // Мода окно с подробной информацией об эпике (клик по названию эпика в
-// заголовке строки доски).
-import type { EpicRow } from "@/Types";
+// заголовке строки доски). Ф-5: блок «ветка + MR» (git-workflow) — ссылка на
+// ветку и MR, кнопки «Создать ветку эпика» и «Создать MR» (push → MR → main).
+import type { EpicRow, GitView } from "@/Types";
 import { STATUS_LABEL } from "../board";
 import { Modal } from "../Modal";
+import { GitBlock } from "../GitBlock";
 import "./styles.scss";
 
-export function EpicModal({ epic, onClose }: { epic: EpicRow; onClose: () => void }) {
+export function EpicModal({
+  epic,
+  git,
+  onCreateBranch,
+  onCreateMR,
+  onClose,
+}: {
+  epic: EpicRow;
+  git?: GitView;
+  onCreateBranch?: (e: EpicRow) => Promise<void>;
+  onCreateMR?: (e: EpicRow) => Promise<void>;
+  onClose: () => void;
+}) {
   return (
     <Modal title={"Эпик · " + epic.task_id} onClose={onClose}>
       <dl className="details">
@@ -36,6 +50,16 @@ export function EpicModal({ epic, onClose }: { epic: EpicRow; onClose: () => voi
           </div>
         )}
       </dl>
+
+      {git && (
+        <GitBlock
+          git={git}
+          kind="epic"
+          id={epic.task_id}
+          onCreateBranch={onCreateBranch ? () => onCreateBranch(epic) : undefined}
+          onCreateMR={onCreateMR ? () => onCreateMR(epic) : undefined}
+        />
+      )}
 
       <h4 className="section">Описание</h4>
       <p className="desc">{epic.description || "—"}</p>

@@ -13,6 +13,7 @@ export function EpicRow({
   epicId,
   tasks,
   collapsed,
+  hasBranch,
   onTaskUpdate,
   onTaskOpen,
   onEpicOpen,
@@ -24,6 +25,9 @@ export function EpicRow({
   epicId: string;
   tasks: TaskRow[];
   collapsed: boolean;
+  // Есть ли у эпика релизная ветка (по board.git — регистр-статус сервера).
+  // undefined — проект не git; false — git-проект, ветки нет; true — есть.
+  hasBranch?: boolean;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onTaskOpen: (t: TaskRow) => void;
   onEpicOpen: (e: Epic) => void;
@@ -57,7 +61,7 @@ export function EpicRow({
           <>
             <span className="id">{epic.task_id}</span>
             <span className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</span>
-            <EpicActionBar epic={epic} tasks={tasks} onDelete={() => onEpicDelete(epic)} onRelease={() => onEpicRelease(epic)} />
+            <EpicActionBar epic={epic} tasks={tasks} hasBranch={hasBranch} onDelete={() => onEpicDelete(epic)} onRelease={() => onEpicRelease(epic)} />
           </>
         )}
       </div>

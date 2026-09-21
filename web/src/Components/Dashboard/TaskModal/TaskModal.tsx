@@ -1,16 +1,25 @@
 // Модальное окно с подробной информацией о задаче (клик по задаче — ячейка
 // доски). Переходы статуса — рядом с эпиком в заголовке: минус/плюс.
-import type { TaskRow } from "@/Types";
+// Ф-5: блок «ветка + MR» — ветка/MR, кнопки «Создать ветку задачи» (от ветки
+// эпика) и «Создать MR» (push → MR в ветку эпика).
+import type { GitView, TaskRow } from "@/Types";
 import { MOVES, STATUS_LABEL } from "../board";
 import { Modal } from "../Modal";
+import { GitBlock } from "../GitBlock";
 import "./styles.scss";
 
 export function TaskModal({
   task,
+  git,
+  onCreateBranch,
+  onCreateMR,
   onTaskUpdate,
   onClose,
 }: {
   task: TaskRow;
+  git?: GitView;
+  onCreateBranch?: (t: TaskRow) => Promise<void>;
+  onCreateMR?: (t: TaskRow) => Promise<void>;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onClose: () => void;
 }) {
@@ -46,6 +55,17 @@ export function TaskModal({
           </div>
         )}
       </dl>
+
+      {git && (
+        <GitBlock
+          git={git}
+          kind="task"
+          id={task.task_id}
+          epicId={task.epic_id}
+          onCreateBranch={onCreateBranch ? () => onCreateBranch(task) : undefined}
+          onCreateMR={onCreateMR ? () => onCreateMR(task) : undefined}
+        />
+      )}
 
       <h4 className="section">Описание</h4>
       <p className="desc">{task.description || "—"}</p>

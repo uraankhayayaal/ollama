@@ -2,6 +2,9 @@
 // REST: postChat / chatHistory; live: "chat" (см. types.ts ChatMsg).
 // Канон-архитектура — как Dashboard (Components/Chatboard/*).
 //
+// Верхний action-bar: кнопка «Экспорт» выгружает чат в сокращённый
+// минимально-токенный формат (chatForAI) для передачи ИИ-модели на разбор.
+//
 // Сворачивание сообщений (foldable): tool-результаты и длинные технические
 // тексты по умолчанию свёрнуты в компактную «шапку» (кто/инструмент/статус);
 // клик разворачивает содержимое. Пустые сообщения показываются компактным
@@ -10,12 +13,18 @@
 import { useEffect, useState } from "react";
 import type { ChatMsg } from "@/Types";
 // import { APIError } from "@/Api";
+import { downloadText } from "@/download";
 import "./styles.scss";
 
 // Пороги «тяжёлого» сообщения: после них контент сворачивается по умолчанию.
 const MAX_COLLAPSED_CHARS = 600;
 const MAX_COLLAPSED_LINES = 10;
 const PREVIEW_MAX = 220;
+
+// Максимум символов одного сообщения в экспортном дайджесте: длинные тексты
+// (результаты инструментов, большие ответы) обрезаются, чтобы упаковать
+// разговор в минимальное число токенов для разбора сторонней ИИ-моделью.
+const EXPORT_SNIPPET_MAX = 400;
 
 export function Chatboard({
   chat,
@@ -25,6 +34,7 @@ export function Chatboard({
   busy,
   collapsed = false,
   onToggleCollapse,
+  thinking = false,
 }: {
   chat: ChatMsg[];
   // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3); рендерится
@@ -37,12 +47,24 @@ export function Chatboard({
   // и иконками статусов сообщений (доска занимает остальную ширину экрана).
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  // thinking — сообщение отправлено, модель ещё не начала печатать: показываем
+  // анимацию «думает» до прихода первого chat_delta, её сменяет живой пузырь.
+  thinking?: boolean;
 }) {
   useEffect(() => {
     if (!collapsed) {
       endRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [chat, live, endRef, collapsed]);
+
+  // Экспорт чата: компактный дайджест для передачи ИИ-модели на разбор
+  // (роли короткими префиксами, без времени; tool-вызовы — имя+статус).
+  const exportChat = () => {
+    if (chat.length === 0) {
+      return;
+    }
+    downloadText(`chat-${Date.now()}.txt`, chatForAI(chat));
+  };
 
   if (collapsed) {
     const counts: Record<string, number> = {};
@@ -68,8 +90,11 @@ export function Chatboard({
             <IconTool />
             <b>{counts.tool ?? 0}</b>
           </div>
-          {live && (
-            <div className="st live" title="Модель печатает…">
+          {(thinking || live) && (
+            <div
+              className="st live"
+              title={thinking && !live ? "Модель думает…" : "Модель печатает…"}
+            >
               <IconLive />
             </div>
           )}
@@ -95,11 +120,23 @@ export function Chatboard({
     <div className="chatboard">
       <div className="headbar">
         <span className="head-title">Чат</span>
-        {onToggleCollapse && (
-          <button className="collapse-btn" onClick={onToggleCollapse} title="Свернуть чат влево">
-            «
-          </button>
-        )}
+        <div className="abar">
+          {chat.length > 0 && (
+            <button
+              className="ab"
+              onClick={exportChat}
+              title="Экспорт чата в сокращённый формат для передачи ИИ-модели"
+            >
+              <IconDownload />
+              Экспорт
+            </button>
+          )}
+          {onToggleCollapse && (
+            <button className="collapse-btn" onClick={onToggleCollapse} title="Свернуть чат влево">
+              «
+            </button>
+          )}
+        </div>
       </div>
 
       <ul className="history">
@@ -117,6 +154,15 @@ export function Chatboard({
             <p className="content">
               {live.content}
               <span className="cursor">…</span>
+            </p>
+          </li>
+        )}
+        {thinking && !live && (
+          <li className="msg assistant thinking" aria-label="Модель думает">
+            <span className="who">assistant</span>
+            <p className="content typing">
+              <IconLive />
+              <span className="hint">думаю…</span>
             </p>
           </li>
         )}
@@ -240,6 +286,37 @@ function previewOf(text: string): string {
   return t.length > PREVIEW_MAX ? t.slice(0, PREVIEW_MAX) + "…" : t;
 }
 
+// Компактное представление чата для передачи ИИ-модели на разбор. Формат
+// минимизирует токены: короткие префиксы ролей, без времени и служебных полей,
+// tool-вызовы — одной строкой «имя + статус», длинные сообщения обрезаются.
+function chatForAI(msgs: ChatMsg[]): string {
+  const out: string[] = ["== чат =="];
+  for (const m of msgs) {
+    const role = (m.role ?? "").toLowerCase();
+    const text = (m.content ?? "").trim();
+    if (role === "tool") {
+      out.push(`T:${m.tool ?? "tool"}${m.ok === false ? " err" : m.ok === true ? " ok" : ""}`);
+      continue;
+    }
+    if (!text) {
+      continue;
+    }
+    const tag =
+      role === "user"
+        ? "U"
+        : role === "assistant"
+          ? "A"
+          : role === "status"
+            ? "S"
+            : role === "system"
+              ? "SY"
+              : "M";
+    const body = text.length > EXPORT_SNIPPET_MAX ? text.slice(0, EXPORT_SNIPPET_MAX) + "…" : text;
+    out.push(`${tag}: ${body}`);
+  }
+  return out.join("\n");
+}
+
 // Иконки статусов для свёрнутой полоски (inline-SVG, без эмодзи).
 function IconUser() {
   return (
@@ -276,6 +353,16 @@ function IconLive() {
       <circle cx="4" cy="4" r="3" opacity="0.4" />
       <circle cx="12" cy="4" r="3" opacity="0.7" />
       <circle cx="20" cy="4" r="3" />
+    </svg>
+  );
+}
+
+function IconDownload() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12" />
+      <path d="M6 11l6 6 6-6" />
+      <path d="M3 21h18" />
     </svg>
   );
 }

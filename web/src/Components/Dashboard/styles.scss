@@ -77,4 +77,99 @@
     color: var(--muted, #94a3b8);
     padding: 20px 0;
   }
+
+  // Свёрнутый режим: тонкая вертикальная полоска справа (аналог чат-полоски
+  // слева) с кнопкой разворота и метриками доски.
+  &.collapsed {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    height: 100%;
+    width: 100%;
+    background: var(--card, #fff);
+
+    .expand {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      background: var(--btn, #f1f5f9);
+      color: var(--muted, #8a94a6);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--btn-hover, #e2e8f0);
+        color: var(--primary, #2563eb);
+      }
+    }
+
+    .dstrip {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+      overflow-y: auto;
+
+      .st {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--line, #e2e8f0);
+        border-radius: 8px;
+        background: var(--btn, #f1f5f9);
+        color: var(--muted, #8a94a6);
+
+        b {
+          font-size: 9px;
+          font-weight: 700;
+          font-variant-numeric: tabular-nums;
+          line-height: 1;
+        }
+
+        &.epic {
+          color: var(--primary, #2563eb);
+        }
+        &.task {
+          color: var(--st-in-progress, #2563eb);
+        }
+        &.bug {
+          color: var(--err, #dc2626);
+        }
+
+        // Разбивка задач по статусам — цвет копирует колонки доски.
+        &.new {
+          color: var(--st-todo, #64748b);
+        }
+        &.analysis {
+          color: var(--st-analysis, #7c3aed);
+        }
+        &.ready {
+          color: var(--st-ready, #0891b2);
+        }
+        &.in_progress {
+          color: var(--st-in-progress, #2563eb);
+        }
+        &.done {
+          color: var(--st-done, #15803d);
+        }
+        &.cancelled {
+          color: var(--muted, #8a94a6);
+        }
+      }
+
+      &.hint {
+        color: var(--muted, #94a3b8);
+        font-size: 12px;
+      }
+    }
+  }
 }

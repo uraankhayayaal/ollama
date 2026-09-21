@@ -1,6 +1,7 @@
 package forges
 
 import (
+	"errors"
 	"net/url"
 	"sort"
 	"strconv"
@@ -61,6 +62,29 @@ type MergeRequestOptions struct {
 	Title string `json:"title"`
 	// Description — описание (легенда правки, итог кратко).
 	Description string `json:"description"`
+}
+
+// MergeRequestInfo — описание существующего Merge/Pull Request (Ф-5):
+// ссылка и текущее состояние. Используется сверкой «есть ли MR по ветке»
+// при открытии дашборда, когда сам MR мог быть создан и вне нашего UI.
+type MergeRequestInfo struct {
+	// URL — ссылка на MR/PR в web-интерфейсе хостинга.
+	URL string
+	// State — состояние: open|merged|closed.
+	State string
+}
+
+// ErrNoMergeRequest — у ветки с заданными source/target нет открытого MR.
+var ErrNoMergeRequest = errors.New("merge request по ветке не найден")
+
+// MRStatusProvider — опциональный интерфейс форджа: поиск MR по паре
+// веток source/target. Не входит в базовый Forge, чтобы не ломать моки и
+// локальные реализации (LocalForge MR не знает): сервер делает type-assert.
+type MRStatusProvider interface {
+	// FindMergeRequest ищет MR с веткой-источником source / целью target
+	// (target может быть пустым для части провайдеров) и возвращает ссылку
+	// и состояние. ErrNoMergeRequest, если такого MR нет.
+	FindMergeRequest(source, target string) (*MergeRequestInfo, error)
 }
 
 // DetectType определяет тип провайдера по URL.

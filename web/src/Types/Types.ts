@@ -34,6 +34,9 @@ export interface EpicRow {
   architecture_summary: string;
   created_at: string;
   updated_at: string;
+  // Релизная ветка эпика (git-workflow Ф-1, префикс ai/epic/<id>). Пусто, пока
+  // ветка не создана.
+  git_branch?: string;
 }
 
 export interface TaskRow {
@@ -48,6 +51,8 @@ export interface TaskRow {
   assignee: string;
   created_at: string;
   updated_at: string;
+  // Фича-ветка задачи (git-workflow Ф-1, префикс ai/task/<id>).
+  git_branch?: string;
 }
 
 export interface BugRow {
@@ -127,6 +132,26 @@ export interface BoardView {
   bugs: BugRow[];
   // Полные счётчики (Ф-3): заполняются при пагинации (limit/offset) или всегда.
   total?: { epics: number; tasks: number; bugs: number };
+  // git-статус проекта (ветки/MR эпиков и задач, Ф-5): заполняется только для
+  // git-проектов с созданными ветками, иначе undefined.
+  git?: GitView;
+}
+
+// Один эпик/задача в git-статусе (Ф-5): ветка + опциональный MR.
+export interface GitLinkView {
+  branch?: string; // имя ветки (ai/epic/… или ai/task/…)
+  branch_url?: string; // web-ссылка на ветку на хостинге
+  target?: string; // ветка, в которую вливается MR (main/ветка эпика)
+  mr_url?: string; // ссылка на MR/PR (если создан)
+  mr_state?: string; // open|merged|closed|"" (неизвестно)
+}
+
+// git-статус всего проекта в снимке доски (Ф-5).
+export interface GitView {
+  base?: string; // базовая ветка (main)
+  base_url?: string; // web-ссылка на базовую ветку
+  epics?: Record<string, GitLinkView>; // epic_id → ветка/MR
+  tasks?: Record<string, GitLinkView>; // task_id → ветка/MR
 }
 
 // Сообщение чата (тип события chat; история — тот же формат).
@@ -189,9 +214,12 @@ export interface LogMessage {
 }
 
 // Счётчик токенов проекта (GET /api/projects/:id/tokens и WS type=tokens):
-// накопленные за время жизни проекта входные (in) и выходные (out) токены.
-// Проект может использовать разные LLM — суммы общие для всех раундов.
+// накопленные за время жизни проекта входные (in) и выходные (out) токены, а
+// также последняя реальная скорость генерации (tps, вых. ток/с) из usage
+// провайдера. Проект может использовать разные LLM — суммы общие для всех
+// раундов.
 export interface ProjectTokens {
   in: number;
   out: number;
+  tps?: number;
 }

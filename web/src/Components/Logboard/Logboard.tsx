@@ -7,10 +7,15 @@
 //
 // Real-time: строки из live-через WebSocket-_connection_ актуализируются
 // мгновенно. Потоковые строки приходят через props.logLines.
+//
+// Верхний action-bar: «Копировать» — все логи в буфер обмена, «Экспорт» —
+// скачивание всех логов файлом (содержимое файлов из REST-снапшота, с учётом
+// ещё не вошедших в снапшот потоковых строк).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { projectLogs } from "@/Api";
 import type { LogsView } from "@/Types";
+import { downloadText, safeName } from "@/download";
 import "./styles.scss";
 
 export interface LogboardProps {
@@ -28,6 +33,8 @@ export function Logboard(props: LogboardProps) {
   const [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Признак «только что скопировали логи» — для краткой фидбеков надписи.
+  const [copied, setCopied] = useState(false);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -102,6 +109,18 @@ export function Logboard(props: LogboardProps) {
     setLines(entry.content.split("\n"));
   }, [logs, selected]);
 
+  // Свежий REST-снапшот включает все потоковые строки, известные на его момент:
+  // помечаем их потреблёнными для КАЖДОГО файла, чтобы экспорт/копирование
+  // не задвоили уже вошедшие в снапшот строки неоткрытых файлов. Эффект
+  // зависит только от `logs` (приход снапшота), поэтому счётчики растут
+  // синхронно с фактическим содержанием файлов на диске.
+  useEffect(() => {
+    if (!logs) return;
+    for (const f of logs.files) {
+      consumed.current.set(f.name, logLinesRef.current.get(f.name)?.length ?? 0);
+    }
+  }, [logs]);
+
   // Новые строки из потока — дописываем только невиданный хвост.
   useEffect(() => {
     if (!selected) return;
@@ -120,11 +139,64 @@ export function Logboard(props: LogboardProps) {
     scrollToBottom();
   }, [lines, scrollToBottom]);
 
+  const hasLogs = !!logs && logs.files.length > 0;
+
+  // Текущее содержимое файла лога: для выбранного — уже слитый живой буфер
+  // (`lines`), для остальных — REST-снапшот + хвост, не вошедший в снапшот.
+  const fileLogText = (name: string): string => {
+    if (!logs) return "";
+    const entry = logs.files.find((f) => f.name === name);
+    if (!entry) return "";
+    if (name === selected) {
+      return lines.join("\n");
+    }
+    const snap = entry.content.split("\n");
+    const stream = props.logLines.get(name) ?? [];
+    const done = consumed.current.get(name) ?? 0;
+    return [...snap, ...stream.slice(done)].join("\n");
+  };
+
+  // Полный дайджест «все логи»: каждый файл со своим заголовком.
+  const allLogsText = (): string => {
+    if (!logs) return "";
+    return logs.files.map((f) => `===== ${f.name} =====\n${fileLogText(f.name)}`).join("\n\n");
+  };
+
+  const onCopyAll = async () => {
+    const text = allLogsText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Не удалось скопировать логи в буфер обмена");
+    }
+  };
+
+  const onExportAll = () => {
+    const text = allLogsText();
+    if (!text) return;
+    downloadText(`logs-${safeName(props.project)}.txt`, text);
+  };
+
   return (
     <div className={"logboard" + (props.showLogboard === false ? " hidden" : "")}>
       {props.toggleLogboard && (
         <div className="head title-head">
           <p className="hint">Логи</p>
+          <div className="abar">
+            {hasLogs && (
+              <button className="ab" onClick={() => void onCopyAll()} title="Скопировать все логи в буфер обмена">
+                <IconCopy />
+                {copied ? "Скопировано" : "Копировать"}
+              </button>
+            )}
+            <button className="ab" onClick={onExportAll} disabled={!hasLogs} title="Скачать все логи файлом">
+              <IconDownload />
+              Экспорт
+            </button>
+          </div>
           <button className="btn close" onClick={props.toggleLogboard} title="Свернуть окно">
             ×
           </button>
@@ -223,4 +295,25 @@ function fmtErr(err: unknown): string {
     return String((err as { message: unknown }).message);
   }
   return String(err ?? "Ошибка");
+}
+
+// Иконка «скачать» для кнопки экспорта (action-bar).
+function IconDownload() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12" />
+      <path d="M6 11l6 6 6-6" />
+      <path d="M3 21h18" />
+    </svg>
+  );
+}
+
+// Иконка «копировать» для кнопки копирования (action-bar).
+function IconCopy() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
 }

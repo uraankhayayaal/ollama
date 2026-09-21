@@ -46,10 +46,15 @@ type Info struct {
 	GitBranches *GitBranchMap `json:"git_branches,omitempty"`
 	// GitResolving — активный процесс решения конфликтов эпика (Ф-4):
 	// «main → релизная ветка» выполняется в постоянном конфликтном worktree,
-	// файлы правит модель/inструмент, финализирует POST .../epics/:eid/resolve.
+	// файлы правит модель/instrument, финализирует POST .../epics/:eid/resolve.
 	// Наличие записи блокирует повторный rebase и отмечает состояние в UI.
 	GitResolving *EpicResolve `json:"git_resolving,omitempty"`
-	CreatedAt    time.Time    `json:"created_at"`
+	// GitMergeRequests — side-реестр MR/PR эпиков и задач (Ф-5): epic_id/task_id
+	// → {url, source, target, state}. Заполняется при создании MR кнопкой
+	// модалки и уточняется фоновой сверкой с форджем. Пустой (nil) — MR ещё
+	// нет ни у кого.
+	GitMergeRequests *MergeRequestMap `json:"git_merge_requests,omitempty"`
+	CreatedAt        time.Time        `json:"created_at"`
 }
 
 // AddParams — параметры регистрации нового проекта.

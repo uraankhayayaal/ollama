@@ -61,6 +61,9 @@ type Usage struct {
 	InputTokens int
 	// OutputTokens — токены, сгенерированные моделью в ответ.
 	OutputTokens int
+	// OutputTPS — реальная скорость генерации (вых. ток/с), когда провайдер
+	// её сообщает (Ollama eval_count/eval_duration); 0, если неизвестна.
+	OutputTPS float64
 }
 
 // ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели.
@@ -584,6 +587,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// эвристическую оценку по истории и ответу. Событие уходит в репортёр
 		// (Web UI) для живой трансляции в шину проекта.
 		in, out := EstimateUsage(messages, reply)
+		var tps float64
 		if u := reply.Usage; u != nil {
 			if u.InputTokens > 0 {
 				in = u.InputTokens
@@ -591,9 +595,11 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			if u.OutputTokens > 0 {
 				out = u.OutputTokens
 			}
+			// Реальная скорость генерации, когда провайдер её сообщает.
+			tps = u.OutputTPS
 		}
 		if rep != nil && (in > 0 || out > 0) {
-			rep.OnTokens(int64(in), int64(out))
+			rep.OnTokens(int64(in), int64(out), tps)
 		}
 
 		if rep != nil {

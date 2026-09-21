@@ -167,6 +167,64 @@ func readFramePayload(t *testing.T, r io.Reader) []byte {
 	return body
 }
 
+// TestSessionSnapshotDeliversStateRightAfterSubscribe проверяет механизм А:
+// broadcastSnapshot публикует клиенту актуальное состояние сессии
+// (status + board + tokens) сразу после WS-подключения. Раньше клиент ждал
+// первого события статуса — проект с уже идущей оркестрацией при
+// открытии/рефреше показывал бы устаревший «idle».
+func TestSessionSnapshotDeliversStateRightAfterSubscribe(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	sess, _, err := srv.getOrCreate("snap-proj")
+	if err != nil {
+		t.Fatalf("getOrCreate: %v", err)
+	}
+	// Имитируем идущую оркестрацию: снапшот обязан сообщить running.
+	sess.mu.Lock()
+	sess.running = true
+	sess.mu.Unlock()
+
+	srvConn, cliConn := net.Pipe()
+	defer cliConn.Close()
+	ws := &WsConn{conn: srvConn, br: bufio.NewReader(srvConn), closed: make(chan struct{})}
+	t.Cleanup(func() { _ = ws.Close() })
+	srv.hub.Subscribe("snap-proj", ws)
+
+	sess.broadcastSnapshot()
+
+	got := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		var ev struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(readFramePayload(t, cliConn), &ev); err != nil {
+			t.Fatalf("кадр %d: %v", i, err)
+		}
+		got[ev.Type] = true
+		if ev.Type == "status" {
+			var st struct {
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal(ev.Payload, &st); err != nil {
+				t.Fatalf("status payload: %v", err)
+			}
+			if st.Status != "running" {
+				t.Fatalf("status = %q, want running", st.Status)
+			}
+		}
+	}
+	for _, typ := range []string{"status", "board", "tokens"} {
+		if !got[typ] {
+			t.Fatalf("снапшот не содержит событие %q", typ)
+		}
+	}
+
+	sess.mu.Lock()
+	sess.running = false
+	sess.mu.Unlock()
+}
+
 // --- Server REST ---
 
 func newTestServer(t *testing.T) (*Server, http.Handler, *miniredis.Miniredis) {

@@ -96,6 +96,45 @@ body {
   }
 }
 
+// Action-bar (общий для Чата и Логов): кластер компактных кнопок-действий
+// в шапке панели. Используется из Chatboard (головной .headbar) и Logboard
+// (головной .head).
+.abar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+
+  .ab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: var(--btn, #f1f5f9);
+    color: var(--muted, #8a94a6);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+
+    svg {
+      flex: 0 0 auto;
+    }
+
+    &:hover:not(:disabled) {
+      background: var(--btn-hover, #e2e8f0);
+      color: var(--ink, #1b2330);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+  }
+}
+
 // Строка статуса сессии под заголовком.
 .statusline {
   display: flex;
@@ -138,23 +177,35 @@ body {
   }
 }
 
-// Основная область: чат (30%) и доска (70%) видны одновременно; при
-// свёрнутом чате остаётся тонкая полоска слева (chat-strip).
+// Основная область: чат и доска видны одновременно, пропорцию меняет
+// разделительная ширма (.splitter); при схлопывании остаётся тонкая полоска
+// слева (.chat-strip) или справа (.dash-strip). Состояния взаимоисключающие.
 .panes {
   flex: 1;
   min-height: 0;
   display: flex;
+
+  // Во время перетаскивания ширмы запрещаем выделение текста.
+  &.dragging {
+    cursor: col-resize;
+    user-select: none;
+
+    .chat-pane,
+    .dash-pane {
+      pointer-events: none;
+    }
+  }
 }
 
+// Левая панель чата: ширина задаётся из JS (пропорция экрана при drag-ширме).
 .chat-pane {
-  flex: 0 0 30%;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 14px;
   overflow: hidden;
-  border-right: 1px solid var(--line);
   background: var(--card);
 }
 
@@ -165,14 +216,54 @@ body {
   border-right: 1px solid var(--line);
 }
 
+// Правая панель доски: занимает оставшуюся ширину.
 .dash-pane {
-  flex: 1 1 70%;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 14px;
   overflow: auto;
+}
+
+// Статусная колонка доски справа (аналог .chat-strip, зеркально).
+.dash-strip {
+  flex: 0 0 44px;
+  min-height: 0;
+  display: flex;
+  border-left: 1px solid var(--line);
+  background: var(--card);
+}
+
+// Разделительная ширма: перетаскивается, меняет пропорцию чат/доска.
+.splitter {
+  flex: 0 0 10px;
+  min-height: 0;
+  position: relative;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+
+  // Вертикальная линия-граница между панелями.
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    transform: translateX(-50%);
+    background: var(--line);
+    transition: background 0.15s ease, width 0.15s ease;
+  }
+
+  &:hover::before,
+  &.active::before {
+    width: 3px;
+    background: var(--primary, #2563eb);
+  }
 }
 
 // Плавающие кнопки открытия Diffboard / Logboard (справа внизу).

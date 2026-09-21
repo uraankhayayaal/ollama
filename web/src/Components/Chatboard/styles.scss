@@ -108,7 +108,7 @@
           color: var(--st-analysis, #7c3aed);
         }
 
-        // Индикатор «модель печатает»: три точки с пульсацией.
+        // Индикатор «модель печатает/думает»: три точки с пульсацией.
         &.live {
           border-style: dashed;
           color: var(--primary, #2563eb);
@@ -125,16 +125,6 @@
             }
           }
         }
-      }
-    }
-
-    @keyframes dotpulse {
-      0%,
-      100% {
-        opacity: 0.25;
-      }
-      50% {
-        opacity: 1;
       }
     }
   }
@@ -324,14 +314,61 @@
           color: var(--muted, #94a3b8);
         }
       }
+
+      // Анимация «модель думает»: сообщение отправлено, но первый фрагмент ещё
+      // не пришёл. Три пульсирующие точки + подпись; после chat_delta её
+      // сменяет живой пузырь .streaming.
+      &.thinking {
+        border-style: dashed;
+        background: #eef2ff;
+        border-color: #c7d2fe;
+
+        .who {
+          color: var(--primary, #2563eb);
+        }
+
+        .content.typing {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 0;
+
+          .hint {
+            font-size: 12px;
+            font-style: italic;
+            color: var(--muted, #8a94a6);
+          }
+        }
+
+        .dots circle {
+          animation: dotpulse 1.2s ease-in-out infinite;
+
+          &:nth-child(2) {
+            animation-delay: 0.2s;
+          }
+          &:nth-child(3) {
+            animation-delay: 0.4s;
+          }
+        }
+      }
     }
   }
 
-  @keyframes blink {
-    50% {
-      opacity: 0;
-    }
+@keyframes dotpulse {
+  0%,
+  100% {
+    opacity: 0.25;
   }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
 
   .send {
     display: flex;

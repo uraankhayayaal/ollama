@@ -196,6 +196,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/rebase", s.handleEpicRebase)
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/resolve", s.handleEpicResolve)
 	mux.HandleFunc("GET /api/projects/{id}/epics/{eid}/resolve", s.handleResolveStatus)
+	// Git-workflow (Ф-5): «Создать MR» — push ветки эпика/задачи в remote и MR.
+	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/mr", s.handleCreateEpicMR)
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/mr", s.handleCreateTaskMR)
 
 	// Логи проекта (панель «Логи», см. logs.go).
 	mux.HandleFunc("GET /api/projects/{id}/logs", s.handleGetLogs)
@@ -243,8 +246,11 @@ func (s *Server) session(project string) *Session {
 
 // --- утилиты ---
 
-// projectMeta собирает ProjectMeta для REST API.
-func projectMeta(inf workspace.Info, meta *board.Meta, running, gating bool) map[string]any {
+// computeStatus собирает статус проекта из состояния оркестрации и доски.
+// Единая точка правды: используется и в projectMeta (REST), и в снапшоте
+// сессии при WS-подключении (server/session.go), чтобы клиент всегда видел
+// одно и то же состояние.
+func computeStatus(running, gating bool, meta *board.Meta) string {
 	status := "idle"
 	if running {
 		status = "running"
@@ -262,6 +268,12 @@ func projectMeta(inf workspace.Info, meta *board.Meta, running, gating bool) map
 			}
 		}
 	}
+	return status
+}
+
+// projectMeta собирает ProjectMeta для REST API.
+func projectMeta(inf workspace.Info, meta *board.Meta, running, gating bool) map[string]any {
+	status := computeStatus(running, gating, meta)
 	out := map[string]any{
 		"project_name": inf.Name,
 		"kind":         inf.Kind,
@@ -504,6 +516,8 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 	if sess := s.session(project); sess != nil {
 		snap, err := boardViewPage(ctx, sess.board, limit, offset)
 		if err == nil {
+			snap.Git = s.gitStatus(project, snap.Epics, snap.Tasks)
+			s.reconcileMRsAsync(project)
 			writeJSON(w, http.StatusOK, snap)
 			return
 		}
@@ -521,6 +535,8 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
 		return
 	}
+	snap.Git = s.gitStatus(project, snap.Epics, snap.Tasks)
+	s.reconcileMRsAsync(project)
 	writeJSON(w, http.StatusOK, snap)
 }
 
@@ -639,7 +655,8 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
-// handleGetTokens возвращает накопленные токены проекта (вход/выход).
+// handleGetTokens возвращает накопленные токены проекта (вход/выход) и
+// последнюю скорость генерации (вых. ток/с).
 func (s *Server) handleGetTokens(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	sess, _, err := s.getOrCreate(project)
@@ -652,7 +669,10 @@ func (s *Server) handleGetTokens(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, tokenEvent{Input: in, Output: out})
+	sess.mu.Lock()
+	rate := sess.rate
+	sess.mu.Unlock()
+	writeJSON(w, http.StatusOK, tokenEvent{Input: in, Output: out, TPS: rate})
 }
 
 // --- REST: HITL ---
@@ -812,6 +832,9 @@ func (s *Server) removeTaskBranch(project, taskID string) {
 	if err := s.reg.DeleteTaskBranch(project, taskID); err != nil {
 		logging.For(project).Warnf("gitflow: снятие ветки задачи %s: %v", taskID, err)
 	}
+	if err := s.reg.DeleteTaskMR(project, taskID); err != nil {
+		logging.For(project).Warnf("gitflow: снятие MR задачи %s: %v", taskID, err)
+	}
 }
 
 // handleDeleteEpic удаляет эпик вместе с его задачами. Допустимо только для
@@ -868,11 +891,21 @@ func (s *Server) handleListBugs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bugs)
 }
 
-// kickBoard публикует снимок доски (если есть сессия).
+// kickBoard публикует снимок доски. Когда оркестрация идёт — только тик для
+// boardFlusher (он сам опубликует в течение 500 мс). Вне оркестрации флашер
+// не крутится, и тик никто бы не дренул: публикуем снимок сразу, иначе UI
+// не увидит обновлений от кнопок «Создать ветку/MR», «Залить в main» (Ф-5).
 func (s *Server) kickBoard(project string) {
 	sess := s.session(project)
-	if sess != nil {
-		sess.kickBoard()
+	if sess == nil {
+		return
+	}
+	sess.kickBoard()
+	sess.mu.Lock()
+	running := sess.running
+	sess.mu.Unlock()
+	if !running {
+		sess.publishBoardNow()
 	}
 }
 
@@ -886,4 +919,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return // ошибка уже отправлена клиенту
 	}
 	s.hub.Subscribe(project, conn)
+	// Снапшот текущего состояния: клиент сразу видит актуальные status/board/
+	// tokens (а не устаревший idle), даже если оркестрация уже идёт.
+	// getOrCreate: сессия обязана существовать, пока открыт дашборд — иначе
+	// kickBoard (кнопки «ветка/MR/релиз» в UI) некому публиковать после
+	// перезапуска сервера, и доска в браузере останется устаревшей (Ф-5).
+	if sess, _, err := s.getOrCreate(project); err == nil {
+		sess.broadcastSnapshot()
+	}
+	// Ф-5: при открытии дашборда асинхронно сверяем MR с форджем (ветки,
+	// созданные вне UI, и статусы merged/closed у отслеживаемых).
+	s.reconcileMRsAsync(project)
 }
