@@ -43,6 +43,10 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 		// деградирует в skipped (как у планировщика).
 		ragClient := rag.NewClientSafe(rag.Config{})
 		asst := chatassist.NewAssistantInDir(dir, sess.project, prompt, sess.board, ragClient)
+		// Ф-3: мосты-инструменты к серверным git/канбан-действиям живут вне
+		// общего реестра tools (цикл импортов) — инъектируем их в набор
+		// ассистента на стороне сервера.
+		asst.AddTools(sess.serverActionTools()...)
 		// Репортёр в контексте диалога: ответ ассистента и потребление токенов
 		// транслируются в живую шину (type=chat_delta/chat, type=tokens), иначе
 		// счётчик токенов чата остаётся на нулях.

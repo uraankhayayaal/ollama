@@ -181,25 +181,25 @@ DELETE /api/projects/{id}/tasks/{tid}   — удалить задачу (обр�
       если недоступно — честно предупредить, что отвечаешь из знаний»
 
 ### Ф-3 — Действия на сайте: delete-task REST + мост к git/канбан
-- [ ] REST `DELETE /api/projects/{id}/tasks/{tid}` (CSRF-мутация) →
+- [x] REST `DELETE /api/projects/{id}/tasks/{tid}` (CSRF-мутация) →
       `board.DeleteTask` → `sess.kickBoard`; тесты server (hermetic)
-- [ ] `server/actions.go`: инструменты-мостья `KanbanStart/EpicRelease/
+- [x] `server/actions.go`: инструменты-мостья `KanbanStart/EpicRelease/
       TaskMerge/BranchReject` через `ActionsBackend` (реализует `Session`);
       деструктивные — с проверкой подтверждения
-- [ ] `agents/chatassist`: инструменты-действия в наборе + правило
+- [x] `agents/chatassist`: инструменты-действия в наборе + правило
       «подтверди перед удалением/reject/release/merge»
-- [ ] Тесты: «удали задачу #12» → сначала вопрос-подтверждение, на «да» →
+- [x] Тесты: «удали задачу #12» → сначала вопрос-подтверждение, на «да» →
       DELETE-REST; «запусти канбан по эпику» → continue; «откати ветку» →
       reject-branch; «залей в main» после «да» → release
-- [ ] Полировка промпта: стратегия неоднозначности (уточняющий вопрос вместо
+- [x] Полировка промпта: стратегия неоднозначности (уточняющий вопрос вместо
       догадки)
 
 ### Ф-4 — Верификация и полировка
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go vet  . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `npm run build` (web/)
-- [ ] Ручной E2E на реальном git-проекте: «создай эпик порт на Rust» →
+- [x] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go vet  . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `npm run build` (web/)
+- [x] Ручной E2E на реальном git-проекте: «создай эпик порт на Rust» →
       эпик на доске; «заведи баг» → баг; «удали задачу» → подтверждение → удалена;
       «залей в main» → подтверждение → release; `go run . serve` + UI-чат
 

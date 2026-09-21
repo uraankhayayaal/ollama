@@ -176,6 +176,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
+	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}", s.handleDeleteTask)
 	mux.HandleFunc("DELETE /api/projects/{id}/epics/{eid}", s.handleDeleteEpic)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
@@ -594,27 +595,14 @@ func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 	// (задачи добавлены чатом/вручную до первого запуска) — берём обобщённое
 	// описание доски. Пустая доска продолжать нечего — проверяем до резолва
 	// провайдера, чтобы «нечего продолжать» не зависело от наличия LLM.
-	taskText := ""
-	meta, merr := sess.board.GetMeta(ctx)
-	if merr == nil && meta != nil {
-		taskText = meta.Task
-	}
-	if taskText == "" {
-		epics, eerr := sess.board.ListEpics(ctx)
-		if eerr != nil {
-			writeErr(w, http.StatusInternalServerError, "чтение доски: "+eerr.Error())
+	taskText, err := sess.continueTaskText(ctx)
+	if err != nil {
+		if errors.Is(err, errEmptyBoard) {
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		tasks, terr := sess.board.ListTasks(ctx)
-		if terr != nil {
-			writeErr(w, http.StatusInternalServerError, "чтение задач: "+terr.Error())
-			return
-		}
-		if len(epics) == 0 && len(tasks) == 0 {
-			writeErr(w, http.StatusBadRequest, "на доске нет задач — добавьте задачу через чат или на доску")
-			return
-		}
-		taskText = "Продолжить работу над задачами доски"
+		writeErr(w, http.StatusInternalServerError, "чтение доски: "+err.Error())
+		return
 	}
 
 	prov, err := s.provider()
@@ -780,6 +768,50 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	// Публикуем обновлённую доску.
 	s.kickBoard(project)
 	writeJSON(w, http.StatusOK, t)
+}
+
+// handleDeleteTask удаляет задачу с доски (Ф-3). Задачи в работе/done/cancelled
+// удалять нельзя — Store.DeleteTask вернёт ошибку. Для git-проектов снимается
+// и запись ветки задачи из side-реестра.
+func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	taskID := r.PathValue("tid")
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	if err := store.DeleteTask(r.Context(), taskID); err != nil {
+		if errors.Is(err, board.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "задача не найдена")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Git-workflow (Ф-1): снимаем из side-реестра ветку задачи.
+	s.removeTaskBranch(project, taskID)
+
+	// Публикуем обновлённую доску.
+	s.kickBoard(project)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// removeTaskBranch снимает из side-реестра ветку задачи git-проекта (Ф-3).
+// No-op для не-git проектов и незаведённых веток — несуществующую ветку
+// реестр и так не возвращает.
+func (s *Server) removeTaskBranch(project, taskID string) {
+	inf, err := s.reg.Get(project)
+	if err != nil || inf.Kind != workspace.KindGit {
+		return
+	}
+	if err := s.reg.DeleteTaskBranch(project, taskID); err != nil {
+		logging.For(project).Warnf("gitflow: снятие ветки задачи %s: %v", taskID, err)
+	}
 }
 
 // handleDeleteEpic удаляет эпик вместе с его задачами. Допустимо только для

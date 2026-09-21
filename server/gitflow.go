@@ -255,89 +255,108 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	epicID := r.PathValue("eid")
 
-	inf, err := s.reg.Get(project)
+	res, source, main, err := s.releaseEpic(r.Context(), project, epicID)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "проект не найден")
-		return
-	}
-	if inf.Kind != workspace.KindGit {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("«Залить в main» доступно только git-проектам (kind=%s)", inf.Kind))
-		return
-	}
-	main := strings.TrimSpace(inf.GitBase)
-	if main == "" {
-		writeErr(w, http.StatusBadRequest, "у проекта не задана базовая ветка (git_base)")
-		return
-	}
-
-	repo, err := s.repoOf(r.Context(), project)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	store, err := s.boardStore(r.Context(), project)
-	if err != nil {
-		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
-		return
-	}
-	defer store.Close()
-	epic, err := store.GetEpic(r.Context(), epicID)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "эпик не найден")
-		return
-	}
-	if epic.Status != board.StatusDone {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("«Залить в main» доступен только эпику со статусом done (сейчас %s)", epic.Status))
-		return
-	}
-
-	epicRef, err := s.reg.EpicBranch(project, epicID)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("сначала создайте ветку эпика %s: %v", epicID, err))
-		return
-	}
-
-	lock := s.mergeLock(project)
-	lock.Lock()
-	defer lock.Unlock()
-
-	res, err := repo.MergeFeature(r.Context(), main, epicRef.Branch, gitops.MergeFeatureOptions{
-		Message: fmt.Sprintf("эпик %s: релиз в main из %s", epicID, epicRef.Branch),
-		PushURL: remotePushURL(inf),
-	})
-	if err != nil {
-		var ce *gitops.MergeConflictError
-		if errors.As(err, &ce) {
+		var ae *apiError
+		if !errors.As(err, &ae) {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ae.mce != nil {
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"status":  "conflicts",
-				"files":   ce.Files,
-				"message": ce.Error(),
+				"files":   ae.mce.Files,
+				"message": ae.mce.Error(),
 			})
 			return
 		}
-		writeErr(w, http.StatusBadGateway, err.Error())
+		writeErr(w, ae.code, ae.msg)
 		return
 	}
 
 	logging.For(project).Infof("gitflow: эпик %s → main: релизная ветка %s влита (already=%v)",
-		epicID, epicRef.Branch, res.AlreadyMerged)
+		epicID, source, res.AlreadyMerged)
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
-			fmt.Sprintf("Эпик %s: релизная ветка %s влита в main (%s)", epicID, epicRef.Branch, main),
+			fmt.Sprintf("Эпик %s: релизная ветка %s влита в main (%s)", epicID, source, main),
 			"", "", nil)
 	}
 	s.kickBoard(project)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
 		"branch":         main,
-		"source":         epicRef.Branch,
+		"source":         source,
 		"message":        res.Message,
 		"already_merged": res.AlreadyMerged,
 	})
+}
+
+// releaseEpic вливает релизную ветку эпика в базовую (main) — общая механика
+// REST-эндпоинта «Залить в main» и моста-инструмента ассистента EpicRelease
+// (Ф-3). Ошибки возвращаются с HTTP-кодом (apiError), чтобы оба потребителя
+// отвечали одинаково; конфликт слияния дополнительно несёт *MergeConflictError
+// для ответа status=conflicts с файлами.
+func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*gitops.MergeResult, string, string, error) {
+	inf, err := s.reg.Get(project)
+	if err != nil {
+		return nil, "", "", &apiError{code: http.StatusNotFound, msg: "проект не найден"}
+	}
+	if inf.Kind != workspace.KindGit {
+		return nil, "", "", &apiError{
+			code: http.StatusBadRequest,
+			msg:  fmt.Sprintf("«Залить в main» доступно только git-проектам (kind=%s)", inf.Kind),
+		}
+	}
+	main := strings.TrimSpace(inf.GitBase)
+	if main == "" {
+		return nil, "", "", &apiError{code: http.StatusBadRequest, msg: "у проекта не задана базовая ветка (git_base)"}
+	}
+
+	repo, err := s.repoOf(ctx, project)
+	if err != nil {
+		return nil, "", "", &apiError{code: http.StatusBadRequest, msg: err.Error()}
+	}
+
+	store, err := s.boardStore(ctx, project)
+	if err != nil {
+		return nil, "", "", &apiError{code: http.StatusServiceUnavailable, msg: "доска недоступна: " + err.Error()}
+	}
+	defer store.Close()
+	epic, err := store.GetEpic(ctx, epicID)
+	if err != nil {
+		return nil, "", "", &apiError{code: http.StatusNotFound, msg: "эпик не найден"}
+	}
+	if epic.Status != board.StatusDone {
+		return nil, "", "", &apiError{
+			code: http.StatusBadRequest,
+			msg:  fmt.Sprintf("«Залить в main» доступен только эпику со статусом done (сейчас %s)", epic.Status),
+		}
+	}
+
+	epicRef, err := s.reg.EpicBranch(project, epicID)
+	if err != nil {
+		return nil, "", "", &apiError{
+			code: http.StatusBadRequest,
+			msg:  fmt.Sprintf("сначала создайте ветку эпика %s: %v", epicID, err),
+		}
+	}
+
+	lock := s.mergeLock(project)
+	lock.Lock()
+	defer lock.Unlock()
+
+	res, err := repo.MergeFeature(ctx, main, epicRef.Branch, gitops.MergeFeatureOptions{
+		Message: fmt.Sprintf("эпик %s: релиз в main из %s", epicID, epicRef.Branch),
+		PushURL: remotePushURL(inf),
+	})
+	if err != nil {
+		var ce *gitops.MergeConflictError
+		if errors.As(err, &ce) {
+			return nil, "", "", &apiError{code: http.StatusConflict, msg: ce.Error(), mce: ce}
+		}
+		return nil, "", "", &apiError{code: http.StatusBadGateway, msg: err.Error()}
+	}
+	return res, epicRef.Branch, main, nil
 }
 
 // epicBranch возвращает имя релизной ветки эпика задачи из side-реестра
@@ -472,3 +491,15 @@ func (s *Server) deleteEpicBranches(project, epicID string, epicTasks []string) 
 		}
 	}
 }
+
+// apiError — ошибка REST-хендлера с HTTP-кодом: единый носитель «каким кодом
+// ответить» для общих ядер REST и мостов-инструментов ассистента (Ф-3).
+// mce заполняется только при конфликте слияния — REST-потребитель отдаёт
+// тогда status=conflicts с перечнем файлов (вход инструмента резолва Ф-4).
+type apiError struct {
+	code int
+	msg  string
+	mce  *gitops.MergeConflictError
+}
+
+func (e *apiError) Error() string { return e.msg }

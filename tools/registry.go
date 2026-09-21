@@ -40,6 +40,25 @@ func Select(names []string, deps Deps) *Set {
 	return s
 }
 
+// Add дополняет набор инструментами вне общего реестра (например,
+// мосты-инструменты к серверным действиям, Ф-3: server не может объявить их в
+// реестре этого пакета из-за цикла импортов). Уже присутствующие имена не
+// дублируются, соответствие «инструмент не из реестра, вызван в Execute» —
+// обычный поимённый диспетч.
+func (s *Set) Add(tools ...Tool) {
+	if s.byName == nil {
+		s.byName = make(map[string]Tool, len(tools))
+	}
+	for _, t := range tools {
+		name := t.Name()
+		if _, ok := s.byName[name]; ok {
+			continue
+		}
+		s.byName[name] = t
+		s.order = append(s.order, name)
+	}
+}
+
 // Get возвращает инструмент по имени и признак его наличия в наборе.
 func (s *Set) Get(name string) (Tool, bool) {
 	t, ok := s.byName[name]
