@@ -42,6 +42,10 @@ type Session struct {
 	// принять решение ДО того, как runner дошёл до затвора).
 	decide chan planner.GateDecision
 
+	// pendingAsk — активный структурированный вопрос ассистента (AskUser):
+	// один на сессию, блокирует агентский цикл до ответа на все вопросы.
+	pendingAsk *pendingAsk
+
 	router  *runevents.Router
 	chat    *chat.Store
 	board   *board.Store
@@ -383,7 +387,12 @@ type tokenEvent struct {
 
 // append пишет сообщение в чат (стяжку) и транслирует в шину (type=chat).
 func (sess *Session) append(role chat.Role, content, agent, tool string, ok *bool) {
-	m := chat.Message{Role: role, Content: content, Agent: agent, Tool: tool, OK: ok}
+	sess.appendMsg(chat.Message{Role: role, Content: content, Agent: agent, Tool: tool, OK: ok})
+}
+
+// appendMsg пишет произвольное сообщение (включая payload Ask для role=ask)
+// в чат и транслирует в шину (type=chat).
+func (sess *Session) appendMsg(m chat.Message) {
 	if _, err := sess.chat.Append(context.Background(), m); err != nil {
 		sess.log.Warnf("server: запись в чат %s: %v", sess.project, err)
 	}

@@ -1,0 +1,223 @@
+// Стили карточки структурированного вопроса (AskUser).
+// Согласованы с палитрой чата (см. Chatboard/styles.scss): те же CSS-переменные
+// (--card, --line, --btn, --primary, --add, --muted, --err).
+
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+
+  &.done {
+    padding: 6px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 10px;
+    background: var(--chat-agent, #f8fafc);
+  }
+
+  .ask-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+
+    .ask-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted, #94a3b8);
+    }
+
+    .back {
+      padding: 2px 8px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 6px;
+      background: var(--btn, #f1f5f9);
+      color: var(--muted, #8a94a6);
+      font-size: 11px;
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        background: var(--btn-hover, #e2e8f0);
+        color: var(--ink, #1b2330);
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    }
+  }
+
+  .ask-qtext {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
+    font-weight: 600;
+    word-break: break-word;
+  }
+
+  .ask-opts {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .opt {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      background: var(--card, #fff);
+      color: var(--ink, #1b2330);
+      font-size: 13px;
+      line-height: 1.35;
+      text-align: left;
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        border-color: var(--primary, #2563eb);
+      }
+
+      &:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+
+      .opt-label {
+        flex: 1;
+        word-break: break-word;
+      }
+
+      .opt-check {
+        flex: 0 0 auto;
+        color: var(--primary, #2563eb);
+        font-weight: 700;
+      }
+
+      // Предпочтительный вариант: рамка и бейдж «рекомендую».
+      &.rec {
+        border-color: #16a34a66;
+
+        .rec-badge {
+          flex: 0 0 auto;
+          padding: 1px 7px;
+          border-radius: 999px;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.02em;
+          background: var(--add, #16a34a);
+          color: #fff;
+        }
+      }
+
+      &.sel {
+        border-color: var(--primary, #2563eb);
+        background: #eef2ff;
+      }
+
+      &.custom {
+        border-style: dashed;
+      }
+    }
+  }
+
+  .ask-custom {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+
+    input {
+      flex: 1;
+      min-width: 0;
+      padding: 7px 10px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      font-size: 13px;
+
+      &:focus-visible {
+        outline: 2px solid var(--primary, #2563eb);
+        outline-offset: 1px;
+      }
+    }
+
+    .btn {
+      flex: 0 0 auto;
+      padding: 7px 12px;
+      border: none;
+      border-radius: 8px;
+      background: var(--primary, #2563eb);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        background: var(--primary-hover, #1d4ed8);
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    }
+  }
+
+  .confirm {
+    align-self: flex-end;
+    padding: 7px 16px;
+    border: none;
+    border-radius: 8px;
+    background: var(--primary, #2563eb);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--primary-hover, #1d4ed8);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  }
+
+  .ask-err {
+    margin: 0;
+    font-size: 12px;
+    color: var(--err, #dc2626);
+  }
+
+  // Итог (все вопросы отвечены): заголовок + строки вопрос → ответ.
+  .ask-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+
+    .ask-summary-row {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+
+      .q {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted, #8a94a6);
+      }
+
+      .a {
+        font-size: 13px;
+        line-height: 1.4;
+        word-break: break-word;
+      }
+    }
+  }
+}

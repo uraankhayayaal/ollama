@@ -157,12 +157,49 @@ export interface GitView {
 // Сообщение чата (тип события chat; история — тот же формат).
 export interface ChatMsg {
   id: string;
-  role: string; // user | assistant | tool | status | system
+  role: string; // user | assistant | tool | status | system | ask
   content: string;
   agent?: string;
   tool?: string;
   ok?: boolean;
+  ask?: AskMsg; // структурированный вопрос (role = ask)
   time: string;
+}
+
+// Структурированный вопрос ассистента (AskUser): пачка вопросов, показываемая
+// пользователю пошагово в карточке-вардин.
+export interface AskMsg {
+  id: string; // id пачки вопросов (для ответа)
+  questions: AskQuestion[];
+}
+
+export type AskKind = "single" | "multi";
+
+export interface AskQuestion {
+  id: string;
+  text: string;
+  kind: AskKind;
+  allow_custom?: boolean; // показывать ли вариант «свой ответ» (default true)
+  options: AskOption[];
+}
+
+export interface AskOption {
+  id: string;
+  label: string;
+  recommended?: boolean;
+}
+
+// Ответ на один шаг пачки (POST ask/{askID}/answer).
+export interface AskAnswerBody {
+  question_id: string;
+  selected: string[];
+  custom?: string;
+}
+
+export interface AskAnswerResult {
+  ok: boolean;
+  answered: number;
+  total: number;
 }
 
 // HITL-затвор (тип события gate; epics | tasks).

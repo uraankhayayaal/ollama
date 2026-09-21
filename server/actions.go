@@ -169,8 +169,11 @@ func actionTools(b ActionsBackend) []tools.Tool {
 
 // serverActionTools возвращает мосты-инструменты server-действий, которые
 // runChatAssistant добавляет в набор ассистента (Ф-3): см. actionTools.
+// AskUser (Ф-1 «спроси пользователя») добавляется рядом, поверх AskBackend.
 func (sess *Session) serverActionTools() []tools.Tool {
-	return actionTools(sess)
+	ts := actionTools(sess)
+	ts = append(ts, &askTool{b: sess})
+	return ts
 }
 
 // actionArg — строковый аргумент инструмента действий.

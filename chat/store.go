@@ -25,6 +25,7 @@ const (
 	RoleSystem    Role = "system"    // служебное (начало сессии и т.п.)
 	RoleStatus    Role = "status"    // статусная строка (агент начал/закончил работу)
 	RoleBoard     Role = "board"     // событие доски / HITL-затвор
+	RoleAsk       Role = "ask"       // структурированный вопрос ассистента пользователю
 )
 
 // Message — единица диалога. ID заполняется из ID записи Redis Stream при
@@ -33,10 +34,58 @@ type Message struct {
 	ID      string    `json:"id,omitempty"`
 	Role    Role      `json:"role"`
 	Content string    `json:"content"`
-	Agent   string    `json:"agent,omitempty"` // имя агента (для assistant/tool)
-	Tool    string    `json:"tool,omitempty"`  // имя инструмента (для role=tool)
-	OK      *bool     `json:"ok,omitempty"`    // успешен ли результат инструмента
+	Agent   string    `json:"agent,omitempty"`         // имя агента (для assistant/tool)
+	Tool    string    `json:"tool,omitempty"`          // имя инструмента (для role=tool)
+	OK      *bool     `json:"ok,omitempty"`            // успешен ли результат инструмента
+	Ask     *Ask      `json:"ask,omitempty"`           // структурированный вопрос (для role=ask)
 	Time    time.Time `json:"time"`
+}
+
+// AskKind — тип структурированного вопроса: одиночный выбор (single) или
+// множественный (multi). Каждый вопрос дополняется вариантами ответа и
+// необязательным кастомным вариантом с полем ввода (план «спроси пользователя
+// при неоднозначности»).
+type AskKind string
+
+const (
+	AskSingle AskKind = "single" // клик по одному варианту = ответ
+	AskMulti  AskKind = "multi"  // несколько чекбоксов + кнопка «Подтвердить»
+)
+
+// Ask — структурированный вопрос ассистента (инструмент AskUser): пачка
+// вопросов, которая показывается пользователю пошагово в чате. Frontend
+// рендерит карточку-вардин: один вопрос на шаг, кастомный вариант с полем
+// ввода, выделение предпочтительного ответа (recommended).
+type Ask struct {
+	ID        string       `json:"id,omitempty"` // id пачки вопросов (для REST-ответа)
+	Questions []AskQuestion `json:"questions"`
+}
+
+// AskQuestion — один шаг вардина.
+type AskQuestion struct {
+	ID   string  `json:"id"`
+	Text string  `json:"text"`
+	Kind AskKind `json:"kind"` // single | multi
+	// AllowCustom — показывать ли вариант «Свой ответ» с полем ввода
+	// (по умолчанию true, если не указано).
+	AllowCustom bool        `json:"allow_custom,omitempty"`
+	Options     []AskOption `json:"options"`
+}
+
+// AskOption — вариант ответа. Recommended — предпочтительный вариант: в UI
+// выделен бейджем «рекомендую», но решение остаётся за пользователем.
+type AskOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Recommended bool   `json:"recommended,omitempty"`
+}
+
+// AskAnswer — ответ пользователя на один вопрос (возвращается модели как
+// результат инструмента AskUser).
+type AskAnswer struct {
+	QuestionID string   `json:"question_id"`
+	Selected   []string `json:"selected"`          // выбранные id вариантов
+	Custom     string   `json:"custom,omitempty"`  // текст кастомного ответа (если выбран)
 }
 
 // StoreConfig — параметры подключения Redis-хранилища диалога.
@@ -173,6 +222,11 @@ func (m Message) fields() map[string]any {
 	if m.OK != nil {
 		out["ok"] = *m.OK
 	}
+	if m.Ask != nil {
+		if b, err := json.Marshal(m.Ask); err == nil {
+			out["ask"] = string(b)
+		}
+	}
 	return out
 }
 
@@ -206,6 +260,15 @@ func messageFromEntry(en redis.XMessage) Message {
 	if t.IsZero() {
 		t = time.Now().UTC()
 	}
+	var ask *Ask
+	if raw, exists := en.Values["ask"]; exists {
+		if b := fmt.Sprint(raw); b != "" {
+			var a Ask
+			if err := json.Unmarshal([]byte(b), &a); err == nil {
+				ask = &a
+			}
+		}
+	}
 	return Message{
 		ID:      en.ID,
 		Role:    Role(fieldString(en.Values, "role")),
@@ -213,6 +276,7 @@ func messageFromEntry(en redis.XMessage) Message {
 		Agent:   fieldString(en.Values, "agent"),
 		Tool:    fieldString(en.Values, "tool"),
 		OK:      ok,
+		Ask:     ask,
 		Time:    t,
 	}
 }

@@ -3,9 +3,9 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, boardOf, chatHistory, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, updateTask } from "./Api";
+import { authStatus, answerAsk, boardOf, chatHistory, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
+import type { AskAnswerBody, AskAnswerResult, BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
@@ -289,6 +289,18 @@ export function App() {
       fail(e);
     }
   };
+
+  // Ответ на структурированный вопрос ассистента (AskUser): POST
+  // /api/projects/{id}/ask/{askID}/answer. Передаётся в Chatboard → AskCard.
+  const onAskAnswer = useCallback(
+    async (askID: string, body: AskAnswerBody): Promise<AskAnswerResult> => {
+      if (!project) {
+        throw new Error("проект не выбран");
+      }
+      return answerAsk(BASE, project.project_name, askID, body);
+    },
+    [project],
+  );
 
   // «Продолжить»: запускает/возобновляет Kanban-оркестрацию на текущей доске
   // (кнопка ⏵). В чат ничего не отправляется и не дублируется: раннер работает
@@ -595,6 +607,7 @@ export function App() {
                 endRef={chatEnd}
                 thinking={thinking}
                 collapsed
+                onAskAnswer={onAskAnswer}
                 onToggleCollapse={() => toggleCollapse("chat")}
               />
             </section>
@@ -610,6 +623,7 @@ export function App() {
                 onSend={onSend}
                 endRef={chatEnd}
                 thinking={thinking}
+                onAskAnswer={onAskAnswer}
                 onToggleCollapse={() => toggleCollapse("chat")}
               />
             </section>

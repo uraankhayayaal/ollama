@@ -175,6 +175,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/tokens", s.handleGetTokens)
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
+	// REST — структурированный вопрос ассистента (AskUser, Ф-1 «спроси
+	// пользователя»): ответ на один шаг пачки.
+	mux.HandleFunc("POST /api/projects/{id}/ask/{askID}/answer", s.handleAskAnswer)
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
 	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}", s.handleDeleteTask)
 	mux.HandleFunc("DELETE /api/projects/{id}/epics/{eid}", s.handleDeleteEpic)
@@ -724,6 +727,40 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.stop()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleAskAnswer принимает ответ пользователя на один шаг пачки вопросов
+// ассистента (AskUser): {question_id, selected, custom} → {ok, answered, total}.
+// Когда отвечены все вопросы, AnswerAsk разблокирует агентский цикл.
+func (s *Server) handleAskAnswer(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	askID := r.PathValue("askID")
+
+	var body struct {
+		QuestionID string   `json:"question_id"`
+		Selected   []string `json:"selected"`
+		Custom     string   `json:"custom"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "невалидный JSON")
+		return
+	}
+	if body.QuestionID == "" {
+		writeErr(w, http.StatusBadRequest, "question_id обязателен")
+		return
+	}
+
+	sess := s.session(project)
+	if sess == nil {
+		writeErr(w, http.StatusNotFound, "сессия не найдена")
+		return
+	}
+	answered, total, err := sess.AnswerAsk(askID, body.QuestionID, body.Selected, body.Custom)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "answered": answered, "total": total})
 }
 
 // --- REST: задачи (Ф-2, минимум для фронта) ---

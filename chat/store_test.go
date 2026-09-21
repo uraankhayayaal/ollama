@@ -129,3 +129,109 @@ func TestOpenRequiresProject(t *testing.T) {
 		t.Fatal("NewStore без проекта должен падать")
 	}
 }
+
+// TestAskPersistence — структурированный вопрос (роль ask + payload Ask)
+// сохраняется в истории и восстанавливается из неё целиком (план «спроси
+// пользователя при неоднозначности», Ф-1).
+func TestAskPersistence(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newTestStore(t, "proj-ask")
+
+	ask := &Ask{
+		ID: "ask-1",
+		Questions: []AskQuestion{
+			{
+				ID:   "q1",
+				Text: "Какой язык для порта?",
+				Kind: AskSingle,
+				Options: []AskOption{
+					{ID: "go", Label: "Go", Recommended: true},
+					{ID: "rust", Label: "Rust"},
+				},
+			},
+			{
+				ID:          "q2",
+				Text:        "Какие фичи добавить?",
+				Kind:        AskMulti,
+				AllowCustom: true,
+				Options: []AskOption{
+					{ID: "a", Label: "Авторизация"},
+					{ID: "b", Label: "Логи"},
+				},
+			},
+		},
+	}
+	if _, err := s.Append(ctx, Message{Role: RoleAsk, Ask: ask}); err != nil {
+		t.Fatalf("Append(ask): %v", err)
+	}
+
+	hist, err := s.History(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 1 {
+		t.Fatalf("History: %d сообщений, want 1", len(hist))
+	}
+	got := hist[0]
+	if got.Role != RoleAsk {
+		t.Fatalf("role = %q, want ask", got.Role)
+	}
+	if got.Ask == nil {
+		t.Fatal("Ask payload не восстановлен")
+	}
+	if got.Ask.ID != "ask-1" || len(got.Ask.Questions) != 2 {
+		t.Fatalf("Ask = %+v", got.Ask)
+	}
+	q1 := got.Ask.Questions[0]
+	if q1.ID != "q1" || q1.Kind != AskSingle || len(q1.Options) != 2 || !q1.Options[0].Recommended {
+		t.Fatalf("q1 = %+v", q1)
+	}
+	q2 := got.Ask.Questions[1]
+	if q2.Kind != AskMulti || !q2.AllowCustom {
+		t.Fatalf("q2 = %+v", q2)
+	}
+}
+
+// TestAskMarshalsInLiveEvent — структурированный вопрос попадает в live-событие
+// (pub/sub) вместе с payload Ask: фронт получит карточку вопроса без доп. REST.
+func TestAskMarshalsInLiveEvent(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newTestStore(t, "proj-ask-live")
+
+	ps, err := s.Subscribe(ctx)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer ps.Close()
+
+	ask := &Ask{
+		ID: "ask-9",
+		Questions: []AskQuestion{
+			{ID: "q", Text: "Продолжить?", Kind: AskSingle, Options: []AskOption{{ID: "y", Label: "Да"}}},
+		},
+	}
+	if _, err := s.Append(ctx, Message{Role: RoleAsk, Ask: ask}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan Message, 1)
+	go func() {
+		msg, err := ps.ReceiveMessage(ctx)
+		if err != nil {
+			return
+		}
+		var got Message
+		if json.Unmarshal([]byte(msg.Payload), &got) == nil && got.Ask != nil {
+			done <- got
+		}
+	}()
+
+	select {
+	case got := <-done:
+		if got.Ask.ID != "ask-9" || len(got.Ask.Questions) != 1 || got.Ask.Questions[0].Options[0].ID != "y" {
+			t.Fatalf("live ask = %+v", got.Ask)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("live-событие с Ask не пришло")
+	}
+}

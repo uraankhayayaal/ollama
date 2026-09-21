@@ -11,9 +11,10 @@
 // плейсхолдером, чтобы не терять хронологию диалога.
 
 import { useEffect, useState } from "react";
-import type { ChatMsg } from "@/Types";
+import type { AskAnswerBody, AskAnswerResult, ChatMsg } from "@/Types";
 // import { APIError } from "@/Api";
 import { downloadText, safeName, stampedName } from "@/download";
+import { AskCard } from "./AskCard";
 import "./styles.scss";
 
 // Пороги «тяжёлого» сообщения: после них контент сворачивается по умолчанию.
@@ -35,6 +36,7 @@ export function Chatboard({
   collapsed = false,
   onToggleCollapse,
   thinking = false,
+  onAskAnswer,
 }: {
   chat: ChatMsg[];
   // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3); рендерится
@@ -50,6 +52,10 @@ export function Chatboard({
   // thinking — сообщение отправлено, модель ещё не начала печатать: показываем
   // анимацию «думает» до прихода первого chat_delta, её сменяет живой пузырь.
   thinking?: boolean;
+  // onAskAnswer — отправка ответа на структурированный вопрос ассистента (AskUser):
+  // POST /api/projects/{id}/ask/{askID}/answer. Внедряется из App (там есть
+  // имя проекта); карточка-вардин рендерится для сообщений role=ask.
+  onAskAnswer?: (askID: string, body: AskAnswerBody) => Promise<AskAnswerResult>;
 }) {
   useEffect(() => {
     if (!collapsed) {
@@ -154,7 +160,7 @@ export function Chatboard({
           if (role === "assistant" && !(m.content ?? "").trim()) return false;
           return true;
         }).map((m) => (
-          <Msg key={m.id} m={m} />
+          <Msg key={m.id} m={m} onAskAnswer={onAskAnswer} />
         ))}
         {live && (
           <li key={live.id} className="msg assistant streaming">
@@ -192,17 +198,33 @@ export function Chatboard({
   );
 }
 
+// defaultAnswerAsk — заглушка на случай, когда карточка вопроса рендерится без
+// live-колбэка (история после перезагрузки, активная сессия уже закрыта):
+// повторно ответить на закрытый вопрос нельзя.
+function defaultAnswerAsk(): Promise<AskAnswerResult> {
+  return Promise.reject(new Error("Вопрос уже закрыт — ответ изменить нельзя"));
+}
+
 // Одно сообщение истории. tool-результаты и объёмные/технические тексты
 // сворачиваются по умолчанию в кликабельную шапку; разворачиваются по клику.
-function Msg({ m }: { m: ChatMsg }) {
+// role=ask рендерит карточку-вардин структурированного вопроса (AskCard).
+function Msg({
+  m,
+  onAskAnswer,
+}: {
+  m: ChatMsg;
+  onAskAnswer?: (askID: string, body: AskAnswerBody) => Promise<AskAnswerResult>;
+}) {
   const role = (m.role ?? "agent").toLowerCase();
   const text = m.content ?? "";
   const empty = text.trim().length === 0;
   const isTool = role === "tool";
+  const isAsk = role === "ask";
   // «Тяжёлое» сообщение: слишком много символов или строк — скрываем по умолчанию.
   // Пустые сообщения не сворачиваются (разворачивать нечего).
   const long = text.length > MAX_COLLAPSED_CHARS || text.split("\n").length > MAX_COLLAPSED_LINES;
   const foldable = !empty && (isTool || long);
+
   const [open, setOpen] = useState(!foldable);
 
   const who = isTool ? m.agent || "tool" : m.agent || (role === "assistant" ? "assistant" : role);
@@ -245,7 +267,9 @@ function Msg({ m }: { m: ChatMsg }) {
         <time className="when">{fmtTime(m.time)}</time>
       </div>
 
-      {empty ? (
+      {isAsk && m.ask ? (
+        <AskCard ask={m.ask} onAskAnswer={onAskAnswer ?? defaultAnswerAsk} />
+      ) : empty ? (
         <p className="content nil" title={`Сообщение без текста (${who})`}>
           ∅
         </p>

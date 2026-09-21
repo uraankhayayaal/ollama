@@ -5,6 +5,8 @@
 // server/session.go и board/entity.go.
 
 import type {
+  AskAnswerBody,
+  AskAnswerResult,
   BoardView,
   BugRow,
   ChatMsg,
@@ -206,6 +208,20 @@ export async function gateDecide(
   return req<{ ok: boolean }>(
     "POST",
     `${base}/api/projects/${enc(project)}/${gate}/decide`,
+    body,
+  );
+}
+
+// Ответ на один шаг структурированного вопроса ассистента (AskUser).
+export async function answerAsk(
+  base: string,
+  project: string,
+  askID: string,
+  body: AskAnswerBody,
+): Promise<AskAnswerResult> {
+  return req<AskAnswerResult>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/ask/${enc(askID)}/answer`,
     body,
   );
 }

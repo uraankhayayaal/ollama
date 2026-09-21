@@ -1,0 +1,1 @@
+export { AskCard } from "./AskCard";
