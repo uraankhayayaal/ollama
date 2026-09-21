@@ -33,6 +33,10 @@ type Session struct {
 	running bool
 	gating  bool
 	gateTyp string
+	// standby — режим ожидания: оркестрация запущена по доске, но брать в
+	// работу нечего (нет эпиков/задач, которые можно исполнить). Сессия жива и
+	// ждёт появления работы; статус в шину — «standby».
+	standby bool
 
 	// decide — решение человека по текущему HITL-затвору (буфер 1 позволяет
 	// принять решение ДО того, как runner дошёл до затвора).
@@ -114,31 +118,14 @@ func (s *Server) newSession(project string) (*Session, error) {
 // continueTaskText формирует текст задачи оркестрации (общая механика
 // handleContinue и моста-инструмента KanbanStart): приоритет meta-задачи
 // проекта; если её нет — обобщённое описание «продолжить работу по доске».
-// Пустая доска — errEmptyBoard (проверка не требует LLM-провайдера).
+// Пустая доска не ошибка: запуск по кнопке берёт в работу только то, что уже
+// есть на доске, а при отсутствии работы переходит в режим ожидания.
 func (sess *Session) continueTaskText(ctx context.Context) (string, error) {
-	taskText := ""
-	if meta, merr := sess.board.GetMeta(ctx); merr == nil && meta != nil {
-		taskText = meta.Task
+	if meta, merr := sess.board.GetMeta(ctx); merr == nil && meta != nil && meta.Task != "" {
+		return meta.Task, nil
 	}
-	if taskText == "" {
-		epics, eerr := sess.board.ListEpics(ctx)
-		if eerr != nil {
-			return "", eerr
-		}
-		tasks, terr := sess.board.ListTasks(ctx)
-		if terr != nil {
-			return "", terr
-		}
-		if len(epics) == 0 && len(tasks) == 0 {
-			return "", errEmptyBoard
-		}
-		taskText = "Продолжить работу над задачами доски"
-	}
-	return taskText, nil
+	return "Продолжить работу над задачами доски", nil
 }
-
-// errEmptyBoard — на доске нет записей, продолжать нечего (клиентская ошибка).
-var errEmptyBoard = errors.New("на доске нет задач — добавьте задачу через чат или на доску")
 
 // start запускает оркестрацию в отдельной горутине (single-flight).
 func (sess *Session) start(ctx context.Context, taskText string, provider models.LLMProvider) error {

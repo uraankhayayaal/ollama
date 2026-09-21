@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // maxKanbanRounds — максимум Kanban-циклов за один запуск. Цикл выполняет один
@@ -42,11 +43,23 @@ type KanbanRunner struct {
 	provider models.LLMProvider
 	store    *board.Store
 	gate     HumanGate
+	// boardOnly — режим запуска по доске (кнопка «Продолжить»): новые эпики и
+	// задачи НЕ создаются (фазы архитектора и лидов пропускаются), в работу
+	// берутся только записи, которые уже есть на доске.
+	boardOnly bool
+	// onStandby — нотификатор режима ожидания: true — работы на доске нет
+	// (ожидание), false — работа появилась (цикл возобновлён). Устанавливается
+	// сервером для трансляции статуса сессии; nil в консольном режиме.
+	onStandby func(bool)
 	// log — лог проекта (logs/<проект>.log). Устанавливается в Run, когда имя
 	// проекта известно; до этого nil, и сообщения идут в файл по умолчанию
 	// (нулевой получатель logging.Logger допустим — проверки не нужны).
 	log *logging.Logger
 }
+
+// standbyPoll — период опроса доски в режиме ожидания: раз в 5 с runner
+// проверяет, не появились ли эпики/задачи, которые можно взять в работу.
+const standbyPoll = 5 * time.Second
 
 // GateDecision — решение человека по HITL-затвору.
 type GateDecision struct {
@@ -73,6 +86,15 @@ type HumanGate interface {
 
 // SetGate устанавливает HITL-затвор. nil возвращает автономный режим.
 func (k *KanbanRunner) SetGate(g HumanGate) { k.gate = g }
+
+// SetBoardOnly включает/выключает режим «только доска»: оркестрация не создаёт
+// новые эпики и задачи, а берёт в работу то, что уже есть на доске; при
+// отсутствии работы переходит в режим ожидания (см. SetStandbyNotifier).
+func (k *KanbanRunner) SetBoardOnly(v bool) { k.boardOnly = v }
+
+// SetStandbyNotifier задаёт нотификатор режима ожидания: fn(true) — работы на
+// доске нет (ожидание), fn(false) — работа появилась (цикл возобновлён).
+func (k *KanbanRunner) SetStandbyNotifier(fn func(bool)) { k.onStandby = fn }
 
 // NewKanbanRunner создаёт Kanban-оркестратор поверх хранилища доски.
 func NewKanbanRunner(provider models.LLMProvider, store *board.Store) *KanbanRunner {
@@ -163,12 +185,21 @@ func (k *KanbanRunner) rework(ctx context.Context, epics []*board.Epic) error {
 }
 
 // Run исполняет Kanban-оркестрацию до решения задачи пользователя.
+// В board-only режиме (SetBoardOnly) новые эпики и задачи не создаются: цикл
+// берёт в работу только записи, которые уже лежат на доске, а при отсутствии
+// работы переходит в режим ожидания (см. runBoardOnly).
 func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) error {
 	// Все сообщения ранера — в лог своего проекта: в режиме serve один процесс
 	// ведёт несколько проектов, и общий файл смешал бы их строки.
 	k.log = logging.For(projectName)
 
-	if err := k.ensureMeta(ctx, projectName, taskText); err != nil {
+	if k.boardOnly {
+		// Запуск по доске: новых записей не создаём (в т.ч. meta), существующую
+		// meta-задачу держим «в работе».
+		if err := k.touchMeta(ctx); err != nil {
+			return err
+		}
+	} else if err := k.ensureMeta(ctx, projectName, taskText); err != nil {
 		return err
 	}
 
@@ -184,80 +215,24 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 		k.log.Infof("[Kanban] зависших «в работе» задач сброшено в «готова к работе»: %d", n)
 	}
 
+	if k.boardOnly {
+		return k.runBoardOnly(ctx)
+	}
+
 	for round := 1; round <= maxKanbanRounds; round++ {
 		// Задача решена: все эпики и все задачи успешно выполнены.
-		done, err := k.store.AllDone(ctx)
+		done, err := k.finishIfAllDone(ctx)
 		if err != nil {
 			return err
 		}
 		if done {
-			if meta, gerr := k.store.GetMeta(ctx); gerr == nil {
-				meta.Status = board.StatusDone
-				_ = k.store.SaveMeta(ctx, meta)
-			}
-			k.log.Infof("[доска] задача пользователя решена: все эпики и задачи выполнены")
 			return nil
 		}
 
-		progress := false
-
-		// Архитектура: эпики -> затвор HITL «утвердить эпики» (перед
-		// декомпозицией лидами). Затвор срабатывает только в раунде, где
-		// архитектор что-то опубликовал (phaseArchitect вернул true) — в
-		// последующих раундах эпики уже есть, и повторного подтверждения
-		// не требуется.
-		p, err := k.phaseArchitect(ctx)
+		progress, err := k.runPhases(ctx)
 		if err != nil {
 			return err
 		}
-		progress = progress || p
-		if k.gate != nil && p {
-			if err := k.waitEpics(ctx); err != nil {
-				return err
-			}
-		}
-
-		// Декомпозиция лидами (после утверждения эпиков выше).
-		p, err = k.phaseLeads(ctx)
-		if err != nil {
-			return err
-		}
-		progress = progress || p
-
-		// Готовность к работе -> затвор HITL «утвердить задачи» (перед
-		// раздачей специалистам). Срабатывает в раунде, где появились новые
-		// готовые задачи; уже подтверждённые потоки в следующих раундах
-		// исполняются без повторного подтверждения.
-		p, err = k.phaseReady(ctx)
-		if err != nil {
-			return err
-		}
-		progress = progress || p
-		if k.gate != nil && p {
-			if err := k.waitReadyTasks(ctx); err != nil {
-				return err
-			}
-		}
-
-		// Исполнение специалистами.
-		p, err = k.phaseExecute(ctx)
-		if err != nil {
-			return err
-		}
-		progress = progress || p
-
-		// Багрепорты и финализация эпиков.
-		p, err = k.phaseBugs(ctx)
-		if err != nil {
-			return err
-		}
-		progress = progress || p
-
-		p, err = k.phaseComplete(ctx)
-		if err != nil {
-			return err
-		}
-		progress = progress || p
 
 		// Ни один этап цикла не сделал работу: на доске остались только
 		// отменённые записи или неразрешимые зависимости — дальше бессмысленно.
@@ -268,6 +243,215 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 	}
 
 	return fmt.Errorf("исчерпан бюджет Kanban-раундов (%d), задача не решена", maxKanbanRounds)
+}
+
+// runBoardOnly — цикл запуска по доске (кнопка «Продолжить»): работают только
+// фазы исполнения существующих записей (без архитектора и лидов), а когда
+// брать в работу нечего — режим ожидания до появления работы на доске.
+// Бюджет раундов ограничивает продуктивную работу, но не ожидание: после
+// простоя счётчик обнуляется, поэтому «ждать работу» можно бесконечно, а
+// «крутиться без результата» — нет.
+func (k *KanbanRunner) runBoardOnly(ctx context.Context) error {
+	round := 0
+	for {
+		round++
+		if round > maxKanbanRounds {
+			return fmt.Errorf("исчерпан бюджет Kanban-раундов (%d), работа по доске не завершена, доска: %s",
+				maxKanbanRounds, k.boardSummary(ctx))
+		}
+		progress, err := k.runPhases(ctx)
+		if err != nil {
+			return err
+		}
+		if progress {
+			continue
+		}
+
+		k.setStandby(true)
+		k.log.Infof("[Kanban] нет эпиков/задач, которые можно взять в работу — режим ожидания (доска: %s)",
+			k.boardSummary(ctx))
+		if err := k.waitForWork(ctx); err != nil {
+			return err
+		}
+		k.setStandby(false)
+		k.log.Infof("[Kanban] на доске появилась работа — продолжаю")
+		round = 0
+	}
+}
+
+// runPhases исполняет один Kanban-цикл и сообщает, была ли сделана работа.
+// В board-only режиме фазы планирования (архитектор, лиды) пропускаются —
+// новые эпики и задачи не создаются.
+func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
+	progress := false
+
+	if !k.boardOnly {
+		// Архитектура: эпики -> затвор HITL «утвердить эпики» (перед
+		// декомпозицией лидами). Затвор срабатывает только в раунде, где
+		// архитектор что-то опубликовал (phaseArchitect вернул true) — в
+		// последующих раундах эпики уже есть, и повторного подтверждения
+		// не требуется.
+		p, err := k.phaseArchitect(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
+		if k.gate != nil && p {
+			if err := k.waitEpics(ctx); err != nil {
+				return false, err
+			}
+		}
+
+		// Декомпозиция лидами (после утверждения эпиков выше).
+		p, err = k.phaseLeads(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
+	}
+
+	// Готовность к работе -> затвор HITL «утвердить задачи» (перед
+	// раздачей специалистам). Срабатывает в раунде, где появились новые
+	// готовые задачи; уже подтверждённые потоки в следующих раундах
+	// исполняются без повторного подтверждения.
+	p, err := k.phaseReady(ctx)
+	if err != nil {
+		return false, err
+	}
+	progress = progress || p
+	if k.gate != nil && p {
+		if err := k.waitReadyTasks(ctx); err != nil {
+			return false, err
+		}
+	}
+
+	// Исполнение специалистами.
+	p, err = k.phaseExecute(ctx)
+	if err != nil {
+		return false, err
+	}
+	progress = progress || p
+
+	// Багрепорты и финализация эпиков.
+	p, err = k.phaseBugs(ctx)
+	if err != nil {
+		return false, err
+	}
+	progress = progress || p
+
+	p, err = k.phaseComplete(ctx)
+	if err != nil {
+		return false, err
+	}
+	return progress || p, nil
+}
+
+// finishIfAllDone завершает оркестрацию, если все эпики и задачи выполнены:
+// meta-задача проекта переводится в «выполнена». Возвращает true, когда задача
+// пользователя решена.
+func (k *KanbanRunner) finishIfAllDone(ctx context.Context) (bool, error) {
+	done, err := k.store.AllDone(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !done {
+		return false, nil
+	}
+	if meta, gerr := k.store.GetMeta(ctx); gerr == nil && meta != nil {
+		meta.Status = board.StatusDone
+		_ = k.store.SaveMeta(ctx, meta)
+	}
+	k.log.Infof("[доска] задача пользователя решена: все эпики и задачи выполнены")
+	return true, nil
+}
+
+// waitForWork опрашивает доску в режиме ожидания: возврат, как только на ней
+// появляется работа, которую можно взять (или отменён контекст — остановка).
+func (k *KanbanRunner) waitForWork(ctx context.Context) error {
+	ticker := time.NewTicker(standbyPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			ok, err := k.hasWork(ctx)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+		}
+	}
+}
+
+// hasWork сообщает, есть ли на доске что взять в работу БЕЗ создания новых
+// записей: готовая/работающая задача, задача, которую phaseReady способен
+// продвинуть (зависимости и фаза-гейт пройдены), эпик, готовый к финализации,
+// либо багрепорт, требующий триажа/экспертизы.
+func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
+	tasks, err := k.store.ListTasks(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, t := range tasks {
+		switch t.Status {
+		case board.StatusReady, board.StatusInProgress:
+			return true, nil
+		case board.StatusNew, board.StatusAnalysis:
+			ok, err := k.depsDone(ctx, t)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				continue
+			}
+			ok, err = k.phasePrereqSatisfied(ctx, t)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+	}
+
+	epics, err := k.store.ListEpics(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range epics {
+		if e.Status.Terminal() {
+			continue
+		}
+		ok, err := k.epicTasksDone(ctx, e)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+
+	bugs, err := k.store.ListBugReports(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, b := range bugs {
+		if b.Status == board.BugStatusNew || b.Status == board.BugStatusConfirmed {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// setStandby сообщает серверу о входе (true) / выходе (false) из режима
+// ожидания. Нотификатор может быть не установлен (консольный режим, тесты).
+func (k *KanbanRunner) setStandby(v bool) {
+	if k.onStandby != nil {
+		k.onStandby(v)
+	}
 }
 
 // ensureMeta создаёт метаданные доски (исходная задача пользователя), если их
@@ -285,6 +469,28 @@ func (k *KanbanRunner) ensureMeta(ctx context.Context, projectName, taskText str
 		meta.Status = board.StatusInProgress
 		return k.store.SaveMeta(ctx, meta)
 	}
+	return nil
+}
+
+// touchMeta — meta-задача для board-only режима: существующая запись
+// переводится в «в работе», новая НЕ создаётся (запуск по кнопке работает
+// только с тем, что уже лежит на доске).
+func (k *KanbanRunner) touchMeta(ctx context.Context) error {
+	meta, err := k.store.GetMeta(ctx)
+	if err != nil {
+		if errors.Is(err, board.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if meta == nil || meta.Status.Terminal() || meta.Status == board.StatusInProgress {
+		return nil
+	}
+	meta.Status = board.StatusInProgress
+	if err := k.store.SaveMeta(ctx, meta); err != nil {
+		return err
+	}
+	k.log.Infof("[доска] meta-задача проекта %q в работе", k.store.Project())
 	return nil
 }
 
@@ -798,16 +1004,9 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 		if len(epic.Tasks) == 0 {
 			continue
 		}
-		allDone := true
-		for _, taskID := range epic.Tasks {
-			t, err := k.store.GetTask(ctx, taskID)
-			if err != nil {
-				return false, fmt.Errorf("эпик %s: чтение задачи %s: %w", epic.TaskID, taskID, err)
-			}
-			if t.Status != board.StatusDone {
-				allDone = false
-				break
-			}
+		allDone, err := k.epicTasksDone(ctx, epic)
+		if err != nil {
+			return false, err
 		}
 		if allDone {
 			// «Доводим» эпик до «выполнена» из любого не-терминального статуса
@@ -843,6 +1042,24 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 		}
 	}
 	return progress, nil
+}
+
+// epicTasksDone сообщает, что все задачи эпика выполнены (и их хотя бы одна):
+// признак того, что эпик можно финализировать.
+func (k *KanbanRunner) epicTasksDone(ctx context.Context, epic *board.Epic) (bool, error) {
+	if len(epic.Tasks) == 0 {
+		return false, nil
+	}
+	for _, taskID := range epic.Tasks {
+		t, err := k.store.GetTask(ctx, taskID)
+		if err != nil {
+			return false, fmt.Errorf("эпик %s: чтение задачи %s: %w", epic.TaskID, taskID, err)
+		}
+		if t.Status != board.StatusDone {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // noteEpicProgress переводит эпик в «в работе», если он в статусе
