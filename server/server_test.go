@@ -21,6 +21,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 
 	"ai/board"
+	"ai/chat"
 	"ai/web"
 )
 
@@ -441,15 +442,55 @@ func TestPostChatDialogueDoesNotCreateEpic(t *testing.T) {
 	}
 }
 
-func TestContinueEmptyBoardBadRequest(t *testing.T) {
-	_, handler, _ := newTestServer(t)
+func TestContinueEmptyBoardStartsInStandby(t *testing.T) {
+	srv, _, mr := newTestServer(t)
+
+	// Stub-провайдер: на пустой доске генерации не будет (оркестрация сразу
+	// уходит в режим ожидания работы), но handleContinue его резолвит.
+	srv.prov = providerResolve{prov: harnessStubProvider{}, done: true}
+
+	sess, _, err := srv.getOrCreate("proj-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = mr
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/projects/proj-empty/continue", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("continue пустой доски: %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("continue пустой доски: %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
+
+	// Оркестрация запущена и ушла в режим ожидания: running до конца и
+	// standby (нет записей, которые можно взять в работу).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sess.mu.Lock()
+		running := sess.running
+		standby := sess.standby
+		sess.mu.Unlock()
+		if running && standby {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("оркестрация не ушла в standby: running=%v standby=%v", running, standby)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Стартовый статус в чат не пишется (запуск по кнопке — без сообщений чата).
+	hist, err := sess.chat.History(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range hist {
+		if m.Role == chat.RoleStatus {
+			t.Fatalf("запуск по кнопке не должен писать статус в чат, найдено: %+v", m)
+		}
+	}
+
+	sess.stop()
 }
 
 func TestContinueOnBoardRequiresProvider(t *testing.T) {

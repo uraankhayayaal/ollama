@@ -173,7 +173,7 @@ export interface GateEvent {
 }
 
 export interface StatusEvent {
-  status: string; // running | waiting | done | stopped | error
+  status: string; // running | waiting | standby | done | stopped | error
   detail?: string;
   gating?: boolean;
   gate?: string;

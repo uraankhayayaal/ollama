@@ -6,7 +6,7 @@
 //   board — снимок доски (BoardSnapshot)
 //   gate  — HITL-затвор (epics/tasks)
 //   tool  — событие инструмента/агента (tool_start/tool_result)
-//   status— статус сессии (running|waiting|done|stopped|error)
+//   status— статус сессии (running|waiting|standby|done|stopped|error)
 //   diff  — дифф (в Ф-2; пока тип-заглушка)
 //   log   — новая строка лога (real-time, logMessage)
 //   tokens— накопленные токены проекта (вход/выход, ProjectTokens)

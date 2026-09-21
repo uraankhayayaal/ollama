@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,6 +45,16 @@ func (f *fakeActions) ActionConfirmed(context.Context) bool { return f.confirmed
 type harnessStubProvider struct{}
 
 func (harnessStubProvider) Generate(context.Context, agents.Agent) (*runner.AgentResponse, error) {
+	return nil, errors.New("стоп: тестовый провайдер")
+}
+
+// leadSeenProvider — провайдер оркестрации, фиксирующий факт вызова. Нужен,
+// чтобы убедиться: запуск по доске взял эпик без задач в работу (лид пошёл на
+// декомпозицию), а не ушёл сразу в standby. Цикл останавливает ошибкой.
+type leadSeenProvider struct{ called int32 }
+
+func (p *leadSeenProvider) Generate(context.Context, agents.Agent) (*runner.AgentResponse, error) {
+	atomic.AddInt32(&p.called, 1)
 	return nil, errors.New("стоп: тестовый провайдер")
 }
 
@@ -360,8 +371,10 @@ func TestChatAssistantDeleteTaskAfterConfirm(t *testing.T) {
 
 // TestChatAssistantKanbanStartLaunchesOrchestration — «запусти канбан по
 // эпику»: безопасный мост KanbanStart выполняется БЕЗ подтверждения и
-// запускает оркестрацию (общая механика continue). Провайдер оркестрации —
-// stub, останавливающий цикл ошибкой (чтобы раннер не ушёл в циклы).
+// запускает оркестрацию в board-only режиме (общая механика continue). Эпик
+// без задач берётся в работу — лид вызывается (декомпозиция). Провайдер
+// оркестрации — stub, останавливающий цикл ошибкой (чтобы раннер не ушёл в
+// циклы).
 func TestChatAssistantKanbanStartLaunchesOrchestration(t *testing.T) {
 	srv, _, mr := newTestServer(t)
 	ctx := context.Background()
@@ -378,8 +391,9 @@ func TestChatAssistantKanbanStartLaunchesOrchestration(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Оркестрация резолвит провайдер через srv.prov: подменяем на stub,
-	// который немедленно останавливает цикл ошибкой (без сети).
-	srv.prov = providerResolve{prov: harnessStubProvider{}, done: true}
+	// фиксирующий вызов лида (декомпозиция эпика без задач).
+	prov := &leadSeenProvider{}
+	srv.prov = providerResolve{prov: prov, done: true}
 
 	m := runScriptedChatAssistant(t, sess, "запусти канбан по эпику",
 		&runner.ModelReply{ToolCalls: []tools.ToolCall{{Name: actionKanbanStart, Arguments: "{}"}}, FinishReason: "tool_calls"},
@@ -389,22 +403,26 @@ func TestChatAssistantKanbanStartLaunchesOrchestration(t *testing.T) {
 		t.Fatalf("финал = %q", m.Content)
 	}
 
-	// Оркестрация действительно стартовала: в истории роль status с текстом
-	// «Оркестрация запущена» (start() пишет его синхронно).
-	waitChatRole(t, sess, chat.RoleStatus, 3*time.Second)
+	// Оркестрация действительно стартовала и взяла эпик без задач в работу:
+	// лид вызван для декомпозиции. Стартового сообщения в чат нет.
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&prov.called) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if atomic.LoadInt32(&prov.called) == 0 {
+		t.Fatal("оркестрация не взяла эпик в работу: провайдер (лид) не вызван")
+	}
+
 	hist, err := sess.chat.History(ctx, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	// Стартовый статус кнопки не пишется в чат (RoleStatus). Ответ инструмента
+	// KanbanStart (RoleTool) — часть цикла ассистента, он ожидаем.
 	for _, h := range hist {
-		if strings.Contains(h.Content, "Оркестрация запущена") {
-			found = true
-			break
+		if h.Role == chat.RoleStatus && strings.Contains(h.Content, "Оркестрация запущена") {
+			t.Fatalf("запуск по кнопке не должен писать статус в чат, найдено: %+v", h)
 		}
-	}
-	if !found {
-		t.Fatalf("оркестрация не запущена, история: %+v", hist)
 	}
 	sess.stop()
 }

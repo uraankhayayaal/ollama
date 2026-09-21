@@ -250,7 +250,10 @@ func (s *Server) session(project string) *Session {
 // Единая точка правды: используется и в projectMeta (REST), и в снапшоте
 // сессии при WS-подключении (server/session.go), чтобы клиент всегда видел
 // одно и то же состояние.
-func computeStatus(running, gating bool, meta *board.Meta) string {
+// standby — режим ожидания работы (запуск по кнопке, на доске ничего нет):
+// сессия жива, но ничего не исполняет, пока не появится работа. Не перекрывает
+// gating (HITL-затвор важнее ожидания работы).
+func computeStatus(running, gating, standby bool, meta *board.Meta) string {
 	status := "idle"
 	if running {
 		status = "running"
@@ -268,12 +271,15 @@ func computeStatus(running, gating bool, meta *board.Meta) string {
 			}
 		}
 	}
+	if standby && running && !gating {
+		status = "standby"
+	}
 	return status
 }
 
 // projectMeta собирает ProjectMeta для REST API.
-func projectMeta(inf workspace.Info, meta *board.Meta, running, gating bool) map[string]any {
-	status := computeStatus(running, gating, meta)
+func projectMeta(inf workspace.Info, meta *board.Meta, running, gating, standby bool) map[string]any {
+	status := computeStatus(running, gating, standby, meta)
 	out := map[string]any{
 		"project_name": inf.Name,
 		"kind":         inf.Kind,
@@ -307,6 +313,19 @@ func (s *Server) provider() (models.LLMProvider, error) {
 		return nil, err
 	}
 	return p, nil
+}
+
+// sessionFlags возвращает флаги состояния сессии проекта (running/gating/
+// standby). Используется там, где статус читается из projectMeta без снапшота:
+// list/meta проектов по REST.
+func (s *Server) sessionFlags(project string) (running, gating, standby bool) {
+	sess := s.session(project)
+	if sess == nil {
+		return false, false, false
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.running, sess.gating, sess.standby
 }
 
 // writeJSON записывает JSON-ответ.
@@ -345,15 +364,8 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 			return store.GetMeta(ctx)
 		}()
 
-		sess := s.session(inf.Name)
-		running, gating := false, false
-		if sess != nil {
-			sess.mu.Lock()
-			running = sess.running
-			gating = sess.gating
-			sess.mu.Unlock()
-		}
-		out = append(out, projectMeta(inf, meta, running, gating))
+		running, gating, standby := s.sessionFlags(inf.Name)
+		out = append(out, projectMeta(inf, meta, running, gating, standby))
 	}
 	if out == nil {
 		out = []map[string]any{}
@@ -459,14 +471,11 @@ func (s *Server) writeProjectMetaFromInfo(w http.ResponseWriter, inf workspace.I
 		return store.GetMeta(context.Background())
 	}()
 	sess := s.session(inf.Name)
-	running, gating := false, false
+	running, gating, standby := false, false, false
 	if sess != nil {
-		sess.mu.Lock()
-		running = sess.running
-		gating = sess.gating
-		sess.mu.Unlock()
+		running, gating, standby = s.sessionFlags(inf.Name)
 	}
-	writeJSON(w, http.StatusOK, projectMeta(inf, meta, running, gating))
+	writeJSON(w, http.StatusOK, projectMeta(inf, meta, running, gating, standby))
 }
 
 // isGitURL определяет, что ввод — git-ссылка, а не путь к локальной папке:
@@ -594,9 +603,11 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleContinue запускает/возобновляет оркестрацию на текущей доске (кнопка
-// «Продолжить»). В чат ничего не отправляется: раннер работает над эпиками и
-// задачами доски своим циклом. Доска должна иметь хотя бы одну запись (эпик,
-// задачу или meta-задачу) — иначе 400.
+// «Продолжить»). Раннер работает в board-only режиме: в чат ничего не
+// отправляется, новые эпики не создаются — берутся в работу записи, которые уже
+// лежат на доске (эпики без задач декомпозируются лидами). Если брать в работу
+// нечего, оркестрация переходит в режим ожидания и ждёт появления работы (см.
+// Session.standby).
 func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 
@@ -609,14 +620,9 @@ func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 	// Текст задачи для раннера: приоритет meta-задачи проекта; если её нет
 	// (задачи добавлены чатом/вручную до первого запуска) — берём обобщённое
-	// описание доски. Пустая доска продолжать нечего — проверяем до резолва
-	// провайдера, чтобы «нечего продолжать» не зависело от наличия LLM.
+	// описание доски. Пустая доска не ошибка: запуск уходит в режим ожидания.
 	taskText, err := sess.continueTaskText(ctx)
 	if err != nil {
-		if errors.Is(err, errEmptyBoard) {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
 		writeErr(w, http.StatusInternalServerError, "чтение доски: "+err.Error())
 		return
 	}

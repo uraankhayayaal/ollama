@@ -115,7 +115,8 @@ func TestReporterWiredIntoSession(t *testing.T) {
 	}
 
 	// Доска с эпиком и незакрытым багрепортом: задача не «решена» (AllDone
-	// false), раннер доходит до фазы лидов и вызывает провайдера хотя бы раз.
+	// false), раннер в board-only доходит до фазы триажа багрепортов и
+	// вызывает провайдера хотя бы раз.
 	ctx := context.Background()
 	if err := sess.board.CreateEpic(ctx, &board.Epic{
 		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "эпик", Description: "описание"},

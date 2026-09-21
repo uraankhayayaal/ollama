@@ -1,8 +1,12 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,6 +265,111 @@ func TestChatAssistantCreatesEpic(t *testing.T) {
 		}
 		return len(epics) == 1 && epics[0].TaskID == "CHAT-01" && epics[0].Title == "Порт на Rust"
 	})
+}
+
+// TestChatAssistantPublishesBoardWhenIdle — «создай эпик …» в idle-сессии
+// (оркестрация не запущена): boardFlusher в этот момент не крутится, поэтому
+// router-колбэк обязан опубликовать снимок доски в шину сразу (через
+// Server.kickBoard), иначе созданный чатом эпик не появится на доске Web UI
+// до ручного обновления страницы.
+func TestChatAssistantPublishesBoardWhenIdle(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-act-pub")
+	sess, _, err := srv.getOrCreate("proj-act-pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.running = false
+	sess.mu.Unlock()
+
+	srvConn, cliConn := net.Pipe()
+	defer cliConn.Close()
+	ws := &WsConn{conn: srvConn, br: bufio.NewReader(srvConn), closed: make(chan struct{})}
+	t.Cleanup(func() { _ = ws.Close() })
+	srv.hub.Subscribe("proj-act-pub", ws)
+
+	runScriptedChatAssistant(t, sess, "создай эпик на порт на Rust",
+		&runner.ModelReply{
+			ToolCalls: []tools.ToolCall{{
+				Name:      tools.BoardCreateEpic,
+				Arguments: `{"task_id":"CHAT-01","title":"Порт на Rust","description":"Перевести сервер на Rust","assigned_role":"Backend Lead"}`,
+			}},
+			FinishReason: "tool_calls",
+		},
+		&runner.ModelReply{Content: "Эпик создан на доске.", FinishReason: "stop"},
+	)
+
+	// Читаем кадры до первого board-события: в idle-сессии оно обязано прийти
+	// сразу после инструмента (без boardFlusher). Ранние снимки (до выполнения
+	// инструмента — борда ещё пуста) пропускаем, ждём с эпиком.
+	var found bool
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		b, ok := readBoardSnapshot(t, cliConn, 2*time.Second)
+		if !ok {
+			break
+		}
+		if len(b.Epics) == 1 && b.Epics[0].TaskID == "CHAT-01" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("board-событие с эпиком CHAT-01 не пришло: idle-сессия должна публиковать снимок сразу")
+	}
+}
+
+// readBoardSnapshot читает кадры WS до первого board-события (или таймаута) и
+// возвращает его payload. ok=false — события не было.
+func readBoardSnapshot(t *testing.T, conn net.Conn, timeout time.Duration) (boardSnapshot, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		var ev struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		hdr := make([]byte, 2)
+		if _, err := io.ReadFull(conn, hdr); err != nil {
+			continue
+		}
+		length := int64(hdr[1] & 0x7f)
+		switch length {
+		case 126:
+			ext := make([]byte, 2)
+			if _, err := io.ReadFull(conn, ext); err != nil {
+				continue
+			}
+			length = int64(ext[0])<<8 | int64(ext[1])
+		case 127:
+			ext := make([]byte, 8)
+			if _, err := io.ReadFull(conn, ext); err != nil {
+				continue
+			}
+			length = 0
+			for _, b := range ext {
+				length = length<<8 | int64(b)
+			}
+		}
+		body := make([]byte, length)
+		if _, err := io.ReadFull(conn, body); err != nil {
+			continue
+		}
+		if err := json.Unmarshal(body, &ev); err != nil {
+			continue
+		}
+		if ev.Type != "board" {
+			continue
+		}
+		var snap boardSnapshot
+		if err := json.Unmarshal(ev.Payload, &snap); err != nil {
+			continue
+		}
+		return snap, true
+	}
+	return boardSnapshot{}, false
 }
 
 // TestChatAssistantCreatesBugAndTask — «хочу канбан на рефакторинг» и «заведи

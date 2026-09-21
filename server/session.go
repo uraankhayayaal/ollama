@@ -109,7 +109,11 @@ func (s *Server) newSession(project string) (*Session, error) {
 		sess.chatEvent(ev)
 		// Потоковые фрагменты не меняют доску — не дёргаем флашер на каждый токен.
 		if ev.Type != runevents.TypeMessageDelta {
-			sess.kickBoard()
+			// Через Server.kickBoard, а не sess.kickBoard: вне оркестрации
+			// (idle-чат) boardFlusher не крутится, и обычный тик никто бы не
+			// дренул — созданные чатом эпики/задачи/баги не появились бы на
+			// доске до ручного обновления страницы.
+			sess.srv.kickBoard(sess.project)
 		}
 	})
 	return sess, nil
@@ -147,7 +151,6 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.mu.Unlock()
 
 	sess.log.Infof("=== Оркестрация запущена: %s", truncateText(taskText, 120))
-	sess.append(chat.RoleStatus, "Оркестрация запущена: "+truncateText(taskText, 120), "", "", nil)
 	sess.broadcastStatus("running", "")
 
 	// Флашер доски: раз в 500 мс публикует снимок доски, если были изменения.
@@ -156,6 +159,11 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 
 	runner := planner.NewKanbanRunner(provider, sess.board)
 	runner.SetGate(sess)
+	// Запуск по кнопке — board-only: новые эпики не создаются, но записи доски
+	// (включая эпики без задач — их декомпозируют лиды) берутся в работу; при
+	// отсутствии работы раннер сообщает сессии (standby) и ждёт эпиков/задач.
+	runner.SetBoardOnly(true)
+	runner.SetStandbyNotifier(sess.setStandby)
 
 	sess.wg.Add(1)
 	go func() {
@@ -165,6 +173,7 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 		sess.running = false
 		sess.gating = false
 		sess.gateTyp = ""
+		sess.standby = false
 		sess.mu.Unlock()
 
 		// Завершение: публикуем финальный статус и снимок доски.
@@ -451,11 +460,11 @@ func (sess *Session) broadcastSnapshot() {
 	defer cancel()
 
 	sess.mu.Lock()
-	running, gating, gateTyp := sess.running, sess.gating, sess.gateTyp
+	running, gating, gateTyp, standby := sess.running, sess.gating, sess.gateTyp, sess.standby
 	sess.mu.Unlock()
 	meta, _ := sess.board.GetMeta(ctx)
 	sess.srv.hub.publish(sess.project, "status", statusEvent{
-		Status: computeStatus(running, gating, meta),
+		Status: computeStatus(running, gating, standby, meta),
 		Gating: gating,
 		Gate:   gateTyp,
 	})
@@ -465,6 +474,33 @@ func (sess *Session) broadcastSnapshot() {
 	}
 	if in, out, err := sess.tok.Get(ctx); err == nil {
 		sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: in, Output: out})
+	}
+}
+
+// setStandby переключает сессию в/из режима ожидания (нотификатор planner'а).
+// Он вызывает runner, когда board-only раннеру нечего взять в работу (правда)
+// или работа появилась (ложь). На фронте статус «standby» — активный: кнопка
+// показывает «Стоп», оркестрация жива и ждёт записи доски.
+func (sess *Session) setStandby(v bool) {
+	sess.mu.Lock()
+	was := sess.standby
+	sess.standby = v
+	running := sess.running
+	gating := sess.gating
+	sess.mu.Unlock()
+	if was == v {
+		return
+	}
+	if v {
+		sess.log.Infof("[оркестрация] на доске нет работы — режим ожидания")
+		sess.broadcastStatus("standby", "нет работы на доске — жду эпики и задачи")
+	} else {
+		// Выход из ожидания: снова running (если оркестрация ещё идёт и нет
+		// HITL-затвора — его статус приоритетнее и выставит waitGate).
+		if running && !gating {
+			sess.log.Infof("[оркестрация] на доске появилась работа — продолжаю")
+			sess.broadcastStatus("running", "")
+		}
 	}
 }
 
@@ -484,7 +520,7 @@ func (sess *Session) broadcastStatus(status, detail string) {
 
 // statusEvent — текущее состояние сессии.
 type statusEvent struct {
-	Status string `json:"status"`           // running|waiting|done|stopped|error
+	Status string `json:"status"`           // running|waiting|standby|done|stopped|error
 	Detail string `json:"detail,omitempty"` // причина (например, текст ошибки)
 	Gating bool   `json:"gating,omitempty"`
 	Gate   string `json:"gate,omitempty"`

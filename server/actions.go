@@ -182,7 +182,9 @@ func actionArg(args map[string]any, key string) string {
 // --- реализация ActionsBackend на Session ---
 
 // KanbanStart запускает/возобновляет оркестрацию по текущей доске (общая
-// механика handleContinue). Ошибка «пустая доска» не требует LLM-провайдера.
+// механика handleContinue). Раннер работает в board-only режиме: новые эпики
+// не создаются, но эпики без задач декомпозируются лидами; при отсутствии
+// работы уходит в режим ожидания.
 func (sess *Session) KanbanStart(ctx context.Context) error {
 	prov, err := sess.srv.provider()
 	if err != nil {
