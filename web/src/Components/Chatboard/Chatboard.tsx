@@ -13,7 +13,7 @@
 import { useEffect, useState } from "react";
 import type { ChatMsg } from "@/Types";
 // import { APIError } from "@/Api";
-import { downloadText } from "@/download";
+import { downloadText, safeName, stampedName } from "@/download";
 import "./styles.scss";
 
 // Пороги «тяжёлого» сообщения: после них контент сворачивается по умолчанию.
@@ -63,7 +63,15 @@ export function Chatboard({
     if (chat.length === 0) {
       return;
     }
-    downloadText(`chat-${Date.now()}.txt`, chatForAI(chat));
+    // Snippet — первые слова первого сообщения пользователя: различает
+    // экспорты одного чата; timestamp в начале имени уже добавляет stampedName.
+    const firstUser = chat.find((m) => {
+      const role = (m.role ?? "").toLowerCase();
+      return role === "user" && (m.content ?? "").trim().length > 0;
+    });
+    const raw = (firstUser?.content ?? "").trim().replace(/\s+/g, " ").slice(0, 20);
+    const snippet = raw ? safeName(raw) : "";
+    downloadText(stampedName("chat", snippet ? `${snippet}.txt` : ".txt"), chatForAI(chat));
   };
 
   if (collapsed) {

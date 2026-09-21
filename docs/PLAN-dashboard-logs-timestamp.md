@@ -1,6 +1,6 @@
 # План: Экспорт логов и чатов — timestamp в начале имени файла
 
-Статус: **ПЛАН (реализация позже)**. Формат — как в `PLAN-webui.md` / `PLAN-lsp.md`.
+Статус: **ГОТОВО**. Формат — как в `PLAN-webui.md` / `PLAN-lsp.md`.
 Закрывает TODO из `PLAN-dashboard-gitflow.md` (строка 10).
 
 ## Цель
@@ -36,13 +36,13 @@ timestamp **(дата+время)** **в начало имени** скачив�
 ## Этапы и чеклист
 
 ### Ф-1 — Хелпер и применения
-- [ ] `web/src/download.ts`: `stampedName(prefix, name)` (формат `YYYY-MM-DD_HH-mm-ss`; ведущие нули; безопасные символы имени)
-- [ ] `Chatboard.tsx`: `exportChat` → `downloadText(stampedName("chat", snippet(title) + ".txt"), ...)`
-- [ ] `Logboard.tsx`: `onExportAll` → `downloadText(stampedName("logs", safeName(props.project) + ".txt"), ...)`
-- [ ] Проверить: копирование (буфер) логов остается без timestamp (имени файла нет)
+- [x] `web/src/download.ts`: `stampedName(prefix, name)` (формат `YYYY-MM-DD_HH-mm-ss`; ведущие нули; безопасные символы имени)
+- [x] `Chatboard.tsx`: `exportChat` → `downloadText(stampedName("chat", snippet(title) + ".txt"), ...)`
+- [x] `Logboard.tsx`: `onExportAll` → `downloadText(stampedName("logs", safeName(props.project) + ".txt"), ...)`
+- [x] Проверить: копирование (буфер) логов остается без timestamp (имени файла нет)
 
 ### Ф-2 — Верификация
-- [ ] `npm run build` (web/)
+- [x] `npm run build` (web/)
 - [ ] Ручная проверка: открыть проект с чатом и логами → «Экспорт» в обоих панелях → в загрузках файлы начинаются с `YYYY-MM-DD_HH-mm-ss_`
 - [ ] Повторный экспорт не перезаписывает предыдущий (имя файла отличается)
 

@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { projectLogs } from "@/Api";
 import type { LogsView } from "@/Types";
-import { downloadText, safeName } from "@/download";
+import { downloadText, safeName, stampedName } from "@/download";
 import "./styles.scss";
 
 export interface LogboardProps {
@@ -177,7 +177,7 @@ export function Logboard(props: LogboardProps) {
   const onExportAll = () => {
     const text = allLogsText();
     if (!text) return;
-    downloadText(`logs-${safeName(props.project)}.txt`, text);
+    downloadText(stampedName("logs", `${safeName(props.project)}.txt`), text);
   };
 
   return (

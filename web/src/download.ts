@@ -16,3 +16,14 @@ export function downloadText(filename: string, text: string): void {
 export function safeName(name: string): string {
   return name.replace(/[^\w.\-]+/g, "_");
 }
+
+// Имя файла экспорта с локальным timestamp (дата+время, ведущие нули) в начале:
+// `YYYY-MM-DD_HH-mm-ss_<prefix><name>`. Timestamp в начале гарантирует, что
+// повторные экспорты не перезаписывают друг друга и порядок по имени совпадает
+// с хронологией.
+export function stampedName(prefix: string, name: string): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const ts = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  return `${ts}_${prefix}${name}`;
+}
