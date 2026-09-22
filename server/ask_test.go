@@ -69,9 +69,9 @@ func TestAskUserToolParsesAndAnswers(t *testing.T) {
 				},
 			},
 			map[string]any{
-				"id":          "q2",
-				"text":        "Какие фичи?",
-				"kind":        "multi",
+				"id":           "q2",
+				"text":         "Какие фичи?",
+				"kind":         "multi",
 				"allow_custom": false,
 				"options": []any{
 					map[string]any{"id": "a", "label": "А"},
@@ -84,8 +84,8 @@ func TestAskUserToolParsesAndAnswers(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	var res struct {
-		Status  string                   `json:"status"`
-		Answers []map[string]any         `json:"answers"`
+		Status  string           `json:"status"`
+		Answers []map[string]any `json:"answers"`
 	}
 	if err := json.Unmarshal(out, &res); err != nil {
 		t.Fatalf("разбор результата: %v", err)
@@ -101,10 +101,10 @@ func TestAskUserToolInvalidArguments(t *testing.T) {
 	tool := &askTool{b: &fakeAskBackend{}}
 
 	for name, args := range map[string]map[string]any{
-		"пусто":   {},
+		"пусто":      {},
 		"нет текста": {"questions": []any{map[string]any{"id": "q", "kind": "single", "options": []any{map[string]any{"id": "a", "label": "А"}}}}},
-		"нет опций": {"questions": []any{map[string]any{"id": "q", "text": "?", "kind": "single", "options": []any{}}}},
-		"дубль id":  {"questions": []any{
+		"нет опций":  {"questions": []any{map[string]any{"id": "q", "text": "?", "kind": "single", "options": []any{}}}},
+		"дубль id": {"questions": []any{
 			map[string]any{"id": "q", "text": "?", "kind": "single", "options": []any{map[string]any{"id": "a", "label": "А"}}},
 			map[string]any{"id": "q", "text": "!", "kind": "single", "options": []any{map[string]any{"id": "b", "label": "Б"}}},
 		}},
@@ -419,7 +419,7 @@ func TestChatAssistantAskUserRoundTrip(t *testing.T) {
 
 	rep := &runner.ModelReply{
 		ToolCalls: []tools.ToolCall{{
-			Name: "AskUser",
+			Name:      "AskUser",
 			Arguments: `{"questions":[{"id":"q1","text":"Какой язык для порта?","kind":"single","options":[{"id":"go","label":"Go","recommended":true},{"id":"rust","label":"Rust"}]}]}`,
 		}},
 		FinishReason: "tool_calls",

@@ -1,10 +1,7 @@
 # План: «спроси пользователя при неоднозначности» — структурированные вопросы ассистента
 
-Статус: **ПЛАН (реализация позже)**. Формат — как остальные `PLAN-*.md`:
-решения пользователя, решения архитектуры, привязка к текущему коду
-(`file:line`), этапы с чекбоксами, верификация. Обновлять файл по мере
-выполнения (чекбоксы `[x]`), статус менять на «реализовано» только после
-зелёной верификации.
+Статус: **реализовано** (Ф-1..Ф-3 + автоматическая верификация). Ручной E2E
+с живым LLM — в чеклисте Ф-4.
 
 ## Цель
 
@@ -193,37 +190,36 @@ POST /api/projects/{id}/ask/{askID}/answer
 ## Этапы и чеклист
 
 ### Ф-1 — Бэкенд: тип `ask` в чате + `Session.AnswerAsk`
-- [ ] `chat/store.go`: роль `chat.RoleAsk`, поле `Ask *chat.Ask` в `Message`,
+- [x] `chat/store.go`: роль `chat.RoleAsk`, поле `Ask *chat.Ask` в `Message`,
       персистентность в `fields()`/`messageFromEntry()` (ask → JSON-строка)
-- [ ] Тесты chat: append/history сохраняет и восстанавливает `Ask`
+- [x] Тесты chat: append/history сохраняет и восстанавливает `Ask`
 
 ### Ф-2 — Бэкенд: инструмент `AskUser`
-- [ ] `server/ask.go`: `AskBackend` (реализует `*Session`) + blocking-инструмент;
+- [x] `server/ask.go`: `AskBackend` (реализует `*Session`) + blocking-инструмент;
       `sess.serverActionTools()` включает `AskUser`
-- [ ] `server/server.go`: `POST /api/projects/{id}/ask/{askID}/answer` (CSRF)
+- [x] `server/server.go`: `POST /api/projects/{id}/ask/{askID}/answer` (CSRF)
       → `Session.AnswerAsk`; guard «нет активного вопроса»/«не тот askID»
-- [ ] Реестр `pendingAsk`: один активный вопрос на сессию; валидация
+- [x] Реестр `pendingAsk`: один активный вопрос на сессию; валидация
       `question_id`, `selected ⊆ options`, кастомное поле
-- [ ] Промпт `agents/chatassist/agent.go:48`: правило вызова `AskUser` при
+- [x] Промпт `agents/chatassist/agent.go:48`: правило вызова `AskUser` при
       неоднозначности (варианты + кастом + recommended + несколько вопросов)
-- [ ] Тесты server (hermetic, fake backend): вызов `AskUser` блокирует →
+- [x] Тесты server (hermetic, fake backend): вызов `AskUser` блокирует →
       `AnswerAsk` по одному → разблокировка с полным JSON ответов; кастом;
       повторный вызов при неотвеченном → ошибка
 
 ### Ф-3 — Фронт: карточка вопроса
-- [ ] `web/src/Types/Types.ts`: `AskOption/AskQuestion/AskMsg/AskChoice`,
-      `ChatMsg.ask`
-- [ ] `Api.ts`: `answerAsk`
-- [ ] `AskCard`: single-radio (клик = ответ), multi-checkbox + «Подтвердить»,
+- [x] `web/src/Types/Types.ts`: `AskOption/AskQuestion/AskMsg`, `ChatMsg.ask`
+- [x] `Api.ts`: `answerAsk`
+- [x] `AskCard`: single-radio (клик = ответ), multi-checkbox + «Подтвердить»,
       кастомный ввод, бейдж+выделение «рекомендую», шаги «i из N», «Назад»
-- [ ] `Chatboard.tsx`: рендер роли `ask`; карточка не сворачивается как tool;
+- [x] `Chatboard.tsx`: рендер роли `ask`; карточка не сворачивается как tool;
       авто-скролл работает
-- [ ] `npm run build` (web/) зелёный
+- [x] `npm run build` (web/) зелёный
 
 ### Ф-4 — Верификация
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go vet  . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go vet  . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
 - [ ] Ручной E2E: ассистенту дают неоднозначный запрос («создай эпик» про два
       возможных предмета) → карточка вопросов → клик по «рекомендую» → ответ
       модели с учётом выбора; второй прогон — multi-вопрос с чекбоксами;

@@ -18,10 +18,10 @@ import "./styles.scss";
 
 export function AskCard({
   ask,
-  answerAsk,
+  onAskAnswer,
 }: {
   ask: AskMsg;
-  answerAsk: (askID: string, body: AskAnswerBody) => Promise<AskAnswerResult>;
+  onAskAnswer: (askID: string, body: AskAnswerBody) => Promise<AskAnswerResult>;
 }) {
   const questions = ask.questions ?? [];
   const total = questions.length;
@@ -44,7 +44,7 @@ export function AskCard({
     setBusy(true);
     setErr("");
     try {
-      const res = await answerAsk(ask.id, {
+      const res = await onAskAnswer(ask.id, {
         question_id: questionID,
         selected: value.selected,
         custom: value.custom || undefined,
@@ -80,6 +80,9 @@ export function AskCard({
   }
 
   const q = questions[step];
+  if (!q) {
+    return null;
+  }
   return (
     <div className="ask">
       <div className="ask-header">

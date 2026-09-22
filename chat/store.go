@@ -34,10 +34,10 @@ type Message struct {
 	ID      string    `json:"id,omitempty"`
 	Role    Role      `json:"role"`
 	Content string    `json:"content"`
-	Agent   string    `json:"agent,omitempty"`         // имя агента (для assistant/tool)
-	Tool    string    `json:"tool,omitempty"`          // имя инструмента (для role=tool)
-	OK      *bool     `json:"ok,omitempty"`            // успешен ли результат инструмента
-	Ask     *Ask      `json:"ask,omitempty"`           // структурированный вопрос (для role=ask)
+	Agent   string    `json:"agent,omitempty"` // имя агента (для assistant/tool)
+	Tool    string    `json:"tool,omitempty"`  // имя инструмента (для role=tool)
+	OK      *bool     `json:"ok,omitempty"`    // успешен ли результат инструмента
+	Ask     *Ask      `json:"ask,omitempty"`   // структурированный вопрос (для role=ask)
 	Time    time.Time `json:"time"`
 }
 
@@ -57,7 +57,7 @@ const (
 // рендерит карточку-вардин: один вопрос на шаг, кастомный вариант с полем
 // ввода, выделение предпочтительного ответа (recommended).
 type Ask struct {
-	ID        string       `json:"id,omitempty"` // id пачки вопросов (для REST-ответа)
+	ID        string        `json:"id,omitempty"` // id пачки вопросов (для REST-ответа)
 	Questions []AskQuestion `json:"questions"`
 }
 
@@ -84,8 +84,8 @@ type AskOption struct {
 // результат инструмента AskUser).
 type AskAnswer struct {
 	QuestionID string   `json:"question_id"`
-	Selected   []string `json:"selected"`          // выбранные id вариантов
-	Custom     string   `json:"custom,omitempty"`  // текст кастомного ответа (если выбран)
+	Selected   []string `json:"selected"`         // выбранные id вариантов
+	Custom     string   `json:"custom,omitempty"` // текст кастомного ответа (если выбран)
 }
 
 // StoreConfig — параметры подключения Redis-хранилища диалога.

@@ -51,14 +51,14 @@ func (t *askTool) Name() string { return askToolName }
 
 func (t *askTool) Definition() tools.ToolDefinition {
 	return tools.ToolDefinition{
-		Name: askToolName,
+		Name:        askToolName,
 		Description: "Структурно спросить пользователя при неоднозначности: варианты выбора (один или несколько) + необязательный вариант «свой ответ» с полем ввода. Можно задать несколько вопросов сразу — они показываются пользователю пошагово. Рекомендуемый вариант помечай recommended=true. Инструмент блокирует генерацию до ответа пользователя; ответы вернутся в результате (status=answered).",
 		Parameters: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]any{
 				"questions": map[string]any{
-					"type": "array",
+					"type":        "array",
 					"description": "Пачка вопросов к пользователю (порядок = порядок шагов)",
 					"items": map[string]any{
 						"type":                 "object",
