@@ -171,6 +171,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}", s.handleGetBoard)
 	mux.HandleFunc("POST /api/projects/{id}/chat", s.handlePostChat)
 	mux.HandleFunc("GET /api/projects/{id}/chat", s.handleChatHistory)
+	mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleClearChat)
 	mux.HandleFunc("POST /api/projects/{id}/continue", s.handleContinue)
 	mux.HandleFunc("GET /api/projects/{id}/tokens", s.handleGetTokens)
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
@@ -665,6 +666,28 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// handleClearChat («кофе-брейк») стирает историю диалога, чтобы UI и модель
+// начали общение с чистого листа. Стрим удаляется целиком; клиентам шлётся
+// событие chat_clear (они очищают локальный массив сообщений), а в свежий
+// стрим пишется системная пометка о начале нового диалога. Она не попадает
+// в контекст модели (chatDialogueHistory игнорирует роль system).
+func (s *Server) handleClearChat(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := sess.chat.Clear(r.Context()); err != nil {
+		writeErr(w, http.StatusInternalServerError, "очистка чата: "+err.Error())
+		return
+	}
+	// Знак для остальных клиентов: стрим пуст, стирайте локальный массив.
+	sess.srv.hub.Publish(project, "chat_clear", map[string]bool{"ok": true})
+	sess.append(chat.RoleSystem, "Кофе-брейк: диалог очищен, начинаем общение с чистого листа.", "system", "", nil)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // handleGetTokens возвращает накопленные токены проекта (вход/выход) и

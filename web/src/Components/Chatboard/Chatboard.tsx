@@ -37,6 +37,7 @@ export function Chatboard({
   onToggleCollapse,
   thinking = false,
   onAskAnswer,
+  onClearChat,
 }: {
   chat: ChatMsg[];
   // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3); рендерится
@@ -56,6 +57,10 @@ export function Chatboard({
   // POST /api/projects/{id}/ask/{askID}/answer. Внедряется из App (там есть
   // имя проекта); карточка-вардин рендерится для сообщений role=ask.
   onAskAnswer?: (askID: string, body: AskAnswerBody) => Promise<AskAnswerResult>;
+  // onClearChat — «кофе-брейк»: очистить диалог и на сервере (DELETE
+  // /api/projects/{id}/chat), и в локальном состоянии, чтобы начать
+  // общение с чистого листа. Внедряется из App (там есть имя проекта).
+  onClearChat?: () => void;
 }) {
   useEffect(() => {
     if (!collapsed) {
@@ -143,6 +148,16 @@ export function Chatboard({
             >
               <IconDownload />
               Экспорт
+            </button>
+          )}
+          {onClearChat && (
+            <button
+              className="ab"
+              onClick={onClearChat}
+              title="Кофе-брейк: очистить диалог и начать общение с чистого листа"
+            >
+              <IconCoffee />
+              Кофе-брейк
             </button>
           )}
           {onToggleCollapse && (
@@ -395,6 +410,17 @@ function IconDownload() {
       <path d="M12 3v12" />
       <path d="M6 11l6 6 6-6" />
       <path d="M3 21h18" />
+    </svg>
+  );
+}
+
+// Иконка «кофе-брейк» (чашка с паром, как для паузы/перезагрузки диалога).
+function IconCoffee() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 8h13v6a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8z" />
+      <path d="M17 9h2a2 2 0 0 1 0 4h-2" />
+      <path d="M6 1v3M10 1v3M14 1v3" />
     </svg>
   );
 }

@@ -195,6 +195,16 @@ func (s *Store) History(ctx context.Context, limit int64) ([]Message, error) {
 	return out, nil
 }
 
+// Clear стирает историю диалога целиком («кофе-брейк»): удаляет ключ стрима,
+// чтобы UI и модель общались с чистого листа. Канал live-событий не трогается,
+// новые сообщения продолжают ходить как обычно.
+func (s *Store) Clear(ctx context.Context) error {
+	if err := s.client.Del(ctx, s.stream).Err(); err != nil {
+		return fmt.Errorf("chat: очистка стрима %s: %w", s.stream, err)
+	}
+	return nil
+}
+
 // Subscribe возвращает подписку на канал live-событий диалога. Вызывающий
 // код циклом получает *redis.Message (см. redis.PubSub.ReceiveMessage).
 func (s *Store) Subscribe(ctx context.Context) (*redis.PubSub, error) {

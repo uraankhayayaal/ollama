@@ -536,6 +536,44 @@ func TestChatHistoryEmpty(t *testing.T) {
 	}
 }
 
+func TestClearChatEndpoint(t *testing.T) {
+	srv, handler, _ := newTestServer(t)
+	ctx := context.Background()
+
+	sess, _, err := srv.getOrCreate("proj-clr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.chat.Append(ctx, chat.Message{Role: chat.RoleUser, Content: "старый вопрос"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/api/projects/proj-clr/chat", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE chat: %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	hist, err := sess.chat.History(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Старое сообщение стёрто; в свежем стриме — только системная пометка
+	// «кофе-брейк», которую модель игнорирует (см. chatDialogueHistory).
+	if len(hist) != 1 || hist[0].Role != chat.RoleSystem {
+		t.Fatalf("после очистки в стриме: %+v, want одна system-пометка", hist)
+	}
+
+	// Повторный клик — идемпотентен (404/500 нет).
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("DELETE", "/api/projects/proj-clr/chat", nil)
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("повторный DELETE chat: %d, body: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
 func TestGateDecideWithoutSession(t *testing.T) {
 	_, handler, _ := newTestServer(t)
 

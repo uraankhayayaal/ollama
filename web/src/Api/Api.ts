@@ -188,6 +188,18 @@ export async function chatHistory(
   );
 }
 
+// «Кофе-брейк»: очищает историю диалога на сервере, чтобы UI и модель
+// начали общение с чистого листа.
+export async function clearChat(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "DELETE",
+    `${base}/api/projects/${enc(project)}/chat`,
+  );
+}
+
 // Накопленные токены проекта (вход/выход).
 export async function projectTokens(
   base: string,

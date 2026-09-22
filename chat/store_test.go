@@ -82,6 +82,46 @@ func TestHistoryLimitAndOrder(t *testing.T) {
 	}
 }
 
+// TestClearWipesHistory — Clear стирает стрим целиком («кофе-брейк»): после
+// очистки история пуста, а новые сообщения Append записываются заново.
+func TestClearWipesHistory(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newTestStore(t, "proj-clear")
+
+	for i := 0; i < 3; i++ {
+		if _, err := s.Append(ctx, Message{Role: RoleUser, Content: "m"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hist, err := s.History(ctx, 10); err != nil || len(hist) != 3 {
+		t.Fatalf("история до очистки: %v, count=%d (want 3)", err, len(hist))
+	}
+
+	if err := s.Clear(ctx); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	hist, err := s.History(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 0 {
+		t.Fatalf("после Clear история не пуста: %d сообщений", len(hist))
+	}
+
+	// Стрим жив: новые сообщения записываются, числа сообщений идут с нуля.
+	first, err := s.Append(ctx, Message{Role: RoleUser, Content: "с нуля"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist, err = s.History(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 1 || hist[0].ID != first || hist[0].Content != "с нуля" {
+		t.Fatalf("после Clear новая запись = %+v", hist)
+	}
+}
+
 func TestSubscribeLive(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newTestStore(t, "proj-c")

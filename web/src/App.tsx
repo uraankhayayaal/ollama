@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, answerAsk, boardOf, chatHistory, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, updateTask } from "./Api";
+import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AskAnswerBody, AskAnswerResult, BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -270,6 +270,14 @@ export function App() {
         handleLog(ev.payload as LogMessage);
       } catch {}
     });
+    // «Кофе-брейк»: диалог стёрт на сервере (у другого клиента или в этой
+    // вкладке) — чистим локальный массив и снимаем «модель думает». Следом
+    // прилетит системная пометка role=chat/system из свежего стрима.
+    l.on("chat_clear", () => {
+      setChat([]);
+      setLive(null);
+      setThinking(false);
+    });
 
     return () => l.close();
   }, [project?.project_name]);
@@ -301,6 +309,27 @@ export function App() {
     },
     [project],
   );
+
+  // «Кофе-брейк»: очищает диалог и на сервере (стирается стрим — модель
+  // «забывает» разговор и общается с чистого листа), и в локальном состоянии.
+  // Сервер сам шлёт chat_clear в шину, но здесь очищаем и свою вкладку, чтобы
+  // не ждать круга по WS.
+  const onClearChat = async () => {
+    if (!project) {
+      return;
+    }
+    if (!window.confirm("Кофе-брейк: очистить диалог и начать общение с чистого листа?")) {
+      return;
+    }
+    setChat([]);
+    setLive(null);
+    setThinking(false);
+    try {
+      await clearChat(BASE, project.project_name);
+    } catch (e) {
+      fail(e);
+    }
+  };
 
   // «Продолжить»: запускает/возобновляет Kanban-оркестрацию на текущей доске
   // (кнопка ⏵). В чат ничего не отправляется и не дублируется: раннер работает
@@ -680,6 +709,7 @@ export function App() {
                 thinking={thinking}
                 collapsed
                 onAskAnswer={onAskAnswer}
+                onClearChat={onClearChat}
                 onToggleCollapse={() => toggleCollapse("chat")}
               />
             </section>
@@ -696,6 +726,7 @@ export function App() {
                 endRef={chatEnd}
                 thinking={thinking}
                 onAskAnswer={onAskAnswer}
+                onClearChat={onClearChat}
                 onToggleCollapse={() => toggleCollapse("chat")}
               />
             </section>
