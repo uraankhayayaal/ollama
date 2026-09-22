@@ -12,6 +12,7 @@ import (
 	"ai/projects"
 	"ai/rag"
 	"ai/runevents"
+	"ai/runctx"
 )
 
 // --- Ассистент проекта (Ф-1) ---
@@ -51,6 +52,10 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 		// транслируются в живую шину (type=chat_delta/chat, type=tokens), иначе
 		// счётчик токенов чата остаётся на нулях.
 		rctx := runevents.WithReporter(ctx, sess.router.WithAgent("assistant"))
+		// Расширенное сжатие истории (Ф-6..Ф-11): RAG-вытеснение/ранжирование
+		// поверх ragClient и LSP-оглавления проекта. Флаги CODEGEN_HISTORY_*
+		// из окружения; выключено по умолчанию.
+		rctx = runctx.WithCompression(rctx, sess.project, dir, ragClient)
 		rep, err := provider.Generate(rctx, asst)
 		if err != nil {
 			sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)

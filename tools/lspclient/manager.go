@@ -74,6 +74,11 @@ func (m *Manager) DiagnosticsProvider(ctx context.Context, dir string, kind stac
 	return m.Client(ctx, dir, kind)
 }
 
+// Outliner возвращает клиент как источник оглавлений файлов (documentSymbol).
+func (m *Manager) Outliner(ctx context.Context, dir string, kind stackdetect.Kind) (Outliner, error) {
+	return m.Client(ctx, dir, kind)
+}
+
 // Client возвращает живой клиент для проекта dir и стека kind, запуская
 // сервер при необходимости. Параллельные обращения к одному ключу дедупли
 // цируются (singleflight): один стартует, остальные ждут готовый клиент.

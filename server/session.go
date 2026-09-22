@@ -13,7 +13,10 @@ import (
 	"ai/chat"
 	"ai/logging"
 	"ai/models"
+	"ai/projects"
+	"ai/rag"
 	"ai/runevents"
+	"ai/runctx"
 	"ai/tokens"
 	"ai/workspace"
 )
@@ -150,6 +153,15 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// (type=chat / type=tool / type=tokens). Без этого Web UI не видит ни
 	// логов раундов, ни счётчика токенов (всё стоит на нулях).
 	cctx = runevents.WithReporter(cctx, sess.router)
+	// Расширенное сжатие агентских циклов фаз (Ф-6..Ф-11): RAG-вытеснение/
+	// ранжирование и LSP-оглавления — каждый call к Generate в оркестрации
+	// (архитектор, лиды, специалисты) получает CompressionClient из контекста.
+	// Флаги CODEGEN_HISTORY_* из окружения; выключено по умолчанию.
+	dir := projects.ProjectDir(sess.project)
+	if inf, err := sess.srv.reg.Get(sess.project); err == nil {
+		dir = inf.Root
+	}
+	cctx = runctx.WithCompression(cctx, sess.project, dir, rag.NewClientSafe(rag.Config{}))
 	sess.ctx = cctx
 	sess.cancel = func() { cancel() }
 	sess.mu.Unlock()

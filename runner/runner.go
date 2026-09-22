@@ -511,6 +511,9 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	}
 	content := ""
 	mx := maxRounds()
+	// lastInputTokens — фактический вход (токены) последнего запроса к модели:
+	// используется для ужесточения сжатия (Ф-11, CODEGEN_HISTORY_TOKENS).
+	lastInputTokens := 0
 
 	// Обязательные инструменты собираем из двух источников: обобщённые группы
 	// RequiredToolGroups (например, лиды: исследование кода + публикация задач)
@@ -582,15 +585,14 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			return nil, fmt.Errorf("контекст отменён до раунда %d: %w", round+1, err)
 		}
 
-		// Сжатие истории под символьный бюджет (CODEGEN_HISTORY_BUDGET): при
-		// включённом бюджете перед каждым запросом выбрасываем старейшие пары
-		// assistant+tool из середины, сохраняя систему, задачу и актуальный
-		// хвост. Счётчики allToolCalls/requiredDone от истории не зависят.
-		if budget := historyBudget(); budget > 0 {
-			if compacted := CompressHistory(messages, budget); len(compacted) != len(messages) {
-				Debugf("RUNNER: раунд %d: сжатие истории %d -> %d сообщений (бюджет %d)", round+1, len(messages), len(compacted), budget)
-				messages = compacted
-			}
+		// Сжатие истории (Ф-6..Ф-11): бюджет из CODEGEN_HISTORY_BUDGET и
+		// ужесточение по фактическому входу прошлого раунда (Ф-11,
+		// CODEGEN_HISTORY_TOKENS), плюс побочные фичи из CompressionClient
+		// контекста — RAG-вытеснение (Ф-7), ранжирование (Ф-8), LSP-оглавления
+		// (Ф-9), компакция (Ф-10) и памятка (Ф-6). Счётчики
+		// allToolCalls/requiredDone от истории не зависят.
+		if compacted, _ := compressHistoryForRound(ctx, provider, messages, lastInputTokens); len(compacted) != len(messages) {
+			messages = compacted
 		}
 
 		// Если провайдер поддерживает стриминг — текст отдаём по кускам
@@ -630,6 +632,9 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		if rep != nil && (in > 0 || out > 0) {
 			rep.OnTokens(int64(in), int64(out), tps)
 		}
+		// Фактический вход пишем в счётчик — следующий раунд сожмётся жёстче,
+		// если провайдер перенёс запрос больше лимита (Ф-11).
+		lastInputTokens = in
 
 		if rep != nil {
 			rep.OnMessage("assistant", reply.Content, reply.FinishReason == "length")

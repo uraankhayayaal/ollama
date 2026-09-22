@@ -23,6 +23,7 @@ import (
 	"ai/models"
 	"ai/projects"
 	"ai/rag"
+	"ai/runctx"
 	"ai/server"
 	"ai/services/mrlistener"
 	"context"
@@ -131,6 +132,9 @@ func main() {
 	var planMode bool
 	var planProject string
 	var planPrompt string
+	// projName — имя проекта standalone-агента (для расширенного сжатия Ф-6..Ф-11);
+	// заполняется в кейсах с каталогом temp/<проект>, у ревьювера остаётся пустым.
+	var projName string
 	switch agentName {
 	case "generate", "backend":
 		// "generate" оставлен как алиас для обратной совместимости: новое
@@ -140,6 +144,7 @@ func main() {
 				"Пример: go run . backend storageService \"Напиши микросервис для хранения файлов\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := defaultPrompt(agentArgs[1:])
 		agent = developer.NewBackendDeveloper(projectName, prompt)
 	case "frontend":
@@ -148,6 +153,7 @@ func main() {
 				"Пример: go run . frontend storageService \"Напиши веб-интерфейс для просмотра файлов\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := defaultPrompt(agentArgs[1:])
 		agent = developer.NewFrontendDeveloper(projectName, prompt)
 	case "plan":
@@ -165,6 +171,7 @@ func main() {
 				"Пример: go run . devops billingService \"Подними Docker Compose с моками для QA и подготовь манифесты Kubernetes\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent = devops.NewDevops(projectName, prompt)
 	case "devopslead":
@@ -173,6 +180,7 @@ func main() {
 				"Пример: go run . devopslead billingService \"Декомпозируй инфраструктуру: Docker Compose локально, Kubernetes на проде, CI/CD с автотестами QA\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent = devopslead.NewDevopsLead(projectName, prompt)
 	case "qa":
@@ -181,6 +189,7 @@ func main() {
 				"Пример: go run . qa billingService \"Проверь соответствие Backend и Frontend API-контрактам и напиши автотесты\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := strings.Join(agentArgs[1:], " ")
 		// Объединённый агент QA-приёмки: сборка → автотесты → приёмка.
 		agent = qaengineer.NewQAEngineer(projectName, prompt)
@@ -190,6 +199,7 @@ func main() {
 				"Пример: go run . qalead billingService \"Сформируй тест-план по контрактам Архитектора и декомпозируй его на задачи для QA-инженеров\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent = qalead.NewQALead(projectName, prompt)
 	case "frontendlead":
@@ -198,6 +208,7 @@ func main() {
 				"Пример: go run . frontendlead billingService \"Декомпозируй интерфейс на UI-модули, спроектируй стейт и API-контракты\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent = frontendlead.NewFrontendLead(projectName, prompt)
 	case "backendlead":
@@ -206,6 +217,7 @@ func main() {
 				"Пример: go run . backendlead billingService \"Декомпозируй сервисную часть на модули, спроектируй контракты API\"")
 		}
 		projectName := agentArgs[0]
+		projName = projectName
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent = backendlead.NewBackendLead(projectName, prompt)
 	case "kanban":
@@ -223,7 +235,10 @@ func main() {
 		if err != nil {
 			logging.Fatalf("Ошибка доски проекта %s: %v", kanbanProject, err)
 		}
-		if err := planner.NewKanbanRunner(provider, store).Run(ctx, kanbanProject, kanbanPrompt); err != nil {
+		// Расширенное сжатие агентских циклов фаз (Ф-6..Ф-11) — как у плана:
+		// контекст инжектируется в ctx, которой пользуются все call к Generate.
+		kctx := runctx.WithCompression(ctx, kanbanProject, projects.ProjectDir(kanbanProject), rag.NewClientSafe(rag.Config{}))
+		if err := planner.NewKanbanRunner(provider, store).Run(kctx, kanbanProject, kanbanPrompt); err != nil {
 			_ = store.Close()
 			logging.Fatalf("Kanban: %v", err)
 		}
@@ -253,6 +268,13 @@ func main() {
 		// поэтому лимит на весь план не накладываем (context без дедлайна).
 		runPlanMode(context.Background(), provider, planProject, planPrompt)
 		os.Exit(0)
+	}
+
+	// Расширенное сжатие истории агентского цикла (Ф-6..Ф-11) для
+	// standalone-агентов с проектным каталогом (RAG-вытеснение/ранжирование и
+	// LSP-оглавления). У ревьювера проекта нет — контекст не трогаем.
+	if projName != "" {
+		ctx = runctx.WithCompression(ctx, projName, projects.ProjectDir(projName), rag.NewClientSafe(rag.Config{}))
 	}
 
 	resp, err := provider.Generate(ctx, agent)
@@ -614,8 +636,11 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, 
 	// релевантным кодом из векторной памяти с фильтром по scope шага.
 	// Клиент ленивый: при недоступном Qdrant/эмбеддингах — nil/деградация
 	// (блок просто не добавляется, шаги работают как раньше).
-	exec.SetRAG(rag.NewClientSafe(rag.Config{}))
-	if err := exec.Run(ctx); err != nil {
+	ragClient := rag.NewClientSafe(rag.Config{})
+	exec.SetRAG(ragClient)
+	// Расширенное сжатие агентских циклов шагов (Ф-6..Ф-11) — тем же клиентом.
+	execCtx := runctx.WithCompression(ctx, plan.ProjectName, projects.ProjectDir(projectName), ragClient)
+	if err := exec.Run(execCtx); err != nil {
 		logging.Fatalf("Ошибка выполнения плана: %v", err)
 	}
 

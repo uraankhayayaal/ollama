@@ -86,9 +86,24 @@ type DiagnosticsProvider interface {
 	Diagnostics(ctx context.Context, files []string) ([]Diagnostic, error)
 }
 
+// Symbol — символ из оглавления документа (DocumentSymbol).
+type Symbol struct {
+	Name     string   `json:"name"`
+	Kind     string   `json:"kind"` // function | method | class | struct | ...
+	Line     int      `json:"line"` // 1-based
+	Children []Symbol `json:"children,omitempty"`
+}
+
+// Outliner — источник оглавлений файлов (documentSymbol): используется
+// LSP-якорями сжатия (Ф-9), где нужен текст об оглавлении вытесняемого файла.
+type Outliner interface {
+	DocumentSymbols(ctx context.Context, file string) ([]Symbol, error)
+}
+
 var (
 	_ Navigator           = (*Client)(nil)
 	_ DiagnosticsProvider = (*Client)(nil)
+	_ Outliner            = (*Client)(nil)
 )
 
 // diagStore хранит последние publishDiagnostics по URI и будит ожидающих.
@@ -382,6 +397,138 @@ func (c *Client) Hover(ctx context.Context, file string, line, col int) (*Hover,
 		out.EndCol = int(h.Range.End.Character) + 1
 	}
 	return out, nil
+}
+
+// DocumentSymbols возвращает оглавление файла (documentSymbol): дерево
+// символов с координатами. file — путь относительно проекта.
+func (c *Client) DocumentSymbols(ctx context.Context, file string) ([]Symbol, error) {
+	abs, _, err := c.ensureOpen(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout())
+	defer cancel()
+	res, err := c.server.DocumentSymbol(cctx, &protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri.File(abs)},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return convertSymbolResult(res), nil
+}
+
+// convertSymbolResult переводит LSP-ответ documentSymbol (union) в [][]Symbol.
+func convertSymbolResult(res protocol.DocumentSymbolResult) []Symbol {
+	switch r := res.(type) {
+	case protocol.DocumentSymbolSlice:
+		out := make([]Symbol, 0, len(r))
+		for _, s := range r {
+			out = append(out, symbolOf(s))
+		}
+		return out
+	case protocol.SymbolInformationSlice:
+		out := make([]Symbol, 0, len(r))
+		for _, si := range r {
+			out = append(out, Symbol{Name: si.Name, Kind: symbolKindName(si.Kind), Line: int(si.Location.Range.Start.Line) + 1})
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func symbolOf(s protocol.DocumentSymbol) Symbol {
+	o := Symbol{Name: s.Name, Kind: symbolKindName(s.Kind), Line: int(s.Range.Start.Line) + 1}
+	for _, ch := range s.Children {
+		o.Children = append(o.Children, symbolOf(ch))
+	}
+	return o
+}
+
+// symbolKindName переводит LSP SymbolKind в читаемое имя (подмножество).
+func symbolKindName(k protocol.SymbolKind) string {
+	switch k {
+	case protocol.SymbolKindPackage:
+		return "package"
+	case protocol.SymbolKindModule:
+		return "module"
+	case protocol.SymbolKindNamespace:
+		return "namespace"
+	case protocol.SymbolKindClass:
+		return "class"
+	case protocol.SymbolKindMethod:
+		return "method"
+	case protocol.SymbolKindProperty:
+		return "property"
+	case protocol.SymbolKindField:
+		return "field"
+	case protocol.SymbolKindConstructor:
+		return "constructor"
+	case protocol.SymbolKindEnum:
+		return "enum"
+	case protocol.SymbolKindInterface:
+		return "interface"
+	case protocol.SymbolKindFunction:
+		return "function"
+	case protocol.SymbolKindVariable:
+		return "variable"
+	case protocol.SymbolKindConstant:
+		return "constant"
+	case protocol.SymbolKindString:
+		return "string"
+	case protocol.SymbolKindNumber:
+		return "number"
+	case protocol.SymbolKindBoolean:
+		return "boolean"
+	case protocol.SymbolKindArray:
+		return "array"
+	case protocol.SymbolKindObject:
+		return "object"
+	case protocol.SymbolKindKey:
+		return "key"
+	case protocol.SymbolKindNull:
+		return "null"
+	case protocol.SymbolKindEnumMember:
+		return "enum_member"
+	case protocol.SymbolKindStruct:
+		return "struct"
+	case protocol.SymbolKindEvent:
+		return "event"
+	case protocol.SymbolKindOperator:
+		return "operator"
+	case protocol.SymbolKindTypeParameter:
+		return "type_parameter"
+	default:
+		return "symbol"
+	}
+}
+
+// FormatOutline строит текстовое оглавление файла: имя типа вид : номер строки
+// на строку, вложенные символы — с отступом (4 пробела на уровень).
+func FormatOutline(path string, syms []Symbol) string {
+	var b strings.Builder
+	writeSyms(&b, syms, 0)
+	if b.Len() == 0 {
+		return ""
+	}
+	return path + "\n" + strings.TrimRight(b.String(), "\n")
+}
+
+func writeSyms(b *strings.Builder, syms []Symbol, depth int) {
+	for _, s := range syms {
+		b.WriteString(strings.Repeat("    ", depth))
+		if s.Kind != "" && s.Kind != "symbol" {
+			b.WriteString(s.Kind)
+			b.WriteByte(' ')
+		}
+		b.WriteString(s.Name)
+		if s.Line > 0 {
+			b.WriteString(" : ")
+			b.WriteString(strconv.Itoa(s.Line))
+		}
+		b.WriteByte('\n')
+		writeSyms(b, s.Children, depth+1)
+	}
 }
 
 // diagItem — файл, ожидающий публикацию диагностик.
