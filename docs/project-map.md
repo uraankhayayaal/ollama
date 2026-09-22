@@ -188,6 +188,8 @@ ollama/  (go.mod module ai)
 | `OLLAMA_INPUT_TOKENS` (legacy `OLLAMA_NUM_CTX`) | окно контекста num_ctx | `32000` |
 | `OLLAMA_OUTPUT_TOKENS` (legacy `OLLAMA_MAX_TOKENS`) | лимит выходных токенов (num_predict) | не задано |
 | `OLLAMA_THINK_TOKENS` | бюджет thinking в токенах → think-уровень (`low`/`medium`/`high`/`max`) | не задано |
+| `OLLAMA_TOOL_RETRIES` | авто-ретрай «обрубленных» tool-call (`invalid tool call arguments`): число повторов запроса | `2` |
+| `OLLAMA_TOOL_RETRY_DELAY` | пауза между повторами авто-ретрая tool-call, мс | `1000` |
 | `OLLAMA_KV_CACHE_TYPE` / `OLLAMA_KEEP_ALIVE` | серверные настройки `ollama serve` (в этом коде не читаются) |
 
 ### YandexGPT / Trim

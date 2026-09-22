@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ollama/ollama/api"
 )
@@ -51,6 +53,48 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 // с убранным потоковым колбэком — поведение сохранено (полный текст ответа).
 func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
 	return o.ChatStream(ctx, agent, msgs, nil)
+}
+
+// toolCallRetriesDefault — сколько раз повторяем запрос к модели, если
+// llama-server вернул невалидный JSON аргументов tool-вызова (модель обрезала
+// вывод; см. retryableToolCallErr). 0 (OLLAMA_TOOL_RETRIES=0) — повторов нет.
+const toolCallRetriesDefault = 2
+
+// toolCallRetryDelayDefault — пауза между повторами, она даёт llama-server
+// время вернуться в рабочее состояние. Настраивается OLLAMA_TOOL_RETRY_DELAY
+// (мс; 0 — без паузы).
+const toolCallRetryDelayDefault = time.Second
+
+// retryableToolCallErr распознаёт «обрубленный» tool-call llama-server —
+// ошибку, которую безопасно повторять с тем же запросом: это не сетевая/
+// контекстная проблема, а качество генерации (модель недописала JSON вызова),
+// ответ стохастичен, поэтому следующий запрос с той же историей почти наверняка
+// вернёт корректные аргументы. Ошибка формируется накопителем аргументов
+// llama-server ("llama-server returned invalid tool call arguments for %q: %w").
+func retryableToolCallErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "invalid tool call arguments")
+}
+
+// toolCallRetries — число повторов запроса при невалидном JSON аргументов
+// tool-call (OLLAMA_TOOL_RETRIES; не настроено — toolCallRetriesDefault).
+func toolCallRetries() int {
+	if v := strings.TrimSpace(os.Getenv("OLLAMA_TOOL_RETRIES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return toolCallRetriesDefault
+}
+
+// toolCallRetryDelay — пауза между повторами (OLLAMA_TOOL_RETRY_DELAY, мс;
+// не настроено — toolCallRetryDelayDefault).
+func toolCallRetryDelay() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("OLLAMA_TOOL_RETRY_DELAY")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return toolCallRetryDelayDefault
 }
 
 // ChatStream выполняет один запрос к модели Ollama в потоковом режиме: фрагменты
@@ -151,7 +195,14 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 	var doneReason string
 	var usage *runner.Usage
 
-	err := o.client.Chat(ctx, req, func(resp api.ChatResponse) error {
+	// Авто-ретрай «обрубленных» tool-call: llama-server иногда не дочитывает
+	// JSON-аргументы вызова инструмента (модель оборвала вывод на полуслове,
+	// редко) и отвечает "llama-server returned invalid tool call arguments:
+	// unexpected end of JSON input". Это не сетевая/контекстная ошибка, а
+	// стохастическое качество генерации — повтор того же запроса почти всегда
+	// возвращает корректный вызов, и оркестрация не падает на одном раунде.
+	// Количество повторов — toolCallRetries(), пауза — toolCallRetryDelay().
+	streamFn := func(resp api.ChatResponse) error {
 		if resp.Message.Content != "" {
 			content.WriteString(resp.Message.Content)
 		}
@@ -206,7 +257,34 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		}
 
 		return nil
-	})
+	}
+
+	var err error
+	for attempt := 0; ; attempt++ {
+		err = o.client.Chat(ctx, req, streamFn)
+		if err == nil {
+			break
+		}
+		if attempt >= toolCallRetries() || !retryableToolCallErr(err) || ctx.Err() != nil {
+			break
+		}
+		runner.Debugf("OLLAMA: попытка %d/%d: невалидные аргументы tool-call (%v), повторяю запрос к модели %q",
+			attempt+1, toolCallRetries(), err, o.model)
+		// Сбрасываем накопители частичного ответа неудачной попытки.
+		content.Reset()
+		toolCalls = nil
+		doneReason = ""
+		usage = nil
+		if d := toolCallRetryDelay(); d > 0 {
+			timer := time.NewTimer(d)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, fmt.Errorf("Ошибка выполнения Chat: %w", ctx.Err())
+			}
+		}
+	}
 	if err != nil {
 		// Оборачиваем через %w: отмена контекста (остановка пользователем,
 		// graceful shutdown, таймаут шага) должна оставаться различимой для
