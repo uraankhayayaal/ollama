@@ -11,6 +11,7 @@ import (
 	"ai/projects"
 	"ai/tools"
 	"os"
+	"strings"
 
 	"github.com/ollama/ollama/api"
 )
@@ -67,6 +68,11 @@ type Assistant struct {
 	*tools.FileOps
 	// Prompt — сообщение пользователя (текст message из чата).
 	Prompt string
+	// History — компактная история диалога (предыдущие реплики пользователя и
+	// ассистента), подмешивается в системный промпт, чтобы модель отвечала
+	// не только на текущий вопрос, но и с учётом предыдущего контекста чата
+	// («что я писал минуту назад»). Пустая строка — история не передаётся.
+	History string
 	// ProjectName — имя проекта (фильтр RAG-поиска, совпадает с реестром).
 	ProjectName string
 	// RAG — клиент векторной памяти (CodeSearch + блок «релевантный код» в
@@ -132,6 +138,9 @@ func (a *Assistant) RequiredToolFirstRound() (string, bool) {
 
 func (a *Assistant) GetSystemMessages(_ []agents.Message) []agents.Message {
 	sys := assistantSystemPrompt
+	if hist := strings.TrimSpace(a.History); hist != "" {
+		sys = historyPromptBlock(hist) + "\n\n" + sys
+	}
 	if blk := a.ragContextBlock(); blk != "" {
 		sys += "\n\n" + blk
 	}
@@ -141,6 +150,14 @@ func (a *Assistant) GetSystemMessages(_ []agents.Message) []agents.Message {
 			Message: sys,
 		},
 	}
+}
+
+// historyPromptBlock — блок истории диалога для системного промпта: ставится
+// ПЕРЕД правилами ассистента, связка «история + новый вопрос» образует полный
+// контекст, при этом модель отвечает только на последнюю реплику пользователя.
+func historyPromptBlock(history string) string {
+	return "История диалога с пользователем (только для контекста — отвечай " +
+		"только на последнюю реплику пользователя):\n" + history
 }
 
 // ragContextBlock — «релевантный код по вопросу»: семантическая выборка из

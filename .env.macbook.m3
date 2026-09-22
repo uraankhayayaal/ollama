@@ -26,10 +26,14 @@ OLLAMA_MODEL_LARGE=
 # Окно входа (num_ctx) на запрос: 32768 — выравнено с моделфайлом и
 # конфигом opencode. Без этого приложение форсировало бы дефолт 32000.
 OLLAMA_INPUT_TOKENS=32768
-# Лимит выхода (num_predict).
-OLLAMA_OUTPUT_TOKENS=8192
-# Бюджет thinking -> уровень рассуждения: 4000 = "medium".
-OLLAMA_THINK_TOKENS=4000
+# Лимит выхода (num_predict): увеличен, чтобы JSON tool-вызова не обрезался
+# на полуслове (Qwen3 с 8192 ронял BoardCreateTask: "unexpected end of JSON input").
+OLLAMA_OUTPUT_TOKENS=16384
+# Рассуждение отключено: thinking тратит бюджет выхода и обрубает tool-вызовы
+# (пустые ответы done_reason="length", цикл падает). См. thinkLevelFromTokens.
+OLLAMA_THINK=0
+# Авто-ретрай обрубленных tool-call (см. OllamaModel.go).
+OLLAMA_TOOL_RETRIES=5
 
 # --- Таймауты: даже на M3 крупные модели/большие диффы требуют времени,
 # но контекст шире, поэтому лимиты можно держать выше дефолтных ---

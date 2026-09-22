@@ -44,6 +44,10 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 		// деградирует в skipped (как у планировщика).
 		ragClient := rag.NewClientSafe(rag.Config{})
 		asst := chatassist.NewAssistantInDir(dir, sess.project, prompt, sess.board, ragClient)
+		// История диалога: последние реплики пользователя/ассистента в системный
+		// промпт, чтобы модель помнила, «о чём писали минуту назад», а не только
+		// текущий вопрос. Текущая реплика (последняя запись стрима) исключается.
+		asst.History = sess.chatDialogueHistory(ctx)
 		// Ф-3: мосты-инструменты к серверным git/канбан-действиям живут вне
 		// общего реестра tools (цикл импортов) — инъектируем их в набор
 		// ассистента на стороне сервера.
@@ -67,6 +71,81 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 		}
 		sess.append(chat.RoleAssistant, rep.Content, "assistant", "", nil)
 	}()
+}
+
+// chatDialogueHistory строит компактную историю диалога из стрима чата:
+// последние chatDialogueMaxTurns реплик пользователя/ассистента (и вопросы
+// AskUser) в хронологическом порядке. Текущая реплика пользователя — последняя
+// запись стрима (добавлена handlePostChat перед вызовом) — пропускается: она
+// уже отдельно в «Вопрос пользователя». Возвращает "" — истории нет (пустой
+// диалог/ошибка чтения).
+func (sess *Session) chatDialogueHistory(ctx context.Context) string {
+	const (
+		chatDialogueMaxTurns = 12  // сколько последних реплик передаём модели
+		chatDialogueMsgLen   = 400 // лимит символов на одну реплику
+		chatDialogueHistoryN = 40  // столько читаем из Redis (запас на фильтрацию)
+	)
+	hist, err := sess.chat.History(ctx, chatDialogueHistoryN)
+	if err != nil || len(hist) == 0 {
+		return ""
+	}
+
+	// Порядок в hist хронологический (старые → новые), последняя запись —
+	// только что добавленное сообщение пользователя. Пропускаем её.
+	start := 0
+	if hist[len(hist)-1].Role == chat.RoleUser {
+		start = 1
+	}
+
+	var lines []string
+	for i := len(hist) - 1 - start; i >= 0; i-- {
+		if len(lines) >= chatDialogueMaxTurns {
+			break
+		}
+		m := hist[i]
+		switch m.Role {
+		case chat.RoleUser, chat.RoleAssistant:
+			if txt := strings.TrimSpace(m.Content); txt != "" {
+				speaker := "пользователь"
+				if m.Role == chat.RoleAssistant {
+					speaker = "ассистент"
+				}
+				lines = append(lines, "["+speaker+"] "+oneLine(txt, chatDialogueMsgLen))
+			}
+		case chat.RoleAsk:
+			if txt := askSummary(m.Ask); txt != "" {
+				lines = append(lines, "[ассистент] "+oneLine(txt, chatDialogueMsgLen))
+			}
+		}
+	}
+
+	// Собирали свежие → старые; разворачиваем в хронологический порядок.
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+// oneLine сводит многострочный текст в одну строку (лимит символов).
+func oneLine(s string, n int) string {
+	return strings.ReplaceAll(truncateText(s, n), "\n", " ")
+}
+
+// askSummary собирает текст вопросов структурированного AskUser в одну строку.
+func askSummary(a *chat.Ask) string {
+	if a == nil {
+		return ""
+	}
+	var parts []string
+	for _, q := range a.Questions {
+		if t := strings.TrimSpace(q.Text); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // chatAssistantPrompt собирает контекст для ассистента: сообщение пользователя,

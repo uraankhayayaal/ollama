@@ -127,6 +127,51 @@ func TestChatAssistAnswersQuestion(t *testing.T) {
 	}
 }
 
+// TestChatAssistHistoryInjected — ассистент получает историю диалога: прошлые
+// реплики пользователя/ассистента уходят в History и в системный промпт, а
+// текущий вопрос (последняя запись стрима) из истории исключается.
+func TestChatAssistHistoryInjected(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-qa-hist")
+	sess, _, err := srv.getOrCreate("proj-qa-hist")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Предыдущий диалог: вопрос пользователя и ответ ассистента.
+	sess.append(chat.RoleUser, "создай эпик на аутентификацию", "user", "", nil)
+	sess.append(chat.RoleAssistant, "Эпик создан: AUTH-01.", "assistant", "", nil)
+
+	prov := &qaStubProvider{called: make(chan struct{}), resp: &runner.AgentResponse{Content: "готово"}}
+	sess.runChatAssistant(context.Background(), "и добавь задачу в него", prov)
+	<-prov.called
+
+	asst, ok := prov.gotAgent.(*chatassist.Assistant)
+	if !ok {
+		t.Fatalf("провайдер получил агента %T, ожидается *chatassist.Assistant", prov.gotAgent)
+	}
+	if !strings.Contains(asst.History, "создай эпик на аутентификацию") {
+		t.Fatalf("история не содержит прошлой реплики пользователя: %q", asst.History)
+	}
+	if !strings.Contains(asst.History, "Эпик создан: AUTH-01.") {
+		t.Fatalf("история не содержит ответа ассистента: %q", asst.History)
+	}
+	if strings.Contains(asst.History, "и добавь задачу в него") {
+		t.Fatalf("текущий вопрос не должен дублироваться в истории: %q", asst.History)
+	}
+
+	var sys strings.Builder
+	for _, m := range asst.GetSystemMessages(nil) {
+		sys.WriteString(m.Message)
+	}
+	if !strings.Contains(sys.String(), "История диалога с пользователем") {
+		t.Fatalf("системный промпт не содержит блока истории диалога")
+	}
+	if !strings.Contains(sys.String(), "создай эпик на аутентификацию") {
+		t.Fatalf("системный промпт не содержит прошлой реплики")
+	}
+}
+
 func TestChatAssistEmptyAnswerFallback(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	registerTestDir(t, srv, "proj-qa-empty")
