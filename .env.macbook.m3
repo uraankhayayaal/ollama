@@ -18,6 +18,9 @@
 LLM_PROVIDER=ollama
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen3-coder-30b
+# Большая модель для «тяжёлых» агентов (Лид, Архитектор, Ревьюер).
+# Пусто — все агенты ходят на OLLAMA_MODEL.
+OLLAMA_MODEL_LARGE=
 
 # --- Контекст и thinking (Ollama), см. models/ModelSettings.go ---
 # Окно входа (num_ctx) на запрос: 32768 — выравнено с моделфайлом и
@@ -36,14 +39,20 @@ REVIEW_TIMEOUT=15m
 # оставляем дефолтные значения для качества ---
 # Лимит замечаний за одно ревью
 REVIEW_MAX_COMMENTS=10
+# Публиковать только критические замечания (шум отсекается), по умолчанию true
+REVIEW_CRITICAL_ONLY=true
 # Блокировать апрув при критичных замечаниях
 REVIEW_BLOCK_ON_CRITICAL=true
 # Отсекать сгенерированные/бинарные файлы
 REVIEW_SKIP_GENERATED=true
+# Размер (в байтах) диффа, с которого он обрезается целиком
+REVIEW_MAX_DIFF_SIZE=300000
 # Раз влезает контекст — можно не дробить дифф агрессивно (дефолт 14000)
 REVIEW_CHUNK_SIZE=14000
 # Раундов побольше — можно ревьюить большие диффы по частям
 REVIEW_MAX_ROUNDS=12
+# Циклы «ревью → исправление → ревью» в планировщике, по умолчанию 3
+REVIEW_FIX_ROUNDS=3
 
 # --- Настройки генератора кода ---
 CODEGEN_LANG=Go
@@ -51,6 +60,15 @@ CODEGEN_MODULE=
 CODEGEN_MAX_FILES=0
 CODEGEN_NO_OVERWRITE=false
 CODEGEN_SUMMARY_FILE=SUMMARY.md
+# Максимум символов из одного файла и за один вызов чтения (защита контекста)
+CODEGEN_READ_MAX_FILE=100000
+CODEGEN_READ_MAX_TOTAL=800000
+# Таймаут команды инструмента Run, по умолчанию 60s
+CODEGEN_RUN_TIMEOUT=60s
+
+# --- Доступ к Git-хостингам (codereviewer публикует замечания и MR) ---
+# GITLAB_TOKEN=
+# GITHUB_TOKEN=
 
 # --- Прочее ---
 # Подробный лог запросов/ответов моделей
