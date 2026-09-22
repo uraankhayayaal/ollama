@@ -1,9 +1,17 @@
 # План: Автоматизация git-workflow — ветки/MR/коммиты без ручных шагов
 
-Статус: **ПЛАН (реализация позже)**. Формат — как в `PLAN-webui.md` / `PLAN-lsp.md`.
+Статус: **РЕАЛИЗОВАНО (Ф-1..Ф-4, верификация Ф-5; остался ручной E2E)**.
+Формат — как в `PLAN-webui.md` / `PLAN-lsp.md`.
 Дополняет уже выполненный `PLAN-dashboard-workflow.md` (Ф-1..Ф-5: ветки эпиков/задач,
 «done → мёрдж в релиз», «Залить в main», авто-резолв конфликтов) и закрывает
 оставшиеся пункты TODO из `PLAN-dashboard-gitflow.md` (строки 1–8).
+
+Авто-шаги выполнены на сервере (`server/gitflow_auto.go`): хуки веток/MR/коммитов
+(Ф-1), `has_commits` и скрытие кнопки MR (Ф-2), worktree задачи + авто-коммит +
+авто-MR на done (Ф-3), sync релизной ветки с main на done эпика (Ф-4). Кнопки
+остались как ручная страховка. Сборка/vet/тесты (hermetic + real-git E2E:
+`TestAutoCreateBranchesRealGit`, `TestAutoCommitAndMergeTaskRealGit`,
+`TestAutoSyncEpicWithMainTrivialResolve`) и `npm run build` зелёные.
 
 ## Цель
 
@@ -22,14 +30,14 @@
 
 | Пункт TODO | Сейчас |
 |---|---|
-| ветка у каждой задачи, свои коммиты | ветки `ai/epic/<id>` / `ai/task/<id>` создаются через REST `POST /api/projects/{id}/epics/{eid}/branch` и `.../tasks/{tid}/branch` (`server/gitflow.go:47,111`), **вручную кнопкой** в модалке (`web/src/Components/Dashboard/GitBlock/GitBlock.tsx`); АВТО-создания нет |
-| коммитов нет → не показывать MR | кнопка «Создать MR» показывается всегда, когда есть ветка (`GitBlock.tsx:129`); поля `has_commits` в `gitLinkView` (`server/gitflow_mr.go:29`) нет |
+| ветка у каждой задачи, свои коммиты | ветки `ai/epic/<id>` / `ai/task/<id>` **создаются автоматически** через хуки `EpicCreatedHook`/`TaskCreatedHook` (`board/store.go`) → `attachGitHooks` (`server/gitflow.go`); кнопки остались страховкой |
+| коммитов нет → не показывать MR | есть: `gitStatus` заполняет `gitLinkView.has_commits` (`server/gitflow_mr.go`); при 0 коммитов фронт (`GitBlock.tsx`) показывает «коммитов ещё нет» и не зовёт сервер |
 | задача готова = ветка залита в эпик | есть: авто-мёрдж через `TaskDoneHook` (`server/gitflow.go:442`) |
 | эпик готов = ветка залита в main | есть: кнопка «Залить в main» (`handleReleaseEpic`, `server/gitflow.go:254`) |
-| авто-коммит во время работы по задаче | **нет**: специалисты работают в рабочей копии клона (`GetOutputDir` планировщика → `projects.ProjectDir`), а не в ветке задачи |
-| авто-MR в эпик | **нет** (только кнопка `handleCreateTaskMR`, `server/gitflow_mr.go:129`) |
-| конфликты с main решены до клика | частично: конфликт выявляется в момент клика → ручной `rebase` (`server/gitflow_resolve.go`) + авто-резолв инструментом `ResolveGitConflicts` (`tools/gitresolve.go`). «Держать ветку в синхроне заранее» нет |
-| ветка эпика собрана и подготовлена к main | есть `handleReleaseEpic`; непрерывной подготовки нет |
+| авто-коммит во время работы по задаче | есть: специалисты пишут в **worktree** ветки задачи (`taskWorktree`/`taskOutputDir`, `server/gitflow_auto.go`), на done — авто-коммит (`commitTaskWorktree`) |
+| авто-MR в эпик | есть: на done при отсутствии MR и наличии токена форджа — `createTaskMROnce` (`server/gitflow_mr.go`) |
+| конфликты с main решены до клика | есть: на done эпика — `syncEpicWithMain` → `syncEpicMainOnce` + авто-резолв `autoResolveMainSync` (тривиальные конфликты), hard-конфликт → abandon с логом (клик-флоу `gitflow_resolve.go` остался) |
+| ветка эпика собрана и подготовлена к main | есть: непрерывная подготовка на done эпика (п. выше), «Залить в main» после синхрона проходит без конфликтов |
 
 ## Решения (предлагаемые)
 
@@ -85,36 +93,36 @@ GET /api/projects/{id}   — git.epics[]/git.tasks[] дополняются has_
 ## Этапы и чеклист
 
 ### Ф-1 — Авто-создание веток (хуки доски)
-- [ ] `board/store.go`: `EpicCreatedHook`/`TaskCreatedHook` + вызовы в `CreateEpic`/`CreateTask`
-- [ ] `server/gitflow.go`: `attachGitHooks` — ветка эпика (от `git_base`), ветка задачи (от ветки эпика, при её наличии); запись в side-реестр + `GitBranch` на доске
-- [ ] Вешется во всех точках создания: `boardStore()` (REST/инструменты), `newSession` (`server/session.go:66`), `handleUpdateTask`
-- [ ] Кнопки «Создать ветку …» остаются для сбоев; ошибки хука → лог + `kickBoard`
-- [ ] Тесты: hermetic (fake-git) + real-git E2E (создание эпика/задачи инструментом → `git branch` клона показывает `ai/epic/…`, `ai/task/…`)
+- [x] `board/store.go`: `EpicCreatedHook`/`TaskCreatedHook` + вызовы в `CreateEpic`/`CreateTask`
+- [x] `server/gitflow.go`: `attachGitHooks` — ветка эпика (от `git_base`), ветка задачи (от ветки эпика, при её наличии); запись в side-реестр + `GitBranch` на доске
+- [x] Вешется во всех точках создания: `boardStore()` (REST/инструменты), `newSession` (`server/session.go:66`), `handleUpdateTask`
+- [x] Кнопки «Создать ветку …» остаются для сбоев; ошибки хука → лог + `kickBoard`
+- [x] Тесты: hermetic (fake-git) + real-git E2E (`TestAutoCreateBranchesRealGit` — создание эпика/задачи через hooked-store → `git branch` клона показывает `ai/epic/…`, `ai/task/…`)
 
 ### Ф-2 — Кнопка MR без коммитов
-- [ ] `gitops.CountCommits(base, branch)` + hermetic-тест
-- [ ] `gitStatus` заполняет `has_commits` (0 ⇒ false); для не-git/без ветки — незаполнено
-- [ ] `Types.ts` + `GitBlock.tsx`: «коммитов ещё нет» вместо кнопки; **никакого** запроса на сервер
-- [ ] `npm run build`
-- [ ] Тесты: снимок доски для ветки-без-коммитов и с коммитами
+- [x] `gitops.CountCommits(base, branch)` + hermetic-тест
+- [x] `gitStatus` заполняет `has_commits` (0 ⇒ false); для не-git/без ветки — незаполнено
+- [x] `Types.ts` + `GitBlock.tsx`: «коммитов ещё нет» вместо кнопки; **никакого** запроса на сервер
+- [x] `npm run build`
+- [x] Тесты: снимок доски для ветки-без-коммитов и с коммитами (`TestGitStatusHasCommits`)
 
 ### Ф-3 — Авто-коммит и авто-MR задачи
-- [ ] `gitops.WorktreeAdd/WorktreeRemove` (публичные, вне `MergeFeature`) + тесты
-- [ ] `KanbanRunner.SetOutputDir`: `specialist` в `phaseExecute` получает OutputDir = worktree ветки задачи (каталог создаётся сервером на in_progress)
-- [ ] На done: авто-коммит dirty-изменений worktree в `ai/task/<id>`; затем штатный `mergeTaskBranch`; при отсутствии MR — авто-MR через `createMR` (переиспользовать `handleCreateTaskMR`); снять worktree
-- [ ] Тесты: real-git E2E — задача не создала коммитов → ветка «чистая», MR не создаётся; создала → коммит + мёрдж + MR
+- [x] `gitops.WorktreeAdd/WorktreeRemove` (публичные, вне `MergeFeature`) + тесты
+- [x] `KanbanRunner.SetOutputDir`: `specialist` в `phaseExecute` получает OutputDir = worktree ветки задачи (каталог создаётся сервером на in_progress)
+- [x] На done: авто-коммит dirty-изменений worktree в `ai/task/<id>`; затем штатный `mergeTaskBranch`; при отсутствии MR — авто-MR через `createMR` (переиспользовать `handleCreateTaskMR`); снять worktree
+- [x] Тесты: real-git E2E (`TestAutoCommitAndMergeTaskRealGit`) — задача без токена форджа MR не создаёт, но коммит+мёрдж+снятие worktree проходят; hermetic (`TestTaskInProgressCreatesWorktree`, `TestTaskDoneAutoMergeConflict`)
 
 ### Ф-4 — Релизная ветка в синхроне с main
-- [ ] На `done` эпика: `merge main` в релизную ветку (через существующий флоу rebase/резолв `gitflow_resolve.go`), без отмены статуса
-- [ ] При авто-синхроне конфликты → авто-резолв переиспользует механику `tools/gitresolve.go` (детерминированный тест E2E намеренного конфликта, как `TestEpicRebaseResolveEndToEndRealGit`)
-- [ ] Кнопка «Залить в main» по-прежнему ручная; после синхрона гарантированно проходит без 409
-- [ ] Тесты: real-git — эпик done с расхождением main → авто-синхрон → release без конфликтов
+- [x] На `done` эпика: `merge main` в релизную ветку (через существующий флоу rebase/резолв `gitflow_resolve.go`), без отмены статуса
+- [x] При авто-синхроне конфликты → авто-резолв переиспользует механику `tools/gitresolve.go` (det-тест E2E намеренного конфликта: `TestAutoSyncEpicWithMainTrivialResolve`)
+- [x] Кнопка «Залить в main» по-прежнему ручная; после синхрона гарантированно проходит без 409
+- [x] Тесты: real-git — эпик done с расхождением main → авто-синхрон → release без конфликтов
 
 ### Ф-5 — Верификация
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go vet  . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
-- [ ] `npm run build` (web/)
+- [x] `go build . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go vet  . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
+- [x] `npm run build` (web/)
 - [ ] Ручной E2E на реальном git-проекте: создать эпик/задачу через чат → ветки появились сами → выполнить задачу → авто-коммит/MR/мёрдж → эпик done → авто-синхрон main → клик «Залить в main» без конфликтов
 
 ## Верификация

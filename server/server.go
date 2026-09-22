@@ -528,7 +528,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 	if sess := s.session(project); sess != nil {
 		snap, err := boardViewPage(ctx, sess.board, limit, offset)
 		if err == nil {
-			snap.Git = s.gitStatus(project, snap.Epics, snap.Tasks)
+			snap.Git = s.gitStatus(ctx, project, snap.Epics, snap.Tasks)
 			s.reconcileMRsAsync(project)
 			writeJSON(w, http.StatusOK, snap)
 			return
@@ -547,7 +547,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
 		return
 	}
-	snap.Git = s.gitStatus(project, snap.Epics, snap.Tasks)
+	snap.Git = s.gitStatus(ctx, project, snap.Epics, snap.Tasks)
 	s.reconcileMRsAsync(project)
 	writeJSON(w, http.StatusOK, snap)
 }
@@ -782,8 +782,9 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer store.Close()
-	// Ф-2: перевод задачи в done автоматически вливает её ветку в релизную.
-	s.attachTaskDoneHook(project, store)
+	// Ф-1..Ф-4: авто-действия git-workflow при изменениях доски (ветки при
+	// создании, мёрдж done→релиз, worktree задачи, синхрон с main).
+	s.attachGitHooks(project, store)
 
 	t, err := store.GetTask(r.Context(), taskID)
 	if err != nil {

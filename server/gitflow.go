@@ -29,14 +29,15 @@ const (
 	taskBranchPrefix = "ai/task/"
 )
 
-// boardStore открывает хранилище доски проекта, привязывая авто-действие
-// «done → мёрдж в релизную ветку» (Ф-2).
+// boardStore открывает хранилище доски проекта, привязывая авто-действия
+// git-workflow (Ф-1..Ф-4): создание веток, мёрдж done→релиз, worktree задачи,
+// синхрон релизной ветки с main.
 func (s *Server) boardStore(ctx context.Context, project string) (*board.Store, error) {
 	store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(project))
 	if err != nil {
 		return nil, err
 	}
-	s.attachTaskDoneHook(project, store)
+	s.attachGitHooks(project, store)
 	return store, nil
 }
 
@@ -435,44 +436,145 @@ func (s *Server) mergeLock(project string) *sync.Mutex {
 	return mu
 }
 
-// attachTaskDoneHook связывает авто-действие «done → мёрдж» с хранилищем
-// доски: когда задача переходит в done, её ветка автоматически вливается в
-// релизную ветку эпика (gitops.MergeFeature). Ошибки не ломают сам переход
-// статуса — логируются; конфликты требуют инструмента резолва Ф-4.
-func (s *Server) attachTaskDoneHook(project string, store *board.Store) {
+// attachGitHooks связывает авто-действия git-workflow с хранилищем доски:
+//
+//   - EpicCreatedHook — авто-создание релизной ветки эпика (от git_base, Ф-1);
+//   - TaskCreatedHook — авто-создание фича-ветки задачи (от ветки её эпика, Ф-1);
+//   - TaskInProgressHook — worktree ветки задачи, в который специалист получает
+//     OutputDir (Ф-3);
+//   - TaskDoneHook — авто-коммит worktree + авто-мёрдж done→релиз + авто-MR
+//     задачи (Ф-2/Ф-3);
+//   - EpicDoneHook — авто-синхрон релизной ветки эпика с main (Ф-4).
+//
+// Все ошибки НЕ ломают переход статуса/сохранение записи: логируются, на доске
+// остаются ручные кнопки (ветка/MR/мёрдж) как страховка от сбоев.
+func (s *Server) attachGitHooks(project string, store *board.Store) {
 	if store == nil {
 		return
 	}
+
+	// Ф-2/Ф-3: задача перешла в done — авто-коммит worktree, авто-мёрдж её ветки
+	// в релизную ветку эпика и авто-MR задачи.
 	store.TaskDoneHook = func(ctx context.Context, task *board.Task, from board.Status) {
-		inf, err := s.reg.Get(project)
-		if err != nil || inf.Kind != workspace.KindGit {
-			return // проект не git — веток нет, мёрджить нечего
-		}
-		if _, err := s.reg.EpicBranch(project, task.EpicID); err != nil {
-			logging.For(project).Detailf("gitflow: авто-мёрдж %s: ветка эпика %s не создана, пропуск",
-				task.TaskID, task.EpicID)
-			return
-		}
-		res, err := s.mergeTaskBranch(ctx, project, task)
-		if err != nil {
-			var ce *gitops.MergeConflictError
-			if errors.As(err, &ce) {
-				logging.For(project).Warnf("gitflow: авто-мёрдж %s: конфликт в %s — требуется резолв (Ф-4)",
-					task.TaskID, strings.Join(ce.Files, ", "))
-				if sess := s.session(project); sess != nil {
-					sess.kickBoard()
-				}
-				return
-			}
-			logging.For(project).Warnf("gitflow: авто-мёрдж %s: %v", task.TaskID, err)
-			return
-		}
-		logging.For(project).Infof("gitflow: задача %s → done: авто-мёрдж в релиз эпика %s (already=%v)",
-			task.TaskID, task.EpicID, res.AlreadyMerged)
-		if sess := s.session(project); sess != nil {
-			sess.kickBoard()
+		s.autoCommitAndMergeTask(ctx, project, task, store)
+	}
+
+	// Ф-1: эпик добавлен на доску — авто-создание релизной ветки.
+	store.EpicCreatedHook = func(ctx context.Context, epic *board.Epic) {
+		s.autoCreateEpicBranch(ctx, project, epic, store)
+	}
+
+	// Ф-1: задача добавлена на доску — авто-создание фича-ветки (база — ветка
+	// эпика). Требует уже существующей ветки эпика (появляется через
+	// EpicCreatedHook или ручной кнопкой).
+	store.TaskCreatedHook = func(ctx context.Context, task *board.Task) {
+		s.autoCreateTaskBranch(ctx, project, task, store)
+	}
+
+	// Ф-3: задача пошла «в работу» — worktree её ветки для специалиста.
+	store.TaskInProgressHook = func(ctx context.Context, task *board.Task, _ board.Status) {
+		s.taskWorktree(ctx, project, task, store)
+	}
+
+	// Ф-4: эпик переведён в done — авто-синхрон релизной ветки с main.
+	store.EpicDoneHook = func(ctx context.Context, epic *board.Epic, _ board.Status) {
+		s.syncEpicWithMain(ctx, project, epic)
+	}
+}
+
+// autoCreateEpicBranch — Ф-1: авто-создание релизной ветки эпика при добавлении
+// эпика на доску git-проекта. База — git_base (main). Идемпотентно; ошибки
+// не ломают сохранение эпика — логируются, на доске остаётся кнопка
+// «Создать ветку эпика» как ручная страховка.
+func (s *Server) autoCreateEpicBranch(ctx context.Context, project string, epic *board.Epic, store *board.Store) {
+	if epic == nil || epic.TaskID == "" {
+		return
+	}
+	inf, err := s.reg.Get(project)
+	if err != nil || inf.Kind != workspace.KindGit {
+		return
+	}
+	base := strings.TrimSpace(inf.GitBase)
+	if base == "" {
+		logging.For(project).Detailf("gitflow: авто-ветка эпика %s: у проекта нет git_base — пропуск", epic.TaskID)
+		return
+	}
+	repo, err := s.repoOf(ctx, project)
+	if err != nil {
+		logging.For(project).Warnf("gitflow: авто-ветка эпика %s: %v", epic.TaskID, err)
+		return
+	}
+
+	lock := s.mergeLock(project)
+	lock.Lock()
+	defer lock.Unlock()
+
+	branch := epicBranchPrefix + gitops.SanitizeBranchName(epic.TaskID)
+	if err := ensureBranch(ctx, repo, branch, base); err != nil {
+		logging.For(project).Warnf("gitflow: авто-ветка эпика %s: %v", epic.TaskID, err)
+		return
+	}
+	if err := s.reg.SetEpicBranch(project, epic.TaskID, workspace.BranchRef{Branch: branch, Base: base}); err != nil {
+		logging.For(project).Warnf("gitflow: авто-ветка эпика %s: реестр: %v", epic.TaskID, err)
+		return
+	}
+	if epic.GitBranch == "" {
+		epic.GitBranch = branch
+		if err := store.SaveEpic(ctx, epic); err != nil {
+			logging.For(project).Warnf("gitflow: авто-ветка эпика %s: сохранение git_branch: %v", epic.TaskID, err)
 		}
 	}
+	logging.For(project).Infof("gitflow: эпик %s → авто-ветка %s (база %s)", epic.TaskID, branch, base)
+	s.kickBoard(project)
+}
+
+// autoCreateTaskBranch — Ф-1: авто-создание фича-ветки задачи при её добавлении
+// на доску git-проекта. База — релизная ветка эпика задачи (должна уже
+// существовать в side-реестре). Идемпотентно; ошибки не ломают сохранение
+// задачи — логируются, на доске остаётся кнопка «Создать ветку задачи».
+func (s *Server) autoCreateTaskBranch(ctx context.Context, project string, task *board.Task, store *board.Store) {
+	if task == nil || task.TaskID == "" || task.EpicID == "" {
+		return
+	}
+	inf, err := s.reg.Get(project)
+	if err != nil || inf.Kind != workspace.KindGit {
+		return
+	}
+	epicRef, err := s.reg.EpicBranch(project, task.EpicID)
+	if err != nil {
+		// Ветки эпика ещё нет (не-git/не создана) — авто-ветка задачи невозможна.
+		// Кнопка «Создать ветку задачи» остаётся ручной страховкой.
+		logging.For(project).Detailf("gitflow: авто-ветка задачи %s: ветка эпика %s отсутствует: %v",
+			task.TaskID, task.EpicID, err)
+		return
+	}
+	repo, err := s.repoOf(ctx, project)
+	if err != nil {
+		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: %v", task.TaskID, err)
+		return
+	}
+
+	lock := s.mergeLock(project)
+	lock.Lock()
+	defer lock.Unlock()
+
+	branch := taskBranchPrefix + gitops.SanitizeBranchName(task.TaskID)
+	if err := ensureBranch(ctx, repo, branch, epicRef.Branch); err != nil {
+		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: %v", task.TaskID, err)
+		return
+	}
+	if err := s.reg.SetTaskBranch(project, task.TaskID, workspace.BranchRef{Branch: branch, Base: epicRef.Branch}); err != nil {
+		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: реестр: %v", task.TaskID, err)
+		return
+	}
+	if task.GitBranch == "" {
+		task.GitBranch = branch
+		if err := store.SaveTask(ctx, task); err != nil {
+			logging.For(project).Warnf("gitflow: авто-ветка задачи %s: сохранение git_branch: %v", task.TaskID, err)
+		}
+	}
+	logging.For(project).Infof("gitflow: задача %s → авто-ветка %s (база %s)", task.TaskID, branch, epicRef.Branch)
+	s.kickBoard(project)
 }
 
 // deleteEpicBranches снимает из side-реестра ветки эпика и всех его задач

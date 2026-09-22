@@ -59,6 +59,15 @@ func (ops *FileOps) SetScope(scope []string) {
 	ops.scopeMatch = forges.CompileScope(scope)
 }
 
+// SetOutputDir переключает рабочую директорию инструментов на лету. Используется
+// оркестрацией (Ф-3): у git-проектов специалист работает в отдельном worktree
+// ветки задачи, а не в общей проектной копии. Раннер зовёт метод через интерфейс
+// { SetOutputDir(string) } у агента (developer/devops/qaengineer встраивают
+// *FileOps), поэтому сигнатура — часть публичного контракта.
+func (ops *FileOps) SetOutputDir(dir string) {
+	ops.OutputDir = dir
+}
+
 // allowed проверяет, разрешён ли файл (относительный slash-путь) областью
 // работы. Без установленного scope разрешено всё.
 func (ops *FileOps) allowed(rel string) bool {

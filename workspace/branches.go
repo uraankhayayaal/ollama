@@ -15,10 +15,13 @@ import (
 )
 
 // BranchRef — привязка git-ветки: имя ветки и точка отхода (база), от которой
-// ветка создана.
+// ветка создана. Worktree — каталог постоянного worktree задачи (Ф-3): задаётся
+// сервером при переводе задачи «в работу» и снимается на done; пусто — worktree
+// не создан (или уже снят).
 type BranchRef struct {
-	Branch string `json:"branch"`
-	Base   string `json:"base,omitempty"`
+	Branch   string `json:"branch"`
+	Base     string `json:"base,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
 }
 
 // GitBranchMap — реестр веток эпиков (релизные ветки, база = main) и задач

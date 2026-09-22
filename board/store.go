@@ -56,6 +56,30 @@ type Store struct {
 	// задачи в релизную ветку эпика при достижении done. nil — хука нет
 	// (значение по умолчанию, поведение прежних вызовов не меняется).
 	TaskDoneHook func(ctx context.Context, task *Task, from Status)
+
+	// TaskInProgressHook — опциональный обратный вызов при переводе задачи в
+	// StatusInProgress (Ф-3). Вызывается из SetTaskStatus вне блокировок, после
+	// успешного сохранения. Назначение: сервер внедряет сюда создание worktree
+	// ветки задачи, в который специалист получает OutputDir. nil — хука нет.
+	TaskInProgressHook func(ctx context.Context, task *Task, from Status)
+
+	// EpicCreatedHook — опциональный обратный вызов после создания эпика (Ф-1).
+	// Вызывается из CreateEpic вне блокировок, после успешного сохранения
+	// (входной epic — сохранённый). Назначение: сервер внедряет сюда авто-создание
+	// релизной ветки эпика у git-проектов. nil — хука нет.
+	EpicCreatedHook func(ctx context.Context, epic *Epic)
+
+	// TaskCreatedHook — опциональный обратный вызов после создания задачи (Ф-1).
+	// Вызывается из CreateTask вне блокировок, после успешного сохранения.
+	// Назначение: сервер внедряет сюда авто-создание фича-ветки задачи (база —
+	// релизная ветка её эпика). nil — хука нет.
+	TaskCreatedHook func(ctx context.Context, task *Task)
+
+	// EpicDoneHook — опциональный обратный вызов при переводе эпика в StatusDone
+	// (Ф-4). Вызывается из SetEpicStatus вне блокировок, после успешного
+	// сохранения. Назначение: сервер внедряет сюда авто-синхрон релизной ветки
+	// эпика с main (merge + авто-резолв конфликтов). nil — хука нет.
+	EpicDoneHook func(ctx context.Context, epic *Epic, from Status)
 }
 
 // key возвращает полный ключ Redis для относительного имени.
@@ -157,7 +181,15 @@ func (s *Store) CreateEpic(ctx context.Context, e *Epic) error {
 	if err := s.client.Set(ctx, s.epicKey(e.TaskID), data, s.ttl).Err(); err != nil {
 		return err
 	}
-	return s.client.SAdd(ctx, s.epicsID(), e.TaskID).Err()
+	if err := s.client.SAdd(ctx, s.epicsID(), e.TaskID).Err(); err != nil {
+		return err
+	}
+	// Ф-1: авто-действия при создании эпика (gitflow: релизная ветка эпика).
+	// Хук внедряется сервером; ошибки хука не ломают само сохранение.
+	if s.EpicCreatedHook != nil {
+		s.EpicCreatedHook(ctx, e)
+	}
+	return nil
 }
 
 // GetEpic возвращает эпик по ID.
@@ -223,8 +255,17 @@ func (s *Store) SetEpicStatus(ctx context.Context, id string, st Status) error {
 	if err := ValidateTransition(e.Status, st); err != nil {
 		return err
 	}
+	from := e.Status
 	e.Status = st
-	return s.SaveEpic(ctx, e)
+	if err := s.SaveEpic(ctx, e); err != nil {
+		return err
+	}
+	// Ф-4: авто-синхрон релизной ветки эпика с main при достижении done.
+	// Хук внедряется сервером; ошибки хука не ломают сам переход.
+	if st == StatusDone && s.EpicDoneHook != nil {
+		s.EpicDoneHook(ctx, e, from)
+	}
+	return nil
 }
 
 // --- Задачи ---
@@ -277,7 +318,15 @@ func (s *Store) CreateTask(ctx context.Context, t *Task) error {
 		return err
 	}
 	e.Tasks = append(e.Tasks, t.TaskID)
-	return s.SaveEpic(ctx, e)
+	if err := s.SaveEpic(ctx, e); err != nil {
+		return err
+	}
+	// Ф-1: авто-действия при создании задачи (gitflow: фича-ветка от ветки
+	// эпика). Хук внедряется сервером; ошибки хука не ломают само сохранение.
+	if s.TaskCreatedHook != nil {
+		s.TaskCreatedHook(ctx, t)
+	}
+	return nil
 }
 
 // GetTask возвращает задачу по ID.
@@ -372,6 +421,9 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 	}
 	// Ф-2: авто-действия при достижении done (gitflow: ветка задачи → релизная
 	// ветка эпика). Хук внедряется сервером; ошибки хука не ломают сам переход.
+	if st == StatusInProgress && s.TaskInProgressHook != nil {
+		s.TaskInProgressHook(ctx, t, from)
+	}
 	if st == StatusDone && s.TaskDoneHook != nil {
 		s.TaskDoneHook(ctx, t, from)
 	}

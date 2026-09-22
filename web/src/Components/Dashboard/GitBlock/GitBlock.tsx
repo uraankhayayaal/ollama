@@ -126,6 +126,10 @@ export function GitBlock({
                   <span className={"mr-state " + link.mr_state}>{stateLabel}</span>
                 )}
               </>
+            ) : link.has_commits === false ? (
+              // Ф-2: в ветке ещё нет коммитов — MR нечего открывать;
+              // кнопку «Создать MR» прячем, пока специалист не поработал.
+              <span className="muted">коммитов ещё нет</span>
             ) : (
               <>
                 {onCreateMR ? (

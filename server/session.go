@@ -72,9 +72,9 @@ func (s *Server) newSession(project string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Ф-2: перевод задачи в done (инструменты агентов, kanban) автоматически
-	// вливает её ветку в релизную ветку эпика.
-	s.attachTaskDoneHook(project, boardStore)
+	// Ф-1..Ф-4: авто-действия git-workflow при изменениях доски (ветки эпиков/
+	// задач при создании, мёрдж done→релиз, worktree задачи, синхрон с main).
+	s.attachGitHooks(project, boardStore)
 	chatStore, err := chat.NewStore(context.Background(), chat.StoreConfig{
 		Addr:     architect.LoadConfig().RedisAddr,
 		Password: architect.LoadConfig().RedisPassword,
@@ -168,6 +168,9 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// отсутствии работы раннер сообщает сессии (standby) и ждёт эпиков/задач.
 	runner.SetBoardOnly(true)
 	runner.SetStandbyNotifier(sess.setStandby)
+	// Ф-3: git-проекты — специалист работает в своём worktree ветки задачи
+	// (OutputDir = worktree), поэтому авто-коммит на done соберёт его правки.
+	runner.SetOutputDir(sess.srv.taskOutputDir)
 
 	sess.wg.Add(1)
 	go func() {
@@ -447,7 +450,7 @@ func (sess *Session) publishBoard(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	v.Git = sess.srv.gitStatus(sess.project, v.Epics, v.Tasks)
+	v.Git = sess.srv.gitStatus(ctx, sess.project, v.Epics, v.Tasks)
 	sess.srv.hub.publish(sess.project, "board", v)
 }
 
@@ -478,7 +481,7 @@ func (sess *Session) broadcastSnapshot() {
 		Gate:   gateTyp,
 	})
 	if v, err := boardView(ctx, sess.board); err == nil {
-		v.Git = sess.srv.gitStatus(sess.project, v.Epics, v.Tasks)
+v.Git = sess.srv.gitStatus(ctx, sess.project, v.Epics, v.Tasks)
 		sess.srv.hub.publish(sess.project, "board", v)
 	}
 	if in, out, err := sess.tok.Get(ctx); err == nil {

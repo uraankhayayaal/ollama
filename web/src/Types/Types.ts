@@ -144,6 +144,9 @@ export interface GitLinkView {
   target?: string; // ветка, в которую вливается MR (main/ветка эпика)
   mr_url?: string; // ссылка на MR/PR (если создан)
   mr_state?: string; // open|merged|closed|"" (неизвестно)
+  // has_commits — в ветке есть свои коммиты (Ф-2). Не вычислено/ошибка git —
+  // undefined; false — коммитов ещё нет, кнопку «Создать MR» скрываем.
+  has_commits?: boolean;
 }
 
 // git-статус всего проекта в снимке доски (Ф-5).

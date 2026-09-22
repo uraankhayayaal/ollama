@@ -432,8 +432,9 @@ func TestTaskDoneAutoMergeHook(t *testing.T) {
 }
 
 // TestTaskDoneAutoMergeConflict — done при конфликте: статус всё равно
-// проставляется, ветки не трогаются (авто-мёрдж сообщает о конфликте в лог,
-// не ломая переход).
+// проставляется, релизная ветка не трогается (авто-мёрдж сообщает о
+// конфликте в лог, не ломая переход), worktree задачи снимается после
+// авто-шага (Ф-3/Ф-4: конфликты уходят интерактивному флоу rebase/резолва).
 func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	const conflicts = `changed in both
   base   100644 c0d0fb45c382919737f8d0c20aaf57cf89b74af8 f.txt
@@ -465,8 +466,17 @@ func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	if err != nil || task.Status != board.StatusDone {
 		t.Fatalf("task после done = %+v, %v", task, err)
 	}
-	if git.saw("git worktree add ") {
-		t.Fatalf("при конфликте не должно быть worktree-мёрджа, вызовы: %v", git.callsList())
+	// Ф-3: in_progress создаёт worktree задачи (работу специалиста позже
+	// авто-коммитят); после done он снимается.
+	if !git.saw("git worktree add ") {
+		t.Fatalf("in_progress не создал worktree задачи (Ф-3), вызовы: %v", git.callsList())
+	}
+	if !git.saw("git worktree remove --force ") {
+		t.Fatalf("после done worktree задачи не снят, вызовы: %v", git.callsList())
+	}
+	// Конфликт НЕ должен сливать ветки: ни worktree-мёрджа, ни force-мерджа.
+	if git.saw("git merge --no-ff ") || git.saw("git merge -X ") {
+		t.Fatalf("при конфликте релизная ветка не должна трогаться, вызовы: %v", git.callsList())
 	}
 }
 

@@ -32,6 +32,9 @@ type gitLinkView struct {
 	Target    string `json:"target,omitempty"`     // ветка, в которую вливается MR (main/ветка эпика)
 	MRURL     string `json:"mr_url,omitempty"`     // ссылка на MR/PR (если создан)
 	MRState   string `json:"mr_state,omitempty"`   // open|merged|closed|"" (неизвестно)
+	// HasCommits — в ветке есть свои коммиты (Ф-2). nil — не вычислено/ошибка
+	// git; false — коммитов ещё нет (кнопка «Создать MR» на фронте прячется).
+	HasCommits *bool `json:"has_commits,omitempty"`
 }
 
 // gitView — git-статус всего проекта в снимке доски (заполняется только для
@@ -169,35 +172,10 @@ func (s *Server) handleCreateTaskMR(w http.ResponseWriter, r *http.Request) {
 
 	lock := s.mergeLock(project)
 	lock.Lock()
-	defer lock.Unlock()
-
-	// База MR (ветка эпика) должна существовать в remote: GitHub/GitLab
-	// отклоняют MR с неизвестной base (422 "base invalid"), а ветка эпика
-	// до первого MR задачи живёт только в локальном клоне.
-	if err := s.ensureRemoteBase(r.Context(), inf, taskRef.Base); err != nil {
-		writeErr(w, http.StatusBadGateway, "подготовка базы MR: "+err.Error())
-		return
-	}
-
-	repo := s.repoForBranch(inf, taskRef.Branch, taskRef.Base)
-	if err := s.pushRepo(r.Context(), repo, inf.GitRemote); err != nil {
-		writeErr(w, http.StatusBadGateway, "push ветки "+taskRef.Branch+": "+err.Error())
-		return
-	}
-	mrURL, err := s.createMR(r.Context(), project, inf, forges.MergeRequestOptions{
-		SourceBranch: taskRef.Branch,
-		TargetBranch: taskRef.Base,
-		Title:        fmt.Sprintf("Задача %s: %s", taskID, task.Title),
-		Description:  task.Description,
-	})
+	mrURL, err := s.createTaskMRLocked(r.Context(), project, inf, taskID, task, taskRef)
+	lock.Unlock()
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "создание MR задачи: "+err.Error())
-		return
-	}
-	if err := s.reg.SetTaskMR(project, taskID, workspace.MRRef{
-		URL: mrURL, Source: taskRef.Branch, Target: taskRef.Base, State: "open",
-	}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "ошибка записи MR в реестр: "+err.Error())
 		return
 	}
 
@@ -209,6 +187,68 @@ func (s *Server) handleCreateTaskMR(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"task_id": taskID, "mr_url": mrURL, "source": taskRef.Branch, "target": taskRef.Base,
 	})
+}
+
+// createTaskMRLocked открывает MR задачи → ветку эпика. Выполняется под
+// mergeLock проекта (вызывающий удерживает его): база MR должна существовать в
+// remote, ветка задачи пушится, MR создаётся и пишется в side-реестр.
+func (s *Server) createTaskMRLocked(ctx context.Context, project string, inf workspace.Info, taskID string, task *board.Task, taskRef workspace.BranchRef) (string, error) {
+	// База MR (ветка эпика) должна существовать в remote: GitHub/GitLab
+	// отклоняют MR с неизвестной base (422 "base invalid"), а ветка эпика
+	// до первого MR задачи живёт только в локальном клоне.
+	if err := s.ensureRemoteBase(ctx, inf, taskRef.Base); err != nil {
+		return "", fmt.Errorf("подготовка базы MR: %w", err)
+	}
+	repo := s.repoForBranch(inf, taskRef.Branch, taskRef.Base)
+	if err := s.pushRepo(ctx, repo, inf.GitRemote); err != nil {
+		return "", fmt.Errorf("push ветки %s: %w", taskRef.Branch, err)
+	}
+	mrURL, err := s.createMR(ctx, project, inf, forges.MergeRequestOptions{
+		SourceBranch: taskRef.Branch,
+		TargetBranch: taskRef.Base,
+		Title:        fmt.Sprintf("Задача %s: %s", taskID, task.Title),
+		Description:  task.Description,
+	})
+	if err != nil {
+		return "", fmt.Errorf("создание MR задачи: %w", err)
+	}
+	if err := s.reg.SetTaskMR(project, taskID, workspace.MRRef{
+		URL: mrURL, Source: taskRef.Branch, Target: taskRef.Base, State: "open",
+	}); err != nil {
+		return "", fmt.Errorf("ошибка записи MR в реестр: %w", err)
+	}
+	return mrURL, nil
+}
+
+// createTaskMROnce создаёт MR задачи вне mergeLock — авто-шаг done (Ф-3).
+// MR, созданный вне UI, уже виден в реестре — no-op. Ветки задачи ещё нет —
+// тоже no-op (создавать MR не из чего). Возвращает (url, создан ли, ошибка).
+func (s *Server) createTaskMROnce(ctx context.Context, project, taskID string, task *board.Task) (string, bool, error) {
+	inf, err := s.reg.Get(project)
+	if err != nil || inf.Kind != workspace.KindGit || inf.GitRemote == "" {
+		return "", false, nil
+	}
+	// Без токена форджа MR не создать (API GitHub/GitLab требует авторизацию) —
+	// авто-шаг пропускается тихо: мёрдж в релизную ветку уже совершён,
+	// ручная кнопка «Создать MR» остаётся страховкой.
+	if gitToken(inf.GitRemote) == "" {
+		return "", false, nil
+	}
+	if mr, merr := s.reg.TaskMR(project, taskID); merr == nil && mr.URL != "" {
+		return mr.URL, false, nil
+	}
+	taskRef, err := s.reg.TaskBranch(project, taskID)
+	if err != nil {
+		return "", false, nil
+	}
+	lock := s.mergeLock(project)
+	lock.Lock()
+	defer lock.Unlock()
+	mrURL, err := s.createTaskMRLocked(ctx, project, inf, taskID, task, taskRef)
+	if err != nil {
+		return "", false, err
+	}
+	return mrURL, true, nil
 }
 
 // createMR открывает MR/PR через фордж проекта (общая механика эпика/задачи).
@@ -260,12 +300,26 @@ func (s *Server) ensureRemoteBase(ctx context.Context, inf workspace.Info, base 
 }
 
 // gitStatus собирает «ветки + MR» эпиков и задач из side-реестров workspace
-// для снимка доски. Быстрый путь (без сети): только локальные реестры.
-// nil — проект не git или ветки не создавались.
-func (s *Server) gitStatus(project string, epics []*board.Epic, tasks []*board.Task) *gitView {
+// для снимка доски. Быстрый путь (без сети): только локальные реестры; признак
+// «есть коммиты» (has_commits) считается локально через gitops.CountCommits
+// (ошибка git — nil, кнопка MR остаётся). nil — проект не git или ветки не
+// создавались.
+func (s *Server) gitStatus(ctx context.Context, project string, epics []*board.Epic, tasks []*board.Task) *gitView {
 	inf, err := s.reg.Get(project)
 	if err != nil || inf.Kind != workspace.KindGit {
 		return nil
+	}
+	repo, _ := s.repoOf(ctx, project)
+	count := func(base, branch string) *bool {
+		if repo == nil || base == "" || branch == "" {
+			return nil
+		}
+		n, cerr := repo.CountCommits(ctx, base, branch)
+		if cerr != nil {
+			return nil
+		}
+		v := n > 0
+		return &v
 	}
 	v := &gitView{
 		Base:    inf.GitBase,
@@ -279,9 +333,10 @@ func (s *Server) gitStatus(project string, epics []*board.Epic, tasks []*board.T
 			continue
 		}
 		lv := gitLinkView{
-			Branch:    ref.Branch,
-			BranchURL: branchWebURL(inf.GitRemote, ref.Branch),
-			Target:    ref.Base,
+			Branch:     ref.Branch,
+			BranchURL:  branchWebURL(inf.GitRemote, ref.Branch),
+			Target:     ref.Base,
+			HasCommits: count(ref.Base, ref.Branch),
 		}
 		if mr, merr := s.reg.EpicMR(project, e.TaskID); merr == nil {
 			lv.MRURL, lv.MRState = mr.URL, mr.State
@@ -294,9 +349,10 @@ func (s *Server) gitStatus(project string, epics []*board.Epic, tasks []*board.T
 			continue
 		}
 		lv := gitLinkView{
-			Branch:    ref.Branch,
-			BranchURL: branchWebURL(inf.GitRemote, ref.Branch),
-			Target:    ref.Base,
+			Branch:     ref.Branch,
+			BranchURL:  branchWebURL(inf.GitRemote, ref.Branch),
+			Target:     ref.Base,
+			HasCommits: count(ref.Base, ref.Branch),
 		}
 		if mr, merr := s.reg.TaskMR(project, t.TaskID); merr == nil {
 			lv.MRURL, lv.MRState = mr.URL, mr.State

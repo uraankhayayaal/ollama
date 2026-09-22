@@ -52,6 +52,12 @@ type KanbanRunner struct {
 	// (ожидание), false — работа появилась (цикл возобновлён). Устанавливается
 	// сервером для трансляции статуса сессии; nil в консольном режиме.
 	onStandby func(bool)
+	// outputDir — переключатель рабочей директории специалиста (Ф-3): функция
+	// (project, taskID) → каталог работы. Для git-проектов это постоянный
+	// worktree ветки задачи (создаётся серверным хуком на статусе in_progress),
+	// и правки агента падают в ВЕТКУ ЗАДАЧИ — авто-коммит на done соберёт именно
+	// их. nil — общая проектная копия temp/<проект>.
+	outputDir func(project, taskID string) string
 	// log — лог проекта (logs/<проект>.log). Устанавливается в Run, когда имя
 	// проекта известно; до этого nil, и сообщения идут в файл по умолчанию
 	// (нулевой получатель logging.Logger допустим — проверки не нужны).
@@ -97,6 +103,11 @@ func (k *KanbanRunner) SetBoardOnly(v bool) { k.boardOnly = v }
 // SetStandbyNotifier задаёт нотификатор режима ожидания: fn(true) — работы на
 // доске нет (ожидание), fn(false) — работа появилась (цикл возобновлён).
 func (k *KanbanRunner) SetStandbyNotifier(fn func(bool)) { k.onStandby = fn }
+
+// SetOutputDir задаёт функцию выбора рабочей директории специалиста по
+// (project, taskID) (Ф-3): worktree ветки задачи для git, temp/<проект> —
+// стандартно. nil возвращает поведение по умолчанию.
+func (k *KanbanRunner) SetOutputDir(fn func(project, taskID string) string) { k.outputDir = fn }
 
 // NewKanbanRunner создаёт Kanban-оркестратор поверх хранилища доски.
 func NewKanbanRunner(provider models.LLMProvider, store *board.Store) *KanbanRunner {
@@ -904,6 +915,17 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// QA-инженер — публикация багрепортов (BoardCreateBugReport).
 		if sb, ok := specialist.(interface{ SetBoardStore(*board.Store) }); ok {
 			sb.SetBoardStore(k.store)
+		}
+		// Специалист git-проекта работает в своём worktree ветки задачи (Ф-3):
+		// правки падают в ветку, авто-коммит на done подхватит их. В остальных
+		// случаях остаётся стандартный OutputDir (temp/<проект>).
+		if k.outputDir != nil {
+			if dir := k.outputDir(k.store.Project(), t.TaskID); dir != "" {
+				if so, ok := specialist.(interface{ SetOutputDir(string) }); ok {
+					so.SetOutputDir(dir)
+					k.log.Infof("[задача %s] рабочая директория → %s", t.TaskID, dir)
+				}
+			}
 		}
 
 		k.log.Infof("[задача %s] специалист %s выполняет: %s",
