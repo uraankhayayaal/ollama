@@ -10,8 +10,8 @@ import (
 // Значения берутся из переменных окружения ACCEPT_* (см. .env.example).
 type Config struct {
 	// BuildCmd — команда сборки, выполняется через sh -c в директории
-	// проекта. Пустая — автодетект по типу проекта (go.mod / package.json /
-	// requirements.txt). Задаётся ACCEPT_BUILD_CMD.
+	// проекта. Пустая — автодетект по типу проекта (go.mod / composer.json /
+	// package.json / requirements.txt). Задаётся ACCEPT_BUILD_CMD.
 	BuildCmd string
 
 	// RunCmd — команда запуска приложения. Пустая — автодетект.

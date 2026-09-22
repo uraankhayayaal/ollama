@@ -20,6 +20,12 @@ type TrimProvider struct {
 	baseURL string
 	apiKey  string
 	model   string
+	// settings — ключевые лимиты модели: выход (TRIM_OUTPUT_TOKENS /
+	// TRIM_MAX_TOKENS, по умолчанию 4000) и бюджет thinking
+	// (TRIM_THINK_TOKENS → reasoning_effort). Вход (TRIM_INPUT_TOKENS)
+	// OpenAI-совместимый API запросом не принимает — хранится как
+	// конфигурация модели.
+	settings ModelSettings
 }
 
 type chatMessage struct {
@@ -57,11 +63,10 @@ type chatUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// trimMaxTokens — лимит выходных токенов для Trim. Задаётся переменной
-// окружения TRIM_MAX_TOKENS.
-func trimMaxTokens() int {
-	if n := os.Getenv("TRIM_MAX_TOKENS"); n != "" {
-		return atoiDefault(n, 4000)
+// trimMaxTokens — лимит выходных токенов для Trim из settings провайдера.
+func (t *TrimProvider) trimMaxTokens() int {
+	if t.settings.OutputTokens > 0 {
+		return t.settings.OutputTokens
 	}
 	return 4000
 }
@@ -83,10 +88,11 @@ func NewTrimProvider() (*TrimProvider, error) {
 	}
 
 	return &TrimProvider{
-		client:  &http.Client{Timeout: 5 * time.Minute},
-		baseURL: strings.TrimSuffix(trimURL, "/"),
-		apiKey:  apiKey,
-		model:   model,
+		client:   &http.Client{Timeout: 5 * time.Minute},
+		baseURL:  strings.TrimSuffix(trimURL, "/"),
+		apiKey:   apiKey,
+		model:    model,
+		settings: resolveSettings("TRIM", ModelSettings{OutputTokens: 4000}),
 	}, nil
 }
 
@@ -165,8 +171,18 @@ func (t *TrimProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []
 	req := map[string]any{
 		"model":                 t.model,
 		"messages":              messages,
-		"max_completion_tokens": trimMaxTokens(),
+		"max_completion_tokens": t.trimMaxTokens(),
 	}
+
+	// Reasoning-модели (T-pro и др.) могут размышлять перед ответом.
+	// TRIM_THINK_TOKENS задаёт бюджет thinking в токенах — переводится в
+	// OpenAI-совместимый reasoning_effort ("low"/"medium"/"high", см.
+	// thinkLevelFromTokens). Не задано — поле не передаётся.
+	if level := thinkLevelFromTokens(t.settings.ThinkTokens); level != "" {
+		req["reasoning_effort"] = level
+		runner.Debugf("TRIM: thinking для модели %q: уровень %q (бюджет %d токенов)", t.model, level, t.settings.ThinkTokens)
+	}
+
 	if forceTool != "" {
 		req["tools"] = toolsParam
 		req["tool_choice"] = map[string]any{

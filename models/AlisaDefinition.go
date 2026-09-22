@@ -16,41 +16,20 @@ import (
 	"github.com/openai/openai-go/shared/constant"
 )
 
-// maxTokensOut для Yandex: 1000 токенов не хватало, из-за чего аргументы
-// WriteFiles обрезались и доходил только 1 файл. Значение можно задать
-// через переменную окружения YANDEX_MAX_TOKENS. По умолчанию 8000: столько
-// нужно, чтобы модель успела сгенерировать JSON с несколькими файлами
-// в одном вызове WriteFiles без обрезания (finish_reason=length).
-func maxTokensOut() int {
-	if n := os.Getenv("YANDEX_MAX_TOKENS"); n != "" {
-		return atoiDefault(n, 8000)
-	}
-	return 8000
-}
-
 // bigWriteTokens — бюджет на раунд, где модель обязана вызвать инструмент
 // первого раунда (например, WriteFiles с JSON всех файлов проекта). JSON
 // нескольких файлов легко перерастает стандартный лимит, поэтому на таком
 // раунде увеличиваем выделение, если пользователь не задал лимит явно.
 const bigWriteTokens = 16000
 
-func atoiDefault(s string, def int) int {
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return def
-		}
-		n = n*10 + int(r-'0')
-	}
-	if n == 0 {
-		return def
-	}
-	return n
-}
-
 type AlisaProvider struct {
 	client openai.Client
 	model  string // например, "yandexgpt/latest"
+	// settings — ключевые лимиты модели: выход (YANDEX_OUTPUT_TOKENS /
+	// YANDEX_MAX_TOKENS, по умолчанию 8000) и бюджет thinking
+	// (YANDEX_THINK_TOKENS). Вход (YANDEX_INPUT_TOKENS) провайдер не
+	// принимает запросом — хранится как конфигурация модели.
+	settings ModelSettings
 }
 
 func NewAlisaProvider() *AlisaProvider {
@@ -63,7 +42,14 @@ func NewAlisaProvider() *AlisaProvider {
 		option.WithBaseURL("https://ai.api.cloud.yandex.net/v1"),
 		option.WithHeader("OpenAI-Project", yandexFolderID),
 	)
-	return &AlisaProvider{client: client, model: fmt.Sprintf("gpt://%s/%s", yandexFolderID, yandexModel)}
+	return &AlisaProvider{
+		client: client,
+		model:  fmt.Sprintf("gpt://%s/%s", yandexFolderID, yandexModel),
+		// По умолчанию 8000: столько нужно, чтобы модель успела сгенерировать
+		// JSON с несколькими файлами в одном вызове WriteFiles без обрезания
+		// (finish_reason=length).
+		settings: resolveSettings("YANDEX", ModelSettings{OutputTokens: 8000}),
+	}
 }
 
 func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
@@ -140,9 +126,13 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 
 	// На раунде, где модель обязана сразу вызвать WriteFiles (сгенерировать
 	// JSON со всеми файлами), обычного лимита может не хватить — даём больше
-	// токенов, если пользователь не задал YANDEX_MAX_TOKENS явно.
-	maxTokens := maxTokensOut()
-	if os.Getenv("YANDEX_MAX_TOKENS") == "" {
+	// токенов, если пользователь не задал YANDEX_MAX_TOKENS/
+	// YANDEX_OUTPUT_TOKENS явно.
+	maxTokens := y.settings.OutputTokens
+	if maxTokens <= 0 {
+		maxTokens = bigWriteTokens
+	}
+	if os.Getenv("YANDEX_MAX_TOKENS") == "" && os.Getenv("YANDEX_OUTPUT_TOKENS") == "" {
 		if req, ok := agent.(runner.ToolRequiringAgent); ok {
 			if name, yes := req.RequiredToolFirstRound(); yes && name != "" && !hasToolResult(msgs) {
 				if maxTokens < bigWriteTokens {
@@ -150,6 +140,18 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 				}
 			}
 		}
+	}
+
+	// Reasoning-модели (qwen3.6 и др.) могут размышлять перед ответом. По
+	// умолчанию рассуждение отключено (reasoning_effort="none"): оно удваивает
+	// время и токены на каждом раунде инструментов при той же точности вызовов.
+	// YANDEX_THINK_TOKENS задаёт бюджет thinking в токенах — он переводится в
+	// уровень рассуждения ("low"/"medium"/"high", см. thinkLevelFromTokens),
+	// при этом рассуждение включается.
+	reasoning := openai.ReasoningEffort("none")
+	if level := thinkLevelFromTokens(y.settings.ThinkTokens); level != "" {
+		reasoning = openai.ReasoningEffort(level)
+		runner.Debugf("YANDEX: thinking для модели %q: уровень %q (бюджет %d токенов)", y.model, level, y.settings.ThinkTokens)
 	}
 
 	// Выполнение запроса
@@ -168,11 +170,8 @@ func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs [
 			Messages:            messages,
 			Tools:               oaTools,
 			ToolChoice:          toolChoice,
-			MaxCompletionTokens: openai.Int(int64(maxTokensOut())),
-
-			// ОТКЛЮЧАЕМ THINKING: Передаем "none" для подавления рассуждений,
-			// чтобы модель сразу генерировала ответ и не тратила контекст.
-			ReasoningEffort: openai.ReasoningEffort("none"),
+			MaxCompletionTokens: openai.Int(int64(maxTokens)),
+			ReasoningEffort:     reasoning,
 		},
 	)
 	if err != nil {

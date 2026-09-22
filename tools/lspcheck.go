@@ -35,7 +35,7 @@ func (t *lspCheckTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name: LspCheck,
 		Description: "Используй этот инструмент, когда сборка/проверки упали, чтобы получить ТОЧНЫЕ строки ошибок компиляции или типов " +
-			"(файл:строка:колонка:описание) по стеку проекта: gopls для Go, tsc для TypeScript/JavaScript, pyright/ruff для Python. " +
+			"(файл:строка:колонка:описание) по стеку проекта: gopls для Go, tsc для TypeScript/JavaScript, pyright/ruff для Python, phpstan/php -l для PHP. " +
 			"Это компактная диагностика без сырых логов — экономнее, чем парсить вывод Run. Вернёт массив diagnostics; если чекер " +
 			"не установлен — status skipped и подсказка использовать Run.",
 		Parameters: map[string]any{
@@ -108,7 +108,7 @@ func (ops *FileOps) LspCheck(args map[string]any) ([]byte, error) {
 			"status":      "skipped",
 			"checker":     "",
 			"diagnostics": []lspDiagnostic{},
-			"message":     "не удалось определить стек проекта (нет go.mod/package.json/requirements.txt в корне и подпроектах) — используй Run: go build/vet, npm run build или свой чекер по стеку",
+			"message":     "не удалось определить стек проекта (нет go.mod/composer.json/package.json/requirements.txt в корне и подпроектах) — используй Run: go build/vet, npm run build или свой чекер по стеку",
 		}), nil
 	}
 
@@ -305,6 +305,26 @@ func lspCheckerCommand(stack stackdetect.Kind, dir string, files []string) (cmd,
 		}
 		// go vet — фолбэк: диагностики в том же формате file:line:col: message.
 		return "go vet ./...", "go vet", nil
+	case stackdetect.KindPhp:
+		// phpstan — локальный vendor/bin в приоритете (composer-зависимость
+		// проекта), затем глобальный в PATH/каталогах установки. Без config
+		// анализировать нечего — фолбэк на php -l по файлам/проекту.
+		bin := ""
+		if stackdetect.HasFile(dir, "vendor/bin/phpstan") {
+			bin = "vendor/bin/phpstan"
+		} else if b, ok := binCommand("phpstan"); ok {
+			bin = b
+		}
+		if bin != "" &&
+			(stackdetect.HasFile(dir, "phpstan.neon") ||
+				stackdetect.HasFile(dir, "phpstan.neon.dist") ||
+				stackdetect.HasFile(dir, "phpstan.dist.neon")) {
+			return bin + " analyse --no-progress --error-format=raw", "phpstan", nil
+		}
+		if len(files) > 0 {
+			return "printf '%s\\n' " + strings.Join(relArgs(dir, files), " ") + " | xargs -n1 php -l", "php -l", nil
+		}
+		return phpLintLSPCmd(), "php -l", nil
 	case stackdetect.KindNode:
 		// Локальный tsc (node_modules/.bin) или tsc в PATH/каталогах установки.
 		// npx не используем: он качает пакет из сети, что недопустимо для
@@ -437,9 +457,17 @@ func shellQuote(p string) string {
 	return p
 }
 
+// phpLintLSPCmd — проект-версия php -l (без точечных files): все .php-исходники,
+// исключая vendor/node_modules. Возвращает ненулевой код при синтаксической ошибке.
+func phpLintLSPCmd() string {
+	return "find . -type f -name '*.php' -not -path './vendor/*' -not -path './node_modules/*' -print0 | xargs -0 -r -n1 php -l"
+}
+
 // parseLSPOutput разбирает вывод чекера в зависимости от стека.
 func parseLSPOutput(stack stackdetect.Kind, output, outputDir string) []lspDiagnostic {
 	switch stack {
+	case stackdetect.KindPhp:
+		return parsePhpstanRaw(output, outputDir)
 	case stackdetect.KindPython:
 		if strings.Contains(output, "\"generalDiagnostics\"") {
 			return parsePyrightJSON(output, outputDir)
@@ -453,7 +481,36 @@ func parseLSPOutput(stack stackdetect.Kind, output, outputDir string) []lspDiagn
 var (
 	reFileColon = regexp.MustCompile(`^(.+?):(\d+):(\d+):\s*(.*)$`)
 	reTscFile   = regexp.MustCompile(`^(.+?)\((\d+)(?:,(\d+))?\):\s*(?:(error|warning)\s+)?(.*)$`)
+	// rePhpstan — формат "phpstan analyse --error-format=raw": "<path>:<line>:<msg>"
+	// (без колонки). Путь в выдаче phpstan — как правило относительный/абсолютный.
+	rePhpstan = regexp.MustCompile(`^(.+?\.php):(\d+):\s*(.*)$`)
 )
+
+// parsePhpstanRaw разбирает вывод phpstan в raw-формате ("path:line:message").
+func parsePhpstanRaw(output, outputDir string) []lspDiagnostic {
+	var ds []lspDiagnostic
+	for _, ln := range strings.Split(output, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		m := rePhpstan.FindStringSubmatch(ln)
+		if m == nil {
+			continue
+		}
+		line, _ := strconv.Atoi(m[2])
+		file := normLSPFile(m[1], outputDir)
+		if file == "" {
+			continue
+		}
+		msg := strings.TrimSpace(m[3])
+		if msg == "" {
+			continue
+		}
+		ds = append(ds, lspDiagnostic{File: file, Line: line, Col: 1, Severity: "error", Message: msg})
+	}
+	return ds
+}
 
 // parseFileColonLine разбирает формат gopls/ruff/go vet:
 // "path:line:col: message" (и "…:line: message" — без колонки).

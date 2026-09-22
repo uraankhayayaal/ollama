@@ -184,17 +184,23 @@ ollama/  (go.mod module ai)
 | `OLLAMA_HOST` | адрес сервера (реально используется клиентом Ollama) |
 | `OLLAMA_MODEL` | модель по умолчанию (`llama3`) |
 | `OLLAMA_MODEL_LARGE` | большая модель для лидов/ревью/эскалаций |
-| `OLLAMA_THINK` | `0`/`false`/`off` — выключить reasoning, `1` — включить |
-| `OLLAMA_NUM_CTX` | окно контекста (num_ctx) — описано в коде; сейчас зафиксировано `32000` |
+| `OLLAMA_THINK` | `0`/`false`/`off` — выключить reasoning, `1` — включить (legacy) |
+| `OLLAMA_INPUT_TOKENS` (legacy `OLLAMA_NUM_CTX`) | окно контекста num_ctx | `32000` |
+| `OLLAMA_OUTPUT_TOKENS` (legacy `OLLAMA_MAX_TOKENS`) | лимит выходных токенов (num_predict) | не задано |
+| `OLLAMA_THINK_TOKENS` | бюджет thinking в токенах → think-уровень (`low`/`medium`/`high`/`max`) | не задано |
 | `OLLAMA_KV_CACHE_TYPE` / `OLLAMA_KEEP_ALIVE` | серверные настройки `ollama serve` (в этом коде не читаются) |
 
 ### YandexGPT / Trim
 | Переменная | Описание | По умолчанию |
 |---|---|---|
 | `YANDEX_API_KEY` / `YANDEX_FOLDER_ID` / `YANDEX_MODEL` | доступ к YandexGPT | — |
-| `YANDEX_MAX_TOKENS` | лимит вывода | `8000` (16 000 на первом WriteFiles-раунде) |
+| `YANDEX_MAX_TOKENS` (= `YANDEX_OUTPUT_TOKENS`) | лимит вывода | `8000` (16 000 на первом WriteFiles-раунде) |
+| `YANDEX_INPUT_TOKENS` | входной контекст (конфигурация модели) | не задано |
+| `YANDEX_THINK_TOKENS` | бюджет thinking → reasoning_effort (`low`/`medium`/`high`); включает рассуждение | не задано |
 | `TRIM_API_KEY` / `TRIM_HOST` / `TRIM_MODEL` | доступ к Trim | — |
-| `TRIM_MAX_TOKENS` | лимит вывода | `4000` |
+| `TRIM_MAX_TOKENS` (= `TRIM_OUTPUT_TOKENS`) | лимит вывода | `4000` |
+| `TRIM_INPUT_TOKENS` | входной контекст (конфигурация модели) | не задано |
+| `TRIM_THINK_TOKENS` | бюджет thinking → reasoning_effort (`low`/`medium`/`high`) | не задано |
 
 ### Форджи и код-ревью
 | Переменная | Описание | По умолчанию |
@@ -376,9 +382,12 @@ ollama/  (go.mod module ai)
     agent'ы (developer/devops/qa) и executor'ские ветки.
 12. **Продуктовые направления**: ревью MR в CI-пайплайне с автофиксом, IDE/LSP
     интеграция, работа с кириллицей/мультиязычностью промптов.
-13. **`OLLAMA_NUM_CTX`**: окно жёстко `32000` в конструкторе Ollama-провайдера,
-    комментарий обещает чтение переменной (по умолчанию 16384). Либо прочитать
-    переменную, либо убрать расхождение.
+13. **Переменные моделей**: входной/выходной контекст и бюджет thinking
+    задаются через `OLLAMA_*/YANDEX_*/TRIM_*` (`_INPUT_TOKENS`,
+    `_OUTPUT_TOKENS`/`_MAX_TOKENS`, `_THINK_TOKENS`); резолвятся в
+    `models.ModelSettings`. Числовой бюджет thinking провайдеры принимают
+    только уровнем (`low`/`medium`/`high`/`max`), поэтому переводится через
+    `thinkLevelFromTokens` (см. `models/ModelSettings.go`).
 14. **`OLLAMA_KV_CACHE_TYPE` / `OLLAMA_KEEP_ALIVE`** — описаны в `.env.example`,
     кодом не читаются (это параметры сервера `ollama serve`). Либо пометить
     в примере как серверные, либо пробросить в запросы клиента.

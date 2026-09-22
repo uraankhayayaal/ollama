@@ -13,6 +13,7 @@ type Kind string
 
 const (
 	KindGo      Kind = "go"
+	KindPhp     Kind = "php"
 	KindNode    Kind = "node"
 	KindPython  Kind = "python"
 	KindUnknown Kind = "unknown"
@@ -25,11 +26,16 @@ func HasFile(dir, name string) bool {
 }
 
 // DetectKind определяет тип проекта по маркерам в корне директории.
-// Приоритет: go.mod → package.json → требовательные питон-маркеры.
+// Приоритет: go.mod → composer.json → package.json → требования питона.
 func DetectKind(dir string) Kind {
 	switch {
 	case HasFile(dir, "go.mod"):
 		return KindGo
+	// composer.json раньше package.json: Laravel/пакетные PHP-проекты несут оба
+	// маркера, и приёмка по стеку PHP (composer + php -l + artisan) корректнее,
+	// чем трактовка такого корня как Node-проекта.
+	case HasFile(dir, "composer.json"):
+		return KindPhp
 	case HasFile(dir, "package.json"):
 		return KindNode
 	case HasFile(dir, "requirements.txt"),

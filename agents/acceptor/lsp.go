@@ -23,7 +23,7 @@ var lspIgnoredDir = map[string]bool{
 // lspSourceExt — расширения исходников, попадающие в ЛСП-сканирование.
 var lspSourceExt = map[string]bool{
 	".go": true, ".js": true, ".jsx": true, ".ts": true, ".tsx": true,
-	".py": true, ".pyi": true,
+	".py": true, ".pyi": true, ".php": true, ".phtml": true,
 }
 
 // maxLSPFiles — максимум исходников, которые открываются в языковом сервере

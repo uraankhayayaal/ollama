@@ -24,14 +24,14 @@ func withAcceptorLSPDiags(t *testing.T, diags []tools.LSPDiag, handled bool) {
 // уважает лимит.
 func TestProjectSourceFiles(t *testing.T) {
 	dir := t.TempDir()
-	for _, f := range []string{"main.go", "server/handler.go", "frontend/App.tsx", "vendor/x.go", "node_modules/y.js", "README.md", "script.sh"} {
+	for _, f := range []string{"main.go", "server/handler.go", "frontend/App.tsx", "src/user.php", "view.phtml", "vendor/x.go", "vendor/x.php", "node_modules/y.js", "README.md", "script.sh"} {
 		writeTestFile(t, dir, f, "")
 	}
 	files := projectSourceFiles(dir, 100)
-	if len(files) != 3 {
-		t.Fatalf("ожидали 3 исходника, got %#v", files)
+	if len(files) != 5 {
+		t.Fatalf("ожидали 5 исходников, got %#v", files)
 	}
-	for _, want := range []string{"main.go", "server/handler.go", "frontend/App.tsx"} {
+	for _, want := range []string{"main.go", "server/handler.go", "frontend/App.tsx", "src/user.php", "view.phtml"} {
 		found := false
 		for _, f := range files {
 			if f == want {

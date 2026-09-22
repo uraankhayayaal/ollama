@@ -21,6 +21,12 @@ func TestDetectKind(t *testing.T) {
 	}
 	os.Remove(filepath.Join(dir, "package.json"))
 
+	writeMarker(t, dir, "composer.json")
+	if got := DetectKind(dir); got != KindPhp {
+		t.Fatalf("composer.json: got %q, want %q", got, KindPhp)
+	}
+	os.Remove(filepath.Join(dir, "composer.json"))
+
 	writeMarker(t, dir, "requirements.txt")
 	if got := DetectKind(dir); got != KindPython {
 		t.Fatalf("requirements.txt: got %q, want %q", got, KindPython)
@@ -53,6 +59,18 @@ func TestDetectKindPrefersGoMod(t *testing.T) {
 	writeMarker(t, dir, "package.json")
 	if got := DetectKind(dir); got != KindGo {
 		t.Fatalf("got %q, want %q", got, KindGo)
+	}
+}
+
+func TestDetectKindPrefersComposerOverPackageJSON(t *testing.T) {
+	// Laravel и пакетные PHP-проекты несут и composer.json, и package.json:
+	// корень трактуется как PHP-стек (composer/php -l/artisan корректнее,
+	// чем Node-сборка фронтенд-ассетов).
+	dir := t.TempDir()
+	writeMarker(t, dir, "composer.json")
+	writeMarker(t, dir, "package.json")
+	if got := DetectKind(dir); got != KindPhp {
+		t.Fatalf("got %q, want %q", got, KindPhp)
 	}
 }
 

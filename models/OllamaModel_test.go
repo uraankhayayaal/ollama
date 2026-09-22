@@ -21,7 +21,7 @@ func TestChatStreamCanceledContextIsWrappable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("url: %v", err)
 	}
-	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", numCtx: 1024}
+	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -34,6 +34,12 @@ func TestDetectKind(t *testing.T) {
 	}
 	os.Remove(filepath.Join(dir, "package.json"))
 
+	writeTestFile(t, dir, "composer.json", "{}")
+	if got := DetectKind(dir); got != KindPhp {
+		t.Fatalf("composer.json: got %q, want php", got)
+	}
+	os.Remove(filepath.Join(dir, "composer.json"))
+
 	writeTestFile(t, dir, "main.py", "print(1)")
 	if got := DetectKind(dir); got != KindPython {
 		t.Fatalf("main.py: got %q, want python", got)
@@ -78,6 +84,24 @@ func TestDetectProjectsSingleRoot(t *testing.T) {
 	roots := DetectProjects(dir)
 	if len(roots) != 1 || roots[0].Rel != "" {
 		t.Fatalf("ожидали один корневой проект, got %#v", roots)
+	}
+}
+
+// PHP-подпроект монорепозитория распознаётся по composer.json отдельным корнем.
+func TestDetectProjectsPhpSubproject(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "api/composer.json", "{}")
+	writeTestFile(t, dir, "frontend/package.json", "{}")
+
+	roots := DetectProjects(dir)
+	if len(roots) != 2 {
+		t.Fatalf("ожидали 2 подпроекта, got %d: %#v", len(roots), roots)
+	}
+	if roots[0].Rel != "api" || roots[0].Kind != KindPhp {
+		t.Fatalf("roots[0] = %#v, ожидали api/php", roots[0])
+	}
+	if roots[1].Rel != "frontend" || roots[1].Kind != KindNode {
+		t.Fatalf("roots[1] = %#v, ожидали frontend/node", roots[1])
 	}
 }
 
@@ -494,6 +518,80 @@ func TestInstallCommandByKind(t *testing.T) {
 	if cmd, _ := KindUnknown.installCommand(dir); cmd != "" {
 		t.Fatalf("unknown: got %q, want ''", cmd)
 	}
+}
+
+// Команды приёмки стека PHP по маркерам проекта (строки команд, без запуска).
+func TestPhpCommandsByKind(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "composer.json", "{}")
+	writeTestFile(t, dir, "artisan", "<?php\n")
+	writeTestFile(t, dir, "vendor/bin/phpstan", "x")
+	writeTestFile(t, dir, "vendor/bin/php-cs-fixer", "x")
+	writeTestFile(t, dir, "phpstan.neon", "{}")
+
+	k := KindPhp
+	if cmd := k.buildCommand(dir); !strings.Contains(cmd, "php -l") || !strings.Contains(cmd, "./vendor/*") {
+		t.Fatalf("build: %q", cmd)
+	}
+	if cmd := k.runCommand(dir); !strings.Contains(cmd, "php artisan serve") {
+		t.Fatalf("run: %q", cmd)
+	}
+	if cmd, tool := k.formatCommand(dir); tool != "php-cs-fixer" || !strings.Contains(cmd, "php-cs-fixer") {
+		t.Fatalf("format: %q (%s)", cmd, tool)
+	}
+	if cmd, tool := k.analyzeCommand(dir); tool != "phpstan" || !strings.Contains(cmd, "phpstan analyse") {
+		t.Fatalf("analyze: %q (%s)", cmd, tool)
+	}
+
+	dir = t.TempDir()
+	writeTestFile(t, dir, "composer.json", "{}")
+	writeTestFile(t, dir, "public/index.php", "<?php\n")
+	if cmd := k.runCommand(dir); !strings.Contains(cmd, "php -S 127.0.0.1:8080") || !strings.Contains(cmd, "-t public") {
+		t.Fatalf("run (public): %q", cmd)
+	}
+}
+
+// Анализатор PHP без конфигурации phpstan (нет phpstan.neon) откатывается на
+// синтаксическую проверку php -l; без composer в PATH установка зависимостей
+// не выбрана (пропуск, а не ошибка).
+func TestPhpAnalyzeFallbackAndInstall(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "composer.json", "{}")
+	writeTestFile(t, dir, "vendor/bin/phpstan", "x")
+
+	if cmd, tool := KindPhp.analyzeCommand(dir); tool != "php -l" || !strings.Contains(cmd, "php -l") {
+		t.Fatalf("analyze без phpstan.neon: %q (%s), ожидали php -l", cmd, tool)
+	}
+
+	// composer недоступен (PATH без composer) — installCommand пуст.
+	empty := t.TempDir()
+	t.Setenv("PATH", empty)
+	if cmd, tool := KindPhp.installCommand(dir); cmd != "" || tool != "" {
+		t.Fatalf("install без composer: %q (%s), ожидали пропуск", cmd, tool)
+	}
+}
+
+// composer в PATH — installCommand даёт composer install.
+func TestPhpInstallWithComposer(t *testing.T) {
+	shim := makeExecutableShim(t, "composer")
+	t.Setenv("PATH", filepath.Dir(shim)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "composer.json", "{}")
+	cmd, tool := KindPhp.installCommand(dir)
+	if tool != "composer install" || !strings.Contains(cmd, "composer install") || !strings.Contains(cmd, "--no-interaction") {
+		t.Fatalf("install: %q (%s)", cmd, tool)
+	}
+}
+
+// makeExecutableShim создаёт исполняемый пустышку-бинарь и возвращает его путь.
+func makeExecutableShim(t *testing.T, name string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
 }
 
 // go mod download на проекте без внешних зависимостей не требует сети и

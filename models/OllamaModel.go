@@ -17,13 +17,14 @@ import (
 type OllamaProvider struct {
 	client *api.Client
 	model  string
-	// numCtx задаёт размер окна контекста (num_ctx) для запросов к Ollama.
-	// По умолчанию Ollama использует 4096 токенов, а история nudge-цикла
-	// (подсказки + результаты инструментов) может раздуваться до десятков
-	// тысяч токенов, из-за чего модель возвращает 400 exceeded_context_size
-	// и шаг срывается. Размер окна задаётся переменной окружения
-	// OLLAMA_NUM_CTX (по умолчанию 16384).
-	numCtx int
+	// settings — ключевые лимиты модели: входящий контекст (num_ctx), выход
+	// (num_predict) и бюджет thinking. Вход задаётся OLLAMA_INPUT_TOKENS/
+	// OLLAMA_NUM_CTX (по умолчанию 32000: Ollama использует 4096 токенов, а
+	// история nudge-цикла может раздуваться до десятков тысяч, из-за чего
+	// модель возвращает 400 exceeded_context_size), выход —
+	// OLLAMA_OUTPUT_TOKENS/OLLAMA_MAX_TOKENS, thinking — OLLAMA_THINK_TOKENS.
+	// См. ModelSettings.
+	settings ModelSettings
 }
 
 func NewOllamaProvider(model string) (*OllamaProvider, error) {
@@ -33,7 +34,13 @@ func NewOllamaProvider(model string) (*OllamaProvider, error) {
 		logging.Fatalf("Ошибка инициализации клиента: %v", err)
 	}
 
-	return &OllamaProvider{client: client, model: model, numCtx: 32000}, nil
+	return &OllamaProvider{
+		client: client,
+		model:  model,
+		settings: resolveSettings("OLLAMA", ModelSettings{
+			InputTokens: 32000,
+		}),
+	}, nil
 }
 
 func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
@@ -92,21 +99,34 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 	// (делегирующий сюда) просто накапливает полный текст.
 	stream := true
 
+	// num_ctx — размер окна контекста (вход), num_predict — лимит выходных
+	// токенов. Оба берутся из settings (ModelSettings).
+	options := map[string]any{"num_ctx": o.settings.InputTokens}
+	if o.settings.OutputTokens > 0 {
+		options["num_predict"] = o.settings.OutputTokens
+	}
+
 	req := &api.ChatRequest{
 		Model:    o.model,
 		Messages: messages,
 		Tools:    ollamaTools,
 		Stream:   &stream,
-		Options:  map[string]any{"num_ctx": o.numCtx},
+		Options:  options,
 	}
 
 	// Reasoning-модели (например qwen3 с включённым thinking) перед ответом
 	// генерируют цепочку рассуждения — это удваивает время и токены на каждом
-	// раунде инструментов при той же точности вызовов. Переменная OLLAMA_THINK
-	// позволяет отключить рассуждение явно ("0"/"false"/"off") или принудительно
-	// включить ("1"). По умолчанию параметр не задаётся — модель работает
-	// как настроена.
-	if v := strings.TrimSpace(os.Getenv("OLLAMA_THINK")); v != "" {
+	// раунде инструментов при той же точности вызовов. Управление рассуждением:
+	//   - OLLAMA_THINK_TOKENS — числовой бюджет thinking: включаем рассуждение
+	//     с уровнем, соответствующим бюджету (см. thinkLevelFromTokens);
+	//   - legacy OLLAMA_THINK — boolean-переключатель ("0"/"false"/"off" —
+	//     выключить, "1" — принудительно включить). По умолчанию параметр не
+	//     задаётся — модель работает как настроена. Приоритет у числового
+	//     бюджета.
+	if level := thinkLevelFromTokens(o.settings.ThinkTokens); level != "" {
+		req.Think = &api.ThinkValue{Value: level}
+		runner.Debugf("OLLAMA: thinking для модели %q: уровень %q (бюджет %d токенов)", o.model, level, o.settings.ThinkTokens)
+	} else if v := strings.TrimSpace(os.Getenv("OLLAMA_THINK")); v != "" {
 		enabled := true
 		switch strings.ToLower(v) {
 		case "0", "false", "off", "no":

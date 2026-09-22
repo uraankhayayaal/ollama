@@ -71,6 +71,25 @@ func TestParseRuffFormat(t *testing.T) {
 	}
 }
 
+func TestParsePhpstanRaw(t *testing.T) {
+	out := "/work/app/src/User.php:42:Call to an undefined method App\\User::missing().\n" +
+		"/work/app/src/Auth.php:7:Property App\\Auth::$x is never read, only written.\n" +
+		"Line   src/Auth.php\n" // шумный текстовый заголовок — не попадает в диагностики
+	ds := parseLSPOutput(stackdetect.KindPhp, out, "/work/app")
+	if len(ds) != 2 {
+		t.Fatalf("want 2 diagnostics, got %d: %+v", len(ds), ds)
+	}
+	if ds[0].File != "src/User.php" || ds[0].Line != 42 || ds[0].Col != 1 {
+		t.Fatalf("got %+v", ds[0])
+	}
+	if ds[0].Severity != "error" {
+		t.Fatalf("severity = %q, want error", ds[0].Severity)
+	}
+	if !strings.Contains(ds[1].Message, "never read") {
+		t.Fatalf("message = %q", ds[1].Message)
+	}
+}
+
 func TestParseLinesWithoutColsFiltered(t *testing.T) {
 	// Строки вида "package: text" или "file:line: text" (без колонки) не дают
 	// точечной диагностики и отфильтровываются.
@@ -116,6 +135,41 @@ func TestLSPCommandSelectionGo(t *testing.T) {
 		t.Fatalf("go: err=%v", err)
 	} else if checker != "gopls" && checker != "go vet" {
 		t.Fatalf("go: checker=%q, cmd=%q", checker, cmd)
+	}
+}
+
+func TestLSPCommandSelectionPhpLocal(t *testing.T) {
+	dir := t.TempDir()
+	writeMarker(t, dir, "composer.json")
+	writeMarker(t, dir, "vendor/bin/phpstan")
+	writeMarker(t, dir, "phpstan.neon")
+	cmd, checker, err := lspCheckerCommand(stackdetect.KindPhp, dir, nil)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if checker != "phpstan" || !strings.Contains(cmd, "vendor/bin/phpstan") || !strings.Contains(cmd, "--error-format=raw") {
+		t.Fatalf("checker=%q cmd=%q", checker, cmd)
+	}
+}
+
+func TestLSPCommandSelectionPhpFallback(t *testing.T) {
+	dir := t.TempDir()
+	writeMarker(t, dir, "composer.json")
+	// Нет ни phpstan-бинаря, ни конфига phpstan — фолбэк php -l.
+	cmd, checker, err := lspCheckerCommand(stackdetect.KindPhp, dir, nil)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if checker != "php -l" || !strings.Contains(cmd, "php -l") {
+		t.Fatalf("checker=%q cmd=%q", checker, cmd)
+	}
+	// Точечные файлы линтуются теми же сами (не через find по всему проекту).
+	cmd, checker, err = lspCheckerCommand(stackdetect.KindPhp, dir, []string{"src/A.php"})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if checker != "php -l" || !strings.Contains(cmd, "src/A.php") {
+		t.Fatalf("checker=%q cmd=%q", checker, cmd)
 	}
 }
 

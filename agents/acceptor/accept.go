@@ -52,7 +52,7 @@ func unknownProjectReport(dir string) *Report {
 	rep.Issues = append(rep.Issues, Issue{
 		Stage:    StageConfig,
 		Severity: "error",
-		Text:     "не удалось определить тип проекта (нет go.mod, package.json, requirements.txt и т.п.) — задайте ACCEPT_BUILD_CMD/ACCEPT_RUN_CMD",
+		Text:     "не удалось определить тип проекта (нет go.mod, composer.json, package.json, requirements.txt и т.п.) — задайте ACCEPT_BUILD_CMD/ACCEPT_RUN_CMD",
 	})
 	rep.Summary = summarize(rep)
 	return rep

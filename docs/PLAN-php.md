@@ -1,8 +1,32 @@
 # План: поддержка стека PHP (детекция, сборка, LSP, приёмка)
 
-Статус: **НЕ РЕАЛИЗОВАНО.** План внедрения PHP как стека проекта.
+Статус: **РЕАЛИЗОВАНО (Ф-1..Ф-5).** План внедрения PHP как стека проекта.
 Код-ревью PHP уже работает (см. «Что уже есть»); ниже — только недостающая
 часть. Отмечать чекбоксы `[x]` по мере выполнения, как в `PLAN-lsp.md`.
+
+Отклонения от плана, принятые при реализации:
+
+- Константа названа `KindPhp` (не `KindPHP`) — в Go не приняты
+  ALL-CAPS-идентификаторы; консистентно с `KindGo`/`KindNode`/`KindPython`.
+- Приоритет маркеров: `go.mod` → `composer.json` → `package.json` → python.
+  composer.json **перед** package.json: Laravel/пакетные PHP-проекты несут оба
+  маркера, и корень должен трактоваться как PHP (иначе Node-сборка ломает
+  приёмку PHP-проекта).
+- `buildCommand` = только `php -l` по всем исходникам
+  (`phpLintCmd()`, `xargs -n1`). `composer install` живёт в `installCommand`
+  и выполняется до build/analyze когда `cfg.InstallDeps=true` — как в
+  замечании «install → build/lint/analyze» ниже; дублировать установку в build
+  не стали (уважает `InstallDeps=false` и не требует сети при голой среде).
+- phpstan выводит error-format=raw как `file:line:message` **без колонки** —
+  план предполагал `file:line:col:`; добавлен отдельный парсер `parsePhpstanRaw`
+  (не `parseFileColonLine`).
+- phpstan (локальный `vendor/bin/phpstan` или глобальный `phpstan`) запускается
+  только при наличии конфига `phpstan.neon`/`phpstan.neon.dist`/`phpstan.dist.neon`;
+  без конфига — фолбэк `php -l`.
+- LSP-сервер PHP: `intelephense --stdio` (фолбэк `phpactor`); команды ищутся
+  через `tools/binpath`, degrade-сообщение «…навигация недоступна, используй
+  ReadMap/ReadFiles».
+- `lspSourceExt` дополнен `.php` **и `.phtml`**.
 
 ## Цель
 
@@ -45,61 +69,76 @@
 
 ### Ф-1: детект стека (ядро)
 
-- [ ] `stackdetect/stackdetect.go`
-  - `:14-19` — добавить константу `KindPHP Kind = "php"`
-  - `:29-44` — в `DetectKind` case `HasFile(dir, "composer.json")` → `KindPHP`
-    (приоритет после go.mod/package.json)
-- [ ] `agents/acceptor/detect.go` — реэкспорт константы `KindPHP`
-  (`:20-25`) + комментарий ProjectRoot (`:40-41`)
-- [ ] ignore-списки: `agent/acceptor/detect.go:isIgnoredDir` (`:362-368`)
-  и `agents/acceptor/lsp.go:lspIgnoredDir` (`:18-21`) — добавить `vendor`
-- [ ] тексты ошибок со списком маркеров: `agents/acceptor/accept.go:55`,
-  `agents/acceptor/config.go:13-14` — упомянуть composer.json
+- [x] `stackdetect/stackdetect.go`
+  - константа `KindPhp Kind = "php"` (в стиле `KindGo`/`KindNode`)
+  - `DetectKind`: case `HasFile(dir, "composer.json")` → `KindPhp`
+    (приоритет: go.mod → composer.json → package.json → python)
+- [x] `agents/acceptor/detect.go` — реэкспорт константы `KindPhp` + комментарий
+  ProjectRoot «go/php/node/python»
+- [x] ignore-списки: `vendor` уже был в `isIgnoredDir`
+  (`agents/acceptor/detect.go`) и `lspIgnoredDir` (`agents/acceptor/lsp.go`) —
+  правок не потребовалось (проверено тестом `TestProjectSourceFiles`)
+- [x] тексты ошибок со списком маркеров: `agents/acceptor/accept.go` и
+  `agents/acceptor/config.go` — упомянут composer.json
 
 ### Ф-2: команды приёмки (`agents/acceptor/detect.go`)
 
-5 switch по Kind; для `KindPHP`:
+5 switch по Kind; для `KindPhp`:
 
-- [ ] `buildCommand` (`:87-108`): если есть `artisan` — `composer install --no-dev --no-interaction`, затем `find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -r php -l` (возврат ненулевой при первом синтаксисе)
-- [ ] `runCommand` (`:112-147`): `artisan` есть → `php artisan serve --host=127.0.0.1 --port=8080`; иначе `php -S 127.0.0.1:8080`
-- [ ] `formatCommand` (`:152-171`): `vendor/bin/php-cs-fixer fix --dry-run --diff` (tool `php-cs-fixer`); нет бинаря → `"", ""`
-- [ ] `analyzeCommand` (`:175-199`): `vendor/bin/phpstan analyse --no-progress` (конфиг `phpstan.neon`/`phpstan.neon.dist` есть) → фолбэк `php -l` syntax-check
-- [ ] `installCommand` (`:204-227`): `composer install --no-dev --no-interaction` (tool `composer install`); composer нет в PATH → `"", ""`
+- [x] `buildCommand`: `phpLintCmd()` — php -l по всем `.php` (исключая vendor/)
+- [x] `runCommand`: нет php.ini/серверов — `artisan` есть → `php artisan serve
+  --host=127.0.0.1 --port=8080`; `public/index.php` → `php -S 127.0.0.1:8080 -t public`;
+  `index.php` → `php -S 127.0.0.1:8080`; иначе `""`
+- [x] `formatCommand`: `vendor/bin/php-cs-fixer fix --dry-run --diff`
+  (tool `php-cs-fixer`); нет бинаря → `"", ""`
+- [x] `analyzeCommand`: `vendor/bin/phpstan analyse --no-progress --error-format=raw`
+  (глобальный `phpstan` как фолбэк-бинарь, только при конфиге
+  `phpstan.neon`/`phpstan.neon.dist`) → иначе фолбэк `phpLintCmd()` (tool `php -l`)
+- [x] `installCommand`: `composer install --no-dev --no-interaction --no-progress`
+  (tool `composer install`), только если `composer.json` и `cmdAvailable("composer")`;
+  иначе `"", ""` (skip, а не ошибка)
 
 ### Ф-3: LSP
 
-- [ ] `tools/lspcheck.go` `lspCheckerCommand` (`:299-338`): case `KindPHP` —
-  локальный `vendor/bin/phpstan` (если конфиг есть) → `binpath.Look("phpstan")`
-  → фолбэк `php -l`; `parseLSPOutput` (`:441-451`) — phpstan выводит в формате
-  `file:line:col: message`, подходит существующий `parseFileColonLine`
-- [ ] `tools/lspclient/servers.go`:
-  - `ServerCommand` (`:31-64`): case `KindPHP` → `intelephense --stdio`
-    (фолбэк `phpactor`), degrade-сообщение «используй ReadMap/ReadFiles»
-  - `languageFor` (`:68-93`): `.php` → `protocol.LanguageKindPHP` (и php для
-    `php` default-stack)
-- [ ] `agents/acceptor/lsp.go` `lspSourceExt` (`:24-27`): добавить `".php"`
-  (иначе PHP-файлы молча пропустятся нативной диагностикой приёмки)
-- [ ] `tools/lspnative.go`/`tools/lspnav.go` — проверить, что стеки в
-  языке-подпроекте (`lspProject`) покрывают PHP
+- [x] `tools/lspcheck.go` `lspCheckerCommand`: case `KindPhp` — локальный
+  `vendor/bin/phpstan` (конфиг-гейт) → глобальный `binCommand("phpstan")` →
+  фолбэк `php -l` (по файлам через `printf | xargs -n1 php -l`, иначе
+  `phpLintLSPCmd()` find-командой); `parseLSPOutput` case `KindPhp` →
+  `parsePhpstanRaw` (формат `file:line:message` без колонки)
+- [x] `tools/lspclient/servers.go`:
+  - `ServerCommand`: case `KindPhp` → `intelephense --stdio` (фолбэк
+    `phpactor`), degrade «…навигация недоступна, используй ReadMap/ReadFiles»
+  - `languageFor`: `.php`/`.phtml` → `protocol.LanguageKindPHP`; default-стек
+    KindPhp → `protocol.LanguageKindPHP`
+- [x] `agents/acceptor/lsp.go` `lspSourceExt`: добавлены `".php"`, `".phtml"`
+- [x] `tools/lspnative.go`/`tools/lspnav.go` — проверено: стеки только
+  пробрасываются (kind → lspclient), switch-ов по Kind нет — PHP покрывается
+  case'ами в lspclient
 
 ### Ф-4: монорепозиторий
 
-- [ ] `agents/acceptor/detect.go:DetectProjects` (`:53-78`) — уже работает по
-  маркерам в подкаталогах: PHP-подпроекты появятся автоматически после Ф-1.
-  Проверить, что `composer.json` в корне не конфликтует с Node-фронтендом
-  монорепозитория (корневой маркер PHP → корень как один PHP-проект)
+- [x] `agents/acceptor/detect.go:DetectProjects` работает по маркерам: PHP-подпроект
+  по `composer.json` в подкаталоге — отдельный корень (тест
+  `TestDetectProjectsPhpSubproject`). Корневой `composer.json` + `package.json`
+  (Laravel) → корень = один PHP-проект (приоритет маркеров, тест
+  `TestDetectKindPrefersComposerOverPackageJSON`)
 
 ### Ф-5: тесты
 
-- [ ] `stackdetect/stackdetect_test.go`: кейс composer.json → KindPHP, приоритет
-  против go.mod
-- [ ] `agents/acceptor/accept_test.go`: build/run/format/analyze/install для
-  KindPHP (artifact? нет — conductor и syntax-check через fake php), detect
-  подпроекта `vendor/`-ignore
-- [ ] `tools/lspcheck_test.go`: phpstan-вывод как text-чанк, фолбэк `php -l`,
-  degrade «phpstan не найден»
-- [ ] `tools/lspclient/*_test.go`: `ServerCommand`/`languageFor` для PHP
-- [ ] `agents/acceptor/lsp_test.go`: LSP-диагностика по `.php`-файлам
+- [x] `stackdetect/stackdetect_test.go`: composer.json → KindPhp; приоритет
+  composer.json над package.json; go.mod всё ещё главный
+- [x] `agents/acceptor/accept_test.go`: `TestPhpCommandsByKind`
+  (build/run/format/analyze по маркерам), `TestPhpAnalyzeFallbackAndInstall`
+  (phpstan без конфига → php -l; composer вне PATH → пропуск install),
+  `TestPhpInstallWithComposer` (composer в PATH → composer install через shim);
+  `TestDetectProjectsPhpSubproject`, `TestDetectKind` + composer.json
+- [x] `tools/lspcheck_test.go`: `TestParsePhpstanRaw` (парсинг + игнор шумных
+  строк), `TestLSPCommandSelectionPhpLocal` (local phpstan), `TestLSPCommandSelectionPhpFallback`
+  (`php -l` командой и по точечным файлам)
+- [x] `tools/lspclient/servers_test.go`: `TestLanguageForPhp` (`.php`/`.phtml`/
+  default-стек → LanguageKindPHP)
+- [x] `agents/acceptor/lsp_test.go`: `TestProjectSourceFiles` дополнен `.php`,
+  `.phtml` и ignore `vendor/x.php`
 
 ## Верификация
 

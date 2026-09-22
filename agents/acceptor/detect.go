@@ -19,6 +19,7 @@ type Kind stackdetect.Kind
 // Константы типов проекта (значения из stackdetect).
 const (
 	KindGo      Kind = Kind(stackdetect.KindGo)
+	KindPhp     Kind = Kind(stackdetect.KindPhp)
 	KindNode    Kind = Kind(stackdetect.KindNode)
 	KindPython  Kind = Kind(stackdetect.KindPython)
 	KindUnknown Kind = Kind(stackdetect.KindUnknown)
@@ -37,7 +38,7 @@ type ProjectRoot struct {
 	// Rel — относительный путь от корня приёмки ("" для самого корня,
 	// "frontend", "server" — для подпроектов монорепозитория).
 	Rel string
-	// Kind — тип проекта (go/node/python).
+	// Kind — тип проекта (go/php/node/python).
 	Kind Kind
 }
 
@@ -88,6 +89,10 @@ func (k Kind) buildCommand(dir string) string {
 	switch k {
 	case KindGo:
 		return "go build ./..."
+	case KindPhp:
+		// PHP не компилируется: синтаксическая проверка всех .php через
+		// php -l (аналог compileall у питона). Каталоги зависимостей не трогаем.
+		return phpLintCmd()
 	case KindNode:
 		// Если есть npm-скрипт build — запускаем его, есть tsconfig без
 		// скрипта — проверяем типы через tsc --noEmit. Иначе сборки нет.
@@ -117,6 +122,19 @@ func (k Kind) runCommand(dir string) string {
 		}
 		if mainPkg := findGoMainPkg(dir); mainPkg != "" {
 			return "go run " + mainPkg
+		}
+		return ""
+	case KindPhp:
+		// Laravel и другие фреймворки: artisan serve. «Голый» PHP — встроенный
+		// сервер; при наличии public/ точка входа находится там.
+		if hasFile(dir, "artisan") {
+			return "php artisan serve --host=127.0.0.1 --port=8080"
+		}
+		if hasFile(dir, "public/index.php") {
+			return "php -S 127.0.0.1:8080 -t public"
+		}
+		if hasFile(dir, "index.php") {
+			return "php -S 127.0.0.1:8080"
 		}
 		return ""
 	case KindNode:
@@ -154,6 +172,13 @@ func (k Kind) formatCommand(dir string) (cmd, tool string) {
 	case KindGo:
 		// gofmt -l печатает список неотформатированных файлов и завершается 0.
 		return "find . -name '*.go' -not -path './vendor/*' -print0 | xargs -0 -r gofmt -l", "gofmt"
+	case KindPhp:
+		// php-cs-fixer живёт в vendor/bin (composer require --dev). Без него
+		// стилизатор не найден — проверка пропускается.
+		if hasFile(dir, "vendor/bin/php-cs-fixer") {
+			return "vendor/bin/php-cs-fixer fix --dry-run --diff", "php-cs-fixer"
+		}
+		return "", ""
 	case KindNode:
 		// Только локальные бинари (npx умеет качать из сети — не для приёмки).
 		if hasNodeBin(dir, "prettier") {
@@ -176,6 +201,21 @@ func (k Kind) analyzeCommand(dir string) (cmd, tool string) {
 	switch k {
 	case KindGo:
 		return "go vet ./...", "go vet"
+	case KindPhp:
+		// phpstan — точный анализатор (raw-формат file:line:message удобен
+		// парсеру замечаний). Без конфигурации phpstan анализировать нечего —
+		// фолбэк на синтаксическую проверку php -l.
+		bin := ""
+		if hasFile(dir, "vendor/bin/phpstan") {
+			bin = "vendor/bin/phpstan"
+		} else if cmdAvailable("phpstan") {
+			bin = "phpstan"
+		}
+		if bin != "" &&
+			(hasFile(dir, "phpstan.neon") || hasFile(dir, "phpstan.neon.dist") || hasFile(dir, "phpstan.dist.neon")) {
+			return bin + " analyse --no-progress --error-format=raw", "phpstan"
+		}
+		return phpLintCmd(), "php -l"
 	case KindNode:
 		// Приоритет: скрипт lint в package.json, затем локальный eslint.
 		if pj := readPackageJSON(dir); pj != nil && pj.Scripts["lint"] != "" && hasFile(dir, "node_modules") {
@@ -208,6 +248,13 @@ func (k Kind) installCommand(dir string) (cmd, tool string) {
 		// Идемпотентен и безвреден для проектов только со стандартной
 		// библиотекой.
 		return "go mod download", "go mod download"
+	case KindPhp:
+		// composer — единственный инструмент установки PHP-зависимостей.
+		// Его отсутствие в окружении ведёт к пропуску шага (не ошибке).
+		if hasFile(dir, "composer.json") && cmdAvailable("composer") {
+			return "composer install --no-dev --no-interaction --no-progress", "composer install"
+		}
+		return "", ""
 	case KindNode:
 		if hasFile(dir, "package-lock.json") || hasFile(dir, "npm-shrinkwrap.json") {
 			return "npm ci", "npm ci"
@@ -349,6 +396,14 @@ func pythonCmd() string {
 		return "python3"
 	}
 	return "python"
+}
+
+// phpLintCmd — команда синтаксической проверки всех PHP-исходников проекта
+// через php -l (без vendor/node_modules), возвращающая ненулевой код при
+// первой синтаксической ошибке. Используется как сборка и как фолбэк
+// анализатора для стека PHP.
+func phpLintCmd() string {
+	return "find . -type f -name '*.php' -not -path './vendor/*' -not -path './node_modules/*' -print0 | xargs -0 -r -n1 php -l"
 }
 
 // cmdAvailable проверяет наличие команды в PATH через exec.LookPath.
