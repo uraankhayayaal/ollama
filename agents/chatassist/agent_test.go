@@ -198,6 +198,21 @@ func TestAssistantPromptHasWebSearchRule(t *testing.T) {
 	}
 }
 
+// TestAssistantPromptHasCreationChecklist — при создании эпиков/задач промпт
+// требует собрать СВОДКУ обязательных параметров, при неоднозначности СПРОСИТЬ
+// пользователя (а не угадывать) и вывести пример сводки перед вызовом
+// инструмента; для эпика — решение про «ревью архитектора» и лида направления
+// (Ф-1 PLAN-dashboard-chat-create).
+func TestAssistantPromptHasCreationChecklist(t *testing.T) {
+	a := newTestAssistant(t, "создай эпик на рефакторинг бэкенда")
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"сводк", "спроси", "ревью архитектора", "BoardCreateEpic", "BoardCreateTask", "Пример сводки"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+}
+
 // TestAssistantRAGBlockSearchParams — блок ищет по проекту, scope пуст (весь
 // проект); ошибка поиска деградирует в пустую строку.
 func TestAssistantRAGBlockSearchParams(t *testing.T) {
