@@ -123,7 +123,8 @@ GET /api/projects/{id}   — git.epics[]/git.tasks[] дополняются has_
 - [x] `go vet  . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
 - [x] `go test . ./agents/... ./tools/ ./board/ ./gitops/ ./server/ ./workspace/`
 - [x] `npm run build` (web/)
-- [ ] Ручной E2E на реальном git-проекте: создать эпик/задачу через чат → ветки появились сами → выполнить задачу → авто-коммит/MR/мёрдж → эпик done → авто-синхрон main → клик «Залить в main» без конфликтов
+- [x] `npm run build` (web/)
+- [x] Ручной E2E на реальном git-проекте (2026-09-22, проект `uraankhayayaal/my-rust-app`): создать эпик/задачу через чат → ветки появились сами → выполнить задачу → авто-коммит/MR/мёрдж → эпик done → авто-синхрон main → клик «Залить в main» без конфликтов. E2E выявил и починил баг: авто-MR задачи создавался ПОСЛЕ мёрджа в релиз эпика, поэтому GitHub отклонял его 422 («No commits between»); авто-MR перенесён ДО мёрджа (`autoCommitAndMergeTask`, `server/gitflow_auto.go`), добавлен hermetic-тест порядка
 
 ## Верификация
 

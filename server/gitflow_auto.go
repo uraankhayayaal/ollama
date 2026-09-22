@@ -125,10 +125,15 @@ func (s *Server) removeTaskWorktree(project, taskID, worktree string) {
 
 // autoCommitAndMergeTask — Ф-2/Ф-3: авто-действия при переводе задачи в done:
 //
-//	1) авто-коммит незакоммиченных изменений worktree в ветку задачи;
-//	2) штатный мёрдж ветки задачи в релизную ветку эпика (mergeTaskBranch);
-//	3) авто-MR задачи (если remote/фордж доступны и MR ещё не создан);
-//	4) снятие worktree задачи.
+//  1. авто-коммит незакоммиченных изменений worktree в ветку задачи;
+//  2. авто-MR задачи (если remote/фордж доступны и MR ещё не создан);
+//  3. штатный мёрдж ветки задачи в релизную ветку эпика (mergeTaskBranch);
+//  4. снятие worktree задачи.
+//
+// Авто-MR создаётся ДО мёрджа в релиз эпика: после влития ветки между ней и
+// релизной веткой не остаётся коммитов, и GitHub/GitLab отклоняют такой MR
+// (422 «No commits between …»). Ветку задачи и базу MR пушит сам
+// createTaskMROnce (ensureRemoteBase), поэтому порядок выполнения безопасен.
 //
 // Ошибки не ломают сам переход статуса (хук) — логируются, ручные кнопки
 // остаются страховкой.
@@ -152,7 +157,17 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 		s.commitTaskWorktree(ctx, project, task, worktree)
 	}
 
-	// 2) Штатный мёрдж done→релиз.
+	// 2) Авто-MR задачи ДО мёрджа в релиз эпика (см. комментарий функции):
+	// пока ветка задачи несёт свои коммиты, фордж может открыть MR.
+	if inf.GitRemote != "" {
+		if mrURL, created, merr := s.createTaskMROnce(ctx, project, task.TaskID, task); merr != nil {
+			logging.For(project).Warnf("gitflow: авто-MR задачи %s: %v", task.TaskID, merr)
+		} else if created {
+			logging.For(project).Infof("gitflow: задача %s → авто-MR %s", task.TaskID, mrURL)
+		}
+	}
+
+	// 3) Штатный мёрдж done→релиз.
 	res, err := s.mergeTaskBranch(ctx, project, task)
 	if err != nil {
 		var ce *gitops.MergeConflictError
@@ -172,16 +187,6 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 	}
 	logging.For(project).Infof("gitflow: задача %s → done: авто-мёрдж в релиз эпика %s (already=%v)",
 		task.TaskID, task.EpicID, res.AlreadyMerged)
-
-	// 3) Авто-MR задачи: ветку пушит mergeTaskBranch (релиз), работу с форджем
-	// выносим за mergeLock, чтобы сетевой MR не держал другие слияния.
-	if inf.GitRemote != "" {
-		if mrURL, created, merr := s.createTaskMROnce(ctx, project, task.TaskID, task); merr != nil {
-			logging.For(project).Warnf("gitflow: авто-MR задачи %s: %v", task.TaskID, merr)
-		} else if created {
-			logging.For(project).Infof("gitflow: задача %s → авто-MR %s", task.TaskID, mrURL)
-		}
-	}
 
 	// 4) Снимаем worktree задачи.
 	if worktree != "" {

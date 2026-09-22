@@ -128,6 +128,66 @@ func TestCreateEpicMRPushesAndRegisters(t *testing.T) {
 	}
 }
 
+// TestAutoTaskMRCBDoneBeforeMerge — авто-MR задачи на done создаётся ДО мёрджа
+// в релиз эпика: даже если сам мёрдж падает (merge-base завершается ошибкой),
+// MR обязан уже существовать в side-реестре. Регрессия: раньше авто-MR шёл
+// после mergeTaskBranch, и fork отклонял его 422 «No commits between …».
+func TestAutoTaskMRCBDoneBeforeMerge(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "tok")
+	git := &fakeGit{fails: map[string]string{
+		"git merge-base": "ошибка merge-base",
+	}}
+	stub := &stubMRForge{url: "https://github.com/o/r/pull/401"}
+	srv, _, _ := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		if remote != "https://github.com/o/r.git" || token != "tok" {
+			t.Fatalf("forge(remote=%q, token=%q)", remote, token)
+		}
+		return stub, nil
+	})
+	ctx := context.Background()
+	registerGit(t, srv, "myrepo", "https://github.com/o/r.git", "ai/myrepo", "main")
+	// Ветки эпика/задачи в side-реестре (как авто-создание Ф-1).
+	if err := srv.reg.SetEpicBranch("myrepo", "epic-1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("myrepo", "task-1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// done-автошаг: мёрдж в релиз упадёт, но авто-MR должен быть создан ДО него.
+	srv.autoCommitAndMergeTask(ctx, "myrepo", &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
+		EpicID:   "epic-1",
+	}, nil)
+
+	// MR целится в ветку эпика и зарегистрирован ДО попытки мёрджа:
+	// merge-base упал → mergeTaskBranch вернул ошибку, но MR жив.
+	if stub.opts.SourceBranch != "ai/task/t1" || stub.opts.TargetBranch != "ai/epic/e1" {
+		t.Fatalf("авто-MR opts = %+v", stub.opts)
+	}
+	mrf, err := srv.reg.TaskMR("myrepo", "task-1")
+	if err != nil {
+		t.Fatalf("авто-MR не создан до мёрджа: %v", err)
+	}
+	if mrf.URL != stub.url || mrf.Source != "ai/task/t1" || mrf.Target != "ai/epic/e1" {
+		t.Fatalf("TaskMR = %+v", mrf)
+	}
+	// Порядок вызовов: push ветки задачи (авто-MR) идёт раньше merge-base (мёрдж).
+	calls := git.callsList()
+	pushIdx, mergeIdx := -1, -1
+	for i, c := range calls {
+		if strings.Contains(c, "push") && strings.Contains(c, "ai/task/t1") && pushIdx < 0 {
+			pushIdx = i
+		}
+		if strings.Contains(c, "merge-base") && mergeIdx < 0 {
+			mergeIdx = i
+		}
+	}
+	if pushIdx < 0 || mergeIdx < 0 || pushIdx > mergeIdx {
+		t.Fatalf("авто-MR (push %d) должен идти до мёрджа (merge-base %d): %v", pushIdx, mergeIdx, calls)
+	}
+}
+
 // TestCreateTaskMRTargetsEpicBranch — MR задачи целится в ветку эпика.
 func TestCreateTaskMRTargetsEpicBranch(t *testing.T) {
 	git := &fakeGit{}
