@@ -381,6 +381,8 @@ func (t *boardCreateEpicTool) Name() string { return BoardCreateEpic }
 func (t *boardCreateEpicTool) Definition() ToolDefinition {
 	props := taskSpecProps()
 	props["architecture_summary"] = map[string]any{"type": "string", "description": "Сводка архитектурного решения, передаваемая лиду для декомпозиции"}
+	props["architect_review"] = map[string]any{"type": "boolean", "description": "Требуется ли ревью архитектора для эпика (true — нужна ревизия решения архитектором, false — не требуется). Если false — в assigned_role обязательно указывается лид направления (инфраструктура/бэкенд/фронтенд/QA)."}
+	props["assigned_role"] = map[string]any{"type": "string", "description": "Лид направления эпика (инфраструктура/бэкенд/фронтенд/QA). Если ревью архитектора не требуется — поле обязательно: лид не ясен из контекста — спроси у пользователя, не угадывай."}
 	return ToolDefinition{
 		Name:        BoardCreateEpic,
 		Description: "Создать новый эпик (крупную задачу верхнего уровня) на Kanban-доске. Эпик будет распределён между лидами направлений. Используется Системным архитектором.",
@@ -571,7 +573,8 @@ type boardCreateTaskTool struct{ b *board.Store }
 func (t *boardCreateTaskTool) Name() string { return BoardCreateTask }
 func (t *boardCreateTaskTool) Definition() ToolDefinition {
 	props := taskSpecProps()
-	props["epic_id"] = map[string]any{"type": "string", "description": "ID эпика, в который добавляется задача"}
+	props["epic_id"] = map[string]any{"type": "string", "description": "ID эпика, в который добавляется задача. Задача ВСЕГДА создаётся внутри существующего эпика: бери эпик из контекста разговора, при сомнении — спроси у пользователя, не выдумывай."}
+	props["assigned_role"] = map[string]any{"type": "string", "description": "Конкретный специалист направления, к которому относится эпик (например Senior Go Developer, QA Engineer). Если задача затрагивает несколько направлений — не создавай её как задачу: предложи оформить эпиком, архитектор раздаст лидам."}
 	return ToolDefinition{
 		Name:        BoardCreateTask,
 		Description: "Создать задачу в эпике на Kanban-доске. Задача выполняемая специалистом. Используется лидами направлений при декомпозиции эпика.",
