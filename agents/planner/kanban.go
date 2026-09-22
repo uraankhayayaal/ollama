@@ -415,9 +415,22 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 	for _, t := range tasks {
 		switch t.Status {
 		case board.StatusReady, board.StatusInProgress:
-			return true, nil
+			ok, err := k.epicWorkable(ctx, t.EpicID)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
 		case board.StatusNew, board.StatusAnalysis:
-			ok, err := k.depsDone(ctx, t)
+			ok, err := k.epicWorkable(ctx, t.EpicID)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				continue
+			}
+			ok, err = k.depsDone(ctx, t)
 			if err != nil {
 				return false, err
 			}
@@ -439,7 +452,7 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, e := range epics {
-		if e.Status.Terminal() {
+		if e.Status.Terminal() || e.Status == board.StatusPaused {
 			continue
 		}
 		// Эпик без задач (или с необработанной ревизией) — работа для лида:
@@ -466,6 +479,29 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// epicWorkable сообщает, можно ли брать в работу задачи эпика: эпик существует
+// и не находится на паузе/в отмене/выполнен. Приостановленные и отменённые
+// эпики «замораживают» свои задачи — оркестратор их не трогает (код/ветки
+// остаются на месте, позже можно возобновить). Отсутствующий эпик — «нет
+// работы» (задача-сирота без родителя исполняться не должна).
+func (k *KanbanRunner) epicWorkable(ctx context.Context, epicID string) (bool, error) {
+	if epicID == "" {
+		return false, nil
+	}
+	e, err := k.store.GetEpic(ctx, epicID)
+	if err != nil {
+		if errors.Is(err, board.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	switch e.Status {
+	case board.StatusPaused, board.StatusCancelled, board.StatusDone:
+		return false, nil
+	}
+	return true, nil
 }
 
 // setStandby сообщает серверу о входе (true) / выходе (false) из режима
@@ -703,15 +739,20 @@ func printLeadTasks(log *logging.Logger, epic *board.Epic, tasks []*board.Task) 
 }
 
 // pipelineIdle сообщает, что на доске нет незавершённых задач (все предыдущие
-// декомпозиции выполнены или отменены). Только в этом состоянии лиду выдаётся
-// следующая декомпозиция: сначала выполняется уже запланированный объём работы.
+// декомпозиции выполнены, отменены или приостановлены). Только в этом состоянии
+// лиду выдаётся следующая декомпозиция: сначала выполняется уже запланированный
+// объём работы. Задачи «на паузе» (эпик приостановлен) не блокируют очередь —
+// пауза эпика не должна замораживать декомпозицию остальных эпиков.
 func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
 		return false, err
 	}
 	for _, t := range tasks {
-		if t.Status != board.StatusDone && t.Status != board.StatusCancelled {
+		switch t.Status {
+		case board.StatusDone, board.StatusCancelled, board.StatusPaused:
+			continue
+		default:
 			return false, nil
 		}
 	}
@@ -794,8 +835,9 @@ func (k *KanbanRunner) nextLeadEpic(epics []*board.Epic) (*board.Epic, bool, boo
 	var best *board.Epic
 	bestDecompose := false
 	for _, epic := range epics {
-		// Терминальные эпики не трогаем.
-		if epic.Status.Terminal() {
+		// Терминальные и приостановленные эпики не трогаем: пауза замораживает
+		// и декомпозицию, и ревизию лидом (код остаётся в своей ветке).
+		if epic.Status.Terminal() || epic.Status == board.StatusPaused {
 			continue
 		}
 		// Нужна первичная декомпозиция (задач нет) либо ревизия после изменения
@@ -831,7 +873,14 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if t.Status != board.StatusNew {
 			continue
 		}
-		ok, err := k.depsDone(ctx, t)
+		ok, err := k.epicWorkable(ctx, t.EpicID)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			continue
+		}
+		ok, err = k.depsDone(ctx, t)
 		if err != nil {
 			return false, err
 		}
@@ -862,7 +911,14 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if t.Status != board.StatusAnalysis {
 			continue
 		}
-		ok, err := k.phasePrereqSatisfied(ctx, t)
+		ok, err := k.epicWorkable(ctx, t.EpicID)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			continue
+		}
+		ok, err = k.phasePrereqSatisfied(ctx, t)
 		if err != nil {
 			return false, err
 		}
@@ -1034,6 +1090,11 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 		if epic.Status == board.StatusDone || epic.Status.Terminal() {
 			continue
 		}
+		// Приостановленный эпик не финализируем: «на паузе» — временное
+		// состояние, завершение дождётся возобновления.
+		if epic.Status == board.StatusPaused {
+			continue
+		}
 		if len(epic.Tasks) == 0 {
 			continue
 		}
@@ -1107,8 +1168,8 @@ func (k *KanbanRunner) noteEpicProgress(ctx context.Context, epicID string) {
 	}
 }
 
-// readyTasks возвращает задачи «готова к работе», отсортированные по порядку
-// (sequence_order) и ID.
+// readyTasks возвращает задачи «готова к работе» (эпик не приостановлен/не
+// отменён), отсортированные по порядку (sequence_order) и ID.
 func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*board.Task, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
@@ -1116,9 +1177,17 @@ func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*board.Task, error) {
 	}
 	var ready []*board.Task
 	for _, t := range tasks {
-		if t.Status == board.StatusReady {
-			ready = append(ready, t)
+		if t.Status != board.StatusReady {
+			continue
 		}
+		ok, err := k.epicWorkable(ctx, t.EpicID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		ready = append(ready, t)
 	}
 	sortTasks(ready)
 	return ready, nil

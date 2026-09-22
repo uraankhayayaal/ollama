@@ -29,7 +29,9 @@
 
   .boardgrid {
     display: grid;
-    grid-template-columns: minmax(180px, auto) repeat(6, minmax(130px, 1fr));
+    // 7 колонок статусов (Ф-6: добавлена «На паузе»); минимум сужен, чтобы
+    // матрица влезала в панель доски без горизонтального скролла.
+    grid-template-columns: minmax(180px, auto) repeat(7, minmax(110px, 1fr));
     gap: 6px;
     align-items: start;
 
@@ -71,6 +73,7 @@
     .grid-head.ready { color: var(--st-ready, #0891b2); }
     .grid-head.in_progress { color: var(--st-in-progress, #2563eb); }
     .grid-head.done { color: var(--st-done, #15803d); }
+    .grid-head.paused { color: var(--st-paused, #b45309); }
   }
 
   &.empty {
@@ -163,6 +166,9 @@
         }
         &.cancelled {
           color: var(--muted, #8a94a6);
+        }
+        &.paused {
+          color: var(--st-paused, #b45309);
         }
       }
 

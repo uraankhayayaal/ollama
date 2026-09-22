@@ -3,9 +3,9 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, answerAsk, boardOf, chatHistory, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, updateTask } from "./Api";
+import { authStatus, answerAsk, boardOf, chatHistory, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { AskAnswerBody, AskAnswerResult, BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens } from "@/Types";
+import type { AskAnswerBody, AskAnswerResult, BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
@@ -392,6 +392,78 @@ export function App() {
     await releaseEpic(BASE, project.project_name, epic.task_id);
   };
 
+  // Перевод эпика в новый статус (кнопки «Пауза»/«Продолжить»/«Отменить»,
+  // Ф-6): эпики изолированы в своих git-ветках, поэтому пауза/отмена НЕ
+  // откатывают код — ветка остаётся, работа просто приостанавливается.
+  // Сервер каскадом переводит и задачи эпика (пауза/отмена/возобновление) —
+  // зеркалим каскад локально, WS-событие board сверит окончательно.
+  const applyEpicStatus = async (epic: EpicRow, status: Status) => {
+    if (!project) {
+      return;
+    }
+    const next = await setEpicStatus(BASE, project.project_name, epic.task_id, status);
+    setBoard((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      let tasks = prev.tasks;
+      if (status === "paused" || status === "cancelled") {
+        // Каскад сервера: не взятые в работу задачи уходят вместе с эпиком;
+        // для паузы запоминаем исходный статус (возобновление вернёт туда же).
+        tasks = tasks.map((t) =>
+          t.epic_id === next.task_id &&
+          (t.status === "new" || t.status === "analysis" || t.status === "ready")
+            ? {
+                ...t,
+                status,
+                resume_status: status === "paused" ? t.status : undefined,
+              }
+            : t,
+        );
+      } else if (status === "ready") {
+        tasks = tasks.map((t) =>
+          t.epic_id === next.task_id && t.status === "paused"
+            ? { ...t, status: t.resume_status ?? "ready", resume_status: undefined }
+            : t,
+        );
+      }
+      return {
+        ...prev,
+        epics: prev.epics.map((e) => (e.task_id === next.task_id ? next : e)),
+        tasks,
+      };
+    });
+  };
+
+  const onEpicPause = async (epic: EpicRow) => {
+    try {
+      await applyEpicStatus(epic, "paused");
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  const onEpicResume = async (epic: EpicRow) => {
+    try {
+      await applyEpicStatus(epic, "ready");
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  const onEpicCancel = async (epic: EpicRow) => {
+    if (!window.confirm(
+      `Отменить эпик «${epic.title}»? Код в его ветке (${epic.git_branch || "ai/epic/" + epic.task_id}) останется — отката не будет.`,
+    )) {
+      return;
+    }
+    try {
+      await applyEpicStatus(epic, "cancelled");
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const onEpicMR = async (epic: EpicRow) => {
     if (!project) {
       return;
@@ -645,6 +717,9 @@ export function App() {
                 onTaskUpdate={onTaskUpdate}
                 onEpicDelete={onEpicDelete}
                 onEpicRelease={onEpicRelease}
+                onEpicPause={onEpicPause}
+                onEpicResume={onEpicResume}
+                onEpicCancel={onEpicCancel}
                 onEpicBranch={onEpicBranch}
                 onTaskBranch={onTaskBranch}
                 onEpicMR={onEpicMR}
@@ -660,6 +735,9 @@ export function App() {
                 onTaskUpdate={onTaskUpdate}
                 onEpicDelete={onEpicDelete}
                 onEpicRelease={onEpicRelease}
+                onEpicPause={onEpicPause}
+                onEpicResume={onEpicResume}
+                onEpicCancel={onEpicCancel}
                 onEpicBranch={onEpicBranch}
                 onTaskBranch={onTaskBranch}
                 onEpicMR={onEpicMR}

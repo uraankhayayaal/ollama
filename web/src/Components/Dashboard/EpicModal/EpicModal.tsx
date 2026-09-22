@@ -1,6 +1,9 @@
 // Мода окно с подробной информацией об эпике (клик по названию эпика в
 // заголовке строки доски). Ф-5: блок «ветка + MR» (git-workflow) — ссылка на
 // ветку и MR, кнопки «Создать ветку эпика» и «Создать MR» (push → MR → main).
+// Ф-6: «Пауза»/«Продолжить»/«Отменить» — эпик изолирован в своей ветке,
+// поэтому приостановка/отмена не откатывают код.
+import { useState } from "react";
 import type { EpicRow, GitView } from "@/Types";
 import { STATUS_LABEL } from "../board";
 import { Modal } from "../Modal";
@@ -12,14 +15,47 @@ export function EpicModal({
   git,
   onCreateBranch,
   onCreateMR,
+  onPause,
+  onResume,
+  onCancel,
   onClose,
 }: {
   epic: EpicRow;
   git?: GitView;
   onCreateBranch?: (e: EpicRow) => Promise<void>;
   onCreateMR?: (e: EpicRow) => Promise<void>;
+  onPause?: (e: EpicRow) => Promise<void>;
+  onResume?: (e: EpicRow) => Promise<void>;
+  onCancel?: (e: EpicRow) => Promise<void>;
   onClose: () => void;
 }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+
+  const canPause =
+    !!onPause &&
+    epic.status !== "done" &&
+    epic.status !== "cancelled" &&
+    epic.status !== "paused";
+  const canResume = !!onResume && epic.status === "paused";
+  const canCancel =
+    !!onCancel && epic.status !== "done" && epic.status !== "cancelled";
+
+  const run = async (action: string, fn: () => Promise<void>) => {
+    if (busy) {
+      return;
+    }
+    setBusy(action);
+    setErr("");
+    try {
+      await fn();
+    } catch (e) {
+      setErr(e instanceof Error && e.message ? e.message : String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
   return (
     <Modal title={"Эпик · " + epic.task_id} onClose={onClose}>
       <dl className="details">
@@ -50,6 +86,42 @@ export function EpicModal({
           </div>
         )}
       </dl>
+
+      {(canPause || canResume || canCancel) && (
+        <div className="epic-status-actions">
+          {canResume && (
+            <button
+              className="epic-resume"
+              disabled={busy !== ""}
+              onClick={() => void run("resume", () => onResume!(epic))}
+              title="Возобновить эпик: его задачи вернутся в «готова к работе»"
+            >
+              {busy === "resume" ? "…" : "Продолжить"}
+            </button>
+          )}
+          {canPause && (
+            <button
+              className="epic-pause"
+              disabled={busy !== ""}
+              onClick={() => void run("pause", () => onPause!(epic))}
+              title="Поставить эпик на паузу: задачи приостановятся, код в ветке останется"
+            >
+              {busy === "pause" ? "…" : "Пауза"}
+            </button>
+          )}
+          {canCancel && (
+            <button
+              className="epic-cancel"
+              disabled={busy !== ""}
+              onClick={() => void run("cancel", () => onCancel!(epic))}
+              title="Отменить эпик без отката кода: запись помечается отменённой, ветка остаётся"
+            >
+              {busy === "cancel" ? "…" : "Отменить"}
+            </button>
+          )}
+          {err && <span className="epic-status-err">{err}</span>}
+        </div>
+      )}
 
       {git && (
         <GitBlock

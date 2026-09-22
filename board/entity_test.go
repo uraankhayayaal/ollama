@@ -80,6 +80,15 @@ func TestValidateTransition(t *testing.T) {
 		{StatusInProgress, StatusDone},
 		{StatusInProgress, StatusCancelled},
 		{StatusDone, StatusDone},
+		// Пауза (Ф-6): любой активный статус можно приостановить, возобновление
+		// возвращает запись в «готова к работе», отмена из паузы допустима.
+		{StatusNew, StatusPaused},
+		{StatusAnalysis, StatusPaused},
+		{StatusReady, StatusPaused},
+		{StatusInProgress, StatusPaused},
+		{StatusPaused, StatusPaused},
+		{StatusPaused, StatusReady},
+		{StatusPaused, StatusCancelled},
 	}
 	for _, c := range valid {
 		if err := ValidateTransition(c.from, c.to); err != nil {
@@ -96,6 +105,13 @@ func TestValidateTransition(t *testing.T) {
 		{StatusDone, StatusNew},
 		{StatusCancelled, StatusNew},
 		{StatusNew, "unknown"},
+		// Терминальные статусы не приостанавливаются; из паузы — только
+		// возобновление или отмена.
+		{StatusDone, StatusPaused},
+		{StatusCancelled, StatusPaused},
+		{StatusPaused, StatusInProgress},
+		{StatusPaused, StatusDone},
+		{StatusPaused, StatusAnalysis},
 	}
 	for _, c := range invalid {
 		if err := ValidateTransition(c.from, c.to); err == nil {

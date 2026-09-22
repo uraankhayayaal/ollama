@@ -19,6 +19,9 @@ export function EpicRow({
   onEpicOpen,
   onEpicDelete,
   onEpicRelease,
+  onEpicPause,
+  onEpicResume,
+  onEpicCancel,
   onToggle,
 }: {
   epic: Epic | null;
@@ -33,6 +36,10 @@ export function EpicRow({
   onEpicOpen: (e: Epic) => void;
   onEpicDelete: (e: Epic) => void;
   onEpicRelease: (e: Epic) => Promise<void>;
+  // Ф-6: пауза/возобновление/отмена эпика (код в ветке остаётся).
+  onEpicPause?: (e: Epic) => Promise<void>;
+  onEpicResume?: (e: Epic) => Promise<void>;
+  onEpicCancel?: (e: Epic) => Promise<void>;
   onToggle: () => void;
 }) {
   const plain = epic ? "" : " plain";
@@ -61,7 +68,16 @@ export function EpicRow({
           <>
             <span className="id">{epic.task_id}</span>
             <span className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</span>
-            <EpicActionBar epic={epic} tasks={tasks} hasBranch={hasBranch} onDelete={() => onEpicDelete(epic)} onRelease={() => onEpicRelease(epic)} />
+            <EpicActionBar
+              epic={epic}
+              tasks={tasks}
+              hasBranch={hasBranch}
+              onDelete={() => onEpicDelete(epic)}
+              onRelease={() => onEpicRelease(epic)}
+              onPause={onEpicPause ? () => onEpicPause(epic) : undefined}
+              onResume={onEpicResume ? () => onEpicResume(epic) : undefined}
+              onCancel={onEpicCancel ? () => onEpicCancel(epic) : undefined}
+            />
           </>
         )}
       </div>

@@ -30,6 +30,10 @@ const (
 	StatusInProgress Status = "in_progress" // в работе
 	StatusDone       Status = "done"        // выполнена
 	StatusCancelled  Status = "cancelled"   // отменена
+	// StatusPaused — «на паузе»: запись приостановлена (работа не ведётся), но
+	// не отменена — ветки/код остаются, позже можно возобновить (ready).
+	// Не терминальный статус.
+	StatusPaused Status = "paused"
 )
 
 // Label возвращает человекочитаемое название статуса (для логов/UI).
@@ -47,6 +51,8 @@ func (s Status) Label() string {
 		return "выполнена"
 	case StatusCancelled:
 		return "отменена"
+	case StatusPaused:
+		return "на паузе"
 	default:
 		return string(s)
 	}
@@ -61,7 +67,7 @@ func (s Status) Terminal() bool {
 // Valid проверяет, что статус известен системе.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusNew, StatusAnalysis, StatusReady, StatusInProgress, StatusDone, StatusCancelled:
+	case StatusNew, StatusAnalysis, StatusReady, StatusInProgress, StatusDone, StatusCancelled, StatusPaused:
 		return true
 	}
 	return false
@@ -70,10 +76,11 @@ func (s Status) Valid() bool {
 // ValidateTransition проверяет допустимость перехода from -> to по конечному
 // автомату статусов Kanban-доски:
 //
-//	новая         -> в анализе, отменена
-//	в анализе     -> готова к работе, отменена
-//	готова к работе -> в работе, отменена
-//	в работе      -> выполнена, отменена
+//	новая         -> в анализе, на паузе, отменена
+//	в анализе     -> готова к работе, на паузе, отменена
+//	готова к работе -> в работе, на паузе, отменена
+//	в работе      -> выполнена, на паузе, отменена
+//	на паузе      -> готова к работе (возобновление), отмена
 //	(терминальные: выполнена/отменена переходов не имеют)
 //
 // Одинаковый статус не считается переходом (допускается для идемпотентности).
@@ -86,19 +93,24 @@ func ValidateTransition(from, to Status) error {
 	}
 	switch from {
 	case StatusNew:
-		if to == StatusAnalysis || to == StatusCancelled {
+		if to == StatusAnalysis || to == StatusPaused || to == StatusCancelled {
 			return nil
 		}
 	case StatusAnalysis:
-		if to == StatusReady || to == StatusCancelled {
+		if to == StatusReady || to == StatusPaused || to == StatusCancelled {
 			return nil
 		}
 	case StatusReady:
-		if to == StatusInProgress || to == StatusCancelled {
+		if to == StatusInProgress || to == StatusPaused || to == StatusCancelled {
 			return nil
 		}
 	case StatusInProgress:
-		if to == StatusDone || to == StatusCancelled {
+		if to == StatusDone || to == StatusPaused || to == StatusCancelled {
+			return nil
+		}
+	case StatusPaused:
+		// Возобновление возвращает эпик/задачу к работе; пауза не терминальна.
+		if to == StatusReady || to == StatusCancelled {
 			return nil
 		}
 	}
@@ -179,6 +191,11 @@ type Task struct {
 	// GitBranch — фича-ветка задачи (git-workflow Ф-1, префикс
 	// ai/task/<id>, база = ветка эпика). Пусто, пока ветка не создана.
 	GitBranch string `json:"git_branch,omitempty"`
+	// ResumeStatus — статус, из которого задача была приостановлена (пауза
+	// эпика, Ф-6). Возобновление возвращает задачу именно в него: оркестратор
+	// заново проверит зависимости и фазовые гейты на прежнем месте цепочки.
+	// Пусто, если задача не на паузе.
+	ResumeStatus Status `json:"resume_status,omitempty"`
 }
 
 // BugStatus — статус багрепорта на общей доске.

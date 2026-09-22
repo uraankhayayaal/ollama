@@ -31,6 +31,7 @@
   .status.in_progress { color: var(--st-in-progress, #2563eb); }
   .status.done { color: var(--st-done, #15803d); }
   .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
+  .status.paused { color: var(--st-paused, #b45309); }
 }
 
 .section {

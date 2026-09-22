@@ -12,6 +12,7 @@ import type {
   ChatMsg,
   DiffFileView,
   DiffView,
+  EpicRow,
   LogsView,
   ProjectMeta,
   ProjectTokens,
@@ -269,6 +270,22 @@ export async function deleteEpic(
   return req<{ ok: boolean }>(
     "DELETE",
     `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}`,
+  );
+}
+
+// Перевод эпика в новый статус (кнопки «Пауза»/«Продолжить»/«Отменить»):
+// пауза/возобновление/отмена не трогают git-ветку эпика — работа просто
+// приостанавливается или запись помечается, код остаётся изолированным.
+export async function setEpicStatus(
+  base: string,
+  project: string,
+  epicID: string,
+  status: EpicRow["status"],
+): Promise<EpicRow> {
+  return req<EpicRow>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/status`,
+    { status },
   );
 }
 

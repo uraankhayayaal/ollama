@@ -1,10 +1,10 @@
 // Канбан-модель доски: статусы колонок, подписи и допустимые переходы.
 // Статусы зеркалят board/entity.go (new -> analysis -> ready -> in_progress
-// -> done; cancelled — терминальный). Переходы ограничены соседними
-// статусами строго по серверному ValidateTransition.
+// -> done; cancelled — терминальный, paused — «на паузе»). Переходы ограничены
+// соседними статусами строго по серверному ValidateTransition.
 import type { Status } from "@/Types";
 
-// Порядок колонок на доске: рабочие статусы цепочки + терминальный.
+// Порядок колонок на доске: рабочие статусы цепочки + терминальный + пауза.
 export const STATUS_ORDER: Status[] = [
   "new",
   "analysis",
@@ -12,6 +12,7 @@ export const STATUS_ORDER: Status[] = [
   "in_progress",
   "done",
   "cancelled",
+  "paused",
 ];
 
 export const STATUS_LABEL: Record<Status, string> = {
@@ -21,10 +22,13 @@ export const STATUS_LABEL: Record<Status, string> = {
   in_progress: "В работе",
   done: "Готово",
   cancelled: "Отменены",
+  paused: "На паузе",
 };
 
 // Допустимые ручные переходы (только между соседними статусами, терминальные
-// статусы — конечные точки).
+// статусы — конечные точки). «На паузе» — не ручной статус задачи: паузу
+// ставит и снимает эпик (кнопки «Пауза»/«Продолжить»), поэтому у paused-задачи
+// переносов нет — она вернётся на прежнее место цепочки вместе с эпиком.
 export const MOVES: Record<Status, { prev: Status | null; next: Status | null }> = {
   new: { prev: null, next: "analysis" },
   analysis: { prev: "new", next: "ready" },
@@ -32,4 +36,5 @@ export const MOVES: Record<Status, { prev: Status | null; next: Status | null }>
   in_progress: { prev: "ready", next: "done" },
   done: { prev: "in_progress", next: null },
   cancelled: { prev: null, next: null },
+  paused: { prev: null, next: null },
 };

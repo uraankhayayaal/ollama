@@ -117,7 +117,7 @@ func (sess *Session) chatAssistantPrompt(question string) string {
 		b.WriteString("\nЗадач нет.\n")
 	} else {
 		b.WriteString("\nЗадачи по статусам:\n")
-		for _, st := range []board.Status{board.StatusNew, board.StatusAnalysis, board.StatusReady, board.StatusInProgress, board.StatusDone, board.StatusCancelled} {
+		for _, st := range []board.Status{board.StatusNew, board.StatusAnalysis, board.StatusReady, board.StatusInProgress, board.StatusDone, board.StatusCancelled, board.StatusPaused} {
 			if n := taskByStatus[st]; n > 0 {
 				fmt.Fprintf(&b, "- %s: %d\n", st.Label(), n)
 			}

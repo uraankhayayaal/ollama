@@ -53,6 +53,7 @@
     &.in_progress { background: var(--st-in-progress, #2563eb); }
     &.done { background: var(--st-done, #15803d); }
     &.cancelled { background: var(--muted, #8a94a6); }
+    &.paused { background: var(--st-paused, #b45309); }
   }
 
   .title {
@@ -82,6 +83,7 @@
     &.in_progress { color: var(--st-in-progress, #2563eb); }
     &.done { color: var(--st-done, #15803d); }
     &.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
+    &.paused { color: var(--st-paused, #b45309); }
   }
 
   &.collapsed {

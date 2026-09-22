@@ -10,7 +10,8 @@ export type Status =
   | "ready"
   | "in_progress"
   | "done"
-  | "cancelled";
+  | "cancelled"
+  | "paused";
 
 // Совместимые алиасы (ретро): некоторые файлы импортируют Epic/Task/
 // BoardSnapshot вместо EpicRow/TaskRow/BoardView — это одно и то же.
@@ -53,6 +54,9 @@ export interface TaskRow {
   updated_at: string;
   // Фича-ветка задачи (git-workflow Ф-1, префикс ai/task/<id>).
   git_branch?: string;
+  // Статус, из которого задача приостановлена (пауза эпика, Ф-6):
+  // возобновление возвращает её на прежнее место цепочки.
+  resume_status?: Status;
 }
 
 export interface BugRow {

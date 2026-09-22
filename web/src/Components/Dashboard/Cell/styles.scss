@@ -37,6 +37,7 @@
   &.in_progress { border-top: 3px solid var(--st-in-progress, #2563eb); }
   &.done { border-top: 3px solid var(--st-done, #15803d); }
   &.cancelled { border-top: 3px solid var(--muted, #8a94a6); }
+  &.paused { border-top: 3px solid var(--st-paused, #b45309); }
 
   &.collapsed {
     min-height: 0;

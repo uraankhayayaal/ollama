@@ -216,3 +216,156 @@ func TestMeta(t *testing.T) {
 		t.Errorf("meta: %+v", m)
 	}
 }
+
+// TestStoreEpicPauseResumeCascade — пауза эпика (Ф-6) каскадом приостанавливает
+// его задачи, которые ещё не взял в работу специалист, запоминая исходный
+// статус; «в работе» доводит текущий раунд оркестратора. Возобновление
+// возвращает задачи на прежнее место цепочки.
+func TestStoreEpicPauseResumeCascade(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "ARC-01", Title: "Backend"}}); err != nil {
+		t.Fatal(err)
+	}
+	// T-01 — «в работе» (специалист уже пишет код), T-02 — «готова к работе»,
+	// T-03 — новая (ждёт зависимости).
+	for _, id := range []string{"T-01", "T-02", "T-03"} {
+		if err := s.CreateTask(ctx, &Task{TaskSpec: TaskSpec{TaskID: id, SequenceOrder: 1}, EpicID: "ARC-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustTask := func(id string, sts ...Status) {
+		t.Helper()
+		for _, st := range sts {
+			if err := s.SetTaskStatus(ctx, id, st); err != nil {
+				t.Fatalf("задача %s -> %s: %v", id, st, err)
+			}
+		}
+	}
+	mustTask("T-01", StatusAnalysis, StatusReady, StatusInProgress)
+	mustTask("T-02", StatusAnalysis, StatusReady)
+
+	// Эпик доводится до «в работе», затем приостанавливается.
+	for _, st := range []Status{StatusAnalysis, StatusReady, StatusInProgress, StatusPaused} {
+		if err := s.SetEpicStatus(ctx, "ARC-01", st); err != nil {
+			t.Fatalf("эпик -> %s: %v", st, err)
+		}
+	}
+	assertTasks := func(want map[string]Status) {
+		t.Helper()
+		for id, st := range want {
+			got, err := s.GetTask(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != st {
+				t.Errorf("задача %s = %s, ожидалось %s", id, got.Status, st)
+			}
+		}
+	}
+	assertTasks(map[string]Status{
+		"T-01": StatusInProgress, // «в работе» пауза эпика не трогает
+		"T-02": StatusPaused,
+		"T-03": StatusPaused,
+	})
+	// Исходные статусы запомнены — возобновление вернёт задачи на место.
+	for _, id := range []string{"T-02", "T-03"} {
+		got, err := s.GetTask(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := StatusReady
+		if id == "T-03" {
+			want = StatusNew
+		}
+		if got.ResumeStatus != want {
+			t.Errorf("задача %s: resume_status = %s, ожидалось %s", id, got.ResumeStatus, want)
+		}
+	}
+
+	// Возобновление: эпик paused -> ready, задачи возвращаются в свои статусы.
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusReady); err != nil {
+		t.Fatalf("эпик paused -> ready: %v", err)
+	}
+	assertTasks(map[string]Status{
+		"T-01": StatusInProgress,
+		"T-02": StatusReady,
+		"T-03": StatusNew,
+	})
+	for _, id := range []string{"T-02", "T-03"} {
+		got, err := s.GetTask(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ResumeStatus != "" {
+			t.Errorf("задача %s: resume_status должен очиститься, получено %s", id, got.ResumeStatus)
+		}
+	}
+}
+
+// TestStoreEpicCancelCascade — отмена эпика (Ф-6) помечает отменёнными его
+// незавершённые задачи (включая приостановленные), не удаляя записи: ветки и
+// код остаются как артефакт, хронология доски сохраняется.
+func TestStoreEpicCancelCascade(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "ARC-01"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"T-01", "T-02"} {
+		if err := s.CreateTask(ctx, &Task{TaskSpec: TaskSpec{TaskID: id, SequenceOrder: 1}, EpicID: "ARC-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetTaskStatus(ctx, "T-01", StatusAnalysis); err != nil {
+		t.Fatal(err)
+	}
+
+	// Эпик приостановлен (T-01/T-02 — «на паузе»), затем отменён.
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusPaused); err != nil {
+		t.Fatalf("эпик new -> paused: %v", err)
+	}
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusCancelled); err != nil {
+		t.Fatalf("эпик paused -> cancelled: %v", err)
+	}
+	for _, id := range []string{"T-01", "T-02"} {
+		got, err := s.GetTask(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != StatusCancelled {
+			t.Errorf("задача %s = %s, ожидалось отменена", id, got.Status)
+		}
+		if got.ResumeStatus != "" {
+			t.Errorf("задача %s: resume_status должен очиститься при отмене", id)
+		}
+	}
+	// Записи не удалены — хронология сохраняется.
+	tasks, err := s.ListTasks(ctx)
+	if err != nil || len(tasks) != 2 {
+		t.Fatalf("задачи должны остаться на доске: %d, err = %v", len(tasks), err)
+	}
+}
+
+// TestStoreEpicPauseDoesNotBlockAllDone — приостановленный эпик не считается
+// выполненным: задача пользователя не решена, пока эпик на паузе.
+func TestStoreEpicPauseDoesNotBlockAllDone(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "ARC-01"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusPaused); err != nil {
+		t.Fatalf("new -> paused: %v", err)
+	}
+	done, err := s.AllDone(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done {
+		t.Fatal("эпик на паузе не даёт успешного решения задачи")
+	}
+}

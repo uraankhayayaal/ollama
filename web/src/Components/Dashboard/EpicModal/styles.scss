@@ -31,6 +31,66 @@
   .status.in_progress { color: var(--st-in-progress, #2563eb); }
   .status.done { color: var(--st-done, #15803d); }
   .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
+  .status.paused { color: var(--st-paused, #b45309); }
+}
+
+// Ф-6: «Пауза»/«Продолжить»/«Отменить» эпика — ряд кнопок под полями модалки.
+.epic-status-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+
+  button {
+    padding: 4px 10px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 6px;
+    background: transparent;
+    font-size: 12px;
+    line-height: 1.4;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+  }
+
+  .epic-pause {
+    border-color: var(--st-paused, #b45309);
+    color: var(--st-paused, #b45309);
+
+    &:hover:not(:disabled) {
+      background: var(--st-paused, #b45309);
+      color: #fff;
+    }
+  }
+
+  .epic-resume {
+    border-color: var(--ok, #15803d);
+    color: var(--ok, #15803d);
+
+    &:hover:not(:disabled) {
+      background: var(--ok, #15803d);
+      color: #fff;
+    }
+  }
+
+  .epic-cancel {
+    border-color: var(--muted, #8a94a6);
+    color: var(--muted, #8a94a6);
+
+    &:hover:not(:disabled) {
+      background: var(--muted, #8a94a6);
+      color: #fff;
+    }
+  }
+
+  .epic-status-err {
+    font-size: 11px;
+    color: var(--danger, #dc2626);
+  }
 }
 
 .section {

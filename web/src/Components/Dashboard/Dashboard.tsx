@@ -19,6 +19,9 @@ export function Dashboard({
   onTaskUpdate,
   onEpicDelete,
   onEpicRelease,
+  onEpicPause,
+  onEpicResume,
+  onEpicCancel,
   onEpicBranch,
   onTaskBranch,
   onEpicMR,
@@ -30,6 +33,10 @@ export function Dashboard({
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onEpicDelete: (e: EpicRow) => void;
   onEpicRelease: (e: EpicRow) => Promise<void>;
+  // Ф-6: пауза/возобновление/отмена эпика (без отката кода — ветка остаётся).
+  onEpicPause?: (e: EpicRow) => Promise<void>;
+  onEpicResume?: (e: EpicRow) => Promise<void>;
+  onEpicCancel?: (e: EpicRow) => Promise<void>;
   // Ф-5: создание ветки эпика/задачи и «Создать MR» (пушит ветку и открывает
   // MR через фордж). Кнопки в блоке «ветка + MR» модалок.
   onEpicBranch?: (e: EpicRow) => Promise<void>;
@@ -126,9 +133,14 @@ export function Dashboard({
   }));
 
   // Эпик активен, если у него есть незавершённые задачи (new → in_progress);
-  // только такие по умолчанию развёрнуты полностью.
+  // только такие по умолчанию развёрнуты полностью. Пауза/отмена/done — не активны.
   const isActive = (tasks: TaskRow[]) =>
-    tasks.some((t) => t.status !== "done" && t.status !== "cancelled");
+    tasks.some(
+      (t) =>
+        t.status !== "done" &&
+        t.status !== "cancelled" &&
+        t.status !== "paused",
+    );
 
   const isCollapsed = (epicId: string, tasks: TaskRow[]) =>
     collapseToggle[epicId] ?? !isActive(tasks);
@@ -176,6 +188,9 @@ export function Dashboard({
             onEpicOpen={(e) => setEpicId(e.task_id)}
             onEpicDelete={onEpicDelete}
             onEpicRelease={onEpicRelease}
+            onEpicPause={onEpicPause}
+            onEpicResume={onEpicResume}
+            onEpicCancel={onEpicCancel}
             onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}
@@ -187,6 +202,9 @@ export function Dashboard({
           git={board.git}
           onCreateBranch={onEpicBranch}
           onCreateMR={onEpicMR}
+          onPause={onEpicPause}
+          onResume={onEpicResume}
+          onCancel={onEpicCancel}
           onClose={() => setEpicId(null)}
         />
       )}

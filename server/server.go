@@ -181,6 +181,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
 	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}", s.handleDeleteTask)
 	mux.HandleFunc("DELETE /api/projects/{id}/epics/{eid}", s.handleDeleteEpic)
+	// Git-workflow (Ф-6): кнопки «Пауза»/«Продолжить»/«Отменить» эпика — перевод
+	// статуса (каскад задач + git-хуки, ветка/код остаются на месте).
+	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/status", s.handleSetEpicStatus)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
 	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
@@ -879,6 +882,57 @@ func (s *Server) removeTaskBranch(project, taskID string) {
 	if err := s.reg.DeleteTaskMR(project, taskID); err != nil {
 		logging.For(project).Warnf("gitflow: снятие MR задачи %s: %v", taskID, err)
 	}
+}
+
+// handleSetEpicStatus — REST-перевод эпика в новый статус (кнопки «Пауза»/
+// «Продолжить»/«Отменить», Ф-6). Эпики изолированы в своих git-ветках,
+// поэтому пауза/отмена не откатывает код: работа просто приостанавливается
+// (статус paused, задачи каскадом на паузу) либо запись помечается отменённой,
+// а ветка остаётся как артефакт. Работает через Store.SetEpicStatus (FSM +
+// каскад) с подключёнными git-хуками (done эпика по-прежнему синхронит
+// релизную ветку с main).
+func (s *Server) handleSetEpicStatus(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	epicID := r.PathValue("eid")
+
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "невалидный JSON")
+		return
+	}
+	st := board.Status(strings.TrimSpace(body.Status))
+	if !st.Valid() {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("неизвестный статус %q", string(body.Status)))
+		return
+	}
+
+	store, err := s.boardStore(r.Context(), project)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
+		return
+	}
+	defer store.Close()
+
+	if err := store.SetEpicStatus(r.Context(), epicID, st); err != nil {
+		var stErr *board.StatusError
+		if errors.As(err, &stErr) {
+			writeErr(w, http.StatusBadRequest, stErr.Error())
+			return
+		}
+		if errors.Is(err, board.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "эпик не найден")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	epic, _ := store.GetEpic(r.Context(), epicID)
+	logging.For(project).Infof("доска: эпик %s → %s (через REST)", epicID, st)
+	s.kickBoard(project)
+	writeJSON(w, http.StatusOK, epic)
 }
 
 // handleDeleteEpic удаляет эпик вместе с его задачами. Допустимо только для
