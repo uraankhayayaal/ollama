@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"ai/stackdetect"
 	"go.lsp.dev/jsonrpc2"
@@ -31,6 +32,27 @@ type fakeServer struct {
 	mu      sync.Mutex
 	opened  []string
 	changed []string
+}
+
+// waitFor ждёт, пока сервер не обработает ровно wantOpened didOpen и
+// wantChanged didChange, либо до истечения дедлайна. Мутекс снимается до
+// проверки/диагностики: t.Fatalf не должен вызываться под замком (иначе
+// Unlock пропускается и серверная горутина вечно стоит на Lock).
+func (s *fakeServer) waitFor(t *testing.T, wantOpened, wantChanged int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.mu.Lock()
+		opened, changed := len(s.opened), len(s.changed)
+		s.mu.Unlock()
+		if opened == wantOpened && changed == wantChanged {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("didOpen = %d, want %d; didChange = %d, want %d", opened, wantOpened, changed, wantChanged)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 func (s *fakeServer) Initialize(context.Context, *protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -154,14 +176,7 @@ func TestClientNavigation(t *testing.T) {
 	if _, err := c.Definition(ctx, "main.go", 3, 7); err != nil {
 		t.Fatalf("Definition#2: %v", err)
 	}
-	srv.mu.Lock()
-	if len(srv.opened) != 1 {
-		t.Fatalf("didOpen count = %d, want 1", len(srv.opened))
-	}
-	if len(srv.changed) != 0 {
-		t.Fatalf("didChange count = %d, want 0", len(srv.changed))
-	}
-	srv.mu.Unlock()
+	srv.waitFor(t, 1, 0)
 
 	// После правки файла отправляется didChange с новым содержимым.
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() { _ = 1 }\n"), 0o644); err != nil {
@@ -170,11 +185,7 @@ func TestClientNavigation(t *testing.T) {
 	if _, err := c.Definition(ctx, "main.go", 3, 7); err != nil {
 		t.Fatalf("Definition#3: %v", err)
 	}
-	srv.mu.Lock()
-	if len(srv.changed) != 1 {
-		t.Fatalf("didChange count = %d, want 1", len(srv.changed))
-	}
-	srv.mu.Unlock()
+	srv.waitFor(t, 1, 1)
 }
 
 func TestClientRejectsPathOutsideProject(t *testing.T) {
