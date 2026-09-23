@@ -9,9 +9,15 @@ import (
 // Hub — WebSocket-хаб: публикует события клиентам по проекту.
 // Каждый проект имеет свой набор подписчиков; publish рассылает JSON
 // {type, payload} всем клиентам проекта.
+//
+// Ф-2: поверх WS-клиентов хаб несёт и внутренних (in-process) слушателей
+// событий проекта (см. Listen/Unlisten/Emit). WS-рассылка остаётся явной
+// (Publish из сессии): снимки доски/статусы строятся там, где есть доступ к
+// хранилищам, а Emit занимается только внутренней шиной.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[string]map[*wsClient]struct{}
+	mu        sync.RWMutex
+	clients   map[string]map[*wsClient]struct{}
+	listeners map[string]map[string]Listener // project → name → слушатель
 }
 
 // wsClient — WS-подключение проекта: writeLoop принимает сообщения из
@@ -27,7 +33,10 @@ type wsClient struct {
 
 // NewHub создаёт пустой хаб.
 func NewHub() *Hub {
-	return &Hub{clients: make(map[string]map[*wsClient]struct{})}
+	return &Hub{
+		clients:   make(map[string]map[*wsClient]struct{}),
+		listeners: make(map[string]map[string]Listener),
+	}
 }
 
 // Subscribe регистрирует клиент и запускает read/write-горутины.
@@ -79,6 +88,49 @@ func (h *Hub) Publish(project, typ string, payload any) {
 
 // publish — короткий алиас Publish (используется в session.go).
 func (h *Hub) publish(project, typ string, payload any) { h.Publish(project, typ, payload) }
+
+// Listen подписывает внутреннего (in-process) слушателя проекта на события
+// шины (Ф-2). Повторная подписка под тем же именем заменяет предыдущего.
+// Слушатели живут всё время жизни процесса (сессия не удаляется) — отдельный
+// Unlisten нужен только для виткофф временных слушателей.
+func (h *Hub) Listen(project, name string, l Listener) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.listeners[project] == nil {
+		h.listeners[project] = make(map[string]Listener)
+	}
+	h.listeners[project][name] = l
+}
+
+// Unlisten отписывает слушателя проекта (idempotent).
+func (h *Hub) Unlisten(project, name string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if ls, ok := h.listeners[project]; ok {
+		delete(ls, name)
+		if len(ls) == 0 {
+			delete(h.listeners, project)
+		}
+	}
+}
+
+// Emit доставляет событие проекта внутренним слушателям (Ф-2). Доставка
+// выполняется вне блокировок хабa (слушатели копируются под RLock и зовутся
+// после) — слушатель может безопасно звать методы хаба. WS-клиентам событие
+// НЕ уходит: снимки публикуются отдельно (Publish), т.к. payload строит
+// сессия (доска/статус/токены), а не хаб.
+func (h *Hub) Emit(project string, ev ProjectEvent) {
+	h.mu.RLock()
+	ls := h.listeners[project]
+	ll := make([]Listener, 0, len(ls))
+	for _, l := range ls {
+		ll = append(ll, l)
+	}
+	h.mu.RUnlock()
+	for _, l := range ll {
+		l(ev)
+	}
+}
 
 // Unregister удаляет клиент из хаба (вызывается из readLoop/writeLoop).
 func (h *Hub) Unregister(cl *wsClient) {

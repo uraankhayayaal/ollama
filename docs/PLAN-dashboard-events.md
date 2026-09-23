@@ -68,25 +68,25 @@
 
 ### Ф-1 — Тип событий + эмит вместо тиков
 - [x] Составить карту всех точек «kickBoard» (см. grep: session.go, gitflow.go, gitflow_mr.go, actions.go)
-- [ ] Ввести `ProjectEvent` + `Session.emit`; `kickBoard` объявить deprecated-обёрткой (`emit(BoardChanged)`)
-- [ ] `boardFlusher` читает события (board_changed → публикация снимка, бэтчинг 500 мс; периодический MR-тикер остаётся)
+- [x] Ввести `ProjectEvent` + `Session.emit`; `kickBoard` объявить deprecated-обёрткой (`emit(BoardChanged)`)
+- [x] `boardFlusher` читает события (board_changed → публикация снимка, бэтчинг 500 мс; периодический MR-тикер остаётся)
 
 ### Ф-2 — Слушатели (доска↔чат)
-- [ ] `Listener`-механика поверх hub; подписка ассистента (server/chatassist.go) на `board_changed`, чтобы при изменении доски перечитывать `chatAssistantPrompt`
-- [ ] Подписка доски на `session_status` (standby/active) → пересчёт `hasWork` без опроса-цикла
-- [ ] Подписка Web UI — существующий WS-канал остаётся (типы `board/chat/status/tokens` сохраняем, backwards-compatible)
+- [x] `Listener`-механика поверх hub; подписка ассистента (server/chatassist.go) на `board_changed`, чтобы при изменении доски перечитывать `chatAssistantPrompt`
+- [x] Подписка доски на `session_status` (standby/active) → пересчёт `hasWork` без опроса-цикла
+- [x] Подписка Web UI — существующий WS-канал остаётся (типы `board/chat/status/tokens` сохраняем, backwards-compatible)
 
 ### Ф-3 — Рефакторинг хендлеров/инструментов
-- [ ] Замена всех прямых `sess.kickBoard()` на `emit(ev)` с причиной
-- [ ] Публикация статусов: единый `computeStatus` + причина (detail) для standby
-- [ ] Удалить (или оставить обёртку) старый `ticks chan struct{}`
+- [x] Замена всех прямых `sess.kickBoard()` на `emit(ev)` с причиной
+- [x] Публикация статусов: единый `computeStatus` + причина (detail) для standby
+- [x] Удалить (или оставить обёртку) старый `ticks chan struct{}`
 
 ### Ф-4 — Верификация
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./server/`
-- [ ] `go vet  . ./agents/... ./tools/ ./board/ ./server/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./server/`
-- [ ] `npm run build` (web/)
-- [ ] Ручной E2E: доска и чат в одном окне — создание эпика из чата мгновенно обновляет доску (WS), кнопка Стоп/Продолжить реагирует на standby
+- [x] `go build . ./agents/... ./tools/ ./board/ ./server/`
+- [x] `go vet  . ./agents/... ./tools/ ./board/ ./server/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./server/`
+- [x] `npm run build` (web/)
+- [x] Ручной E2E: доска и чат в одном окне — создание эпика из чата мгновенно обновляет доску (WS), кнопка Стоп/Продолжить реагирует на standby
 
 ## Верификация
 

@@ -809,6 +809,70 @@ func TestKanbanBoardOnlyEmptyGoesStandby(t *testing.T) {
 	}
 }
 
+// TestKanbanBoardOnlyWakeLeavesStandby — runner в standby (пустая доска);
+// после появления работы событие Wake выводит его из ожидания сразу, а не по
+// 5-секундному тику опроса (Ф-2, PLAN-dashboard-events: board_changed → Wake).
+func TestKanbanBoardOnlyWakeLeavesStandby(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	srv := miniredis.RunT(t)
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-bo-wake"})
+	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-bo-wake")) })
+
+	standby := make(chan bool, 8)
+	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr.SetBoardOnly(true)
+	kr.SetStandbyNotifier(func(v bool) {
+		select {
+		case standby <- v:
+		default:
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- kr.Run(ctx, "kanban-bo-wake", "Продолжить") }()
+
+	select {
+	case v := <-standby:
+		if !v {
+			t.Fatalf("первый нотификатор standby = %v, want true", v)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("раннер не ушёл в standby за 3 с")
+	}
+
+	// На доске появляется работа (эпик, доступный board-only декомпозиции),
+	// и сервер будит runner'а событием Wake — не ждём ticker-standing.
+	if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{
+		TaskID:       "WAKE-01",
+		Title:        "Эпик после standby",
+		Description:  "Создаётся событием, будит ожидание",
+		AssignedRole: "Backend Lead",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	kr.Wake()
+
+	select {
+	case v := <-standby:
+		if v {
+			t.Fatalf("после Wake нотификатор = %v, want false (работа появилась)", v)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Wake не вывел раннера из standby за 3 с")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("раннер не завершился после отмены")
+	}
+}
+
 // TestKanbanBoardOnlyDecomposesExistingEpic — запуск по доске (board-only) с
 // эпиком без задач (как после создания чатом): эпик берётся в работу — лид
 // декомпозирует его на задачи, специалисты их выполняют, а новых эпиков

@@ -199,7 +199,7 @@ func (s *Server) handleEpicRebase(w http.ResponseWriter, r *http.Request) {
 				epicID, epicRef.Branch, strings.Join(forecast, ", "), len(resolved), len(hard)),
 			"", "", nil)
 	}
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: rebase эпика, конфликты для резолва")
 	if hard == nil {
 		hard = []string{}
 	}
@@ -388,7 +388,7 @@ func (s *Server) handleEpicResolve(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("Эпик %s: конфликты разрешены, релизная ветка %s влита в main и запушена. Приёмка: %s",
 				epicID, rs.Branch, cfgreport.Summary), "", "", nil)
 	}
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: резолв конфликтов, релиз в main")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
 		"branch":         main,

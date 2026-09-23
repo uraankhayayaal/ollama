@@ -450,7 +450,7 @@ func TestBranchWebURL(t *testing.T) {
 
 // TestEpicBranchKickBoardPublishesWhenIdle — ветка создаётся кнопкой в UI вне
 // оркестрации (сессия есть, running=false). boardFlusher в этот момент не
-// крутится, поэтому kickBoard обязан опубликовать снимок доски сразу: иначе
+// крутится, поэтому emitBoard обязан опубликовать снимок доски сразу: иначе
 // «Создать ветку эпика» в модалке не превратится в ссылку на ветку (Ф-5).
 func TestEpicBranchKickBoardPublishesWhenIdle(t *testing.T) {
 	git := &fakeGit{fails: map[string]string{

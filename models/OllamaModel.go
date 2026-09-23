@@ -11,6 +11,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ollama/ollama/api"
@@ -95,6 +97,31 @@ func toolCallRetryDelay() time.Duration {
 		}
 	}
 	return toolCallRetryDelayDefault
+}
+
+// streamIdleDefault — допустимая тишина стрима без единого кадра. Кадры
+// NDJSON от llama-server идут непрерывно всю генерацию (даже у reasoning-моделей
+// «думание» стримится), поэтому пауза дольше лимита — признак мёртвого бэкенда,
+// а не «модель думает». Настраивается OLLAMA_STREAM_IDLE.
+const streamIdleDefault = 2 * time.Minute
+
+// streamIdleInterval возвращает лимит тишины стрима: OLLAMA_STREAM_IDLE —
+// число секунд либо длительность вида "90s"/"2m". "0"/"off"/"false"/"no" —
+// вотчдог выключен. Не задано — streamIdleDefault.
+func streamIdleInterval() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("OLLAMA_STREAM_IDLE")); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "off", "false", "no":
+			return 0
+		}
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return streamIdleDefault
 }
 
 // ChatStream выполняет один запрос к модели Ollama в потоковом режиме: фрагменты
@@ -259,11 +286,66 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		return nil
 	}
 
+	// Идл-вотчдог мёртвого бэкенда: SDK Ollama читает стрим блокирующим
+	// scanner.Scan() через http.DefaultClient (Timeout=0) и полагается только
+	// на отмену ctx — собственного таймаута у страма нет. Когда llama-server
+	// умирает на середине генерации (краш/память), ollama держит соединение
+	// открытым без новых кадров, и Scan() не возвращается никогда (чат молчит,
+	// генерация «висит» вечно). Страж отменяет локальный ctx после паузы без
+	// единого кадра (OLLAMA_STREAM_IDLE): кадры идут непрерывно всю нормальную
+	// генерацию, поэтому тишина дольше лимита — признак мёртвого бэкенда.
+	idle := streamIdleInterval()
+	var silenceAborted atomic.Bool
+	if idle > 0 {
+		var (
+			mu        sync.Mutex
+			lastFrame = time.Now()
+		)
+		touch := func() {
+			mu.Lock()
+			lastFrame = time.Now()
+			mu.Unlock()
+		}
+		baseStreamFn := streamFn
+		streamFn = func(resp api.ChatResponse) error {
+			touch()
+			return baseStreamFn(resp)
+		}
+		watchCtx, cancelWatch := context.WithCancel(ctx)
+		go func() {
+			ticker := time.NewTicker(idle / 2)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-watchCtx.Done():
+					return
+				case <-ticker.C:
+					mu.Lock()
+					silent := time.Since(lastFrame)
+					mu.Unlock()
+					if silent >= idle {
+						silenceAborted.Store(true)
+						cancelWatch()
+						return
+					}
+				}
+			}
+		}()
+		defer cancelWatch()
+		ctx = watchCtx
+	}
+
 	var err error
 	for attempt := 0; ; attempt++ {
 		err = o.client.Chat(ctx, req, streamFn)
 		if err == nil {
 			break
+		}
+		if silenceAborted.Load() {
+			// Замолчавший стрим — не ретрай и не «остановлено пользователем»:
+			// отдаём явную ошибку без обёртки context.Canceled, чтобы
+			// оркестрация не перепутала мёртвый бэкенд с обычной остановкой.
+			return nil, fmt.Errorf("Ошибка выполнения Chat: стрим модели %q замолчал на %v (бэкенд/модель, похоже, завершились). Лимит тишины — OLLAMA_STREAM_IDLE", o.model, idle)
 		}
 		if attempt >= toolCallRetries() || !retryableToolCallErr(err) || ctx.Err() != nil {
 			break

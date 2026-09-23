@@ -121,7 +121,7 @@ func (s *Server) handleCreateEpicMR(w http.ResponseWriter, r *http.Request) {
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus, "Создан MR эпика: "+mrURL, "", "", nil)
 	}
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: создан MR эпика")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"epic_id": epicID, "mr_url": mrURL, "source": epicRef.Branch, "target": epicRef.Base,
 	})
@@ -183,7 +183,7 @@ func (s *Server) handleCreateTaskMR(w http.ResponseWriter, r *http.Request) {
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus, "Создан MR задачи: "+mrURL, "", "", nil)
 	}
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: создан MR задачи")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"task_id": taskID, "mr_url": mrURL, "source": taskRef.Branch, "target": taskRef.Base,
 	})
@@ -490,7 +490,7 @@ func (s *Server) reconcileMRsAsync(project string) {
 		if changed {
 			logging.For(project).Infof("gitflow: фоновая сверка MR обновила статусы")
 			if sess := s.session(project); sess != nil {
-				sess.kickBoard()
+				sess.emitBoard("gitflow: фоновая сверка MR обновила статусы")
 			}
 		}
 	}()

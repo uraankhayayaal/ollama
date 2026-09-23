@@ -284,6 +284,22 @@ func computeStatus(running, gating, standby bool, meta *board.Meta) string {
 	return status
 }
 
+// standbyReason — причина режима ожидания оркестрации. Единая строка для
+// broadcastStatus, снапшота при WS-подключении и REST-меты: фронт должен видеть
+// одно объяснение, откуда бы статус ни пришёл (Ф-3, PLAN-dashboard-events).
+const standbyReason = "нет работы на доске — жду эпики и задачи"
+
+// statusDetail — человекочитаемая причина текущего состояния (поле detail
+// рядом со status). Сейчас единственный случай, где компоненты-потребители
+// (кнопка Стоп/Продолжить, список проектов) нуждаются в причине — standby:
+// сессия активна, но не исполняет работу, и UI объясняет это пользователю.
+func statusDetail(running, gating, standby bool) string {
+	if standby && running && !gating {
+		return standbyReason
+	}
+	return ""
+}
+
 // projectMeta собирает ProjectMeta для REST API.
 func projectMeta(inf workspace.Info, meta *board.Meta, running, gating, standby bool) map[string]any {
 	status := computeStatus(running, gating, standby, meta)
@@ -294,6 +310,9 @@ func projectMeta(inf workspace.Info, meta *board.Meta, running, gating, standby 
 		"status":       status,
 		"created_at":   "",
 		"updated_at":   "",
+	}
+	if detail := statusDetail(running, gating, standby); detail != "" {
+		out["status_detail"] = detail
 	}
 	if inf.GitRemote != "" {
 		out["git_remote"] = inf.GitRemote
@@ -856,7 +875,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Публикуем обновлённую доску.
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "REST: задача обновлена")
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -887,7 +906,7 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	s.removeTaskBranch(project, taskID)
 
 	// Публикуем обновлённую доску.
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "REST: задача удалена")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -954,7 +973,7 @@ func (s *Server) handleSetEpicStatus(w http.ResponseWriter, r *http.Request) {
 
 	epic, _ := store.GetEpic(r.Context(), epicID)
 	logging.For(project).Infof("доска: эпик %s → %s (через REST)", epicID, st)
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "REST: эпик сменил статус")
 	writeJSON(w, http.StatusOK, epic)
 }
 
@@ -991,7 +1010,7 @@ func (s *Server) handleDeleteEpic(w http.ResponseWriter, r *http.Request) {
 	s.deleteEpicBranches(project, epicID, epicTasks)
 
 	// Публикуем обновлённую доску.
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "REST: эпик удалён")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -1012,24 +1031,6 @@ func (s *Server) handleListBugs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bugs)
 }
 
-// kickBoard публикует снимок доски. Когда оркестрация идёт — только тик для
-// boardFlusher (он сам опубликует в течение 500 мс). Вне оркестрации флашер
-// не крутится, и тик никто бы не дренул: публикуем снимок сразу, иначе UI
-// не увидит обновлений от кнопок «Создать ветку/MR», «Залить в main» (Ф-5).
-func (s *Server) kickBoard(project string) {
-	sess := s.session(project)
-	if sess == nil {
-		return
-	}
-	sess.kickBoard()
-	sess.mu.Lock()
-	running := sess.running
-	sess.mu.Unlock()
-	if !running {
-		sess.publishBoardNow()
-	}
-}
-
 // --- WebSocket ---
 
 // handleWS выполняет WS-upgrade и подписывает клиента на проект.
@@ -1043,7 +1044,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Снапшот текущего состояния: клиент сразу видит актуальные status/board/
 	// tokens (а не устаревший idle), даже если оркестрация уже идёт.
 	// getOrCreate: сессия обязана существовать, пока открыт дашборд — иначе
-	// kickBoard (кнопки «ветка/MR/релиз» в UI) некому публиковать после
+	// srvEmitBoard (кнопки «ветка/MR/релиз» в UI) некому публиковать после
 	// перезапуска сервера, и доска в браузере останется устаревшей (Ф-5).
 	if sess, _, err := s.getOrCreate(project); err == nil {
 		sess.broadcastSnapshot()

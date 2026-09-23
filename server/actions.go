@@ -221,7 +221,7 @@ func (sess *Session) TaskMerge(ctx context.Context, taskID string) (string, erro
 	sess.log.Infof("gitflow: ассистент мёрджит задачу %s → %s (already=%v)", taskID, branch, res.AlreadyMerged)
 	sess.append(chat.RoleStatus,
 		fmt.Sprintf("Задача %s влита в релизную ветку %s", taskID, branch), "", "", nil)
-	sess.kickBoard()
+	sess.emitBoard("ассистент: мёрдж задачи")
 	if res.AlreadyMerged {
 		return fmt.Sprintf("Задача %s уже влита в релизную ветку %s", taskID, branch), nil
 	}
@@ -236,7 +236,7 @@ func (sess *Session) EpicRelease(ctx context.Context, epicID string) (string, er
 		return "", err
 	}
 	sess.log.Infof("gitflow: ассистент релизит эпик %s → main (already=%v)", epicID, res.AlreadyMerged)
-	sess.kickBoard()
+	sess.emitBoard("ассистент: релиз эпика в main")
 	if res.AlreadyMerged {
 		return fmt.Sprintf("Релизная ветка %s эпика %s уже влита в main", source, epicID), nil
 	}
@@ -263,7 +263,7 @@ func (sess *Session) BranchReject(ctx context.Context) error {
 	sess.append(chat.RoleStatus,
 		fmt.Sprintf("Ветка %s отклонена, рабочая копия возвращена на %s", repo.Branch, repo.Base),
 		"", "", nil)
-	sess.kickBoard()
+	sess.emitBoard("ассистент: отклонение ветки")
 	return nil
 }
 

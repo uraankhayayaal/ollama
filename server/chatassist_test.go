@@ -315,7 +315,7 @@ func TestChatAssistantCreatesEpic(t *testing.T) {
 // TestChatAssistantPublishesBoardWhenIdle — «создай эпик …» в idle-сессии
 // (оркестрация не запущена): boardFlusher в этот момент не крутится, поэтому
 // router-колбэк обязан опубликовать снимок доски в шину сразу (через
-// Server.kickBoard), иначе созданный чатом эпик не появится на доске Web UI
+// emitBoard), иначе созданный чатом эпик не появится на доске Web UI
 // до ручного обновления страницы.
 func TestChatAssistantPublishesBoardWhenIdle(t *testing.T) {
 	srv, _, _ := newTestServer(t)

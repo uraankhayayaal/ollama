@@ -102,7 +102,7 @@ func (s *Server) handleCreateEpicBranch(w http.ResponseWriter, r *http.Request) 
 	}
 
 	logging.For(project).Infof("gitflow: эпик %s → ветка %s (база %s)", epicID, branch, base)
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: ветка эпика")
 	writeJSON(w, http.StatusOK, map[string]string{"branch": branch, "base": base, "epic_id": epicID})
 }
 
@@ -168,7 +168,7 @@ func (s *Server) handleCreateTaskBranch(w http.ResponseWriter, r *http.Request) 
 	}
 
 	logging.For(project).Infof("gitflow: задача %s → ветка %s (база %s)", taskID, branch, epicRef.Branch)
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: ветка задачи")
 	writeJSON(w, http.StatusOK, map[string]string{"branch": branch, "base": epicRef.Branch, "task_id": taskID})
 }
 
@@ -229,7 +229,7 @@ func (s *Server) handleMergeTask(w http.ResponseWriter, r *http.Request) {
 
 	logging.For(project).Infof("gitflow: мёрдж задачи %s: %s (already=%v)",
 		taskID, res.Message, res.AlreadyMerged)
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: мёрдж задачи")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
 		"branch":         s.epicBranch(project, task),
@@ -282,7 +282,7 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("Эпик %s: релизная ветка %s влита в main (%s)", epicID, source, main),
 			"", "", nil)
 	}
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: релиз эпика в main")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
 		"branch":         main,
@@ -525,7 +525,7 @@ func (s *Server) autoCreateEpicBranch(ctx context.Context, project string, epic 
 		}
 	}
 	logging.For(project).Infof("gitflow: эпик %s → авто-ветка %s (база %s)", epic.TaskID, branch, base)
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: авто-ветка эпика")
 }
 
 // autoCreateTaskBranch — Ф-1: авто-создание фича-ветки задачи при её добавлении
@@ -574,7 +574,7 @@ func (s *Server) autoCreateTaskBranch(ctx context.Context, project string, task 
 		}
 	}
 	logging.For(project).Infof("gitflow: задача %s → авто-ветка %s (база %s)", task.TaskID, branch, epicRef.Branch)
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: авто-ветка задачи")
 }
 
 // deleteEpicBranches снимает из side-реестра ветки эпика и всех его задач

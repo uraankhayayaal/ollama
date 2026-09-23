@@ -691,3 +691,172 @@ func TestHubConcurrentPublish(t *testing.T) {
 	h.CloseAll()
 	wg.Wait()
 }
+
+// --- внутренние слушатели шины проекта (Ф-2) ---
+
+// TestHubEmitListeners — Listen/Emit/Unlisten: событие доставляется подписчику
+// только своего проекта; повторная подписка заменяет слушателя; после
+// Unlisten доставки нет.
+func TestHubEmitListeners(t *testing.T) {
+	h := NewHub()
+
+	got := make(chan ProjectEvent, 8)
+	h.Listen("p1", "a", func(ev ProjectEvent) { got <- ev })
+	h.Listen("p2", "a", func(ev ProjectEvent) { t.Fatalf("чужой проект получил событие: %+v", ev) })
+
+	h.Emit("p1", ProjectEvent{Type: EventBoardChanged, Detail: "тест"})
+	select {
+	case ev := <-got:
+		if ev.Type != EventBoardChanged || ev.Detail != "тест" {
+			t.Fatalf("событие = %+v, want board_changed/тест", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("слушатель не получил событие")
+	}
+
+	// Повторная подписка под тем же именем заменяет слушателя.
+	replaced := false
+	h.Listen("p1", "a", func(ev ProjectEvent) { replaced = true })
+	h.Emit("p1", ProjectEvent{Type: EventBoardChanged})
+	if !replaced {
+		t.Fatal("повторная подписка не заменила слушателя")
+	}
+	if n := len(got); n != 0 {
+		t.Fatalf("старый слушатель ещё жив: %d событий в канале", n)
+	}
+
+	// Unlisten отписывает.
+	h.Unlisten("p1", "a")
+	h.Emit("p1", ProjectEvent{Type: EventChatUpdated})
+	select {
+	case ev := <-got:
+		t.Fatalf("событие после Unlisten: %+v", ev)
+	default:
+	}
+}
+
+// TestSessionBoardRevAndWakeListener — событийная связь «доска ↔ чат» (Ф-2):
+// emit(board_changed) инкрементит ревизию доски (видна ассистенту в промпте),
+// а во время standby будит runner'а на перепроверку hasWork.
+func TestSessionBoardRevAndWakeListener(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-ev-listen")
+	sess, _, err := srv.getOrCreate("proj-ev-listen")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sess.boardRev.Load(); got != 0 {
+		t.Fatalf("boardRev на старте = %d, want 0", got)
+	}
+
+	// board_changed → ревизия растёт; chat_updated ревизию не трогает.
+	sess.emit(ProjectEvent{Type: EventChatUpdated})
+	sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: "тест"})
+	sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: "тест 2"})
+	if got := sess.boardRev.Load(); got != 2 {
+		t.Fatalf("boardRev = %d, want 2 (только board_changed считается)", got)
+	}
+
+	// Стендбай-затвор: runner подписан через standby-wake, но вне оркестрации
+	// runner == nil — Wake не трогаем, ошибок нет.
+	sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: "idle"})
+	if got := sess.boardRev.Load(); got != 3 {
+		t.Fatalf("boardRev после idle-события = %d, want 3", got)
+	}
+}
+
+// TestSessionStandbyStatusDetail — режим ожидания публикует WS status с единой
+// причиной (Ф-3): setStandby(true) → status=standby + detail=standbyReason.
+// Это то, на что опирается кнопка «Стоп/Продолжить» и список проектов,
+// объясняя пользователю, почему сессия активна, но не исполняет работу.
+func TestSessionStandbyStatusDetail(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-standby-detail")
+	sess, _, err := srv.getOrCreate("proj-standby-detail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.running = true
+	sess.mu.Unlock()
+
+	srvConn, cliConn := net.Pipe()
+	defer cliConn.Close()
+	ws := &WsConn{conn: srvConn, br: bufio.NewReader(srvConn), closed: make(chan struct{})}
+	t.Cleanup(func() { _ = ws.Close() })
+	srv.hub.Subscribe("proj-standby-detail", ws)
+
+	// Вход в standby — публикуется status с деталью причины.
+	sess.setStandby(true)
+
+	st := readWSStatus(t, cliConn)
+	if st == nil || st.Status != "standby" {
+		t.Fatal("status=standby не пришёл по WS")
+	}
+	if st.Detail != standbyReason {
+		t.Fatalf("standby detail = %q, want %q", st.Detail, standbyReason)
+	}
+}
+
+// readWSEvent читает один WS-кадр и возвращает тип события и сырой payload.
+func readWSEvent(t *testing.T, conn net.Conn, timeout time.Duration) (string, json.RawMessage, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		var ev struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		hdr := make([]byte, 2)
+		if _, err := io.ReadFull(conn, hdr); err != nil {
+			continue
+		}
+		length := int64(hdr[1] & 0x7f)
+		switch length {
+		case 126:
+			ext := make([]byte, 2)
+			if _, err := io.ReadFull(conn, ext); err != nil {
+				continue
+			}
+			length = int64(ext[0])<<8 | int64(ext[1])
+		case 127:
+			ext := make([]byte, 8)
+			if _, err := io.ReadFull(conn, ext); err != nil {
+				continue
+			}
+			length = 0
+			for _, b := range ext {
+				length = length<<8 | int64(b)
+			}
+		}
+		body := make([]byte, length)
+		if _, err := io.ReadFull(conn, body); err != nil {
+			continue
+		}
+		if err := json.Unmarshal(body, &ev); err != nil {
+			continue
+		}
+		return ev.Type, ev.Payload, true
+	}
+	return "", nil, false
+}
+
+// readWSStatus ищет в потоке WS первый кадр status и возвращает его payload.
+func readWSStatus(t *testing.T, conn net.Conn) *statusEvent {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		typ, payload, ok := readWSEvent(t, conn, 2*time.Second)
+		if !ok || typ != "status" {
+			continue
+		}
+		var st statusEvent
+		if err := json.Unmarshal(payload, &st); err != nil {
+			continue
+		}
+		return &st
+	}
+	return nil
+}

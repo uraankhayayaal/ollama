@@ -75,7 +75,7 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 		return
 	}
 	logging.For(project).Infof("gitflow: задача %s → worktree %s (%s)", task.TaskID, wtPath, taskRef.Branch)
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: worktree задачи")
 }
 
 // taskOutputDir возвращает каталог работы специалиста по задаче: для
@@ -182,7 +182,7 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 		if worktree != "" {
 			s.removeTaskWorktree(project, task.TaskID, worktree)
 		}
-		s.kickBoard(project)
+		s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи завершён с ошибкой")
 		return
 	}
 	logging.For(project).Infof("gitflow: задача %s → done: авто-мёрдж в релиз эпика %s (already=%v)",
@@ -192,7 +192,7 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 	if worktree != "" {
 		s.removeTaskWorktree(project, task.TaskID, worktree)
 	}
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: готовность задачи завершена (done → релиз)")
 }
 
 // syncEpicWithMain — Ф-4: авто-синхрон релизной ветки эпика с main. Запускается
@@ -243,7 +243,7 @@ func (s *Server) syncEpicMainOnce(ctx context.Context, project string, epic *boa
 	})
 	if err == nil {
 		logging.For(project).Infof("gitflow: эпик %s: авто-синхрон с main (already=%v)", epic.TaskID, res.AlreadyMerged)
-		s.kickBoard(project)
+		s.srvEmitBoard(project, "gitflow: авто-синхрон эпика с main")
 		return
 	}
 	var ce *gitops.MergeConflictError
@@ -297,7 +297,7 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 		removeWT()
 		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: сложные конфликты [%s] — флоу rebase/резолв",
 			epic.TaskID, strings.Join(hard, ", "))
-		s.kickBoard(project)
+		s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: сложные конфликты")
 		return
 	}
 	if err := wt.Stage(ctx, resolved); err != nil {
@@ -321,5 +321,5 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 	removeWT()
 	logging.For(project).Infof("gitflow: эпик %s: авто-синхрон с main: тривиальные конфликты авто-разрешены (%d файлов), ветка продвинута",
 		epic.TaskID, len(resolved))
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: конфликты разрешены")
 }

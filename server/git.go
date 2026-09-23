@@ -401,7 +401,7 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("Ветка %s отклонена, рабочая копия возвращена на %s", repo.Branch, repo.Base),
 			"", "", nil)
 	}
-	s.kickBoard(project)
+	s.srvEmitBoard(project, "git: ветка отклонена")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

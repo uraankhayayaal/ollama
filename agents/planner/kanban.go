@@ -58,6 +58,9 @@ type KanbanRunner struct {
 	// и правки агента падают в ВЕТКУ ЗАДАЧИ — авто-коммит на done соберёт именно
 	// их. nil — общая проектная копия temp/<проект>.
 	outputDir func(project, taskID string) string
+	// wake — канал событийного побуждения из standby (см. Wake): буфер 1
+	// поглощает сигналы, когда runner не ждёт работу.
+	wake chan struct{}
 	// log — лог проекта (logs/<проект>.log). Устанавливается в Run, когда имя
 	// проекта известно; до этого nil, и сообщения идут в файл по умолчанию
 	// (нулевой получатель logging.Logger допустим — проверки не нужны).
@@ -109,9 +112,21 @@ func (k *KanbanRunner) SetStandbyNotifier(fn func(bool)) { k.onStandby = fn }
 // стандартно. nil возвращает поведение по умолчанию.
 func (k *KanbanRunner) SetOutputDir(fn func(project, taskID string) string) { k.outputDir = fn }
 
+// Wake побуждает runner, ожидающий работу на доске (standby), немедленно
+// перепроверить её (Ф-2, PLAN-dashboard-events) — вместо ожидания следующего
+// 5-секундного тика опроса. Сервер зовёт его по событию board_changed из
+// другого процесса-компонента (REST-правка доски, созданный чатом эпик).
+// Безопасен из любых горутин; вне ожидания — no-op (буфер 1 поглощает сигнал).
+func (k *KanbanRunner) Wake() {
+	select {
+	case k.wake <- struct{}{}:
+	default:
+	}
+}
+
 // NewKanbanRunner создаёт Kanban-оркестратор поверх хранилища доски.
 func NewKanbanRunner(provider models.LLMProvider, store *board.Store) *KanbanRunner {
-	return &KanbanRunner{provider: provider, store: store}
+	return &KanbanRunner{provider: provider, store: store, wake: make(chan struct{}, 1)}
 }
 
 // waitEpics — HITL-затвор «утвердить эпики»: блокирует до решения человека.
@@ -383,6 +398,8 @@ func (k *KanbanRunner) finishIfAllDone(ctx context.Context) (bool, error) {
 
 // waitForWork опрашивает доску в режиме ожидания: возврат, как только на ней
 // появляется работа, которую можно взять (или отменён контекст — остановка).
+// Опрос раз в standbyPoll дополнен событийным Wake: сервер будит runner по
+// board_changed, так что новая работа подхватывается сразу, а не с задержкой.
 func (k *KanbanRunner) waitForWork(ctx context.Context) error {
 	ticker := time.NewTicker(standbyPoll)
 	defer ticker.Stop()
@@ -390,6 +407,14 @@ func (k *KanbanRunner) waitForWork(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-k.wake:
+			ok, err := k.hasWork(ctx)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
 		case <-ticker.C:
 			ok, err := k.hasWork(ctx)
 			if err != nil {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ollama/ollama/api"
 )
@@ -159,5 +160,128 @@ func TestChatStreamNoRetryOnNonRetryableError(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&attempts); got != 1 {
 		t.Fatalf("неретраируемая ошибка не должна повторяться, got %d запросов", got)
+	}
+}
+
+func TestStreamIdleIntervalParsing(t *testing.T) {
+	cases := []struct {
+		env  string
+		want time.Duration
+	}{
+		{"0", 0},
+		{"off", 0},
+		{"false", 0},
+		{"90s", 90 * time.Second},
+		{"2m", 2 * time.Minute},
+		{"1", time.Second},
+		{"120", 2 * time.Minute},
+		{"abc", streamIdleDefault},
+	}
+	for _, tc := range cases {
+		t.Setenv("OLLAMA_STREAM_IDLE", tc.env)
+		if got := streamIdleInterval(); got != tc.want {
+			t.Errorf("OLLAMA_STREAM_IDLE=%q: got %v, want %v", tc.env, got, tc.want)
+		}
+	}
+	t.Setenv("OLLAMA_STREAM_IDLE", "")
+	if got := streamIdleInterval(); got != streamIdleDefault {
+		t.Errorf("по умолчанию: got %v, want %v", got, streamIdleDefault)
+	}
+}
+
+// silentChatServer имитирует мёртвый бэкенд: отдаёт один кадр, затем держит
+// соединение открытым без новых фрагментов и без EOF — ровно то состояние,
+// в которое встаёт ollama, когда llama-server умер на середине генерации.
+func silentChatServer(t *testing.T, attempts *int32) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(attempts, 1)
+		fl, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"model":"test","message":{"role":"assistant","content":"частично"}}`)
+		if fl != nil {
+			fl.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Замолчавший стрим (бэкенд умер: клиент Ollama держит соединение без кадров)
+// должен прерываться идл-вотчдогом, а не висеть вечно: без таймаута SDK
+// читает стрим блокирующим Scan() через http.DefaultClient (Timeout=0).
+func TestChatStreamIdleWatchdogAbortsSilentBackend(t *testing.T) {
+	t.Setenv("OLLAMA_STREAM_IDLE", "1")
+	var attempts int32
+	srv := silentChatServer(t, &attempts)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("url: %v", err)
+	}
+	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
+
+	_, err = p.ChatStream(context.Background(), &testAgent{}, []runner.Message{{Role: "user", Content: "привет"}}, nil)
+	if err == nil {
+		t.Fatal("ожидалась ошибка замолчавшего стрима")
+	}
+	if !strings.Contains(err.Error(), "замолчал") {
+		t.Fatalf("ожидали диагноз «замолчал», got: %v", err)
+	}
+	// Замолчавший бэкенд — не остановка пользователем: оркестрация должна
+	// увидеть ошибку, а не context.Canceled.
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("ошибка не должна разворачиваться в context.Canceled: %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("ожидали один запрос, got %d", got)
+	}
+}
+
+// Живой стрим с паузами заметно меньше лимита не должен задевать вотчдог:
+// кадры идут, lastFrame обновляется, генерация завершается штатно.
+func TestChatStreamIdleWatchdogHealthyStream(t *testing.T) {
+	t.Setenv("OLLAMA_STREAM_IDLE", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		fl, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		for _, f := range []string{
+			`{"model":"test","message":{"role":"assistant","content":"при"}}`,
+			`{"model":"test","message":{"role":"assistant","content":"в"}}`,
+			`{"model":"test","message":{"role":"assistant","content":"ет"}}`,
+			`{"model":"test","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","eval_count":3,"prompt_eval_count":10}`,
+		} {
+			fmt.Fprintln(w, f)
+			fl.Flush()
+			time.Sleep(200 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("url: %v", err)
+	}
+	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
+
+	rep, err := p.ChatStream(context.Background(), &testAgent{}, []runner.Message{{Role: "user", Content: "привет"}}, nil)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if rep.Content != "привет" {
+		t.Fatalf("ожидали полный текст «привет», got %q", rep.Content)
+	}
+	if rep.Usage == nil || rep.Usage.OutputTokens != 3 {
+		t.Fatalf("ожидали usage с eval_count=3, got %+v", rep.Usage)
 	}
 }

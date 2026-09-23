@@ -18,7 +18,9 @@ import (
 	"ai/runevents"
 	"ai/runctx"
 	"ai/tokens"
+	"ai/tools"
 	"ai/workspace"
+	"sync/atomic"
 )
 
 // Session — живая оркестрация одного проекта: один KanbanRunner на проект,
@@ -54,9 +56,20 @@ type Session struct {
 	board   *board.Store
 	tok     *tokens.Store
 	ctx     context.Context
-	ticks   chan struct{} // сигнал «доска могла измениться» для флашера
+	events  chan ProjectEvent // внутренняя шина событий проекта (для флашера и слушателей)
 	wg      sync.WaitGroup
 	stopped bool
+
+	// runner — активный KanbanRunner оркестрации (Ф-2). Никогда не зовётся
+	// напрямую из слушателей; только Wake() для выхода из standby по событию
+	// board_changed. nil вне оркестрации.
+	runner *planner.KanbanRunner
+
+	// boardRev — монотонный счётчик изменений доски (инкремент на каждое
+	// событие board_changed). Служит ассистенту «индикатором свежести»: доста-
+	// точно увидеть, что ревизия выросла относительно прошлого ответа, чтобы
+	// понять, что доска менялась. Потокобезопасен (atomic).
+	boardRev atomic.Uint64
 
 	// rate — последняя реальная скорость генерации (вых. ток/с) из usage
 	// провайдера (Ollama eval_count/eval_duration). Не сбрасывается между
@@ -109,21 +122,59 @@ func (s *Server) newSession(project string) (*Session, error) {
 		chat:    chatStore,
 		board:   boardStore,
 		tok:     tokStore,
-		ticks:   make(chan struct{}, 64),
+		events:  make(chan ProjectEvent, 64),
 		log:     logging.For(project),
 	}
 	sess.router = runevents.NewRouter(func(ev runevents.Event) {
 		sess.chatEvent(ev)
 		// Потоковые фрагменты не меняют доску — не дёргаем флашер на каждый токен.
-		if ev.Type != runevents.TypeMessageDelta {
-			// Через Server.kickBoard, а не sess.kickBoard: вне оркестрации
-			// (idle-чат) boardFlusher не крутится, и обычный тик никто бы не
-			// дренул — созданные чатом эпики/задачи/баги не появились бы на
-			// доске до ручного обновления страницы.
-			sess.srv.kickBoard(sess.project)
+		if ev.Type == runevents.TypeMessageDelta {
+			return
+		}
+		// Инструменты доски (Board*: создание/правка эпиков, задач, багов)
+		// меняют доску — бамп снимка. Остальные события цикла (текст модели,
+		// файловые инструменты) доску не меняют — только чат.
+		if (ev.Type == runevents.TypeToolStart || ev.Type == runevents.TypeToolResult) && tools.IsBoardTool(ev.Tool) {
+			// emitBoard, а не голый emit: вне оркестрации (idle-чат) boardFlusher
+			// не крутится, и обычный тик никто бы не дренул — созданные чатом
+			// эпики/задачи/баги не появились бы на доске до ручного обновления
+			// страницы. emitBoard публикует снимок сразу, когда флашера нет.
+			sess.emitBoard("ассистент: инструмент доски")
+			return
+		}
+		sess.emit(ProjectEvent{Type: EventChatUpdated})
+	})
+	// Ф-2: событийная связь «доска ↔ чат» на слушателях шины проекта.
+	// Сессия подписывает своих внутренних потребителей; другие компоненты
+	// (будущие аналитики, эпики/задачи) добавляются как новые Listen-подписки
+	// без правки хендлеров.
+	s.listeners(project, sess)
+	return sess, nil
+}
+
+// listeners регистрирует внутренних слушателей событий проекта на шине (Ф-2).
+// Порядок вызова важен: слушатели зовутся в порядке подписки.
+func (s *Server) listeners(project string, sess *Session) {
+	// Доска изменилась → ревизия растёт: ассистент в следующем ответе видит
+	// свежесть доски (chatAssistantPrompt) и может сообщить, что изменилось.
+	s.hub.Listen(project, "chatassist-board-rev", func(ev ProjectEvent) {
+		if ev.Type == EventBoardChanged {
+			sess.boardRev.Add(1)
 		}
 	})
-	return sess, nil
+	// Доска изменилась во время ожидания работы (standby) → будим runner'а:
+	// он тут же пересчитает hasWork вместо ожидания 5-секундного опроса.
+	s.hub.Listen(project, "standby-wake", func(ev ProjectEvent) {
+		if ev.Type != EventBoardChanged {
+			return
+		}
+		sess.mu.Lock()
+		standby, runner := sess.standby, sess.runner
+		sess.mu.Unlock()
+		if standby && runner != nil {
+			runner.Wake()
+		}
+	})
 }
 
 // continueTaskText формирует текст задачи оркестрации (общая механика
@@ -183,6 +234,9 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// Ф-3: git-проекты — специалист работает в своём worktree ветки задачи
 	// (OutputDir = worktree), поэтому авто-коммит на done соберёт его правки.
 	runner.SetOutputDir(sess.srv.taskOutputDir)
+	sess.mu.Lock()
+	sess.runner = runner
+	sess.mu.Unlock()
 
 	sess.wg.Add(1)
 	go func() {
@@ -193,6 +247,7 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 		sess.gating = false
 		sess.gateTyp = ""
 		sess.standby = false
+		sess.runner = nil
 		sess.mu.Unlock()
 
 		// Завершение: публикуем финальный статус и снимок доски.
@@ -414,18 +469,45 @@ func (sess *Session) appendMsg(m chat.Message) {
 	sess.srv.hub.publish(sess.project, "chat", m)
 }
 
-// kickBoard помечает доску «изменилась» — флашер вскоре опубликует снимок.
-func (sess *Session) kickBoard() {
+// emitBoard помечает доску «изменилась» с причиной (Ф-3): кладёт событие
+// board_changed в шину (слушатели + флашер) и, если оркестрация не идёт
+// (boardFlusher не крутится), публикует снимок сразу — иначе правки REST/чата
+// не увидит Web UI до ручного обновления страницы или старта оркестрации.
+func (sess *Session) emitBoard(detail string) {
+	sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: detail})
+	sess.mu.Lock()
+	running := sess.running
+	sess.mu.Unlock()
+	if !running {
+		sess.publishBoardNow()
+	}
+}
+
+// srvEmitBoard — emitBoard по имени проекта (для REST-хендлеров и git-хуков,
+// у которых нет ссылки на Session, только project).
+func (s *Server) srvEmitBoard(project, detail string) {
+	if sess := s.session(project); sess != nil {
+		sess.emitBoard(detail)
+	}
+}
+
+// emit кладёт событие проекта во внутреннюю шину сессии (Ф-1/Ф-2): доставляет
+// его внутренним слушателям (hub.Emit, например ассистент/standby-wake) и
+// флашеру доски. Колесо неблокирующее: флашер/слушатели сработают по
+// ближайшему циклу, а переполнение при массовой рассылке (например, пачка
+// задач с каскадом статусов) не блокирует хендлер.
+func (sess *Session) emit(ev ProjectEvent) {
+	sess.srv.hub.Emit(sess.project, ev)
 	select {
-	case sess.ticks <- struct{}{}:
+	case sess.events <- ev:
 	default:
 	}
 }
 
-// boardFlusher раз в 500 мс публикует снимок доски, если были изменения.
-// Параллельно, раз в минуту (Ф-5, гибрид), фоном сверяет MR с форджем,
-// чтобы состояние MR-кнопок обновлялось и при активной оркестрации без
-// перезахода на дашборд.
+// boardFlusher раз в 500 мс публикует снимок доски, если был событийный тик
+// (EventBoardChanged). Параллельно, раз в минуту (Ф-5, гибрид), фоном сверяет
+// MR с форджем, чтобы состояние MR-кнопок обновлялось и при активной
+// оркестрации без перезахода на дашборд.
 func (sess *Session) boardFlusher(ctx context.Context) {
 	defer sess.wg.Done()
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -437,20 +519,25 @@ func (sess *Session) boardFlusher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Бэтчинг: пачка бампов доски за 500 мс публикуется одним снимком.
 			select {
-			case <-sess.ticks:
-				sess.publishBoard(ctx)
+			case ev := <-sess.events:
+				if ev.Type == EventBoardChanged {
+					sess.publishBoard(ctx)
+				}
 			default:
 			}
-		case <-sess.ticks:
-			sess.publishBoard(ctx)
+		case ev := <-sess.events:
+			if ev.Type == EventBoardChanged {
+				sess.publishBoard(ctx)
+			}
 		case <-mrTicker.C:
 			changed, err := sess.srv.reconcileMRs(ctx, sess.project)
 			if err != nil {
 				continue
 			}
 			if changed {
-				sess.kickBoard()
+				sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: "MR-сверка нашла изменения"})
 			}
 		}
 	}
@@ -489,6 +576,7 @@ func (sess *Session) broadcastSnapshot() {
 	meta, _ := sess.board.GetMeta(ctx)
 	sess.srv.hub.publish(sess.project, "status", statusEvent{
 		Status: computeStatus(running, gating, standby, meta),
+		Detail: statusDetail(running, gating, standby),
 		Gating: gating,
 		Gate:   gateTyp,
 	})
@@ -517,7 +605,7 @@ func (sess *Session) setStandby(v bool) {
 	}
 	if v {
 		sess.log.Infof("[оркестрация] на доске нет работы — режим ожидания")
-		sess.broadcastStatus("standby", "нет работы на доске — жду эпики и задачи")
+		sess.broadcastStatus("standby", standbyReason)
 	} else {
 		// Выход из ожидания: снова running (если оркестрация ещё идёт и нет
 		// HITL-затвора — его статус приоритетнее и выставит waitGate).
