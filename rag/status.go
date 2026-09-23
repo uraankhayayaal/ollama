@@ -44,7 +44,7 @@ func (c *Client) ProjectInfo(ctx context.Context, projectName string) (ProjectIn
 		return ProjectInfo{Project: projectName}, nil
 	}
 
-	resp, err := c.store.Count(ctx, &qdrant.CountPoints{
+	n, err := c.store.Count(ctx, &qdrant.CountPoints{
 		CollectionName: c.collection,
 		Filter: &qdrant.Filter{Must: []*qdrant.Condition{
 			qdrant.NewMatchKeyword(PayloadProject, projectName),
@@ -56,9 +56,5 @@ func (c *Client) ProjectInfo(ctx context.Context, projectName string) (ProjectIn
 	if err != nil {
 		return ProjectInfo{}, &UnavailableError{Err: err}
 	}
-	n := 0
-	if resp.GetResult() != nil {
-		n = int(resp.GetResult().GetCount())
-	}
-	return ProjectInfo{Project: projectName, Chunks: n}, nil
+	return ProjectInfo{Project: projectName, Chunks: int(n)}, nil
 }

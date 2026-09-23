@@ -16,7 +16,6 @@ import (
 	"ai/rag"
 	"context"
 	"encoding/json"
-	"time"
 )
 
 // RagIndexStatus — имя инструмента в реестре (см. registry.go newTool).

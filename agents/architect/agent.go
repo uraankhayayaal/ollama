@@ -33,13 +33,16 @@ import (
 const SubmitBacklogToolName = "submit_architecture_backlog"
 
 // toolNames — инструменты архитектора: чтение проекта (List, ReadFiles) из
-// общего реестра и работа с общей Kanban-доской (инструменты Board*). Писать
+// общего реестра, семантический поиск (CodeSearch) и статус RAG-индекса
+// (RagIndexStatus), работа с общей Kanban-доской (инструменты Board*). Писать
 // файлы и запускать команды архитектору нельзя: его работа — спроектировать
 // архитектуру, вести эпики и проводить экспертизу багрепортов.
 var toolNames = []string{
 	"List", "ReadFiles",
 	tools.LspDefinition, tools.LspReferences, tools.LspHover,
+	tools.CodeSearch, tools.RagIndexStatus,
 	tools.BoardListEpics, tools.BoardListTasks, tools.BoardListBugs, tools.BoardGetBug,
+	tools.BoardGetEpic, tools.BoardGetTask,
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
 	tools.BoardReviewBug,
 }
@@ -55,6 +58,9 @@ type Architect struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis), куда публикуются эпики.
 	Store *board.Store
+	// RAG — клиент векторной памяти (CodeSearch + блок «релевантный код» в
+	// промпте). Опционален: nil — инструменты деградируют в skipped, блока нет.
+	RAG tools.RAGSearcher
 	// ReviewMode — режим экспертизы багрепортов (фаза phaseBugs оркестратора):
 	// обязательный первый раунд submit_architecture_backlog отключается,
 	// системный промпт меняется на экспертную оценку багов.
@@ -73,7 +79,9 @@ func NewArchitect(projectName, prompt string) (*Architect, error) {
 }
 
 // NewArchitectWithStore создаёт архитектора с уже сконфигурированным
-// хранилищем доски (используется оркестратором Kanban).
+// хранилищем доски (используется оркестратором Kanban). Клиент RAG
+// подключается позже через SetRAG: на этапе создания он ещё может не
+// существовать, а инструменты без него просто деградируют в skipped.
 func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Architect {
 	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
@@ -87,12 +95,35 @@ func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Arch
 	}
 }
 
+// SetRAG подключает клиент векторной памяти и пересобирает набор инструментов
+// с ним (CodeSearch/RagIndexStatus начинают искать по индексу). Повторный вызов
+// безопасен: типизации инструментов восстанавливаются из реестра.
+func (a *Architect) SetRAG(r tools.RAGSearcher) *Architect {
+	a.RAG = r
+	if a.Store != nil {
+		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, Board: a.Store, RAG: r})
+	} else {
+		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, RAG: r})
+	}
+	return a
+}
+
 // AsBugExpert переключает архитектора в режим экспертизы багрепортов:
 // системный промпт меняется, обязательный первый раунд submit_architecture_backlog
 // отключается.
 func (a *Architect) AsBugExpert() *Architect {
 	a.ReviewMode = true
 	return a
+}
+
+// ragContextBlock — «релевантный код по задаче»: семантическая выборка из
+// векторной памяти (RAG) по тексту задачи пользователя, подмешивается в
+// системный промпт, чтобы архитектор «знал» релевантный код не только через
+// CodeSearch, но и из контекста первого ответа (Ф-1). Имя проекта — базовое
+// имя OutputDir (temp/<имя>). Пустой проект/RAG выключен/nil-клиент/неудача
+// поиска — пустая строка (degrade).
+func (a *Architect) ragContextBlock() string {
+	return architectRAGBlock(projectNameFromOutputDir(a.OutputDir), a.Prompt, a.RAG)
 }
 
 func (a *Architect) GetUserMessages() []agents.Message {
@@ -122,6 +153,9 @@ func (a *Architect) GetSystemMessages(_ []agents.Message) []agents.Message {
 	if a.ReviewMode {
 		prompt = bugExpertSystemPrompt
 	}
+	if blk := a.ragContextBlock(); blk != "" {
+		prompt += "\n\n" + blk
+	}
 	return []agents.Message{
 		{
 			Type:    agents.MessageTypeSystem,
@@ -138,6 +172,9 @@ func (a *Architect) GetSystemMessages(_ []agents.Message) []agents.Message {
 const architectureSystemPrompt = `Ты — Системный архитектор (System Architect) автоматической команды разработки. Твоя роль — спроектировать архитектуру решения по задаче пользователя и распределить работу между четырьмя лидами направлений: Backend Lead, Frontend Lead, DevOps Lead, QA Lead.
 
 Ты работаешь только внутри выходной директории проекта (OutputDir) и с общей Kanban-доской проекта (инструменты Board*).
+
+### ИЗУЧЕНИЕ КОДА:
+Изучай проект через CodeSearch/RAG (семантический поиск по кодовой базе — компактнее сплошного чтения) и LSP-навигацию. Если CodeSearch вернул skipped со словом про индекс (или RAG-блока в промпте нет) — проверь статус индекса RagIndexStatus: пока индекс не построен, работай ReadFiles/ReadMap/LSP, к выводу о существующем функционале это не должно приводить к догадкам.
 
 ### ТЕХНОЛОГИЧЕСКИЙ СТЕК И ПРАВИЛА:
 1. Backend: Golang. Frontend: React.
@@ -189,7 +226,7 @@ const architectureSystemPrompt = `Ты — Системный архитекто
 }
 
 Твой план работы:
-1. Изучи текущее состояние проекта (если проект существует): List → ReadMap/ReadFiles, а для точечной навигации по символам (определение, места использования, сигнатуры) — LspDefinition/LspReferences/LspHover по file:line:col (компактнее чтения файлов целиком).
+1. Изучи текущее состояние проекта (если проект существует): сначала CodeSearch/RAG — семантический поиск релевантного кода по задаче (плюс блок «релевантный код» ниже, если есть), затем List → ReadFiles для точного чтения, а для навигации по символам (определение, места использования, сигнатуры) — LspDefinition/LspReferences/LspHover по file:line:col (компактнее чтения файлов целиком). Если CodeSearch вернул skipped со словом про индекс — проверь RagIndexStatus.
 2. Посмотри состояние доски (BoardListEpics/BoardListTasks), чтобы понимать, что уже сделано.
 3. Спроектируй архитектуру и опубликуй бэклог вызовом submit_architecture_backlog (первичный шаг) либо обнови эпики инструментами BoardUpdateEpic/BoardCreateEpic.
 4. Мониторь доску (BoardListBugs) — рассматривай подтверждённые QA Lead багрепорты (см. правила экспертизы).`
@@ -199,7 +236,7 @@ const architectureSystemPrompt = `Ты — Системный архитекто
 // исправления (или отклоняет как фичу).
 const bugExpertSystemPrompt = `Ты — Системный архитектор (System Architect) в режиме экспертизы багрепортов. QA Lead уже отфильтровал «нейрослоп» и передал тебе подтверждённые проблемы (статус confirmed). Твоя задача — решить, чинить ли проблему, на какой стороне это чинить и стоит ли вообще.
 
-Ты работаешь с общей Kanban-доской проекта (инструменты Board*).
+Ты работаешь с общей Kanban-доской проекта (инструменты Board*). Перед вердиктом при необходимости изучай код через CodeSearch/RAG; если поиск вернул skipped со словом про индекс — проверь RagIndexStatus и работай ReadFiles/ReadMap/LSP.
 
 ### ПРАВИЛА ЭКСПЕРТИЗЫ:
 1. Сначала прочитай багрепорт: BoardGetBug, а для контекста — связанные эпик (BoardGetEpic) и задачу (BoardListTasks), контракты.

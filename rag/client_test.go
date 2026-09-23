@@ -63,12 +63,12 @@ func (f *fakeStore) Query(ctx context.Context, request *qdrant.QueryPoints) ([]*
 	return nil, nil
 }
 
-func (f *fakeStore) Count(ctx context.Context, request *qdrant.CountPoints) (*qdrant.CountResponse, error) {
+func (f *fakeStore) Count(ctx context.Context, request *qdrant.CountPoints) (uint64, error) {
 	f.countCalls++
 	if f.countErr != nil {
-		return nil, f.countErr
+		return 0, f.countErr
 	}
-	return &qdrant.CountResponse{Result: &qdrant.CountResult{Count: f.countResult}}, nil
+	return f.countResult, nil
 }
 
 func (f *fakeStore) Close() error { f.closed = true; return nil }
