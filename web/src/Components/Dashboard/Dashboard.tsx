@@ -4,15 +4,16 @@
 // между соседними статусами внутри своего эпика.
 
 import { useState } from "react";
-import type { BoardView, EpicRow, TaskRow } from "@/Types";
+import type { BoardView, BugRow, EpicRow, TaskRow } from "@/Types";
 import { STATUS_LABEL, STATUS_ORDER } from "./board";
 import { EpicRow as EpicRowView } from "./EpicRow";
 import { EpicModal } from "./EpicModal";
 import { TaskModal } from "./TaskModal";
+import { BugModal } from "./BugModal";
 import "./styles.scss";
 
 // Строка матрицы: эпик (или null для задач без эпика) + его задачи.
-type Row = { epic: EpicRow | null; epicId: string; tasks: TaskRow[] };
+type Row = { epic: EpicRow | null; epicId: string; tasks: TaskRow[]; bugs: BugRow[] };
 
 export function Dashboard({
   board,
@@ -52,6 +53,7 @@ export function Dashboard({
   // board: WS-событие (git/MR обновились) перерисует модалку без переоткрытия.
   const [epicId, setEpicId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [bugId, setBugId] = useState<string | null>(null);
   // Свёрнутость эпиков: явный выбор пользователя (toggle[epicId]) перекрывает
   // значение по умолчанию (неактивные свёрнуты, активные развёрнуты).
   const [collapseToggle, setCollapseToggle] = useState<Record<string, boolean>>({});
@@ -116,16 +118,27 @@ export function Dashboard({
     list.push(t);
     byEpic.set(t.epic_id, list);
   }
+  // Группируем баги по эпику, сохраняя строки багов без известного эпика.
+  const byEpicBug = new Map<string, BugRow[]>();
+  for (const b of board.bugs) {
+    const bugList = byEpicBug.get(b.epic_id) ?? [];
+    bugList.push(b);
+    byEpicBug.set(b.epic_id, bugList);
+  }
+
   const rows: Row[] = board.epics.map((e) => ({
     epic: e,
     epicId: e.task_id,
     tasks: byEpic.get(e.task_id) ?? [],
+    bugs: byEpicBug.get(e.task_id) ?? [],
   }));
   for (const [epicId, tasks] of byEpic) {
     if (!board.epics.some((e) => e.task_id === epicId)) {
-      rows.push({ epic: null, epicId, tasks });
+      rows.push({ epic: null, epicId, tasks, bugs: byEpicBug.get(epicId) ?? [] });
     }
   }
+  // Баги принадлежат только существующему эпику. Не создаём для них
+  // синтетические строки «без эпика».
 
   const statusCounts = STATUS_ORDER.map((s) => ({
     status: s,
@@ -155,6 +168,7 @@ export function Dashboard({
   // строка исчезла (удалили), модалка просто не рендерится.
   const epic = epicId ? board.epics.find((e) => e.task_id === epicId) ?? null : null;
   const task = taskId ? board.tasks.find((t) => t.task_id === taskId) ?? null : null;
+  const bug = bugId ? board.bugs.find((b) => b.bug_id === bugId) ?? null : null;
 
   return (
     <div className="dashboard" onDragOver={(e) => e.preventDefault()}>
@@ -181,10 +195,12 @@ export function Dashboard({
             epic={r.epic}
             epicId={r.epicId}
             tasks={r.tasks}
+            bugs={r.bugs}
             collapsed={isCollapsed(r.epicId, r.tasks)}
             hasBranch={board.git ? !!board.git.epics?.[r.epicId]?.branch : undefined}
             onTaskUpdate={onTaskUpdate}
             onTaskOpen={(t) => setTaskId(t.task_id)}
+            onBugOpen={(b) => setBugId(b.bug_id)}
             onEpicOpen={(e) => setEpicId(e.task_id)}
             onEpicDelete={onEpicDelete}
             onEpicRelease={onEpicRelease}
@@ -218,6 +234,7 @@ export function Dashboard({
           onClose={() => setTaskId(null)}
         />
       )}
+      {bug && <BugModal bug={bug} onClose={() => setBugId(null)} />}
     </div>
   );
 }

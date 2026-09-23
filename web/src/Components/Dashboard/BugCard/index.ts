@@ -1,0 +1,1 @@
+export { BugCard } from "./BugCard";

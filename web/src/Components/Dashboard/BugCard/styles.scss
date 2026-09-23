@@ -1,0 +1,149 @@
+// Заголовочная ячейка строки (первый столбец): тумблер свёртывания, иконка
+// статуса, название эпика. Липкая по горизонтали. В развёрнутом виде —
+// колонка (название/id/статус), в свёрнутом — строка «иконка + название»,
+// не влезающее название обрезается многоточием.
+
+.epic-head {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  background: var(--col, #f4f6f9);
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover:not(.plain) {
+    background: var(--btn-hover, #e2e8f0);
+  }
+
+  &.plain {
+    cursor: default;
+    opacity: 0.75;
+  }
+
+  .toggle {
+    align-self: flex-start;
+    padding: 0 2px;
+    border: none;
+    background: transparent;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--muted, #8a94a6);
+    cursor: pointer;
+
+    &:hover {
+      color: var(--ink, #1b2330);
+    }
+  }
+
+  .dot {
+    display: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: none;
+
+    &.new { background: var(--st-todo, #64748b); }
+    &.analysis { background: var(--st-analysis, #7c3aed); }
+    &.ready { background: var(--st-ready, #0891b2); }
+    &.in_progress { background: var(--st-in-progress, #2563eb); }
+    &.done { background: var(--st-done, #15803d); }
+    &.cancelled { background: var(--muted, #8a94a6); }
+    &.paused { background: var(--st-paused, #b45309); }
+  }
+
+  .title {
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  .id {
+    font-size: 11px;
+    font-family: var(--mono, monospace);
+    color: var(--muted, #8a94a6);
+    overflow-wrap: anywhere;
+  }
+
+  .status {
+    width: fit-content;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+
+    &.new { color: var(--st-todo, #64748b); }
+    &.analysis { color: var(--st-analysis, #7c3aed); }
+    &.ready { color: var(--st-ready, #0891b2); }
+    &.in_progress { color: var(--st-in-progress, #2563eb); }
+    &.done { color: var(--st-done, #15803d); }
+    &.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
+    &.paused { color: var(--st-paused, #b45309); }
+  }
+
+  &.collapsed {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 8px;
+
+    .toggle {
+      align-self: center;
+    }
+
+    .dot {
+      display: block;
+    }
+
+    .title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow-wrap: normal;
+    }
+  }
+}
+.bug {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 6px;
+  background: var(--bg, #f6f8fb);
+  cursor: pointer;
+
+  .title {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin-top: 3px;
+    border-radius: 50%;
+
+    &.--st-todo { background: var(--st-todo, #64748b); }
+    &.--st-analysis { background: var(--st-analysis, #7c3aed); }
+    &.--st-ready { background: var(--st-ready, #0891b2); }
+    &.--st-done { background: var(--st-done, #15803d); }
+    &.--muted { background: var(--muted, #8a94a6); }
+  }
+
+  .tag {
+    flex: none;
+    font-size: 9px;
+    color: var(--muted, #8a94a6);
+  }
+}

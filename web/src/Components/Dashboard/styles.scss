@@ -35,6 +35,17 @@
     gap: 6px;
     align-items: start;
 
+    // Каждая группа эпика (заголовок, задачи и его баги) — единый элемент
+    // сетки, чьи внутренние ячейки выравниваются по колонкам доски.
+    .epic-row-grid {
+      display: grid;
+      grid-column: 1 / -1;
+      grid-template-columns: subgrid;
+      gap: 6px;
+      min-width: 0;
+      align-items: start;
+    }
+
     .corner,
     .grid-head {
       font-size: 11px;
@@ -74,6 +85,51 @@
     .grid-head.in_progress { color: var(--st-in-progress, #2563eb); }
     .grid-head.done { color: var(--st-done, #15803d); }
     .grid-head.paused { color: var(--st-paused, #b45309); }
+
+    .bug-row-label,
+    .bug-cell {
+      min-width: 0;
+      padding: 6px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 8px;
+      background: var(--card, #fff);
+    }
+
+    .bug-row-label {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--err, #dc2626);
+    }
+
+    .bug-cell {
+      min-height: 42px;
+      border-top-width: 3px;
+      overflow: hidden;
+
+      .bug-count {
+        margin-bottom: 5px;
+        color: var(--muted, #8a94a6);
+        font-size: 10px;
+      }
+
+      ul {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      &.new { border-top-color: var(--st-todo, #64748b); }
+      &.confirmed { border-top-color: var(--st-analysis, #7c3aed); }
+      &.fix { border-top-color: var(--st-ready, #0891b2); }
+      &.fixed { border-top-color: var(--st-done, #15803d); }
+      &.slop, &.feature, &.wont_fix { border-top-color: var(--muted, #8a94a6); }
+    }
   }
 
   &.empty {

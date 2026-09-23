@@ -188,10 +188,9 @@ export function Chatboard({
         )}
         {thinking && !live && (
           <li className="msg assistant thinking" aria-label="Модель думает">
-            <span className="who">assistant</span>
             <p className="content typing">
-              <IconLive />
-              <span className="hint">думаю…</span>
+              <span className="activity-mark" aria-hidden="true"><i /><i /><i /></span>
+              <span className="hint">Думаю</span>
             </p>
           </li>
         )}

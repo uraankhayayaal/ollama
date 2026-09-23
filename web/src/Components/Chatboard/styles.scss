@@ -7,6 +7,25 @@
   gap: 10px;
   height: 100%;
   min-height: 0;
+  gap: 12px;
+
+  button {
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease,
+      box-shadow 150ms ease, transform 150ms ease;
+
+    &:active:not(:disabled) { transform: scale(0.97); }
+  }
+
+  .headbar .abar .ab:hover:not(:disabled) {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+    color: var(--ink, #1b2330);
+  }
+
+  .ask .opt:hover:not(:disabled) {
+    box-shadow: 0 2px 8px rgb(15 23 42 / 0.07);
+    transform: translateY(-1px);
+  }
 
   // Шапка: заголовок + кнопка сворачивания чата влево (справа сверху).
   .headbar {
@@ -14,13 +33,15 @@
     align-items: center;
     justify-content: space-between;
     flex: 0 0 auto;
+    min-height: 36px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line, #e2e8f0);
 
     .head-title {
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--muted, #8a94a6);
+      font-size: 14px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      color: var(--ink, #1b2330);
     }
 
     .collapse-btn {
@@ -28,17 +49,20 @@
       height: 26px;
       padding: 0;
       border: 1px solid var(--line, #e2e8f0);
-      border-radius: 6px;
+      border-radius: 8px;
       background: var(--btn, #f1f5f9);
       color: var(--muted, #8a94a6);
       font-size: 14px;
       line-height: 1;
       cursor: pointer;
+      transition: color 160ms ease, background 160ms ease, border-color 160ms ease, transform 160ms ease;
 
       &:hover {
         background: var(--btn-hover, #e2e8f0);
         color: var(--ink, #1b2330);
       }
+
+      &:active { transform: scale(0.94); }
     }
   }
 
@@ -110,9 +134,10 @@
 
         // Индикатор «модель печатает/думает»: три точки с пульсацией.
         &.live {
-          border-style: dashed;
           color: var(--primary, #2563eb);
-          background: #eef2ff;
+          background: #f1f3f6;
+          border-color: transparent;
+          animation: live-breathe 1.8s ease-in-out infinite;
 
           .dots circle {
             animation: dotpulse 1.2s ease-in-out infinite;
@@ -132,30 +157,39 @@
   .history {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 16px;
     overflow-y: auto;
     flex: 1;
-    padding: 4px 2px;
+    padding: 8px 4px 12px;
+    margin: 0;
+    list-style: none;
+    scrollbar-gutter: stable;
 
     .msg {
       display: flex;
       flex-direction: column;
       gap: 2px;
-      max-width: 82%;
-      padding: 8px 10px;
-      border-radius: 10px;
-      background: var(--chat-bg, #f1f5f9);
-      border: 1px solid var(--line, #e2e8f0);
+      width: 100%;
+      max-width: 100%;
+      padding: 2px 2px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      animation: message-in 220ms cubic-bezier(.2,.75,.3,1) both;
+      transform-origin: bottom left;
 
       &.user {
         align-self: flex-end;
-        background: var(--chat-user, #dbeafe);
+        width: fit-content;
+        max-width: 86%;
+        padding: 9px 13px;
+        border-radius: 16px 16px 4px 16px;
+        background: #f1f2f4;
+        transform-origin: bottom right;
       }
-      &.tool,
-      &.agent {
-        align-self: flex-start;
-        background: var(--chat-agent, #f8fafc);
-      }
+      &.assistant, &.agent, &.ask { align-self: flex-start; }
+      &.tool { align-self: flex-start; background: #f8fafc; }
 
       // Шапка строки сообщения: кто/инструмент/время в одну линию.
       .head {
@@ -174,10 +208,10 @@
       }
 
       .who {
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+        text-transform: none;
+        letter-spacing: 0;
         color: var(--muted, #94a3b8);
         white-space: nowrap;
         overflow: hidden;
@@ -186,7 +220,7 @@
 
       .content {
         font-size: 14px;
-        line-height: 1.45;
+        line-height: 1.55;
         white-space: pre-wrap;
         word-break: break-word;
       }
@@ -201,17 +235,18 @@
       // --- сворачиваемые сообщения (tool-результаты / длинные тексты) ---
 
       &.foldable {
-        padding: 0;
+        padding: 2px 0;
         // overflow: hidden;
         cursor: pointer;
+        transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
         -webkit-tap-highlight-color: transparent;
 
         .head {
-          padding: 7px 10px;
+          padding: 6px 0;
         }
 
         &:hover {
-          border-color: var(--primary, #2563eb);
+          background: #f8f9fb;
         }
 
         &:focus-visible {
@@ -228,14 +263,14 @@
           }
 
           .content {
-            border-top: 1px solid var(--line, #e2e8f0);
-            padding: 6px 10px 2px;
+            padding: 5px 0 2px 16px;
+            border-left: 1px solid #d9dee7;
           }
         }
 
         // Свёрнутое: шапка + однострочная выжимка первого значимого фрагмента.
         &.closed .preview {
-          padding: 0 10px 7px;
+          padding: 0 0 7px 16px;
           margin: 0;
           font-size: 12px;
           line-height: 1.5;
@@ -307,11 +342,19 @@
       // «Плавающее» потоковое сообщение (стриминг, Ф-3): неполный текст,
       // после курсоравных символов добиваем анимацией печати.
       &.streaming {
-        border-style: dashed;
+        padding-top: 4px;
+        animation: none;
 
         .cursor {
-          animation: blink 1s steps(2, start) infinite;
-          color: var(--muted, #94a3b8);
+          display: inline-block;
+          width: 6px;
+          height: 1.05em;
+          margin-left: 3px;
+          vertical-align: -0.12em;
+          border-radius: 2px;
+          background: #5b6472;
+          font-size: 0;
+          animation: cursor-pulse 900ms ease-in-out infinite;
         }
       }
 
@@ -319,35 +362,37 @@
       // не пришёл. Три пульсирующие точки + подпись; после chat_delta её
       // сменяет живой пузырь .streaming.
       &.thinking {
-        border-style: dashed;
-        background: #eef2ff;
-        border-color: #c7d2fe;
-
-        .who {
-          color: var(--primary, #2563eb);
-        }
+        padding: 5px 2px;
+        animation: none;
 
         .content.typing {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 9px;
           margin: 0;
+          min-height: 28px;
 
           .hint {
-            font-size: 12px;
-            font-style: italic;
-            color: var(--muted, #8a94a6);
+            font-size: 13px;
+            color: #737b87;
           }
         }
 
-        .dots circle {
-          animation: dotpulse 1.2s ease-in-out infinite;
+        .activity-mark {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          height: 16px;
 
-          &:nth-child(2) {
-            animation-delay: 0.2s;
-          }
-          &:nth-child(3) {
-            animation-delay: 0.4s;
+          i {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: #727b88;
+            animation: thought-wave 1.15s ease-in-out infinite;
+
+            &:nth-child(2) { animation-delay: 140ms; }
+            &:nth-child(3) { animation-delay: 280ms; }
           }
         }
       }
@@ -373,13 +418,75 @@
   .send {
     display: flex;
     gap: 8px;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 16px;
+    background: var(--card, #fff);
+    box-shadow: 0 3px 14px rgb(15 23 42 / 0.06);
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+
+    &:focus-within {
+      border-color: #aebbd0;
+      box-shadow: 0 0 0 3px rgb(100 116 139 / 0.12), 0 4px 16px rgb(15 23 42 / 0.07);
+    }
 
     input {
       flex: 1;
-      padding: 8px 12px;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 8px;
+      min-width: 0;
+      padding: 7px 9px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink, #1b2330);
       font-size: 14px;
+
+      &::placeholder { color: #98a2b3; }
     }
+
+    .btn.primary {
+      padding: 8px 13px;
+      border: 0;
+      border-radius: 10px;
+      background: #252a32;
+      color: white;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+
+      &:hover:not(:disabled) { background: #3b424d; box-shadow: 0 3px 9px rgb(15 23 42 / 0.16); }
+      &:active:not(:disabled) { transform: scale(0.96); }
+      &:disabled { opacity: 0.55; cursor: default; }
+    }
+  }
+}
+
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes thought-wave {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0) scale(0.85); }
+  30% { opacity: 1; transform: translateY(-3px) scale(1); }
+}
+
+@keyframes cursor-pulse {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0.25; }
+}
+
+@keyframes live-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(100 116 139 / 0); }
+  50% { box-shadow: 0 0 0 4px rgb(100 116 139 / 0.12); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chatboard *, .chatboard *::before, .chatboard *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

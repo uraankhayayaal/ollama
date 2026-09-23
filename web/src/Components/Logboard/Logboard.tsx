@@ -35,8 +35,12 @@ export function Logboard(props: LogboardProps) {
   const [error, setError] = useState("");
   // Признак «только что скопировали логи» — для краткой фидбеков надписи.
   const [copied, setCopied] = useState(false);
+  const [query, setQuery] = useState("");
+  const [level, setLevel] = useState<"all" | "warn" | "err">("all");
+  const [following, setFollowing] = useState(true);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const followingRef = useRef(true);
 
   // props.logLines — НАКОПИТЕЛЬНЫЙ массив всех строк, присланных по WS с
   // момента открытия проекта (App.tsx только добавляет). consumed[file] —
@@ -53,10 +57,25 @@ export function Logboard(props: LogboardProps) {
 
   const scrollToBottom = useCallback(() => {
     const el = bodyRef.current;
-    if (el) {
+    if (el && followingRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
     }
   }, []);
+
+  const jumpToBottom = () => {
+    followingRef.current = true;
+    setFollowing(true);
+    const el = bodyRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+
+  const handleLogScroll = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    followingRef.current = nearBottom;
+    setFollowing(nearBottom);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,6 +125,8 @@ export function Logboard(props: LogboardProps) {
     // Снапшот уже содержит строки, пришедшие по WS до него, — помечаем их
     // потреблёнными, иначе стрим-эффект ниже продублирует их в хвост.
     consumed.current.set(selected, logLinesRef.current.get(selected)?.length ?? 0);
+    followingRef.current = true;
+    setFollowing(true);
     setLines(entry.content.split("\n"));
   }, [logs, selected]);
 
@@ -140,6 +161,13 @@ export function Logboard(props: LogboardProps) {
   }, [lines, scrollToBottom]);
 
   const hasLogs = !!logs && logs.files.length > 0;
+  const visibleLines = lines
+    .map((text, index) => ({ text, index }))
+    .filter(({ text }) => {
+      const cls = lineCls(text);
+      return (level === "all" || cls.includes(level)) &&
+        (!query.trim() || text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+    });
 
   // Текущее содержимое файла лога: для выбранного — уже слитый живой буфер
   // (`lines`), для остальных — REST-снапшот + хвост, не вошедший в снапшот.
@@ -249,13 +277,37 @@ export function Logboard(props: LogboardProps) {
             );
           })()}
 
-          <div className="logbody" ref={bodyRef}>
-            {lines.map((ln, i) => (
-              <div key={i} className={lineCls(ln)}>
-                {ln || "\u00a0"}
+          <div className="log-tools">
+            <label className="log-search">
+              <IconSearch />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Найти в логах"
+                aria-label="Найти в логах"
+              />
+              {!!query && <button type="button" onClick={() => setQuery("")} title="Очистить поиск">×</button>}
+            </label>
+            <div className="level-filters" aria-label="Фильтр уровня логов">
+              {([ ["all", "Все"], ["warn", "Warn"], ["err", "Error"] ] as const).map(([value, label]) => (
+                <button key={value} className={level === value ? "active" : ""} onClick={() => setLevel(value)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="line-count">{visibleLines.length}{visibleLines.length !== lines.length ? ` / ${lines.length}` : " строк"}</span>
+          </div>
+
+          <div className="logbody" ref={bodyRef} onScroll={handleLogScroll}>
+            {visibleLines.map(({ text, index }) => (
+              <div key={index} className={lineCls(text)}>
+                {text || "\u00a0"}
               </div>
             ))}
+            {visibleLines.length === 0 && <div className="log-empty">{query || level !== "all" ? "Совпадений нет" : "Лог пуст"}</div>}
           </div>
+          {!following && <button className="log-follow" onClick={jumpToBottom}><IconDown /> К новым строкам</button>}
         </>
       )}
     </div>
@@ -316,4 +368,12 @@ function IconCopy() {
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   );
+}
+
+function IconSearch() {
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>;
+}
+
+function IconDown() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v15M6 13l6 6 6-6" /></svg>;
 }

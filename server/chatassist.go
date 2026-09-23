@@ -116,6 +116,14 @@ func (sess *Session) chatDialogueHistory(ctx context.Context) string {
 			if txt := askSummary(m.Ask); txt != "" {
 				lines = append(lines, "[ассистент] "+oneLine(txt, chatDialogueMsgLen))
 			}
+		case chat.RoleTool:
+			if txt := strings.TrimSpace(m.Content); txt != "" {
+				spyateli := "инструмент"
+				if m.Tool != "" {
+					spyateli = m.Tool + " →"
+				}
+				lines = append(lines, "["+spyateli+"] "+oneLine(txt, chatDialogueMsgLen))
+			}
 		}
 	}
 
