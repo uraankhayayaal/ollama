@@ -129,6 +129,8 @@ func newTool(name string, deps Deps) Tool {
 		return &codeSearchTool{ops: deps.FileOps, searcher: deps.RAG}
 	case RagIndexStatus:
 		return &ragIndexStatusTool{ops: deps.FileOps, searcher: deps.RAG}
+	case DetectStack:
+		return &stackTool{ops: deps.FileOps}
 	case WebSearch:
 		return &webSearchTool{client: nil, endpoint: ""}
 	case "ReviewMr":

@@ -381,15 +381,15 @@ func (t *boardCreateEpicTool) Name() string { return BoardCreateEpic }
 func (t *boardCreateEpicTool) Definition() ToolDefinition {
 	props := taskSpecProps()
 	props["architecture_summary"] = map[string]any{"type": "string", "description": "Сводка архитектурного решения, передаваемая лиду для декомпозиции"}
-	props["architect_review"] = map[string]any{"type": "boolean", "description": "Требуется ли ревью архитектора для эпика (true — нужна ревизия решения архитектором, false — не требуется). Если false — в assigned_role обязательно указывается лид направления (инфраструктура/бэкенд/фронтенд/QA)."}
-	props["assigned_role"] = map[string]any{"type": "string", "description": "Лид направления эпика (инфраструктура/бэкенд/фронтенд/QA). Если ревью архитектора не требуется — поле обязательно: лид не ясен из контекста — спроси у пользователя, не угадывай."}
+	props["architect_review"] = map[string]any{"type": "boolean", "description": "Исторический параметр — не влияет: каждый созданный этим инструментом эпик проходит ОБЯЗАТЕЛЬНУЮ ревизию архитектора (Ф-8) перед декомпозицией на задачи. assigned_role оставь пустым, если лид направления назначит архитектор при ревизии."}
+	props["assigned_role"] = map[string]any{"type": "string", "description": "Лид направления эпика (инфраструктура/бэкенд/фронтенд/QA). Можно указать сразу, но финально лида назначит архитектор при ревизии."}
 	return ToolDefinition{
 		Name:        BoardCreateEpic,
 		Description: "Создать новый эпик (крупную задачу верхнего уровня) на Kanban-доске. Эпик будет распределён между лидами направлений. Используется Системным архитектором.",
 		Parameters: map[string]any{
 			"type":                 "object",
 			"properties":           props,
-			"required":             []string{"task_id", "title", "description", "assigned_role"},
+			"required":             []string{"task_id", "title", "description"},
 			"additionalProperties": false,
 		},
 	}
@@ -405,7 +405,11 @@ func (t *boardCreateEpicTool) Execute(args map[string]any) ([]byte, error) {
 			return boardErr(BoardCreateEpic, fmt.Errorf("зависимость %q: %w", dep, err))
 		}
 	}
-	epic := &board.Epic{TaskSpec: ts, Summary: strArg(args, "architecture_summary")}
+	epic := &board.Epic{
+		TaskSpec:       ts,
+		Summary:        strArg(args, "architecture_summary"),
+		RequiresReview: true, // Ф-8: каждый созданный эпик проходит обязательную ревизию архитектора.
+	}
 	if err := t.b.CreateEpic(ctx, epic); err != nil {
 		if errors.Is(err, board.ErrExists) {
 			// Подсказываем модели выход из тупика «ID уже занят»: проверить
@@ -434,6 +438,7 @@ func (t *boardUpdateEpicTool) Definition() ToolDefinition {
 	}
 	props["epic_id"] = map[string]any{"type": "string", "description": "ID эпика для обновления"}
 	props["architecture_summary"] = map[string]any{"type": "string", "description": "Сводка архитектурного решения"}
+	props["requires_review"] = map[string]any{"type": "boolean", "description": "Флаг обязательной ревизии архитектора (Ф-8): true — эпик-черновик ждёт ревизии; false — ревизия пройдена, декомпозиция разрешена. Снимается архитектором в режиме ревизии."}
 	return ToolDefinition{
 		Name:        BoardUpdateEpic,
 		Description: "Обновить эпик доски: изменить описание/контракты, переприоритетизировать (sequence_order), изменить зависимости или роль лида. Уведомляет лида направления о необходимости ревизии задач (используется при мониторинге изменений).",
@@ -492,6 +497,11 @@ func (t *boardUpdateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	if v, ok := args["task_id"].(string); ok && v != "" {
 		e.TaskID = v
+	}
+	if v, ok := args["requires_review"]; ok {
+		if b, err := flexBoolVal(v); err == nil {
+			e.RequiresReview = b
+		}
 	}
 	e.Revision++
 	if err := t.b.SaveEpic(ctx, e); err != nil {

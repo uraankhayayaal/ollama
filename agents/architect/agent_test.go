@@ -222,6 +222,44 @@ func TestArchitectPromptMentionsRAGWorkflow(t *testing.T) {
 	}
 }
 
+// TestArchitectPromptMentionsStackAndDepth — Ф-2/Ф-3: промпт архитектора велит
+// определять стек/роли через DetectStack, назначать эпики только нужным
+// лидам, учитывать глубину декомпозиции (слои) и исследовать смежный
+// функционал (затрагиваемых модулей), а не штамповать «всегда Go+React+4
+// лида».
+func TestArchitectPromptMentionsStackAndDepth(t *testing.T) {
+	a := newTestArchitect(t)
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"DetectStack", "слои", "затрагиваемых", "KISS"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+	// Ф-3: фразы глубины/смежного/уточнения стека на месте.
+	for _, want := range []string{"AskUser", "CodeSearch", "BoardGetEpic"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+	// Жёсткий штамп убран: стек берётся из кода проекта.
+	for _, disallowed := range []string{
+		"Backend: Golang. Frontend: React.",
+		"всегда Go + React",
+	} {
+		if strings.Contains(p, disallowed) {
+			t.Errorf("промпт не должен содержать жёсткий штамп %q:\n%s", disallowed, p)
+		}
+	}
+	// Инструмент обнаруживается в наборе.
+	names := map[string]bool{}
+	for _, td := range a.GetTools() {
+		names[td.Name] = true
+	}
+	if !names[tools.DetectStack] {
+		t.Error("архитектор не включает инструмент DetectStack")
+	}
+}
+
 // TestArchitectSystemMessagesIncludeRAGBlock — Ф-1: при подключённом RAG
 // (SetRAG) в системный промпт попадает блок «Релевантный код по задаче»
 // (поиск — по проекту из OutputDir, scope пуст).

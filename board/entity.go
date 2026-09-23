@@ -175,6 +175,15 @@ type Epic struct {
 	// декомпозировал/реконсилил этот эпик. Если Revision > LeadSyncedRev —
 	// содержание эпика изменилось, лиду нужна повторная ревизия задач.
 	LeadSyncedRev int `json:"lead_synced_rev"`
+	// RequiresReview — требуется ли ревизия Системного архитектора перед
+	// декомпозицией лидом (Ф-8 PLAN-architect-intelligence.md). Эпики,
+	// созданные в чате ассистентом, — черновики: им обязательна ревизия
+	// (безопасный дефолт true для новых записей). Эпики бэклога самого
+	// архитектора (submit_architecture_backlog) — явный false: свой план
+	// архитектор не ревьюит собой. Пока флаг true, nextLeadEpic не выдаёт
+	// эпик лиду, а фаза phaseArchitectReview прогоняет его через архитектора,
+	// который по итогам ревизии снимает флаг (BoardUpdateEpic/ить).
+	RequiresReview bool `json:"requires_review"`
 }
 
 // Task — задача на общей доске. Создаётся лидом при декомпозиции эпика и
@@ -196,6 +205,28 @@ type Task struct {
 	// заново проверит зависимости и фазовые гейты на прежнем месте цепочки.
 	// Пусто, если задача не на паузе.
 	ResumeStatus Status `json:"resume_status,omitempty"`
+}
+
+// UnmarshalJSON для Epic с безопасным дефолтом Ф-8: записи, где поле
+// requires_review отсутствует (старая схема, черновики), интерпретируются как
+// требующие ревизии архитектора. Явные false (бэклог submit_architecture_backlog)
+// и true (чат-эпики) сохраняются как есть.
+func (e *Epic) UnmarshalJSON(data []byte) error {
+	type epicAlias Epic
+	var a epicAlias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*e = Epic(a)
+	// Отсутствие ключа в сохранённой записи = требуется ревизия (безопасный
+	// дефолт Ф-8). Проверяем по сырым полям объекта.
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err == nil {
+		if _, present := fields["requires_review"]; !present {
+			e.RequiresReview = true
+		}
+	}
+	return nil
 }
 
 // BugStatus — статус багрепорта на общей доске.

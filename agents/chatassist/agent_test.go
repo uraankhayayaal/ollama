@@ -66,8 +66,8 @@ func TestAssistantInterface(t *testing.T) {
 
 // TestAssistantToolsIncludeBoardWritesAndCodeSearch — набор ассистента содержит
 // чтение файлов, семантический поиск по коду (CodeSearch) и write-инструменты
-// доски (создание эпиков/задач/багов), чтобы ассистент мог действовать по
-// смыслу сообщения. Пишущих файловых инструментов быть не должно (Ф-1).
+// доски (создание эпиков/багов), чтобы ассистент мог действовать по смыслу
+// сообщения. Пишущих файловых инструментов быть не должно (Ф-1).
 func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
 	a, _ := newTestAssistantBoard(t, "создай эпик порт на Rust")
 	names := map[string]bool{}
@@ -81,7 +81,7 @@ func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
 		tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
 		tools.BoardListBugs, tools.BoardGetBug,
 		tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
-		tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask, tools.BoardSetTaskStatus,
+		tools.BoardSetTaskStatus,
 		tools.BoardCreateBug, tools.BoardSetBugStatus, tools.BoardReviewBug,
 	} {
 		if !names[w] {
@@ -92,6 +92,13 @@ func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
 	for _, w := range []string{"WriteFiles", "AppendFile", "DeleteFiles", "Run", "SearchReplace"} {
 		if names[w] {
 			t.Errorf("ассистент не должен включать инструмент %q", w)
+		}
+	}
+	// Задачи внутри эпика ассистент не создаёт/не правит (Ф-8): их заводят лиды
+	// направлений, а все чат-эпики проходят обязательную ревизию архитектора.
+	for _, w := range []string{"BoardCreateTask", "BoardUpdateTask", "BoardDeleteTask"} {
+		if names[w] {
+			t.Errorf("ассистент не должен включать task-write инструмент %q", w)
 		}
 	}
 }
@@ -202,17 +209,22 @@ func TestAssistantPromptHasWebSearchRule(t *testing.T) {
 	}
 }
 
-// TestAssistantPromptHasCreationChecklist — при создании эпиков/задач промпт
-// требует собрать СВОДКУ обязательных параметров, при неоднозначности СПРОСИТЬ
+// TestAssistantPromptHasCreationChecklist — при создании эпиков промпт требует
+// собрать СВОДКУ обязательных параметров, при неоднозначности СПРОСИТЬ
 // пользователя (а не угадывать) и вывести пример сводки перед вызовом
-// инструмента; для эпика — решение про «ревью архитектора» и лида направления
-// (Ф-1 PLAN-dashboard-chat-create).
+// инструмента; чат-эпик позиционируется как черновик для Системного
+// архитектора, задачи напрямую не заводятся (Ф-8).
 func TestAssistantPromptHasCreationChecklist(t *testing.T) {
 	a := newTestAssistant(t, "создай эпик на рефакторинг бэкенда")
 	p := a.GetSystemMessages(nil)[0].Message
-	for _, want := range []string{"сводк", "спроси", "ревью архитектора", "BoardCreateEpic", "BoardCreateTask", "Пример сводки"} {
+	for _, want := range []string{"сводк", "спроси", "BoardCreateEpic", "Пример сводки", "черновик для Системного архитектора"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+	for _, forbid := range []string{"СВОДКА ДЛЯ ЗАДАЧИ", "BoardCreateTask", "ревью архитектора: не требуется"} {
+		if strings.Contains(p, forbid) {
+			t.Errorf("промпт не должен содержать %q:\n%s", forbid, p)
 		}
 	}
 }

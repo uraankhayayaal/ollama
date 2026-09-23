@@ -333,9 +333,20 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 		}
 	}
 
+	// Ревизия эпиков-черновиков (Ф-8): эпики с RequiresReview=true проверяются
+	// Системным архитектором в режиме ревизии ПЕРЕД декомпозицией лидами.
+	// Работает в обоих режимах (обычном и board-only): чат-ассистент создаёт
+	// черновики на доске в любом из них. Фаза снимает флаг RequiresReview —
+	// и только после этого лид может декомпозировать эпик.
+	p, err := k.phaseArchitectReview(ctx)
+	if err != nil {
+		return false, err
+	}
+	progress = progress || p
+
 	// Декомпозиция лидами: в board-only обрабатываются эпики, уже лежащие на
 	// доске (созданные чатом/вручную, но ещё без задач), а также их ревизия.
-	p, err := k.phaseLeads(ctx)
+	p, err = k.phaseLeads(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -613,6 +624,69 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// phaseArchitectReview — Ф-8: ревизия эпиков-черновиков (requires_review=true)
+// Системным архитектором в режиме ревизора. Черновики, созданные чатом/вручную,
+// декомпозиции лидами не подлежат (nextLeadEpic их пропускает), поэтому именно
+// архитектор приводит их к стандарту бэклога и снимает флаг — только после этого
+// лид получает эпик. Если на доске черновиков нет — фаза простаивает.
+// Работает в обоих режимах (обычном и board-only): в board-only чат уже мог
+// наложить на доску эпики, требующие ревизии.
+func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
+	epics, err := k.store.ListEpics(ctx)
+	if err != nil {
+		return false, err
+	}
+	var drafts []*board.Epic
+	for _, epic := range epics {
+		// Черновики не трогаем только в терминальных/приостановленных состояниях
+		// (пауза замораживает ревизию, Ф-8): в остальных состояниях ревизия
+		// обязательна, пока флаг не снят.
+		if !epic.RequiresReview || epic.Status.Terminal() || epic.Status == board.StatusPaused {
+			continue
+		}
+		drafts = append(drafts, epic)
+	}
+	if len(drafts) == 0 {
+		return false, nil
+	}
+
+	reviewer := architect.NewArchitectWithStore(k.store.Project(), k.epicReviewPrompt(k.store.Project(), drafts), k.store).AsReviewer()
+	resp, err := k.provider.Generate(ctx, reviewer)
+	if err != nil {
+		return false, fmt.Errorf("фаза ревизии эпиков: %w", err)
+	}
+	if resp != nil && resp.Truncated {
+		return false, fmt.Errorf("фаза ревизии эпиков: цикл остановлен по лимиту раундов")
+	}
+	k.log.Infof("[Системный архитектор] ревизия %d эпиков-черновиков", len(drafts))
+
+	// Ревизия успешна: снимаем флаг и синхронизируем ревизию лида с ревизией
+	// эпика, чтобы лид сразу принял утверждённый эпик к декомпозиции без
+	// повторной «ресинхронизации» (LeadSyncedRev == Revision).
+	for _, d := range drafts {
+		d.RequiresReview = false
+		d.LeadSyncedRev = d.Revision
+		if err := k.store.SaveEpic(ctx, d); err != nil {
+			return false, fmt.Errorf("эпик %s: снятие ревизии: %w", d.TaskID, err)
+		}
+	}
+	return true, nil
+}
+
+// epicReviewPrompt формирует задание ревизии эпиков-черновиков (Ф-8): архитектор
+// приводит каждый черновик к стандарту бэклога (ТЗ, стек, роли, глубина
+// декомпозиции, смежные модули).
+func (k *KanbanRunner) epicReviewPrompt(project string, drafts []*board.Epic) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Проведи ревизию %d эпиков-черновиков на доске проекта %q. Это черновики, созданные чат-ассистентом или вручную: каждому требуется твоя экспертиза перед декомпозицией лидами.\n\n", len(drafts), project)
+	for _, epic := range drafts {
+		fmt.Fprintf(&b, "- %s «%s» (статус %s, ревизия %d): %s\n",
+			epic.TaskID, truncateText(epic.Title, 80), epic.Status.Label(), epic.Revision, truncateText(epic.Description, 400))
+	}
+	b.WriteString("\nДля каждого эпика: проверь корректность ТЗ, соответствие фактическому стеку проекта (DetectStack), глубину декомпозиции и затронутые смежные модули; скорректируй эпик инструментами доски (BoardUpdateEpic и др.).")
+	return b.String()
+}
+
 // phaseLeads: декомпозиция и ревизия эпиков лидами направлений. Работа идёт
 // по очереди (сериализация): лид декомпозирует следующий эпик только после
 // завершения текущей волны задач — лиды не проектируют всё подряд на пустой
@@ -865,8 +939,13 @@ func (k *KanbanRunner) nextLeadEpic(epics []*board.Epic) (*board.Epic, bool, boo
 		if epic.Status.Terminal() || epic.Status == board.StatusPaused {
 			continue
 		}
-		// Нужна первичная декомпозиция (задач нет) либо ревизия после изменения
-		// эпика Системным архитектором (ревизия доски выросла).
+		// Черновик (requires_review=true, Ф-8) не декомпозируется лидом, пока
+		// Системный архитектор не утвердил его ревизией: лид получает эпик
+		// только после снятия флага. Иначе черновик чата разнёсся бы на задачи
+		// без экспертизы архитектора.
+		if epic.RequiresReview {
+			continue
+		}
 		needDecompose := len(epic.Tasks) == 0
 		needResync := !needDecompose && epic.Revision > epic.LeadSyncedRev
 		if !needDecompose && !needResync {
