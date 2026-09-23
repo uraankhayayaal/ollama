@@ -15,10 +15,12 @@ import (
 
 // fakeSearcher — управляемая реализация RAGSearcher для тестов.
 type fakeSearcher struct {
-	pingErr   error
-	results   []rag.SearchResult
-	searchErr error
-	last      rag.SearchParams
+	pingErr     error
+	results     []rag.SearchResult
+	searchErr   error
+	projectInfo rag.ProjectInfo
+	infoErr     error
+	last        rag.SearchParams
 }
 
 func (f *fakeSearcher) Ping(context.Context) error { return f.pingErr }
@@ -29,6 +31,10 @@ func (f *fakeSearcher) Search(_ context.Context, p rag.SearchParams) ([]rag.Sear
 		return nil, f.searchErr
 	}
 	return f.results, nil
+}
+
+func (f *fakeSearcher) ProjectInfo(_ context.Context, _ string) (rag.ProjectInfo, error) {
+	return f.projectInfo, f.infoErr
 }
 
 func newCodeSearchTool(searcher RAGSearcher) *codeSearchTool {

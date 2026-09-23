@@ -44,6 +44,10 @@ func (f *fakeAssistantSearcher) Search(_ context.Context, p rag.SearchParams) ([
 	return f.results, f.err
 }
 
+func (f *fakeAssistantSearcher) ProjectInfo(_ context.Context, _ string) (rag.ProjectInfo, error) {
+	return rag.ProjectInfo{}, nil
+}
+
 var _ agents.Agent = (*Assistant)(nil)
 
 func TestAssistantInterface(t *testing.T) {

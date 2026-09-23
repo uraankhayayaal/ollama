@@ -287,18 +287,18 @@ IndexBackground (server-мост, безопасный):
 ## Этапы и чеклист
 
 ### Ф-1 — RAG у архитектора (инструменты + контекст)
-- [ ] `rag/status.go`: `ProjectInfo` (Count API), расширить `QdrantStore` в
+- [x] `rag/status.go`: `ProjectInfo` (Count API), расширить `QdrantStore` в
       `rag/client.go:55-62` методом `Count`; hermetic-тесты (fake-хранилище)
-- [ ] `tools/ragstatus.go`: `RagIndexStatus` (deps `FileOps+RAG`), degrade →
+- [x] `tools/ragstatus.go`: `RagIndexStatus` (deps `FileOps+RAG`), degrade →
       skipped с подсказкой; регистрация в `tools/registry.go:newTool`
-- [ ] `agents/architect/agent.go`: поле `RAG tools.RAGSearcher` + `SetRAG`;
+- [x] `agents/architect/agent.go`: поле `RAG tools.RAGSearcher` + `SetRAG`;
       `toolNames` += `CodeSearch`, `RagIndexStatus`, `BoardGetEpic`, `BoardGetTask`
-- [ ] `agents/architect/ragcontext.go`: `architectRAGBlock` (по образцу
+- [x] `agents/architect/ragcontext.go`: `architectRAGBlock` (по образцу
       `agents/chatassist/ragcontext.go:38`), env `RAG_ARCHITECT_CONTEXT`
       (по умолчанию вкл)
-- [ ] Промпт: «Изучи проект через CodeSearch/RAG; если вернулся skipped со
+- [x] Промпт: «Изучи проект через CodeSearch/RAG; если вернулся skipped со
       словом про индекс — проверь `RagIndexStatus`»
-- [ ] Тесты: набор инструментов архитектора содержит `CodeSearch`/`RagIndexStatus`/
+- [x] Тесты: набор инструментов архитектора содержит `CodeSearch`/`RagIndexStatus`/
       `BoardGetEpic`/`BoardGetTask`; RAG-блок в промпте при fake-поиске; без RAG
       (nil) — промпт без блока, агент жив
 
@@ -436,6 +436,8 @@ npm run build   # web/ (при UI-части Ф-5)
   эпиков (кто назначен) пригодятся для прогноза.
 
 ## Как продолжить
+
+Есть лог от предыдущей работы ./docs/ses_f32ffb918ffevT6sgwoZ3LNN0Q.json
 
 1. Открыть этот файл, прочитать «Решения пользователя» и «Этапы и чеклист».
 2. Взять первый незачёркнутый пункт Ф-1, выполнить, отметить `[x]`, закоммитить.

@@ -21,6 +21,9 @@ type fakeStore struct {
 	upsertCalls int
 	deleteCalls int
 	queryCalls  int
+	countCalls  int
+	countResult uint64
+	countErr    error
 	closed      bool
 }
 
@@ -58,6 +61,14 @@ func (f *fakeStore) Delete(ctx context.Context, request *qdrant.DeletePoints) (*
 func (f *fakeStore) Query(ctx context.Context, request *qdrant.QueryPoints) ([]*qdrant.ScoredPoint, error) {
 	f.queryCalls++
 	return nil, nil
+}
+
+func (f *fakeStore) Count(ctx context.Context, request *qdrant.CountPoints) (uint64, error) {
+	f.countCalls++
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	return f.countResult, nil
 }
 
 func (f *fakeStore) Close() error { f.closed = true; return nil }

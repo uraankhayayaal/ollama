@@ -2,8 +2,10 @@ package architect
 
 import (
 	"ai/board"
+	"ai/rag"
 	"ai/tools"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,7 +20,7 @@ func newTestArchitect(t *testing.T) *Architect {
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
 	a := NewArchitectWithStore("testproj", "Задача пользователя", store)
-	a.OutputDir = t.TempDir()
+	a.OutputDir = filepath.Join(t.TempDir(), "testproj")
 	return a
 }
 
@@ -52,6 +54,26 @@ func TestToolsIncludeSubmitBacklog(t *testing.T) {
 		t.Fatal("не найдено определение submit_architecture_backlog")
 	} else if _, ok := td.Parameters["properties"].(map[string]any)["tasks"]; !ok {
 		t.Error("схема submit_architecture_backlog не содержит поле tasks")
+	}
+}
+
+// TestToolsIncludeStudyAndRAG — Ф-1: архитектор работает с RAG/доской: набор
+// инструментов содержит семантический поиск (CodeSearch), статус индекса
+// (RagIndexStatus) и чтение деталей эпика/задачи (BoardGetEpic/BoardGetTask) —
+// контрактов перед правкой.
+func TestToolsIncludeStudyAndRAG(t *testing.T) {
+	a := newTestArchitect(t)
+	names := map[string]bool{}
+	for _, td := range a.GetTools() {
+		names[td.Name] = true
+	}
+	for _, want := range []string{
+		tools.CodeSearch, tools.RagIndexStatus,
+		tools.BoardGetEpic, tools.BoardGetTask,
+	} {
+		if !names[want] {
+			t.Errorf("агент не включает инструмент %q", want)
+		}
 	}
 }
 
@@ -158,5 +180,129 @@ func TestSubmitBacklogRejectsBadSchema(t *testing.T) {
 		"files": []map[string]string{{"filename": "x", "content": "y"}},
 	}); err == nil {
 		t.Fatal("архитектор не должен уметь вызывать WriteFiles")
+	}
+}
+
+// fakeArchitectSearcher — управляемая реализация tools.RAGSearcher для тестов
+// без сети: возвращает заданные результаты поиска, запоминает параметры.
+type fakeArchitectSearcher struct {
+	results []rag.SearchResult
+	err     error
+	last    rag.SearchParams
+}
+
+func (f *fakeArchitectSearcher) Ping(_ context.Context) error { return nil }
+
+func (f *fakeArchitectSearcher) Search(_ context.Context, p rag.SearchParams) ([]rag.SearchResult, error) {
+	f.last = p
+	return f.results, f.err
+}
+
+func (f *fakeArchitectSearcher) ProjectInfo(_ context.Context, _ string) (rag.ProjectInfo, error) {
+	return rag.ProjectInfo{}, nil
+}
+
+// TestArchitectPromptMentionsRAGWorkflow — Ф-1: промпт архитектора велит
+// изучать проект через CodeSearch/RAG и при skipped-выдаче проверять
+// статус индекса инструментом RagIndexStatus (обе секции: проектирование и
+// экспертиза багов).
+func TestArchitectPromptMentionsRAGWorkflow(t *testing.T) {
+	a := newTestArchitect(t)
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"CodeSearch", "RagIndexStatus", "RAG"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"CodeSearch", "RagIndexStatus"} {
+		if !strings.Contains(bug, want) {
+			t.Errorf("промпт экспертизы не содержит %q:\n%s", want, bug)
+		}
+	}
+}
+
+// TestArchitectSystemMessagesIncludeRAGBlock — Ф-1: при подключённом RAG
+// (SetRAG) в системный промпт попадает блок «Релевантный код по задаче»
+// (поиск — по проекту из OutputDir, scope пуст).
+func TestArchitectSystemMessagesIncludeRAGBlock(t *testing.T) {
+	fake := &fakeArchitectSearcher{results: []rag.SearchResult{
+		{File: "server/api.go", StartLine: 1, EndLine: 3, Score: 0.9, Snippet: "package server"},
+	}}
+	a := newTestArchitect(t)
+	a.Prompt = "спроектировать API для клиента"
+	a.SetRAG(fake)
+
+	msgs := a.GetSystemMessages(nil)
+	if len(msgs) != 1 {
+		t.Fatalf("ожидался 1 системный промпт, got %d", len(msgs))
+	}
+	p := msgs[0].Message
+	if !strings.Contains(p, "Релевантный код по задаче") || !strings.Contains(p, "server/api.go") {
+		t.Fatalf("промпт не содержит RAG-блок:\n%s", p)
+	}
+	if fake.last.Project != "testproj" {
+		t.Fatalf("поиск по проекту = %q, ожидался testproj (из OutputDir)", fake.last.Project)
+	}
+	if fake.last.Scope != "" {
+		t.Fatalf("scope должен быть пустым (весь проект), got %q", fake.last.Scope)
+	}
+}
+
+// TestArchitectSystemMessagesWithoutRAG — Ф-1: nil-клиент RAG не ломает
+// архитектора: промпт строится без блока «релевантный код».
+func TestArchitectSystemMessagesWithoutRAG(t *testing.T) {
+	a := newTestArchitect(t)
+	msgs := a.GetSystemMessages(nil)
+	p := msgs[0].Message
+	if strings.Contains(p, "Релевантный код по задаче") {
+		t.Fatalf("без RAG промпт не должен содержать блок:\n%s", p)
+	}
+	if !strings.Contains(p, "Системный архитектор") {
+		t.Fatalf("системный промпт архитектора должен сохраниться:\n%s", p)
+	}
+}
+
+// TestArchitectRAGBlockSearchParams — блок ищет по проекту, scope пуст (весь
+// проект); ошибка поиска деградирует в пустую строку (как у ассистента).
+func TestArchitectRAGBlockSearchParams(t *testing.T) {
+	fake := &fakeArchitectSearcher{results: []rag.SearchResult{{File: "a.go", Snippet: "x"}}}
+	blk := architectRAGBlock("proj-x", "где токен?", fake)
+	if blk == "" {
+		t.Fatal("блок должен быть непустым")
+	}
+	if fake.last.Scope != "" {
+		t.Fatalf("scope должен быть пустым (весь проект), got %q", fake.last.Scope)
+	}
+	if fake.last.Project != "proj-x" {
+		t.Fatalf("поиск по проекту = %q, ожидался proj-x", fake.last.Project)
+	}
+
+	// Ошибка поиска (Qdrant недоступен) → блок пуст (degrade).
+	fail := &fakeArchitectSearcher{err: &rag.UnavailableError{Err: context.Canceled}}
+	if got := architectRAGBlock("proj-x", "где токен?", fail); got != "" {
+		t.Fatalf("ошибка поиска должна деградировать в пустой блок, got %q", got)
+	}
+
+	// nil-поисковик → пустой блок.
+	if got := architectRAGBlock("proj-x", "где токен?", nil); got != "" {
+		t.Fatalf("nil-поисковик должен давать пустой блок, got %q", got)
+	}
+}
+
+// TestProjectNameFromOutputDir — имя проекта выводится из OutputDir (temp/<имя>);
+// пустой путь — пустая строка.
+func TestProjectNameFromOutputDir(t *testing.T) {
+	for _, tc := range []struct {
+		dir, want string
+	}{
+		{"/tmp/temp/my-app", "my-app"},
+		{"", ""},
+		{"   ", ""},
+		{"/tmp/temp/my-app/", "my-app"},
+	} {
+		if got := projectNameFromOutputDir(tc.dir); got != tc.want {
+			t.Errorf("projectNameFromOutputDir(%q) = %q, ожидался %q", tc.dir, got, tc.want)
+		}
 	}
 }

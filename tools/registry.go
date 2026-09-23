@@ -127,6 +127,8 @@ func newTool(name string, deps Deps) Tool {
 		return &lspHoverTool{ops: deps.FileOps}
 	case CodeSearch:
 		return &codeSearchTool{ops: deps.FileOps, searcher: deps.RAG}
+	case RagIndexStatus:
+		return &ragIndexStatusTool{ops: deps.FileOps, searcher: deps.RAG}
 	case WebSearch:
 		return &webSearchTool{client: nil, endpoint: ""}
 	case "ReviewMr":
