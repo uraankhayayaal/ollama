@@ -35,6 +35,8 @@ export function Diffboard(props: DiffboardProps) {
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState("");
   const [mr, setMr] = useState<{ url: string; branch: string; base: string } | null>(null);
+  const [fileQuery, setFileQuery] = useState("");
+  const [fileStatus, setFileStatus] = useState("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,7 +59,7 @@ export function Diffboard(props: DiffboardProps) {
   // Раскрытие файла: подтягиваем патч (если ещё не загружен) — лениво.
   const toggle = async (path: string) => {
     setOpen((prev) => ({ ...prev, [path]: !prev[path] }));
-    if (!patches[path]) {
+    if (diff?.kind === "git" && !patches[path]) {
       try {
         const pv = await projectDiffFile(BASE, props.project, path);
         setPatches((prev) => ({ ...prev, [path]: pv }));
@@ -103,6 +105,17 @@ export function Diffboard(props: DiffboardProps) {
 
   const isGit = props.kind === "git";
   const gitFiles = diff?.files ?? [];
+  const snapFiles: DiffFile[] = diff?.kind === "snap" ? [
+    ...(diff.added ?? []).map((f) => ({ path: f, status: "added" as const, added: 0, deleted: 0 })),
+    ...(diff.modified ?? []).map((f) => ({ path: f, status: "modified" as const, added: 0, deleted: 0 })),
+    ...(diff.removed ?? []).map((f) => ({ path: f, status: "removed" as const, added: 0, deleted: 0 })),
+  ] : [];
+  const allFiles = diff?.kind === "git" ? gitFiles : snapFiles;
+  const filteredFiles = allFiles.filter((f) =>
+    (fileStatus === "all" || f.status === fileStatus) &&
+    f.path.toLocaleLowerCase().includes(fileQuery.trim().toLocaleLowerCase()),
+  );
+  const countFiles = (status: string) => allFiles.filter((f) => f.status === status).length;
 
   return (
     <div className={"diffboard" + (props.showDiffboard === false ? " hidden" : "")}>
@@ -120,81 +133,69 @@ export function Diffboard(props: DiffboardProps) {
       {error && <p className="err">{error}</p>}
 
       {!loading && !error && diff?.kind === "git" && (
+        <div className="diff-summary">
+          <span><b>{allFiles.length}</b> файлов</span>
+          <span className="added">+{allFiles.reduce((n, f) => n + f.added, 0)}</span>
+          <span className="removed">−{allFiles.reduce((n, f) => n + f.deleted, 0)}</span>
+          <span className="branch">{diff.branch} → {diff.base}</span>
+        </div>
+      )}
+
+      {!loading && !error && diff?.kind === "snap" && (
+        <p className="hint snap-hint">Локальные изменения относительно baseline-снимка</p>
+      )}
+
+      {!loading && !error && diff && allFiles.length > 0 && (
         <>
-          <div className="head">
-            <p className="hint">
-              Ветка <strong>{diff.branch}</strong> → <strong>{diff.base}</strong> (base) · remote{" "}
-              <code>{diff.remote}</code> · файлов: {gitFiles.length}
-            </p>
+          <div className="diff-tools">
+            <label className="file-search">
+              <IconSearch />
+              <input value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} placeholder="Найти файл" aria-label="Найти файл" />
+              {fileQuery && <button type="button" onClick={() => setFileQuery("")}>×</button>}
+            </label>
+            <div className="file-filters" aria-label="Фильтр файлов">
+              {([ ["all", "Все", allFiles.length], ["modified", "Изменены", countFiles("modified")], ["added", "Добавлены", countFiles("added")], ["removed", "Удалены", countFiles("removed")], ["renamed", "Переименованы", countFiles("renamed")] ] as const)
+                .filter(([value, , count]) => value === "all" || count > 0)
+                .map(([value, label, count]) => (
+                  <button key={value} className={fileStatus === value ? "active" : ""} onClick={() => setFileStatus(value)}>
+                    {label}<span>{count}</span>
+                  </button>
+                ))}
+            </div>
           </div>
-          {gitFiles.length > 0 ? (
-            <div className="filelist">
-              {gitFiles.map((f) => (
-                <div className="fentry" key={f.path}>
-                  <button className={"frow " + f.status} onClick={() => void toggle(f.path)}>
+          <div className="filelist">
+            {filteredFiles.map((f) => {
+              const snapPatch = diff.kind === "snap" ? diff.patches?.[f.path] : undefined;
+              const gitPatch = patches[f.path]?.patch;
+              return (
+                <div className={"fentry" + (open[f.path] ? " expanded" : "")} key={f.path}>
+                  <button className={"frow " + f.status} onClick={() => void toggle(f.path)} aria-expanded={!!open[f.path]}>
+                    <span className={"file-icon " + f.status}>{fileIcon(f.status)}</span>
                     <span className="fpath">{f.path}</span>
                     <span className="fstat">
                       <i className="badge">{statusWord(f.status)}</i>
-                      <b className="add">+{f.added}</b>
-                      <b className="del">-{f.deleted}</b>
+                      {diff.kind === "git" && <><b className="add">+{f.added}</b><b className="del">−{f.deleted}</b></>}
                     </span>
+                    <span className={"chevron" + (open[f.path] ? " open" : "")}>›</span>
                   </button>
                   {open[f.path] && (
                     <div className="fpatch">
-                      {patches[f.path] ? (
-                        <SideDiff patch={patches[f.path]!.patch} />
-                      ) : (
-                        <p className="hint">Гружу патч…</p>
-                      )}
+                      {diff.kind === "snap" && snapPatch ? <SideDiff patch={snapPatch} status={f.status} /> :
+                        diff.kind === "git" && gitPatch ? <SideDiff patch={gitPatch} status={f.status} /> :
+                          diff.kind === "git" ? <p className="hint">Загружаю патч…</p> : <p className="hint">Текстовый diff недоступен.</p>}
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className="hint">Изменений от точки отхода нет.</p>
-          )}
+              );
+            })}
+            {filteredFiles.length === 0 && <p className="no-files">По этому фильтру файлов нет.</p>}
+          </div>
         </>
       )}
 
-      {!loading && !error && diff?.kind === "snap" && (() => {
-        const snapFiles: DiffFile[] = [
-          ...(diff.added ?? []).map((f) => ({ path: f, status: "added" as const, added: 0, deleted: 0 })),
-          ...(diff.modified ?? []).map((f) => ({ path: f, status: "modified" as const, added: 0, deleted: 0 })),
-          ...(diff.removed ?? []).map((f) => ({ path: f, status: "removed" as const, added: 0, deleted: 0 })),
-        ];
-        return (
-          <>
-            <p className="hint">
-              Локальный проект: изменения файлов относительно точки отхода (baseline-снимка).
-            </p>
-            {snapFiles.length > 0 ? (
-              <div className="filelist">
-                {snapFiles.map((f) => {
-                  const patch = diff.patches?.[f.path];
-                  return (
-                    <div className="fentry" key={f.path}>
-                      <button className={"frow " + f.status} onClick={() => void toggle(f.path)}>
-                        <span className="fpath">{f.path}</span>
-                        <span className="fstat">
-                          <i className="badge">{statusWord(f.status)}</i>
-                        </span>
-                      </button>
-                      {open[f.path] && patch && (
-                        <div className="fpatch">
-                          <SideDiff patch={patch} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="hint">Изменений относительно точки отхода нет.</p>
-            )}
-          </>
-        );
-      })()}
+      {!loading && !error && diff && allFiles.length === 0 && (
+        <p className="empty-diff">Изменений относительно точки отхода нет.</p>
+      )}
 
       {!loading && !error && diff && !isGit && (
         <p className="hint">Приёмка через MR доступна только git-проектам (открытым по git-URL).</p>
@@ -233,8 +234,10 @@ export function Diffboard(props: DiffboardProps) {
 
 // SideDiff — двухколоночный дифф одного файла «до → после» (JetBrains-стиль):
 // слева красным — удалённые строки, справа зелёным — добавленные.
-function SideDiff({ patch }: { patch: string }) {
+function SideDiff({ patch, status }: { patch: string; status?: string }) {
   const s = sideBySide(patch);
+  const onlyOld = status === "removed" || s.newPath === "/dev/null";
+  const onlyNew = status === "added" || s.oldPath === "/dev/null";
 
   if (s.binary) {
     return <p className="hint">Бинарный файл: содержимое в диффе недоступно.</p>;
@@ -258,22 +261,18 @@ function SideDiff({ patch }: { patch: string }) {
   };
 
   return (
-    <div className="sdiff">
+    <div className={"sdiff" + (onlyOld ? " only-old" : onlyNew ? " only-new" : "")}>
       <div className="sdiff-head">
-        <span className="win old" title={s.oldPath ?? undefined}>
+        {!onlyNew && <span className="win old" title={s.oldPath ?? undefined}>
           <span className="dot red" /> До · {s.oldPath ?? "—"}
-        </span>
-        <span className="win new" title={s.newPath ?? undefined}>
+        </span>}
+        {!onlyOld && <span className="win new" title={s.newPath ?? undefined}>
           <span className="dot green" /> После · {s.newPath ?? "—"}
-        </span>
+        </span>}
       </div>
       <div className="sdiff-cols">
-        <div className="col old">
-          {s.rows.map((r, idx) => cell(r, "left", "l" + idx))}
-        </div>
-        <div className="col new">
-          {s.rows.map((r, idx) => cell(r, "right", "r" + idx))}
-        </div>
+        {!onlyNew && <div className="col old">{s.rows.map((r, idx) => cell(r, "left", "l" + idx))}</div>}
+        {!onlyOld && <div className="col new">{s.rows.map((r, idx) => cell(r, "right", "r" + idx))}</div>}
       </div>
     </div>
   );
@@ -290,6 +289,19 @@ function statusWord(s: string): string {
     default:
       return "изменён";
   }
+}
+
+function fileIcon(status: string): string {
+  switch (status) {
+    case "added": return "+";
+    case "removed": return "−";
+    case "renamed": return "↗";
+    default: return "•";
+  }
+}
+
+function IconSearch() {
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>;
 }
 
 function fmtErr(err: unknown): string {

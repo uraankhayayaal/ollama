@@ -4,15 +4,16 @@
 // между соседними статусами внутри своего эпика.
 
 import { useState } from "react";
-import type { BoardView, EpicRow, TaskRow } from "@/Types";
+import type { BoardView, BugRow, EpicRow, TaskRow } from "@/Types";
 import { STATUS_LABEL, STATUS_ORDER } from "./board";
 import { EpicRow as EpicRowView } from "./EpicRow";
 import { EpicModal } from "./EpicModal";
 import { TaskModal } from "./TaskModal";
+import { BugModal } from "./BugModal";
 import "./styles.scss";
 
 // Строка матрицы: эпик (или null для задач без эпика) + его задачи.
-type Row = { epic: EpicRow | null; epicId: string; tasks: TaskRow[] };
+type Row = { epic: EpicRow | null; epicId: string; tasks: TaskRow[]; bugs: BugRow[] };
 
 export function Dashboard({
   board,
@@ -52,9 +53,12 @@ export function Dashboard({
   // board: WS-событие (git/MR обновились) перерисует модалку без переоткрытия.
   const [epicId, setEpicId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [bugId, setBugId] = useState<string | null>(null);
   // Свёрнутость эпиков: явный выбор пользователя (toggle[epicId]) перекрывает
   // значение по умолчанию (неактивные свёрнуты, активные развёрнуты).
   const [collapseToggle, setCollapseToggle] = useState<Record<string, boolean>>({});
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   if (!board) {
     if (collapsed) {
@@ -116,20 +120,48 @@ export function Dashboard({
     list.push(t);
     byEpic.set(t.epic_id, list);
   }
+  // Группируем баги по эпику, сохраняя строки багов без известного эпика.
+  const byEpicBug = new Map<string, BugRow[]>();
+  for (const b of board.bugs) {
+    const bugList = byEpicBug.get(b.epic_id) ?? [];
+    bugList.push(b);
+    byEpicBug.set(b.epic_id, bugList);
+  }
+
   const rows: Row[] = board.epics.map((e) => ({
     epic: e,
     epicId: e.task_id,
     tasks: byEpic.get(e.task_id) ?? [],
+    bugs: byEpicBug.get(e.task_id) ?? [],
   }));
   for (const [epicId, tasks] of byEpic) {
     if (!board.epics.some((e) => e.task_id === epicId)) {
-      rows.push({ epic: null, epicId, tasks });
+      rows.push({ epic: null, epicId, tasks, bugs: byEpicBug.get(epicId) ?? [] });
     }
   }
+  // Баги принадлежат только существующему эпику. Не создаём для них
+  // синтетические строки «без эпика».
 
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleRows = rows.map((r) => {
+    const epicMatches = !!normalizedQuery && (r.epic?.title ?? "").toLocaleLowerCase().includes(normalizedQuery);
+    const tasks = r.tasks.filter((t) =>
+      (statusFilter === "all" || t.status === statusFilter) &&
+      (!normalizedQuery || epicMatches || `${t.title} ${t.task_id} ${t.description}`.toLocaleLowerCase().includes(normalizedQuery)),
+    );
+    const bugs = r.bugs.filter((b) =>
+      !normalizedQuery || epicMatches || `${b.title} ${b.bug_id} ${b.description}`.toLocaleLowerCase().includes(normalizedQuery),
+    );
+    return { ...r, tasks, bugs, epicMatches };
+  }).filter((r) => {
+    if (!normalizedQuery && statusFilter === "all") return true;
+    return r.epicMatches || r.tasks.length > 0 || r.bugs.length > 0;
+  });
+
+  const visibleTasks = visibleRows.flatMap((r) => r.tasks);
   const statusCounts = STATUS_ORDER.map((s) => ({
     status: s,
-    count: board.tasks.filter((t) => t.status === s).length,
+    count: visibleTasks.filter((t) => t.status === s).length,
   }));
 
   // Эпик активен, если у него есть незавершённые задачи (new → in_progress);
@@ -155,6 +187,7 @@ export function Dashboard({
   // строка исчезла (удалили), модалка просто не рендерится.
   const epic = epicId ? board.epics.find((e) => e.task_id === epicId) ?? null : null;
   const task = taskId ? board.tasks.find((t) => t.task_id === taskId) ?? null : null;
+  const bug = bugId ? board.bugs.find((b) => b.bug_id === bugId) ?? null : null;
 
   return (
     <div className="dashboard" onDragOver={(e) => e.preventDefault()}>
@@ -168,6 +201,23 @@ export function Dashboard({
         </span>
       </div>
 
+      <div className="board-tools">
+        <label className="board-search">
+          <IconSearch />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Найти эпик, задачу или баг" aria-label="Найти на доске" />
+          {query && <button type="button" onClick={() => setQuery("")} title="Очистить поиск">×</button>}
+        </label>
+        <div className="status-filters" aria-label="Фильтр статуса задач">
+          <button className={statusFilter === "all" ? "active" : ""} onClick={() => setStatusFilter("all")}>Все</button>
+          {STATUS_ORDER.map((s) => (
+            <button key={s} className={statusFilter === s ? `active ${s}` : ""} onClick={() => setStatusFilter(s)}>
+              {STATUS_LABEL[s]} <span>{board.tasks.filter((t) => t.status === s).length}</span>
+            </button>
+          ))}
+        </div>
+        {(query || statusFilter !== "all") && <span className="match-count">{visibleTasks.length} задач · {visibleRows.length} эпиков</span>}
+      </div>
+
       <div className="boardgrid">
         <div className="corner">Эпик</div>
         {statusCounts.map(({ status, count }) => (
@@ -175,16 +225,18 @@ export function Dashboard({
             {STATUS_LABEL[status]} <b>{count}</b>
           </div>
         ))}
-        {rows.map((r) => (
+        {visibleRows.map((r) => (
           <EpicRowView
             key={r.epicId}
             epic={r.epic}
             epicId={r.epicId}
             tasks={r.tasks}
+            bugs={r.bugs}
             collapsed={isCollapsed(r.epicId, r.tasks)}
             hasBranch={board.git ? !!board.git.epics?.[r.epicId]?.branch : undefined}
             onTaskUpdate={onTaskUpdate}
             onTaskOpen={(t) => setTaskId(t.task_id)}
+            onBugOpen={(b) => setBugId(b.bug_id)}
             onEpicOpen={(e) => setEpicId(e.task_id)}
             onEpicDelete={onEpicDelete}
             onEpicRelease={onEpicRelease}
@@ -194,6 +246,7 @@ export function Dashboard({
             onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}
+        {visibleRows.length === 0 && <div className="board-empty">Ничего не найдено. Измените запрос или фильтр.</div>}
       </div>
 
       {epic && (
@@ -218,6 +271,7 @@ export function Dashboard({
           onClose={() => setTaskId(null)}
         />
       )}
+      {bug && <BugModal bug={bug} onClose={() => setBugId(null)} />}
     </div>
   );
 }
@@ -249,4 +303,8 @@ function IconBug() {
       <path d="M2.5 13h4M17.5 13h4M3 20l3.5-2M21 20l-3.5-2M7.5 13a4.5 4.5 0 0 0 9 0" />
     </svg>
   );
+}
+
+function IconSearch() {
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>;
 }

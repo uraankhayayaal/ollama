@@ -1,141 +1,177 @@
-// Стили панели «Логи» (Logboard). Имена .logboard — зеркало LogsView (Types)
-// и GET /api/projects/<name>/logs. Строки с WARN/ERROR подсвечиваются.
-
+// Logboard shares Chatboard's restrained surfaces, spacing and motion.
 .logboard {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   height: 100%;
   min-height: 0;
+  color: var(--ink, #1b2330);
 
-  &.hidden {
-    display: none;
-  }
+  &.hidden { display: none; }
 
-  .err {
-    color: var(--err, #dc2626);
-    font-size: 13px;
-  }
+  button { transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease; }
+  button:active:not(:disabled) { transform: scale(.97); }
 
-  .hint {
-    color: var(--muted, #8a94a6);
-    font-size: 13px;
+  .err { color: var(--err, #dc2626); font-size: 13px; }
+  .hint { color: var(--muted, #8a94a6); font-size: 12px; }
+  .hint code { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+  .hint.cat { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    code {
-      font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    }
-  }
-
-  .hint.cat {
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  // Шапка панели: заголовок + кнопка «свернуть» справа (общий стиль с Diffboard).
-  .head {
+  .head.title-head {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line, #e2e8f0);
 
-    .hint {
-      flex: 1;
-      margin: 0;
-    }
+    > .hint { flex: 1; margin: 0; color: var(--ink, #1b2330); font-size: 14px; font-weight: 650; }
 
     .btn.close {
-      flex: 0 0 auto;
-      width: 26px;
-      height: 26px;
+      width: 28px;
+      height: 28px;
       padding: 0;
-      font-size: 16px;
-      line-height: 1;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 6px;
-      background: var(--btn, #f1f5f9);
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
       color: var(--muted, #8a94a6);
+      font-size: 20px;
+      line-height: 1;
       cursor: pointer;
-
-      &:hover {
-        background: var(--btn-hover, #e2e8f0);
-        color: var(--err, #dc2626);
-      }
+      &:hover { background: #f1f3f6; color: var(--ink, #1b2330); }
     }
   }
 
-  // Переключатель файлов лога (когда их несколько).
   .lgtabs {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex: 0 0 auto;
+    gap: 4px;
+    overflow-x: auto;
+    padding-bottom: 2px;
 
     .lgtab {
-      padding: 4px 10px;
-      font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-      font-size: 12px;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 999px;
-      background: var(--btn, #f1f5f9);
+      max-width: 260px;
+      overflow: hidden;
+      padding: 6px 9px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
       color: var(--muted, #64748b);
+      font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       cursor: pointer;
-
-      &:hover {
-        background: var(--btn-hover, #e2e8f0);
-      }
-
-      &.active {
-        background: var(--primary, #2563eb);
-        border-color: var(--primary, #2563eb);
-        color: #fff;
-      }
+      &:hover { background: #f1f3f6; color: var(--ink, #1b2330); }
+      &.active { background: #eceff3; color: var(--ink, #1b2330); font-weight: 600; }
     }
   }
 
   .lgmeta {
     display: flex;
-    gap: 14px;
-    font-size: 12px;
+    flex: 0 0 auto;
+    gap: 12px;
+    overflow: hidden;
     color: var(--muted, #8a94a6);
-
-    code {
-      font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-      color: var(--ink, #1b2330);
-    }
+    font-size: 11px;
+    white-space: nowrap;
+    span { overflow: hidden; text-overflow: ellipsis; }
+    code { color: var(--ink, #1b2330); font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
   }
 
-  // Текст лога: моноширинный, перенос по словам, вертикальный скролл.
+  .log-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    min-height: 34px;
+
+    .log-search {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex: 1;
+      min-width: 120px;
+      max-width: 360px;
+      padding: 6px 9px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: #f3f4f6;
+      color: var(--muted, #8a94a6);
+      transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+      &:focus-within { border-color: #cbd2dc; background: #fff; box-shadow: 0 0 0 3px rgb(100 116 139 / .1); }
+      input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink, #1b2330); font: inherit; font-size: 12px; }
+      input::placeholder { color: #98a2b3; }
+      button { border: 0; background: transparent; color: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+    }
+
+    .level-filters { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: #f3f4f6; }
+    .level-filters button { padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted, #8a94a6); font-size: 11px; cursor: pointer; }
+    .level-filters button:hover { color: var(--ink, #1b2330); }
+    .level-filters button.active { background: #fff; color: var(--ink, #1b2330); box-shadow: 0 1px 2px rgb(15 23 42 / .08); }
+    .line-count { color: var(--muted, #8a94a6); font-size: 11px; white-space: nowrap; }
+  }
+
   .logbody {
     flex: 1;
     min-height: 0;
     overflow: auto;
-    background: var(--card, #fff);
-    border: 1px solid var(--line, #e2e8f0);
-    border-radius: 8px;
+    padding: 9px 0;
+    border-radius: 10px;
+    background: #f8f9fb;
     font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: 12px;
-    line-height: 1.5;
-    padding: 6px 0;
+    font-size: 11px;
+    line-height: 1.65;
+    counter-reset: logline;
+    scrollbar-gutter: stable;
 
     .lg {
-      padding: 0 10px;
+      position: relative;
+      padding: 1px 12px 1px 56px;
+      color: #414956;
       white-space: pre-wrap;
-      word-break: break-word;
-      color: var(--ink, #1b2330);
-
-      &.ts {
-        color: var(--muted, #64748b);
-      }
-
-      &.warn {
-        color: #b45309;
-        background: #fef3c7;
-      }
-
-      &.err {
-        color: #b91c1c;
-        background: #fdeaea;
-      }
+      overflow-wrap: anywhere;
+      counter-increment: logline;
+      animation: logline-in 140ms ease-out both;
+      &::before { content: counter(logline); position: absolute; left: 0; width: 42px; padding-right: 10px; color: #a0a8b4; text-align: right; user-select: none; }
+      &:hover { background: rgb(15 23 42 / .035); }
+      &.ts { color: #778190; }
+      &.warn { color: #8a5a10; background: rgb(245 158 11 / .055); }
+      &.err { color: #a83b42; background: rgb(220 38 38 / .06); }
     }
+    .log-empty { padding: 18px 56px; color: var(--muted, #8a94a6); font: 12px system-ui, sans-serif; }
   }
+
+  .log-follow {
+    position: absolute;
+    right: 18px;
+    bottom: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 11px;
+    border: 1px solid #d9dee7;
+    border-radius: 999px;
+    background: #fff;
+    color: #3f4855;
+    box-shadow: 0 4px 14px rgb(15 23 42 / .12);
+    font-size: 11px;
+    cursor: pointer;
+    animation: logline-in 160ms ease-out both;
+    &:hover { background: #f6f7f9; }
+  }
+}
+
+@keyframes logline-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media (max-width: 620px) {
+  .logboard .log-tools { flex-wrap: wrap; }
+  .logboard .log-tools .log-search { max-width: none; flex-basis: 100%; }
+  .logboard .lgmeta { gap: 7px; font-size: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logboard *, .logboard *::before, .logboard *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

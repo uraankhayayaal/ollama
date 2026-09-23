@@ -6,10 +6,11 @@
 .diffboard {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   height: 100%;
   min-height: 0;
   overflow-y: auto;
+  color: var(--ink, #1b2330);
 
   &.hidden {
     display: none;
@@ -18,6 +19,22 @@
   .err {
     color: var(--err, #dc2626);
     font-size: 13px;
+  }
+
+  .head.title-head {
+    min-height: 36px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line, #e2e8f0);
+
+    .hint { color: var(--ink, #1b2330); font-size: 14px; font-weight: 650; }
+
+    .btn.close {
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      font-size: 20px;
+      &:hover { background: #f1f3f6; color: var(--ink, #1b2330); }
+    }
   }
 
   .ok {
@@ -115,12 +132,13 @@
   .filelist {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
 
     .fentry {
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 8px;
+      min-width: 0;
+      border-radius: 9px;
       overflow: hidden;
+      animation: diff-entry-in 180ms ease-out both;
 
       .frow {
         display: flex;
@@ -128,17 +146,19 @@
         align-items: center;
         gap: 8px;
         width: 100%;
-        padding: 6px 10px;
-        background: var(--card, #fff);
+        padding: 7px 9px;
+        border-radius: 8px;
+        background: transparent;
         border: none;
-        border-left: 3px solid var(--mod, #2563eb);
+        border-left: 2px solid transparent;
         cursor: pointer;
         text-align: left;
         font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-        font-size: 13px;
+        font-size: 12px;
+        transition: background 150ms ease, border-color 150ms ease;
 
         &:hover {
-          background: var(--btn-hover, #eef2f7);
+          background: #f4f5f7;
         }
 
         &.added {
@@ -149,6 +169,25 @@
         }
         &.renamed {
           border-left-color: var(--mod, #7c3aed);
+        }
+
+        &.added { border-left-color: var(--add, #16a34a); }
+        &.removed { border-left-color: var(--rem, #dc2626); }
+
+        .file-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 18px;
+          width: 18px;
+          height: 18px;
+          border-radius: 5px;
+          background: #eceff3;
+          color: #707987;
+          font: 600 12px var(--mono, monospace);
+          &.added { background: #e8f6ec; color: #16803c; }
+          &.removed { background: #fcebec; color: #bd343b; }
+          &.renamed { background: #f1ebff; color: #7544b8; }
         }
 
         .fpath {
@@ -162,13 +201,13 @@
         .fstat {
           display: flex;
           align-items: center;
-          gap: 8px;
-          font-size: 12px;
+          gap: 7px;
+          font-size: 11px;
 
           .badge {
             font-style: normal;
             color: var(--muted, #8a94a6);
-            font-size: 11px;
+            font-size: 10px;
             text-transform: lowercase;
           }
           .add {
@@ -178,11 +217,22 @@
             color: var(--rem, #dc2626);
           }
         }
+
+        .chevron {
+          color: #9aa3af;
+          font-size: 17px;
+          line-height: 1;
+          transition: transform 160ms ease;
+          &.open { transform: rotate(90deg); }
+        }
       }
 
       // Раскрытый патч файла — side-by-side.
       .fpatch {
-        border-top: 1px solid var(--line, #e2e8f0);
+        margin: 2px 0 8px 27px;
+        overflow: hidden;
+        border-left: 1px solid #e1e5eb;
+        animation: diff-patch-in 180ms ease-out both;
       }
     }
   }
@@ -203,6 +253,13 @@
   // ── Side-by-side (JetBrains-стиль) ────────────────────────────────
   .sdiff {
     overflow: hidden;
+
+    &.only-new .sdiff-head,
+    &.only-new .sdiff-cols,
+    &.only-old .sdiff-head,
+    &.only-old .sdiff-cols {
+      grid-template-columns: minmax(0, 1fr);
+    }
 
     .sdiff-head {
       display: grid;
@@ -241,11 +298,12 @@
     .sdiff-cols {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      height: 100%;
-      min-height: 0;
+      // Растём по содержимому патча, не растягиваем раскрытие до высоты drawer.
+      height: auto;
 
       .col {
-        overflow: auto;
+        min-width: 0;
+        overflow: hidden;
         font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
         font-size: 12px;
         line-height: 17px;
@@ -366,4 +424,66 @@
       }
     }
   }
+}
+
+.diff-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted, #8a94a6);
+  font-size: 12px;
+  b { color: var(--ink, #1b2330); font-weight: 650; }
+  .added { color: #16803c; font-family: var(--mono, monospace); }
+  .removed { color: #bd343b; font-family: var(--mono, monospace); }
+  .branch { margin-left: auto; overflow: hidden; color: #778190; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); font-size: 10px; }
+}
+
+.snap-hint { margin: 0; }
+
+.diff-tools {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+  min-height: 34px;
+
+  .file-search {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+    min-width: 120px;
+    max-width: 340px;
+    padding: 6px 9px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: #f3f4f6;
+    color: #8a94a6;
+    transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+    &:focus-within { border-color: #cbd2dc; background: #fff; box-shadow: 0 0 0 3px rgb(100 116 139 / .1); }
+    input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink, #1b2330); font: inherit; font-size: 12px; }
+    input::placeholder { color: #98a2b3; }
+    button { border: 0; background: transparent; color: inherit; font-size: 16px; cursor: pointer; }
+  }
+
+  .file-filters { display: flex; gap: 2px; overflow-x: auto; padding: 2px; border-radius: 9px; background: #f3f4f6; }
+  .file-filters button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: #7d8794; font-size: 10px; white-space: nowrap; cursor: pointer; }
+  .file-filters button:hover { color: var(--ink, #1b2330); }
+  .file-filters button.active { background: #fff; color: var(--ink, #1b2330); box-shadow: 0 1px 2px rgb(15 23 42 / .08); }
+  .file-filters button span { opacity: .65; font-variant-numeric: tabular-nums; }
+}
+
+.empty-diff, .no-files { margin: 0; padding: 16px 4px; color: var(--muted, #8a94a6); font-size: 13px; }
+
+@keyframes diff-entry-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes diff-patch-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media (max-width: 620px) {
+  .diff-tools { flex-wrap: wrap; }
+  .diff-tools .file-search { max-width: none; flex-basis: 100%; }
+  .diff-summary .branch { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .diffboard *, .diffboard *::before, .diffboard *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
