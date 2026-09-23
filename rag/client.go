@@ -58,6 +58,7 @@ type QdrantStore interface {
 	Upsert(ctx context.Context, request *qdrant.UpsertPoints) (*qdrant.UpdateResult, error)
 	Delete(ctx context.Context, request *qdrant.DeletePoints) (*qdrant.UpdateResult, error)
 	Query(ctx context.Context, request *qdrant.QueryPoints) ([]*qdrant.ScoredPoint, error)
+	Count(ctx context.Context, request *qdrant.CountPoints) (*qdrant.CountResponse, error)
 	Close() error
 }
 
