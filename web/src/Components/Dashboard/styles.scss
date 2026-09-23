@@ -8,6 +8,7 @@
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+  min-height: 0;
 
   .banner {
     display: flex;
@@ -27,13 +28,59 @@
     }
   }
 
+  .board-tools {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+
+    button { transition: color 150ms ease, background 150ms ease, transform 150ms ease; }
+    button:active:not(:disabled) { transform: scale(.97); }
+
+    .board-search {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex: 1 1 210px;
+      max-width: 340px;
+      min-width: 150px;
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: #f1f2f4;
+      color: var(--muted, #8a94a6);
+      transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+      &:focus-within { border-color: #cbd2dc; background: #fff; box-shadow: 0 0 0 3px rgb(100 116 139 / .1); }
+      input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink, #1b2330); font: inherit; font-size: 12px; }
+      input::placeholder { color: #98a2b3; }
+      button { border: 0; background: transparent; color: inherit; font-size: 16px; cursor: pointer; }
+    }
+
+    .status-filters { display: flex; gap: 2px; max-width: 100%; overflow-x: auto; padding: 2px; border-radius: 9px; background: #f1f2f4; }
+    .status-filters button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: #7d8794; font-size: 10px; white-space: nowrap; cursor: pointer; }
+    .status-filters button:hover { color: var(--ink, #1b2330); }
+    .status-filters button.active { background: #fff; color: var(--ink, #1b2330); box-shadow: 0 1px 2px rgb(15 23 42 / .08); }
+    .status-filters button span { color: #8993a0; font-variant-numeric: tabular-nums; }
+    .status-filters button.active.new { color: var(--st-todo, #64748b); }
+    .status-filters button.active.analysis { color: var(--st-analysis, #7c3aed); }
+    .status-filters button.active.ready { color: var(--st-ready, #0891b2); }
+    .status-filters button.active.in_progress { color: var(--st-in-progress, #2563eb); }
+    .status-filters button.active.done { color: var(--st-done, #15803d); }
+    .status-filters button.active.paused { color: var(--st-paused, #b45309); }
+    .match-count { margin-left: auto; color: var(--muted, #8a94a6); font-size: 11px; white-space: nowrap; }
+  }
+
   .boardgrid {
     display: grid;
     // 7 колонок статусов (Ф-6: добавлена «На паузе»); минимум сужен, чтобы
     // матрица влезала в панель доски без горизонтального скролла.
-    grid-template-columns: minmax(180px, auto) repeat(7, minmax(110px, 1fr));
-    gap: 6px;
+    grid-template-columns: minmax(170px, 190px) repeat(7, minmax(108px, 1fr));
+    gap: 7px;
     align-items: start;
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 8px;
 
     // Каждая группа эпика (заголовок, задачи и его баги) — единый элемент
     // сетки, чьи внутренние ячейки выравниваются по колонкам доски.
@@ -44,6 +91,7 @@
       gap: 6px;
       min-width: 0;
       align-items: start;
+      animation: epic-row-in 180ms ease-out both;
     }
 
     .corner,
@@ -86,50 +134,57 @@
     .grid-head.done { color: var(--st-done, #15803d); }
     .grid-head.paused { color: var(--st-paused, #b45309); }
 
-    .bug-row-label,
-    .bug-cell {
+    .epic-bugs {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
       min-width: 0;
-      padding: 6px;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 8px;
-      background: var(--card, #fff);
-    }
+      padding: 7px 9px 9px;
+      border-top: 1px solid #e8ebef;
+      animation: epic-row-in 180ms ease-out both;
 
-    .bug-row-label {
-      position: sticky;
-      left: 0;
-      z-index: 2;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--err, #dc2626);
-    }
-
-    .bug-cell {
-      min-height: 42px;
-      border-top-width: 3px;
-      overflow: hidden;
-
-      .bug-count {
-        margin-bottom: 5px;
-        color: var(--muted, #8a94a6);
+      .bug-row-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        flex: 0 0 auto;
+        padding-top: 4px;
+        color: #8a5360;
         font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        span { color: #a1a8b2; font-variant-numeric: tabular-nums; }
       }
 
       ul {
         display: flex;
-        flex-direction: column;
-        gap: 5px;
-        list-style: none;
+        flex: 1;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
         margin: 0;
         padding: 0;
+        list-style: none;
       }
 
-      &.new { border-top-color: var(--st-todo, #64748b); }
-      &.confirmed { border-top-color: var(--st-analysis, #7c3aed); }
-      &.fix { border-top-color: var(--st-ready, #0891b2); }
-      &.fixed { border-top-color: var(--st-done, #15803d); }
-      &.slop, &.feature, &.wont_fix { border-top-color: var(--muted, #8a94a6); }
+      .bug {
+        flex: 0 1 250px;
+        max-width: 100%;
+        min-width: 150px;
+        padding: 6px 8px;
+        border: 0;
+        border-radius: 8px;
+        background: #f6f6f7;
+        transition: background 140ms ease, transform 140ms ease;
+        &:hover { background: #eff0f2; transform: translateY(-1px); }
+        .title { font-size: 11px; }
+        .tag { padding: 2px 5px; border-radius: 5px; background: #eceef1; }
+      }
     }
+
+    .board-empty { grid-column: 1 / -1; padding: 26px; color: var(--muted, #8a94a6); text-align: center; }
   }
 
   &.empty {
@@ -234,4 +289,10 @@
       }
     }
   }
+}
+
+@keyframes epic-row-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard *, .dashboard *::before, .dashboard *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

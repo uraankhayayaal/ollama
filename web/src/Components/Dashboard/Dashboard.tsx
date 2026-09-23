@@ -57,6 +57,8 @@ export function Dashboard({
   // Свёрнутость эпиков: явный выбор пользователя (toggle[epicId]) перекрывает
   // значение по умолчанию (неактивные свёрнуты, активные развёрнуты).
   const [collapseToggle, setCollapseToggle] = useState<Record<string, boolean>>({});
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   if (!board) {
     if (collapsed) {
@@ -140,9 +142,26 @@ export function Dashboard({
   // Баги принадлежат только существующему эпику. Не создаём для них
   // синтетические строки «без эпика».
 
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleRows = rows.map((r) => {
+    const epicMatches = !!normalizedQuery && (r.epic?.title ?? "").toLocaleLowerCase().includes(normalizedQuery);
+    const tasks = r.tasks.filter((t) =>
+      (statusFilter === "all" || t.status === statusFilter) &&
+      (!normalizedQuery || epicMatches || `${t.title} ${t.task_id} ${t.description}`.toLocaleLowerCase().includes(normalizedQuery)),
+    );
+    const bugs = r.bugs.filter((b) =>
+      !normalizedQuery || epicMatches || `${b.title} ${b.bug_id} ${b.description}`.toLocaleLowerCase().includes(normalizedQuery),
+    );
+    return { ...r, tasks, bugs, epicMatches };
+  }).filter((r) => {
+    if (!normalizedQuery && statusFilter === "all") return true;
+    return r.epicMatches || r.tasks.length > 0 || r.bugs.length > 0;
+  });
+
+  const visibleTasks = visibleRows.flatMap((r) => r.tasks);
   const statusCounts = STATUS_ORDER.map((s) => ({
     status: s,
-    count: board.tasks.filter((t) => t.status === s).length,
+    count: visibleTasks.filter((t) => t.status === s).length,
   }));
 
   // Эпик активен, если у него есть незавершённые задачи (new → in_progress);
@@ -182,6 +201,23 @@ export function Dashboard({
         </span>
       </div>
 
+      <div className="board-tools">
+        <label className="board-search">
+          <IconSearch />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Найти эпик, задачу или баг" aria-label="Найти на доске" />
+          {query && <button type="button" onClick={() => setQuery("")} title="Очистить поиск">×</button>}
+        </label>
+        <div className="status-filters" aria-label="Фильтр статуса задач">
+          <button className={statusFilter === "all" ? "active" : ""} onClick={() => setStatusFilter("all")}>Все</button>
+          {STATUS_ORDER.map((s) => (
+            <button key={s} className={statusFilter === s ? `active ${s}` : ""} onClick={() => setStatusFilter(s)}>
+              {STATUS_LABEL[s]} <span>{board.tasks.filter((t) => t.status === s).length}</span>
+            </button>
+          ))}
+        </div>
+        {(query || statusFilter !== "all") && <span className="match-count">{visibleTasks.length} задач · {visibleRows.length} эпиков</span>}
+      </div>
+
       <div className="boardgrid">
         <div className="corner">Эпик</div>
         {statusCounts.map(({ status, count }) => (
@@ -189,7 +225,7 @@ export function Dashboard({
             {STATUS_LABEL[status]} <b>{count}</b>
           </div>
         ))}
-        {rows.map((r) => (
+        {visibleRows.map((r) => (
           <EpicRowView
             key={r.epicId}
             epic={r.epic}
@@ -210,6 +246,7 @@ export function Dashboard({
             onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}
+        {visibleRows.length === 0 && <div className="board-empty">Ничего не найдено. Измените запрос или фильтр.</div>}
       </div>
 
       {epic && (
@@ -266,4 +303,8 @@ function IconBug() {
       <path d="M2.5 13h4M17.5 13h4M3 20l3.5-2M21 20l-3.5-2M7.5 13a4.5 4.5 0 0 0 9 0" />
     </svg>
   );
+}
+
+function IconSearch() {
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>;
 }

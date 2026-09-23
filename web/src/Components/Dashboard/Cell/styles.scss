@@ -1,16 +1,17 @@
 // Стили ячейки доски (эпик × статус). Класс .cell — глобальный.
 
 .cell {
-  min-height: 64px;
-  padding: 6px;
-  border: 1px solid var(--line, #e2e8f0);
-  border-radius: 8px;
-  background: var(--card, #fff);
+  min-height: 58px;
+  padding: 7px 5px;
+  border: 0;
+  border-top: 2px solid var(--line, #e2e8f0);
+  border-radius: 0 0 8px 8px;
+  background: #f7f8fa;
 
   ul {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 6px;
     list-style: none;
     margin: 0;
     padding: 0;
@@ -31,15 +32,18 @@
     }
   }
 
-  &.new { border-top: 3px solid var(--st-todo, #64748b); }
-  &.analysis { border-top: 3px solid var(--st-analysis, #7c3aed); }
-  &.ready { border-top: 3px solid var(--st-ready, #0891b2); }
-  &.in_progress { border-top: 3px solid var(--st-in-progress, #2563eb); }
-  &.done { border-top: 3px solid var(--st-done, #15803d); }
-  &.cancelled { border-top: 3px solid var(--muted, #8a94a6); }
-  &.paused { border-top: 3px solid var(--st-paused, #b45309); }
+  &.new { border-top-color: var(--st-todo, #64748b); }
+  &.analysis { border-top-color: var(--st-analysis, #7c3aed); }
+  &.ready { border-top-color: var(--st-ready, #0891b2); }
+  &.in_progress { border-top-color: var(--st-in-progress, #2563eb); }
+  &.done { border-top-color: var(--st-done, #15803d); }
+  &.cancelled { border-top-color: var(--muted, #8a94a6); }
+  &.paused { border-top-color: var(--st-paused, #b45309); }
 
   &.collapsed {
     min-height: 0;
+    padding: 2px;
+    background: transparent;
+    border-top-color: transparent;
   }
 }

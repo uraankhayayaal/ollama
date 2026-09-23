@@ -2,36 +2,56 @@
 // см. общий стиль проекта).
 
 .task {
-  padding: 8px 10px;
-  border: 1px solid var(--line, #e2e8f0);
-  border-radius: 8px;
-  background: var(--card, #fff);
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / .045);
   cursor: pointer;
+  transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 
   &:hover {
-    border-color: var(--primary, #2563eb);
+    background: #fff;
+    box-shadow: 0 3px 10px rgb(15 23 42 / .09);
+    transform: translateY(-1px);
+  }
+
+  &:focus-visible {
+    outline: 2px solid #aab5c4;
+    outline-offset: 1px;
   }
 
   .title {
-    font-size: 13px;
-    font-weight: 600;
-    margin-bottom: 4px;
+    font-size: 12px;
+    font-weight: 550;
+    line-height: 1.4;
+    margin-bottom: 3px;
+    overflow-wrap: anywhere;
   }
 
   .controls {
-    margin-top: 6px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-top: 5px;
 
     button {
       font-size: 11px;
-      padding: 2px 7px;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 5px;
-      background: var(--btn, #f1f5f9);
+      width: 22px;
+      height: 20px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: #f1f2f4;
+      color: #66707e;
       cursor: pointer;
 
       &:hover {
-        background: var(--btn-hover, #e2e8f0);
+        background: #e6e8ec;
+        color: var(--ink, #1b2330);
       }
+
+      &:active { transform: scale(.94); }
     }
   }
 }
