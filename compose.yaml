@@ -1,50 +1,10 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    container_name: ollama
-    working_dir: /app/backend
-    volumes:
-      - ollama:/root/.ollama
-    networks:
-      docker-net:
-    ports:
-      - "11434:11434"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    # Раскомментируйте блок ниже, если у вас есть GPU от NVIDIA и настроен Nvidia Container Toolkit
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    restart: unless-stopped
-    container_name: open-webui
-    working_dir: /app/backend
-    volumes:
-      - open-webui:/app/backend/data
-    networks:
-      docker-net:
-    ports:
-      - "3000:8080"
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      - ollama
-
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant_rag
     ports:
       - "6333:6333" # REST API и Web UI
-      - "6334:6334" # gRPC API (лучший выбор для Go)
+      - "96334:6334" # gRPC API (используется приложением, QDRANT_ADDR)
     volumes:
       - qdrant:/qdrant/storage
     restart: always
@@ -54,20 +14,12 @@ services:
     container_name: ollama-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "96379:6379" # REDIS_ADDR / BOARD_REDIS_ADDR
     volumes:
       - redis:/data
-    networks:
-      docker-net:
     # AOF для durability чекпоинтов планировщика
     command: ["redis-server", "--appendonly", "yes"]
 
 volumes:
-  ollama: {}
   qdrant: {}
-  open-webui: {}
   redis: {}
-
-networks:
-  docker-net:
-    external: true

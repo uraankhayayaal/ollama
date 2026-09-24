@@ -21,7 +21,7 @@ type Config struct {
 // LoadConfig читает настройки архитектора из переменных окружения.
 func LoadConfig() Config {
 	return Config{
-		RedisAddr:     envString("BOARD_REDIS_ADDR", "localhost:6379"),
+		RedisAddr:     envString("BOARD_REDIS_ADDR", "localhost:96379"),
 		RedisPassword: os.Getenv("BOARD_REDIS_PASSWORD"),
 		RedisDB:       envInt("BOARD_REDIS_DB", 0),
 		RedisTTL:      envDuration("BOARD_TTL", 0),

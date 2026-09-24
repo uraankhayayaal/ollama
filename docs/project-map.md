@@ -271,7 +271,7 @@ ollama/  (go.mod module ai)
 ### Чекпоинты планировщика (Redis)
 | Переменная | Описание | По умолчанию |
 |---|---|---|
-| `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB` | адрес/пароль/база Redis для чекпоинтов | `localhost:6379` / — / `0` |
+| `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB` | адрес/пароль/база Redis для чекпоинтов | `localhost:96379` / — / `0` |
 | `PLAN_CHECKPOINT` | принудительно включить чекпоинты (`1`) | авто при Redis |
 | `PLAN_CHECKPOINT_TTL` | TTL чекпоинта | `0` (без) |
 | `PLAN_RESUME` | продолжить план (`1`, аналог `--resume`) | — |
@@ -279,7 +279,7 @@ ollama/  (go.mod module ai)
 ### Kanban-доска (Redis)
 | Переменная | Описание | По умолчанию |
 |---|---|---|
-| `BOARD_REDIS_ADDR` / `BOARD_REDIS_PASSWORD` / `BOARD_REDIS_DB` | Redis доски | `localhost:6379` / — / `0` |
+| `BOARD_REDIS_ADDR` / `BOARD_REDIS_PASSWORD` / `BOARD_REDIS_DB` | Redis доски | `localhost:96379` / — / `0` |
 | `BOARD_TTL` | TTL записей доски | `0` (без) |
 
 ### Web UI (`go run . serve`)

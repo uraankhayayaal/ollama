@@ -30,7 +30,7 @@ func (e *ErrDependency) Error() string {
 
 // StoreConfig — параметры подключения Redis-хранилища доски.
 type StoreConfig struct {
-	// Addr — адрес Redis вида "host:port". По умолчанию "localhost:6379".
+	// Addr — адрес Redis вида "host:port". По умолчанию "localhost:96379".
 	Addr string
 	// Password — пароль Redis (пусто — без пароля).
 	Password string
@@ -106,7 +106,7 @@ func (s *Store) metaKey() string          { return s.key("meta") }
 func NewStore(ctx context.Context, cfg StoreConfig) (*Store, error) {
 	addr := cfg.Addr
 	if addr == "" {
-		addr = "localhost:6379"
+		addr = "localhost:96379"
 	}
 	if cfg.Project == "" {
 		return nil, fmt.Errorf("board: имя проекта обязательно для хранилища доски")
@@ -127,7 +127,7 @@ func NewStore(ctx context.Context, cfg StoreConfig) (*Store, error) {
 func NewStoreNoCheck(cfg StoreConfig) *Store {
 	addr := cfg.Addr
 	if addr == "" {
-		addr = "localhost:6379"
+		addr = "localhost:96379"
 	}
 	return &Store{
 		client:  redis.NewClient(&redis.Options{Addr: addr, Password: cfg.Password, DB: cfg.DB}),
