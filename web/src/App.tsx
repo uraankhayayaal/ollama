@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, updateTask } from "./Api";
+import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -367,6 +367,26 @@ export function App() {
     }
   };
 
+  // «Индекс RAG»: фоновая индексация векторной памяти проекта (Ф-5). Вызов не
+  // блокирует UI; повторный запуск при идущей индексации отклоняется сервером.
+  const [indexing, setIndexing] = useState(false);
+  const indexingRef = useRef(false);
+  const onIndex = async () => {
+    if (!project || indexingRef.current) {
+      return;
+    }
+    indexingRef.current = true;
+    setIndexing(true);
+    try {
+      await indexProject(BASE, project.project_name);
+    } catch (e) {
+      fail(e);
+    } finally {
+      indexingRef.current = false;
+      setIndexing(false);
+    }
+  };
+
   const onGate = async (gateName: "epics" | "tasks", decision: { approved: boolean; reason?: string }) => {
     if (!project) {
       return;
@@ -667,6 +687,16 @@ export function App() {
         <WorkspacePicker projects={projects} current={project} onOpen={open} busy={busy} />
         <div className="head-actions">
           {project && <TokensCounter in={tokens.in} out={tokens.out} tps={tokens.tps} />}
+          {project && (
+            <button
+              className="btn"
+              onClick={() => void onIndex()}
+              disabled={indexing}
+              title="Построить RAG-индекс проекта в фоне (не блокирует оркестрацию)"
+            >
+              {indexing ? "Индексирую…" : "Индекс RAG"}
+            </button>
+          )}
           <RunButton
             status={status}
             canContinue={canContinue}

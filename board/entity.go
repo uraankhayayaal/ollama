@@ -144,7 +144,7 @@ type TaskSpec struct {
 }
 
 // Opportunity — кросс-функциональная возможность/инсайт архитектора для
-// смежного направления (Ф-6 PLAN-2026-09-24-wip-architect-intelligence.md): целевая роль и
+// смежного направления (Ф-6 PLAN-2026-09-24-done-architect-intelligence.md): целевая роль и
 // предложение. Опциональное поле бэклога — не эпик, а рекомендация лидам.
 type Opportunity struct {
 	TargetRole string `json:"target_role"`
@@ -193,7 +193,7 @@ type Epic struct {
 	// содержание эпика изменилось, лиду нужна повторная ревизия задач.
 	LeadSyncedRev int `json:"lead_synced_rev"`
 	// RequiresReview — требуется ли ревизия Системного архитектора перед
-	// декомпозицией лидом (Ф-8 PLAN-2026-09-24-wip-architect-intelligence.md). Эпики,
+	// декомпозицией лидом (Ф-8 PLAN-2026-09-24-done-architect-intelligence.md). Эпики,
 	// созданные в чате ассистентом, — черновики: им обязательна ревизия
 	// (безопасный дефолт true для новых записей). Эпики бэклога самого
 	// архитектора (submit_architecture_backlog) — явный false: свой план

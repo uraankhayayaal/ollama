@@ -177,6 +177,20 @@ export async function continueProject(
   );
 }
 
+// Фоновая индексация RAG-памяти проекта (кнопка «Индекс RAG», Ф-5). Запускает
+// горутину на сервере — цикл оркестрации не блокируется; результат (файлы/
+// чанки) приходит статусом в чат.
+export async function indexProject(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean; message: string }> {
+  return req<{ ok: boolean; message: string }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/index`,
+    {},
+  );
+}
+
 export async function chatHistory(
   base: string,
   project: string,

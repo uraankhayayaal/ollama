@@ -220,6 +220,6 @@ npm run build   # web/
 - `PLAN-2026-09-19-done-qdrant.md` — RAG/Qdrant: Ф-7 добавляет
   «эпизоды» (псевдо-проект `@episodes:<project>`) к `IndexProject`;
   Ф-8 — `Similarity` на тех же эмбеддерах без новых коллекций.
-- `PLAN-2026-09-24-wip-architect-intelligence.md` — независимая сессия
+- `PLAN-2026-09-24-done-architect-intelligence.md` — независимая сессия
   (архитектор + RAG/AskUser/fоновая индексация); сжатие в канбан-сессиях
   подключается через тот же `runctx.WithCompression` (`server/session.go:221`).

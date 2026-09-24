@@ -38,7 +38,7 @@ go test . ./agents/... ./tools/ ./board/
 - Предсуществующие неформатированные файлы (`agents/acceptor/checks.go`,
   `agents/acceptor/run.go`) не трогать.
 
-Состояние последней сессии (PLAN-wip-architect-intelligence, Ф-4/Ф-5):
+Состояние последней сессии (PLAN-2026-09-24-done-architect-intelligence, Ф-1..Ф-8, остался ручной E2E):
 Ф-4 «Корректность задачи, паттерны, AskUser» — архитектор получил
 `KanbanRunner.SetRAG` (Р-6) и `KanbanRunner.SetArchitectExtras` (Р-5),
 применяемые в `phaseArchitect`/`phaseArchitectReview`/`phaseBugs` через
@@ -64,9 +64,11 @@ doc-комментариев.
 (замена для hermetic-тестов). `npm run build` web/ зелёный; `go test
 ./server/` — неизвестно 2 флаки чат-ассистента
 (`TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`),
-падают и на чистой базе (не связаны с Ф-4/Ф-5). Отложено: опциональный
-REST `POST /api/projects/{id}/index` + кнопка в Web UI (необязательный нюанс
-Ф-5).
+падают и на чистой базе (не связаны с Ф-4/Ф-5). Опциональный нюанс Ф-5
+сделан: REST `POST /api/projects/{id}/index` (`handleProjectIndex`,
+server/server.go — 409 при идущей, 503 при недоступном RAG) + кнопка «Индекс
+RAG» в `web/src/App.tsx` (head-actions); тесты `TestRESTProjectIndex` /
+`TestRESTProjectIndexRAGUnavailable`.
 
 Ф-6 «Кросс-функциональные инсайты» — `board/entity.go`: тип
 `Opportunity{TargetRole, Suggestion}` + `Backlog.Opportunities []Opportunity`
@@ -92,7 +94,7 @@ REST `POST /api/projects/{id}/index` + кнопка в Web UI (необязат�
 Frontend Lead. Далее по плану — Ф-8 и следующие фазы уже реализованы
 (Ф-8 в списке: эпики из чата — ревизия архитектора).
 
-Состояние последней сессии (PLAN-2026-09-24-todo-makefile, Ф-1..Ф-5 готовы,
+Состояние последней сессии (PLAN-2026-09-24-done-makefile, Ф-1..Ф-5 готовы,
 остался ручной E2E): корневой Makefile проекта (temp/<проект>/Makefile) —
 единая точка входа команд субагентов и приёмки. Ф-1: `tools/stacktool.go`
 `StackInfo.Makefile (json:"makefile")` + маркер «Makefile»; секция «MAKEFILE
@@ -116,7 +118,7 @@ make-цель → автодетект kind; make-команды исполня�
 `TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
 `TestChatAssistantPublishesBoardWhenIdle`).
 
-Состояние после PLAN-2026-09-24-todo-merge-conflict-board (Ф-1..Ф-5, остался
+Состояние после PLAN-2026-09-24-done-merge-conflict-board (Ф-1..Ф-5, остался
 ручной E2E): конфликты мёрджа стали видимы на доске. Ф-1: `board/entity.go` —
 `MergeConflictFiles []string` у `Epic`/`Task` (`json:"merge_conflict_files,
 omitempty"`); запись/очистка в `autoCommitAndMergeTask` (done→релиз), `Session.

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Ф-2 PLAN-2026-09-24-wip-architect-intelligence.md: побочная эвристика DetectStack.
+// Ф-2 PLAN-2026-09-24-done-architect-intelligence.md: побочная эвристика DetectStack.
 // Синтетические проекты: консоль без frontend, монорепо с server+frontend,
 // php/laravel-проект.
 

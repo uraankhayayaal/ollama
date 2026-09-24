@@ -1,6 +1,6 @@
 # План: «Умный Системный архитектор» — RAG, роли, глубина, смежные системы
 
-Статус: **В РАБОТЕ** (Ф-4/Ф-5 выполнены, осталось: опциональный REST-индекс и ручной E2E).
+Статус: **DONE** (Ф-1..Ф-8 реализованы и верифицированы; остался ручной E2E на живом проекте).
 Формат — как остальные `PLAN-*.md`: текущее состояние (`file:line`), решения
 пользователя, архитектурные решения, новые компоненты, этапы с чекбоксами,
 верификация. Обновлять по мере выполнения (чекбоксы `[x]`), статус менять
@@ -246,7 +246,7 @@
 | `server/actions.go` (правка) | мост `IndexBackground` + `ActionsBackend.IndexBackground` |
 | `server/ragindex.go` | фоновая индексация: walk + `IndexProject` + отчёт в чат/лог |
 | `main.go` (правка) | CLI-канбан: `runner.SetRAG(ragClient)` |
-| `docs/PLAN-2026-09-24-wip-architect-intelligence.md` | этот план |
+| `docs/PLAN-2026-09-24-done-architect-intelligence.md` | этот план |
 
 ## Интеграции с существующим кодом
 
@@ -355,9 +355,10 @@ IndexBackground (server-мост, безопасный):
       „Построить RAG-индекс в фоне?" → при «да» вызови `IndexBackground` и
       продолжай проектирование; при «нет»/недоступности — работай
       ReadMap/ReadFiles/LSP и пометь в architecture_summary, что RAG пуст»
-- [ ] Опц.: `POST /api/projects/{id}/index` + кнопка в Web UI (EntryPoint —
-      `server/server.go`, `web/src/Components/Dashboard`) — отложено (не
-      обязательный нюанс; мост доступен из цикла архитектора)
+- [x] Опц.: `POST /api/projects/{id}/index` + кнопка в Web UI (EntryPoint —
+      `server/server.go`, `web/src/Components/Dashboard`) — сделано: REST
+      `handleProjectIndex` (409 при идущей, 503 при недоступном RAG) +
+      кнопка «Индекс RAG» в `web/src/App.tsx` (head-actions)
 - [x] Тесты: мост `IndexBackground` запускает индексацию (fake-walker/фейк
       Qdrant), не блокирует цикл; повторный запуск идемпотентен; два запуска
       подряд при идущей индексации отклоняется (single-flight)
@@ -379,10 +380,11 @@ IndexBackground (server-мост, безопасный):
 - [x] `go build . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
 - [x] `go vet  . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
 - [x] `go test . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
-      (падают только 2 пред-существующих флака ассистента —
+      (падают только 3 пред-существующих флака ассистента —
       `TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
-      падают и на чистой базе; не связаны с Ф-4..Ф-6)
-- [x] `npm run build` (web/) — зелёный
+      `TestChatAssistantPublishesBoardWhenIdle` — падают и на чистой базе;
+      не связаны с Ф-4..Ф-6)
+- [x] `npm run build` (web/) — зелёный (включая кнопку «Индекс RAG» Ф-5)
 - [ ] Ручной E2E на реальном проекте (Web UI): новая задача на существующий
       репозиторий → архитектор поднимает RAG-индекс в фоне по согласию,
       декомпозирует с учётом стека и ролей; «кнопка на фронте» → эпик покрывает

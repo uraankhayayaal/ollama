@@ -1,6 +1,7 @@
 # План: «Makefile проекта — единая точка входа команд для субагентов + инфраструктурный слой DevOps»
 
-Статус: **TODO** (план, реализация не начата).
+Статус: **DONE** (Ф-1..Ф-5 реализованы, `go build/vet`+`go test` по перечню
+AGENTS.md зелёные; остался ручной E2E).
 Формат — как остальные `PLAN-*.md`: текущее состояние (`file:line`), решения
 пользователя, архитектурные решения, новые компоненты, этапы с чекбоксами,
 верификация. Обновлять по мере выполнения (чекбоксы `[x]`), статус менять
@@ -210,7 +211,7 @@ node → build/test/lint, php → lint, python → compileall/black/ruff.
 
 | Файл | Назначение |
 |---|---|
-| `docs/PLAN-2026-09-24-todo-makefile.md` | этот план |
+| `docs/PLAN-2026-09-24-done-makefile.md` | этот план |
 | `agents/architect/agent.go` (правка) | секция «MAKEFILE ПРОЕКТА» в `architectureSystemPrompt`/`epicReviewSystemPrompt`/`bugExpertSystemPrompt`; правило обязательного эпика при отсутствии Makefile |
 | `tools/stacktool.go` (правка) | `StackInfo.Makefile` + маркер `Makefile` в детекте |
 | `agents/developer/developer.go` (правка) | п.5: приоритет Makefile-цели в `Run` |
@@ -328,7 +329,7 @@ go test . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/
 
 ## Связанные планы
 
-- `PLAN-2026-09-24-wip-architect-intelligence.md` — Ф-2 (`DetectStack` + роли)
+- `PLAN-2026-09-24-done-architect-intelligence.md` — Ф-2 (`DetectStack` + роли)
   и Ф-4 (корректность задачи) — основа для правила «эпик Makefile» и поля
   `makefile` в детекте; этот план расширяет контракт целей архитектора.
 - `PLAN-2026-09-19-done-lsp.md` / `PLAN-2026-09-19-done-qdrant.md` — инструменты

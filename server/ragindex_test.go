@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,6 +225,72 @@ func TestSessionIndexBackground(t *testing.T) {
 	case <-bi.closed:
 	default:
 		t.Error("клиент RAG фоновой индексации не закрыт после завершения")
+	}
+}
+
+// TestRESTProjectIndex — кнопка «Индекс RAG» (опциональный нюанс Ф-5):
+// POST /api/projects/{id}/index запускает фоновую индексацию (горутину),
+// отвечает 200 {ok,message}; по завершении — status-сообщение в чат.
+func TestRESTProjectIndex(t *testing.T) {
+	orig := buildProjectIndexer
+	defer func() { buildProjectIndexer = orig }()
+
+	srv, handler, _ := newTestServer(t)
+	dir := registerTestDir(t, srv, "proj-rag-rest")
+	writeTestFile(t, dir, "main.go", "package main\n")
+
+	idx := &fakeProjectIndexer{}
+	buildProjectIndexer = func() (projectIndexerCloser, error) { return idx, nil }
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		"POST", "/api/projects/proj-rag-rest/index", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST index: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["ok"] != true {
+		t.Fatalf("ответ = %+v", out)
+	}
+
+	// Индексация ушла в горутину: ждём финальный status-отчёт в чате.
+	sess, _, err := srv.getOrCreate("proj-rag-rest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := waitChatRole(t, sess, chat.RoleStatus, 3*time.Second); !containsCase(m.Content, "RAG-индекс") {
+		t.Fatalf("нет status-отчёта об индексации, последний: %q", m.Content)
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if len(idx.calls) != 1 || idx.calls[0].project != "proj-rag-rest" {
+		t.Fatalf("IndexProject вызван с %+v, want 1 вызов по proj-rag-rest", idx.calls)
+	}
+}
+
+// TestRESTProjectIndexRAGUnavailable — недоступный клиент RAG: 503, тело с
+// сообщением (UI показывает ошибку, доска не ломается).
+func TestRESTProjectIndexRAGUnavailable(t *testing.T) {
+	orig := buildProjectIndexer
+	defer func() { buildProjectIndexer = orig }()
+	buildProjectIndexer = func() (projectIndexerCloser, error) {
+		return nil, errors.New("клиент RAG не создан (проверь QDRANT_ADDR и EMBEDDING_MODEL)")
+	}
+
+	srv, handler, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-rag-rest-err")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		"POST", "/api/projects/proj-rag-rest-err/index", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST index без RAG: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "QDRANT_ADDR") {
+		t.Fatalf("тело 503 не объясняет причину: %s", rec.Body.String())
 	}
 }
 

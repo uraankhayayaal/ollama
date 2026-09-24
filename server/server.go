@@ -173,6 +173,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/chat", s.handleChatHistory)
 	mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleClearChat)
 	mux.HandleFunc("POST /api/projects/{id}/continue", s.handleContinue)
+	mux.HandleFunc("POST /api/projects/{id}/index", s.handleProjectIndex)
 	mux.HandleFunc("GET /api/projects/{id}/tokens", s.handleGetTokens)
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
@@ -665,6 +666,34 @@ func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleProjectIndex — фоновая индексация RAG-памяти проекта по кнопке в Web
+// UI (опциональный нюанс Ф-5, PLAN-2026-09-24-done-architect-intelligence.md,
+// Р-2). Вызов не блокирует цикл: Session.IndexBackground запускает горутину;
+// результат (файлы/чанки) уходит в лог и chat.RoleStatus. Повтор при уже
+// идущей индексации — 409; недоступный клиент RAG (нет Qdrant/модели) — 503.
+func (s *Server) handleProjectIndex(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
+		return
+	}
+	if err := sess.IndexBackground(r.Context()); err != nil {
+		sess.log.Warnf("[index] фоновая индексация %s: %v", project, err)
+		msg := err.Error()
+		if strings.Contains(msg, "уже запущена") {
+			writeErr(w, http.StatusConflict, msg)
+			return
+		}
+		writeErr(w, http.StatusServiceUnavailable, msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"message": "Индексация RAG-индекса запущена в фоне",
+	})
 }
 
 // handleChatHistory возвращает историю диалога.
