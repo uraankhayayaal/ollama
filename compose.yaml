@@ -4,7 +4,7 @@ services:
     container_name: qdrant_rag
     ports:
       - "6333:6333" # REST API и Web UI
-      - "96334:6334" # gRPC API (используется приложением, QDRANT_ADDR)
+      - "56334:6334" # gRPC API (используется приложением, QDRANT_ADDR)
     volumes:
       - qdrant:/qdrant/storage
     restart: always
@@ -14,7 +14,7 @@ services:
     container_name: ollama-redis
     restart: unless-stopped
     ports:
-      - "96379:6379" # REDIS_ADDR / BOARD_REDIS_ADDR
+      - "56379:6379" # REDIS_ADDR / BOARD_REDIS_ADDR
     volumes:
       - redis:/data
     # AOF для durability чекпоинтов планировщика

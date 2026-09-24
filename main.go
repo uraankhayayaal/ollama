@@ -656,7 +656,7 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, 
 // plannerStore создаёт чекпоинт-хранилище для плана проекта. Контрольные
 // точки включаются автоматически, если в настройках задан REDIS_ADDR, либо
 // явно при PLAN_CHECKPOINT=1 или запросе resume (--resume / PLAN_RESUME=1).
-// Адрес Redis берётся из REDIS_ADDR (по умолчанию localhost:96379). Если Redis
+// Адрес Redis берётся из REDIS_ADDR (по умолчанию localhost:56379). Если Redis
 // недоступен, а resume не запрошен — работаем без чекпоинтов (предупреждение),
 // при resume — завершаемся с ошибкой.
 func plannerStore(ctx context.Context, projectName string) (*checkpoint.Store, bool) {
@@ -671,7 +671,7 @@ func plannerStore(ctx context.Context, projectName string) (*checkpoint.Store, b
 
 	addr := os.Getenv("REDIS_ADDR")
 	if addr == "" {
-		addr = "localhost:96379"
+		addr = "localhost:56379"
 	}
 
 	cfg := checkpoint.StoreConfig{

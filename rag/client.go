@@ -27,7 +27,7 @@ import (
 // Значения по умолчанию и переменные окружения.
 const (
 	// DefaultAddr — адрес Qdrant gRPC по умолчанию (QDRANT_ADDR).
-	DefaultAddr = "localhost:96334"
+	DefaultAddr = "localhost:56334"
 	// DefaultCollectionName — имя коллекции по умолчанию (QDRANT_COLLECTION_NAME).
 	DefaultCollectionName = "project_code_base"
 )
@@ -39,7 +39,7 @@ const probeText = "Этот текст проганяется через мод�
 // Config — настройки клиента RAG-памяти. Пустые поля добираются из переменных
 // окружения: QDRANT_ADDR, QDRANT_COLLECTION_NAME, EMBEDDING_MODEL.
 type Config struct {
-	// Addr — адрес Qdrant вида "host:port" (gRPC, порт 96334).
+	// Addr — адрес Qdrant вида "host:port" (gRPC, порт 56334).
 	Addr string
 	// CollectionName — имя коллекции чанков проекта.
 	CollectionName string

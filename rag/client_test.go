@@ -254,9 +254,9 @@ func TestParseAddr(t *testing.T) {
 		host string
 		port int
 	}{
-		{"", "localhost", 96334},
-		{"qdrant.local:96334", "qdrant.local", 96334},
-		{"http://qdrant.local:96334", "qdrant.local", 96334},
+		{"", "localhost", 56334},
+		{"qdrant.local:56334", "qdrant.local", 56334},
+		{"http://qdrant.local:56334", "qdrant.local", 56334},
 		{":1234", "localhost", 1234},
 	}
 	for _, tc := range cases {

@@ -68,7 +68,7 @@ type Store struct {
 
 // StoreConfig — параметры подключения к Redis.
 type StoreConfig struct {
-	// Addr — адрес Redis вида "host:port". По умолчанию "localhost:96379".
+	// Addr — адрес Redis вида "host:port". По умолчанию "localhost:56379".
 	Addr string
 	// Password — пароль Redis (пусто — без пароля).
 	Password string
@@ -85,7 +85,7 @@ type StoreConfig struct {
 func NewStore(ctx context.Context, cfg StoreConfig) (*Store, error) {
 	addr := cfg.Addr
 	if addr == "" {
-		addr = "localhost:96379"
+		addr = "localhost:56379"
 	}
 	key := cfg.Key
 	if key == "" {
@@ -109,7 +109,7 @@ func NewStore(ctx context.Context, cfg StoreConfig) (*Store, error) {
 func NewStoreNoCheck(cfg StoreConfig) *Store {
 	addr := cfg.Addr
 	if addr == "" {
-		addr = "localhost:96379"
+		addr = "localhost:56379"
 	}
 	key := cfg.Key
 	if key == "" {

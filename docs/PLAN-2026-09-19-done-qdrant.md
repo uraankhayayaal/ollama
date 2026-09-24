@@ -18,8 +18,8 @@
 
 | Файл / сущность | Что есть сейчас |
 |---|---|
-| `compose.yaml:42` | сервис `qdrant` уже задекларирован (порты `6333` HTTP / `96334` gRPC, volume `qdrant`) — код его **не использует** |
-| `readme.md:235-278` | пример работы с `github.com/qdrant/go-client` (gRPC 96334, `Distance_Cosine`) — заготовка-референс |
+| `compose.yaml:42` | сервис `qdrant` уже задекларирован (порты `6333` HTTP / `56334` gRPC, volume `qdrant`) — код его **не использует** |
+| `readme.md:235-278` | пример работы с `github.com/qdrant/go-client` (gRPC 56334, `Distance_Cosine`) — заготовка-референс |
 | `models/LLMProvider.go`, `models/OllamaModel.go` | интерфейс `Generate`/`ChatStream`; **эмбеддингов нет** — механизм надо добавить |
 | `tools/registry.go:79` `newTool` | реестр инструментов; `CodeSearch` пока не зарегистрирован |
 | `tools/tool.go:24` `Deps` | контекст инструментов (`FileOps/Session/Board`) — для RAG нужно опциональное поле (клиент Qdrant) |
@@ -30,7 +30,7 @@
 
 ## Решения пользователя (зафиксировано)
 
-1. **Стек**: Qdrant по gRPC (`QDRANT_ADDR=localhost:96334`), коллекция
+1. **Стек**: Qdrant по gRPC (`QDRANT_ADDR=localhost:56334`), коллекция
    `project_code_base`, метрика `Distance_Cosine`.
 2. **Модель эмбеддингов**: нативная Ollama (`EMBEDDING_MODEL`, по умолчанию
    `nomic-embed-text`) — через HTTP `/api/embeddings` клиента Ollama; без
@@ -96,7 +96,7 @@
 ## Этапы и чеклист
 
 ### Ф-1 — Инфраструктура: клиент Qdrant + эмбеддинги
-- [x] `rag/client.go`: gRPC-клиент (`QDRANT_ADDR`, порт 96334), инициализация и
+- [x] `rag/client.go`: gRPC-клиент (`QDRANT_ADDR`, порт 56334), инициализация и
       create-if-not-exists коллекции `project_code_base` (`Distance_Cosine`,
       размерность из модели эмбеддингов)
 - [x] `rag/embed.go`: `Embed(text) ([]float32, error)` через Ollama —

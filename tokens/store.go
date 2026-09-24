@@ -17,7 +17,7 @@ import (
 
 // StoreConfig — параметры подключения Redis-хранилища счётчика токенов.
 type StoreConfig struct {
-	Addr     string // "host:port", по умолчанию "localhost:96379"
+	Addr     string // "host:port", по умолчанию "localhost:56379"
 	Password string
 	DB       int
 	Project  string // префикс ключа (один счётчик на проект)
@@ -47,7 +47,7 @@ func NewStore(ctx context.Context, cfg StoreConfig) (*Store, error) {
 func NewStoreNoCheck(cfg StoreConfig) *Store {
 	addr := cfg.Addr
 	if addr == "" {
-		addr = "localhost:96379"
+		addr = "localhost:56379"
 	}
 	return &Store{
 		client:  redis.NewClient(&redis.Options{Addr: addr, Password: cfg.Password, DB: cfg.DB}),
