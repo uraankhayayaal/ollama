@@ -70,6 +70,15 @@ export function EpicModal({
           <dt>Статус</dt>
           <dd className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</dd>
         </div>
+        {(epic.merge_conflict_files ?? []).length > 0 && (
+          <div className="merge-conflict-row">
+            <dt>Конфликт мёрджа</dt>
+            <dd className="merge-conflict">
+              Релизная ветка не влилась в main: {(epic.merge_conflict_files ?? []).join(", ")}.
+              <br />Нужен резолв (ResolveGitConflicts / ручной rebase), затем «Залить в main».
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Проект</dt>
           <dd>{epic.project_name}</dd>

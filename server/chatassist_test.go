@@ -260,6 +260,43 @@ func TestChatAssistPromptHasBoardContext(t *testing.T) {
 	}
 }
 
+// TestChatAssistPromptShowsMergeConflict — промпт ассистента несёт блок
+// «Конфликты мёрджа» со списком файлов для задач/эпиков, чья ветка не влилась
+// (Ф-2): модель видит точку резолва и не повторяет TaskMerge.
+func TestChatAssistPromptShowsMergeConflict(t *testing.T) {
+	srv, _, mr := newTestServer(t)
+	registerTestDir(t, srv, "proj-qa-conflict")
+
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-qa-conflict"})
+	ctx := context.Background()
+	store.CreateEpic(ctx, &board.Epic{
+		TaskSpec:           board.TaskSpec{TaskID: "epic-c", Title: "Чистка кода"},
+		MergeConflictFiles: []string{"src/main.rs"},
+	})
+	store.CreateTask(ctx, &board.Task{
+		TaskSpec:           board.TaskSpec{TaskID: "task-c", Title: "Фича"},
+		EpicID:             "epic-c",
+		MergeConflictFiles: []string{"my-rust-app"},
+	})
+
+	sess, _, err := srv.getOrCreate("proj-qa-conflict")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := sess.chatAssistantPrompt("что с задачами?")
+	for _, want := range []string{
+		"Конфликты мёрджа",
+		"задачи (ветка ↔ релиз эпика): task-c [my-rust-app]",
+		"эпики (main ↔ релизная ветка): epic-c [src/main.rs]",
+		"НЕ повторяй TaskMerge",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+}
+
 // waitBoard waits until predicates on the board are satisfied (hermetic helper
 // для асинхронного runChatAssistant).
 func waitBoard(t *testing.T, sess *Session, within time.Duration, pred func() bool) {

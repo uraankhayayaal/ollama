@@ -32,6 +32,13 @@
   .status.done { color: var(--st-done, #15803d); }
   .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
   .status.paused { color: var(--st-paused, #b45309); }
+
+  // Ф-5: конфликт мёрджа — ветка не влилась, нужен резолв. Красный акцент на
+  // dd, чтобы конфликт был заметен в модалке задачи/эпика.
+  .merge-conflict {
+    color: #b91c1c;
+    font-weight: 600;
+  }
 }
 
 .section {

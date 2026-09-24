@@ -1,9 +1,39 @@
 package board
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+// TestMergeConflictFilesJSON — JSON-кругоборот признака конфликта мёрджа
+// (Ф-4/Ф-5): массив merge_conflict_files есть у эпика и задачи, при пустом
+// списке поле опускается (omitempty).
+func TestMergeConflictFilesJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"epic", &Epic{TaskSpec: TaskSpec{TaskID: "E1"}, MergeConflictFiles: []string{"src/a.go", "src/b.go"}}},
+		{"task", &Task{TaskSpec: TaskSpec{TaskID: "T1"}, MergeConflictFiles: []string{"src/a.go"}}},
+	} {
+		raw, err := json.Marshal(tc.value)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", tc.name, err)
+		}
+		if !strings.Contains(string(raw), `"merge_conflict_files":[`) {
+			t.Fatalf("%s: поле merge_conflict_files не сериализуется: %s", tc.name, raw)
+		}
+	}
+	// omitempty: пустой список не пишется.
+	raw, err := json.Marshal(&Task{TaskSpec: TaskSpec{TaskID: "T2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "merge_conflict_files") {
+		t.Fatalf("пустой список не должен попадать в JSON: %s", raw)
+	}
+}
 
 func TestUnmarshalBacklog(t *testing.T) {
 	raw := "```json\n{\n  \"architecture_summary\": \"План приложения\",\n  \"tasks\": [\n    {\"task_id\": \"ARC-01\", \"title\": \"Backend модуль\", \"description\": \"Описание\", \"assigned_role\": \"Backend Lead\", \"sequence_order\": \"1\", \"can_run_parallel\": \"true\", \"dependencies\": []},\n    {\"task_id\": \"ARC-02\", \"title\": \"Infra\", \"description\": \"Описание\\nс новой строкой\", \"assigned_role\": \"DevOps Lead\", \"sequence_order\": 2, \"can_run_parallel\": false, \"dependencies\": [\"ARC-01\"]}\n  ]\n}\n```"

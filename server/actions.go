@@ -17,10 +17,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"ai/chat"
+	"ai/gitops"
 	"ai/tools"
 )
 
@@ -240,10 +242,31 @@ func (sess *Session) TaskMerge(ctx context.Context, taskID string) (string, erro
 	}
 	res, err := sess.srv.mergeTaskBranch(ctx, sess.project, task)
 	if err != nil {
+		var ce *gitops.MergeConflictError
+		if errors.As(err, &ce) {
+			// Конфликт фиксируем на доске: задача несёт список файлов и видна
+			// в UI. Результат детерминирован — повторный TaskMerge при том же
+			// состоянии вернёт те же файлы (состояние не меняется), поэтому
+			// модель не «ходит по кругу», а видит точку резолва.
+			task.MergeConflictFiles = ce.Files
+			if serr := store.SaveTask(ctx, task); serr != nil {
+				sess.log.Warnf("gitflow: TaskMerge %s: запись конфликта: %v", taskID, serr)
+			}
+			sess.emitBoard("ассистент: мёрдж задачи — конфликт")
+			return "", fmt.Errorf("конфликт при вливании ветки задачи %s: файлы [%s]. Ветки не тронуты — нужен резолв: правьте файлы инструментом ResolveGitConflicts или сделайте ручной rebase, затем повторите мёрдж",
+				taskID, strings.Join(ce.Files, ", "))
+		}
 		return "", err
 	}
 	branch := sess.srv.epicBranch(sess.project, task)
 	sess.log.Infof("gitflow: ассистент мёрджит задачу %s → %s (already=%v)", taskID, branch, res.AlreadyMerged)
+	// Успешный мёрдж снимает признак конфликта с задачи (если он был).
+	if len(task.MergeConflictFiles) > 0 {
+		task.MergeConflictFiles = nil
+		if serr := store.SaveTask(ctx, task); serr != nil {
+			sess.log.Warnf("gitflow: TaskMerge %s: очистка конфликта: %v", taskID, serr)
+		}
+	}
 	sess.append(chat.RoleStatus,
 		fmt.Sprintf("Задача %s влита в релизную ветку %s", taskID, branch), "", "", nil)
 	sess.emitBoard("ассистент: мёрдж задачи")
@@ -261,6 +284,8 @@ func (sess *Session) EpicRelease(ctx context.Context, epicID string) (string, er
 		return "", err
 	}
 	sess.log.Infof("gitflow: ассистент релизит эпик %s → main (already=%v)", epicID, res.AlreadyMerged)
+	// Успешный релиз снимает признак конфликта с эпика на доске (если был).
+	sess.srv.clearEpicMergeConflict(ctx, sess.project, epicID)
 	sess.emitBoard("ассистент: релиз эпика в main")
 	if res.AlreadyMerged {
 		return fmt.Sprintf("Релизная ветка %s эпика %s уже влита в main", source, epicID), nil

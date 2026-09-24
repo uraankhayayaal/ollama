@@ -254,6 +254,31 @@ func (sess *Session) chatAssistantPrompt(question string) string {
 		}
 	}
 
+	// Конфликты мёрджа (git-workflow Ф-4/Ф-5): ветки задач/эпиков, которые не
+	// влились в цель из-за конфликта. Модель видит их явно, чтобы не повторять
+	// TaskMerge по кругу, а идти на резолв.
+	var conflictEpics, conflictTasks []string
+	for _, e := range v.Epics {
+		if len(e.MergeConflictFiles) > 0 {
+			conflictEpics = append(conflictEpics, fmt.Sprintf("%s [%s]", e.TaskID, strings.Join(e.MergeConflictFiles, ", ")))
+		}
+	}
+	for _, t := range v.Tasks {
+		if len(t.MergeConflictFiles) > 0 {
+			conflictTasks = append(conflictTasks, fmt.Sprintf("%s [%s]", t.TaskID, strings.Join(t.MergeConflictFiles, ", ")))
+		}
+	}
+	if len(conflictEpics) > 0 || len(conflictTasks) > 0 {
+		b.WriteString("\nКонфликты мёрджа (ветка не влилась, нужен резолв):\n")
+		if len(conflictEpics) > 0 {
+			fmt.Fprintf(&b, "- эпики (main ↔ релизная ветка): %s\n", strings.Join(conflictEpics, "; "))
+		}
+		if len(conflictTasks) > 0 {
+			fmt.Fprintf(&b, "- задачи (ветка ↔ релиз эпика): %s\n", strings.Join(conflictTasks, "; "))
+		}
+		b.WriteString("НЕ повторяй TaskMerge при конфликте — сообщи пользователю список файлов и предложи резолв (ResolveGitConflicts / ручной rebase) или спроси, как действовать.\n")
+	}
+
 	// Баги: сводка по статусам.
 	bugByStatus := map[board.BugStatus]int{}
 	for _, bg := range v.Bugs {

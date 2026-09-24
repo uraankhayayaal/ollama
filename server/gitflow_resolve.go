@@ -193,6 +193,12 @@ func (s *Server) handleEpicRebase(w http.ResponseWriter, r *http.Request) {
 
 	logging.For(project).Infof("gitflow: rebase %s: конфликты в %s, авто-резолв %d, на модель %d (%s)",
 		epicID, strings.Join(forecast, ", "), len(resolved), len(hard), wtPath)
+	// Конфликт main ↔ релизная ветка виден на доске: помечаем эпик списком
+	// конфликтующих файлов (снимется успешным resolve/релизом).
+	epic.MergeConflictFiles = forecast
+	if serr := store.SaveEpic(r.Context(), epic); serr != nil {
+		logging.For(project).Warnf("gitflow: rebase %s: запись конфликта на доске: %v", epicID, serr)
+	}
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
 			fmt.Sprintf("Эпик %s: конфликты main ↔ %s в файлах [%s]. Авто-резолвено %d, осталось у модели %d. Правьте файлы инструментом ResolveGitConflicts и завершите POST .../resolve.",
@@ -383,6 +389,8 @@ func (s *Server) handleEpicResolve(w http.ResponseWriter, r *http.Request) {
 
 	logging.For(project).Infof("gitflow: resolve %s: релиз в main выполнен (%s, already=%v)",
 		epicID, res.Message, res.AlreadyMerged)
+	// Резолв завершён — снимаем признак конфликта с эпика на доске (если был).
+	s.clearEpicMergeConflict(r.Context(), project, epicID)
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
 			fmt.Sprintf("Эпик %s: конфликты разрешены, релизная ветка %s влита в main и запушена. Приёмка: %s",

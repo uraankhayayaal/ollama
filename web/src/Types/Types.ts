@@ -39,6 +39,9 @@ export interface EpicRow {
   // Релизная ветка эпика (git-workflow Ф-1, префикс ai/epic/<id>). Пусто, пока
   // ветка не создана.
   git_branch?: string;
+  // Конфликтующие файлы мёрджа релизной ветки ↔ main (Ф-4/Ф-5). Непусто —
+  // ветка не влилась, нужен резолв (ResolveGitConflicts / ручной rebase).
+  merge_conflict_files?: string[];
 }
 
 export interface TaskRow {
@@ -56,6 +59,9 @@ export interface TaskRow {
   updated_at: string;
   // Фича-ветка задачи (git-workflow Ф-1, префикс ai/task/<id>).
   git_branch?: string;
+  // Конфликтующие файлы мёрджа ветки задачи ↔ релиз эпика (Ф-4/Ф-5). Непусто —
+  // ветка не влилась, нужен резолв (ResolveGitConflicts / ручной rebase).
+  merge_conflict_files?: string[];
   // Статус, из которого задача приостановлена (пауза эпика, Ф-6):
   // возобновление возвращает её на прежнее место цепочки.
   resume_status?: Status;

@@ -32,6 +32,12 @@
   .status.done { color: var(--st-done, #15803d); }
   .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
   .status.paused { color: var(--st-paused, #b45309); }
+
+  // Ф-5: конфликт мёрджа — релизная ветка не влилась в main. Красный акцент.
+  .merge-conflict {
+    color: #b91c1c;
+    font-weight: 600;
+  }
 }
 
 // Ф-6: «Пауза»/«Продолжить»/«Отменить» эпика — ряд кнопок под полями модалки.

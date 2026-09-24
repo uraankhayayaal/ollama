@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -366,6 +367,14 @@ func TestMergeTaskConflict409(t *testing.T) {
 	if git.saw("git worktree add ") || git.saw("git merge --no-ff") {
 		t.Fatalf("конфликт не должен доходить до worktree-мёрджа, вызовы: %v", git.callsList())
 	}
+	// Конфликт записан на доску задачи (Ф-4/Ф-5): список файлов виден в UI.
+	ctx := context.Background()
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+	task, err := store.GetTask(ctx, "task-1")
+	if err != nil || len(task.MergeConflictFiles) != 1 || task.MergeConflictFiles[0] != "f.txt" {
+		t.Fatalf("task.merge_conflict_files = %v, %v; want [f.txt]", task.MergeConflictFiles, err)
+	}
 }
 
 // TestMergeTaskAlreadyMerged — задача уже влита: ответ ok с already_merged=true,
@@ -391,6 +400,82 @@ func TestMergeTaskAlreadyMerged(t *testing.T) {
 	}
 	if git.saw("git worktree add ") || git.saw("git merge --no-ff") || git.saw("git push ") {
 		t.Fatalf("уже слитая задача не должна мутировать git, вызовы: %v", git.callsList())
+	}
+}
+
+// TestMergeTaskClearsConflictField — успешный мёрдж снимает с задачи признак
+// конфликта: merge_conflict_files очищается на доске (Ф-4/Ф-5).
+func TestMergeTaskClearsConflictField(t *testing.T) {
+	git := mockMergeGit("")
+	srv, handler, mr := setupGitflow(t, git)
+	ctx := context.Background()
+	seedGitflowBoard(t, mr, srv)
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+	task, err := store.GetTask(ctx, "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.MergeConflictFiles = []string{"f.txt"}
+	if err := store.SaveTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		"POST", "/api/projects/myrepo/tasks/task-1/merge", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("мёрдж: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	after, err := store.GetTask(ctx, "task-1")
+	if err != nil || len(after.MergeConflictFiles) != 0 {
+		t.Fatalf("после успешного мёрджа merge_conflict_files = %v, %v; want пусто", after.MergeConflictFiles, err)
+	}
+}
+
+// TestMergeTaskConflictIdempotent — повторный TaskMerge при конфликте возвращает
+// тот же стабильный результат (409 + те же файлы), состояние доски не меняется
+// между вызовами (Ф-4: модель не «ходит по кругу» с меняющимся ответом).
+func TestMergeTaskConflictIdempotent(t *testing.T) {
+	const conflicts = `changed in both
+  base   100644 c0d0fb45c382919737f8d0c20aaf57cf89b74af8 f.txt
+  our    100644 ffdfb012e4aec2a6d3c21bb473f19822c5737852 f.txt
+  their  100644 542655f4d59aeaeb83b65316f9bc779f6ffb11f9 f.txt
+@@ -1 +1,5 @@
++<<<<<<< .our
++=======
++>>>>>>> .their
+`
+	git := mockMergeGit(conflicts)
+	srv, handler, mr := setupGitflow(t, git)
+	seedGitflowBoard(t, mr, srv)
+	ctx := context.Background()
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+
+	want := map[string]any{}
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(
+			"POST", "/api/projects/myrepo/tasks/task-1/merge", strings.NewReader(`{}`)))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("вызов %d: %d, want 409 (body: %s)", i+1, rec.Code, rec.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := want["status"]; ok {
+			if out["status"] != want["status"] || fmt.Sprint(out["files"]) != fmt.Sprint(want["files"]) {
+				t.Fatalf("вызов %d: ответ изменился: %v → %v", i+1, want, out)
+			}
+		} else {
+			want = out
+		}
+		task, gerr := store.GetTask(ctx, "task-1")
+		if gerr != nil || len(task.MergeConflictFiles) != 1 || task.MergeConflictFiles[0] != "f.txt" {
+			t.Fatalf("вызов %d: merge_conflict_files = %v, %v; want [f.txt]", i+1, task.MergeConflictFiles, gerr)
+		}
 	}
 }
 
@@ -465,6 +550,11 @@ func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	task, err := store.GetTask(ctx, "task-1")
 	if err != nil || task.Status != board.StatusDone {
 		t.Fatalf("task после done = %+v, %v", task, err)
+	}
+	// Конфликт зафиксирован НА ДОСКЕ: задача несёт список файлов (Ф-4/Ф-5) —
+	// UI и чат-ассистент видят, что ветка не влилась.
+	if len(task.MergeConflictFiles) != 1 || task.MergeConflictFiles[0] != "f.txt" {
+		t.Fatalf("task.merge_conflict_files = %v, want [f.txt]", task.MergeConflictFiles)
 	}
 	// Ф-3: in_progress создаёт worktree задачи (работу специалиста позже
 	// авто-коммитят); после done он снимается.

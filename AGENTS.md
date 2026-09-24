@@ -115,3 +115,22 @@ make-цель → автодетект kind; make-команды исполня�
 (плюс 3 пред-существующих флака чат-ассистента на чистой HEAD:
 `TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
 `TestChatAssistantPublishesBoardWhenIdle`).
+
+Состояние после PLAN-2026-09-24-todo-merge-conflict-board (Ф-1..Ф-5, остался
+ручной E2E): конфликты мёрджа стали видимы на доске. Ф-1: `board/entity.go` —
+`MergeConflictFiles []string` у `Epic`/`Task` (`json:"merge_conflict_files,
+omitempty"`); запись/очистка в `autoCommitAndMergeTask` (done→релиз), `Session.
+TaskMerge` (server/actions.go), REST `handleMergeTask`/`handleReleaseEpic`
+(server/gitflow.go), авто-синхрон эпика `autoResolveMainSync` +
+`clearEpicMergeConflict` (server/gitflow_auto.go:471), `handleEpicRebase`/
+`handleEpicResolve` (server/gitflow_resolve.go); `RoleStatus`-уведомления.
+Ф-2: блок «Конфликты мёрджа» в `chatAssistantPrompt` (server/chatassist.go) +
+правило «не повторять TaskMerge» в `agents/chatassist/agent.go`. Ф-3:
+`web/src/Types/Types.ts` `merge_conflict_files` + бейдж в модалках
+`TaskModal`/`EpicModal` (TaskModal/styles.scss, EpicModal/styles.scss). Ф-4:
+`TaskMerge` возвращает детерминированную конфликт-строку с файлами и точкой
+резолва, состояние не меняется. Тесты: `TestTaskDoneAutoMergeConflict` (поле
+f.txt), `TestMergeTaskConflict409` (409+поле), `TestMergeTaskConflictIdempotent`,
+`TestMergeTaskClearsConflictField`, `TestMergeConflictFilesJSON` (board),
+`TestChatAssistPromptShowsMergeConflict`; `go build/vet` по перечню AGENTS.md
+зелёные, `go test` зелёные кроме 3 пред-существующих флаков чат-ассистента.

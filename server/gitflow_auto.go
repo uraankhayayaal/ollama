@@ -6,6 +6,7 @@ package server
 
 import (
 	"ai/board"
+	"ai/chat"
 	"ai/gitops"
 	"ai/logging"
 	"ai/projects"
@@ -278,6 +279,17 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 		if errors.As(err, &ce) {
 			logging.For(project).Warnf("gitflow: авто-мёрдж %s: конфликт в %s — требуется резолв (Ф-4)",
 				task.TaskID, strings.Join(ce.Files, ", "))
+			// Конфликт должен быть виден на доске: помечаем задачу списком
+			// конфликтующих файлов (поле merge_conflict_files) и сообщаем в чат.
+			task.MergeConflictFiles = ce.Files
+			if serr := store.SaveTask(ctx, task); serr != nil {
+				logging.For(project).Warnf("gitflow: авто-мёрдж %s: запись конфликта на доске: %v", task.TaskID, serr)
+			}
+			if sess := s.session(project); sess != nil {
+				sess.append(chat.RoleStatus,
+					fmt.Sprintf("Задача %s: авто-мёрдж в релиз эпика %s не прошёл — конфликт в файлах [%s]. Нужен резолв: повторите мёрдж после правок или используйте ResolveGitConflicts.",
+						task.TaskID, task.EpicID, strings.Join(ce.Files, ", ")), "", "", nil)
+			}
 		} else {
 			logging.For(project).Warnf("gitflow: авто-мёрдж %s: %v", task.TaskID, err)
 		}
@@ -291,6 +303,13 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 	}
 	logging.For(project).Infof("gitflow: задача %s → done: авто-мёрдж в релиз эпика %s (already=%v)",
 		task.TaskID, task.EpicID, res.AlreadyMerged)
+	// Успешный мёрдж снимает признак конфликта с задачи (если он был).
+	if len(task.MergeConflictFiles) > 0 {
+		task.MergeConflictFiles = nil
+		if serr := store.SaveTask(ctx, task); serr != nil {
+			logging.For(project).Warnf("gitflow: авто-мёрдж %s: очистка конфликта: %v", task.TaskID, serr)
+		}
+	}
 
 	// 4) Снимаем worktree задачи.
 	if worktree != "" {
@@ -347,6 +366,7 @@ func (s *Server) syncEpicMainOnce(ctx context.Context, project string, epic *boa
 	})
 	if err == nil {
 		logging.For(project).Infof("gitflow: эпик %s: авто-синхрон с main (already=%v)", epic.TaskID, res.AlreadyMerged)
+		s.clearEpicMergeConflict(ctx, project, epic.TaskID)
 		s.srvEmitBoard(project, "gitflow: авто-синхрон эпика с main")
 		return
 	}
@@ -401,6 +421,23 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 		removeWT()
 		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: сложные конфликты [%s] — флоу rebase/резолв",
 			epic.TaskID, strings.Join(hard, ", "))
+		// Помечаем эпик на доске: конфликт main ↔ релизная ветка виден в UI и
+		// ассистенту (флоу rebase/resolve остаётся точкой входа для резолва).
+		epic.MergeConflictFiles = hard
+		if store, err := s.boardStore(ctx, project); err == nil {
+			if e, gerr := store.GetEpic(ctx, epic.TaskID); gerr == nil {
+				e.MergeConflictFiles = hard
+				if serr := store.SaveEpic(ctx, e); serr != nil {
+					logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: запись конфликта: %v", epic.TaskID, serr)
+				}
+			}
+			store.Close()
+		}
+		if sess := s.session(project); sess != nil {
+			sess.append(chat.RoleStatus,
+				fmt.Sprintf("Эпик %s: авто-синхрон релизной ветки с main упёрся в конфликт в файлах [%s]. Доступен флоу rebase/резолв (ResolveGitConflicts).",
+					epic.TaskID, strings.Join(hard, ", ")), "", "", nil)
+		}
 		s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: сложные конфликты")
 		return
 	}
@@ -425,5 +462,27 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 	removeWT()
 	logging.For(project).Infof("gitflow: эпик %s: авто-синхрон с main: тривиальные конфликты авто-разрешены (%d файлов), ветка продвинута",
 		epic.TaskID, len(resolved))
+	s.clearEpicMergeConflict(ctx, project, epic.TaskID)
 	s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: конфликты разрешены")
+}
+
+// clearEpicMergeConflict снимает признак конфликта мёрджа с эпика на доске
+// (успешный синхрон с main / релиз / резолв). Идемпотентно; ошибки логируются.
+func (s *Server) clearEpicMergeConflict(ctx context.Context, project, epicID string) {
+	store, err := s.boardStore(ctx, project)
+	if err != nil {
+		return
+	}
+	defer store.Close()
+	epic, err := store.GetEpic(ctx, epicID)
+	if err != nil {
+		return
+	}
+	if len(epic.MergeConflictFiles) == 0 {
+		return
+	}
+	epic.MergeConflictFiles = nil
+	if err := store.SaveEpic(ctx, epic); err != nil {
+		logging.For(project).Warnf("gitflow: снятие конфликта эпика %s: %v", epicID, err)
+	}
 }

@@ -218,6 +218,13 @@ func (s *Server) handleMergeTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ce *gitops.MergeConflictError
 		if errors.As(err, &ce) {
+			// Конфликт на доске: задача помечается списком файлов (виден в UI,
+			// снимется успешным мёрджем).
+			task.MergeConflictFiles = ce.Files
+			if serr := store.SaveTask(r.Context(), task); serr != nil {
+				logging.For(project).Warnf("gitflow: мёрдж %s: запись конфликта: %v", taskID, serr)
+			}
+			s.srvEmitBoard(project, "gitflow: мёрдж задачи — конфликт")
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"status":  "conflicts",
 				"files":   ce.Files,
@@ -231,6 +238,12 @@ func (s *Server) handleMergeTask(w http.ResponseWriter, r *http.Request) {
 
 	logging.For(project).Infof("gitflow: мёрдж задачи %s: %s (already=%v)",
 		taskID, res.Message, res.AlreadyMerged)
+	if len(task.MergeConflictFiles) > 0 {
+		task.MergeConflictFiles = nil
+		if serr := store.SaveTask(r.Context(), task); serr != nil {
+			logging.For(project).Warnf("gitflow: мёрдж %s: очистка конфликта: %v", taskID, serr)
+		}
+	}
 	s.srvEmitBoard(project, "gitflow: мёрдж задачи")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
@@ -279,6 +292,7 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 
 	logging.For(project).Infof("gitflow: эпик %s → main: релизная ветка %s влита (already=%v)",
 		epicID, source, res.AlreadyMerged)
+	s.clearEpicMergeConflict(r.Context(), project, epicID)
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
 			fmt.Sprintf("Эпик %s: релизная ветка %s влита в main (%s)", epicID, source, main),

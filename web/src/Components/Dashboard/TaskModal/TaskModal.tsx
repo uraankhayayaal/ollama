@@ -43,6 +43,15 @@ export function TaskModal({
           <dt>Статус</dt>
           <dd className={"status " + task.status}>{STATUS_LABEL[task.status] ?? task.status}</dd>
         </div>
+        {(task.merge_conflict_files ?? []).length > 0 && (
+          <div className="merge-conflict-row">
+            <dt>Конфликт мёрджа</dt>
+            <dd className="merge-conflict">
+              Ветка не влилась в релиз эпика: {(task.merge_conflict_files ?? []).join(", ")}.
+              <br />Нужен резолв (ResolveGitConflicts / ручной rebase), затем повторить мёрдж.
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Исполнитель</dt>
           <dd>{task.assignee || "—"}</dd>
