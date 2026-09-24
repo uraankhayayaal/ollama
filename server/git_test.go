@@ -272,6 +272,169 @@ func TestGetDiffGitProjectUnknownFileNotFound(t *testing.T) {
 	}
 }
 
+func TestGetDiffRegisteredTaskBranch(t *testing.T) {
+	const raw = "diff --git a/task.go b/task.go\nindex 1..2 100644\n--- a/task.go\n+++ b/task.go\n@@ -1 +1,2 @@\n-old\n+new\n+task\n"
+	git := &fakeGit{starts: map[string]string{
+		"git -c diff.submodule=log diff main...ai/task/t1": raw,
+	}}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/projects/myrepo/diff?ref=ai/task/t1&vs=main", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET task diff: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Branch string `json:"branch"`
+		Base   string `json:"base"`
+		Files  []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Branch != "ai/task/t1" || out.Base != "main" || len(out.Files) != 1 || out.Files[0].Path != "task.go" {
+		t.Fatalf("task diff metadata: %+v", out)
+	}
+
+	// Патч файла должен обслуживаться тем же кэшем/ref и не пересчитывать diff.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/projects/myrepo/diff?ref=ai/task/t1&vs=main&file=task.go", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "+task") {
+		t.Fatalf("GET task patch: %d, body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetDiffTaskWorktreeIncludesDirtyChanges(t *testing.T) {
+	const raw = "diff --git a/dirty.go b/dirty.go\nnew file mode 100644\n--- /dev/null\n+++ b/dirty.go\n@@ -0,0 +1 @@\n+dirty\n"
+	git := &fakeGit{starts: map[string]string{
+		"git rev-parse --git-dir":               ".git/worktrees/task",
+		"git merge-base main ai/task/t1":        "abc123\n",
+		"git -c diff.submodule=log diff abc123": raw,
+	}}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+	worktree := filepath.Join(t.TempDir(), "task-worktree")
+	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1", Worktree: worktree}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/projects/myrepo/diff?ref=ai/task/t1&vs=main", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "dirty.go") {
+		t.Fatalf("GET dirty worktree diff: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if !git.saw("git add -N -A") || !git.saw("diff abc123") {
+		t.Fatalf("dirty worktree was not compared to merge-base: %v", git.callsList())
+	}
+}
+
+func TestGetDiffEpicAndTaskUseSeparateCacheEntries(t *testing.T) {
+	const epicRaw = "diff --git a/epic.go b/epic.go\nnew file mode 100644\n--- /dev/null\n+++ b/epic.go\n@@ -0,0 +1 @@\n+epic\n"
+	const taskRaw = "diff --git a/task.go b/task.go\nnew file mode 100644\n--- /dev/null\n+++ b/task.go\n@@ -0,0 +1 @@\n+task\n"
+	git := &fakeGit{starts: map[string]string{
+		"git -c diff.submodule=log diff main...ai/epic/e1": epicRaw,
+		"git -c diff.submodule=log diff main...ai/task/t1": taskRaw,
+	}}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+	if err := srv.reg.SetEpicBranch("myrepo", "e1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ ref, want string }{
+		{"ai/epic/e1", "epic.go"},
+		{"ai/task/t1", "task.go"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/api/projects/myrepo/diff?ref="+tc.ref+"&vs=main", nil)
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("diff for %s: %d, body %s", tc.ref, rec.Code, rec.Body.String())
+		}
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/projects/myrepo/diff?ref=ai/epic/e1&vs=main&file=epic.go", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "+epic") {
+		t.Fatalf("epic patch was replaced by another ref cache entry: %d, %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetDiffTaskWorktreeRealGit(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitFixtureRun(t, root, "init", "-b", "main")
+	setGitUserReal(t, root)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitFixtureRun(t, root, "add", "-A")
+	gitFixtureRun(t, root, "commit", "-m", "base")
+	gitFixtureRun(t, root, "checkout", "-b", "ai/epic/e1")
+	if err := os.WriteFile(filepath.Join(root, "epic.go"), []byte("epic\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitFixtureRun(t, root, "add", "epic.go")
+	gitFixtureRun(t, root, "commit", "-m", "epic change")
+	worktree := filepath.Join(t.TempDir(), "task-worktree")
+	gitFixtureRun(t, root, "worktree", "add", "-b", "ai/task/t1", worktree, "ai/epic/e1")
+	if err := os.WriteFile(filepath.Join(worktree, "task.go"), []byte("task uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, handler, _ := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	if _, err := srv.reg.Add(workspace.AddParams{
+		Name: "local-diff", Kind: workspace.KindGit, Root: root,
+		GitRemote: "git@invalid.example:team/local-diff.git", GitBranch: "ai/local-diff", GitBase: "main",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetEpicBranch("local-diff", "e1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("local-diff", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1", Worktree: worktree}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/projects/local-diff/diff?ref=ai/task/t1&vs=main", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "epic.go") || !strings.Contains(rec.Body.String(), "task.go") {
+		t.Fatalf("реальный task diff: %d, body: %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/projects/local-diff/diff?ref=ai/task/t1&vs=main&file=task.go", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "+task uncommitted") {
+		t.Fatalf("реальный task patch: %d, body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetDiffRejectsUnknownRefAndNonMainBase(t *testing.T) {
+	srv, handler, _ := newTestServerGit(t, &fakeGit{}, nil)
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+	for _, target := range []string{
+		"/api/projects/myrepo/diff?ref=ai/task/unknown&vs=main",
+		"/api/projects/myrepo/diff?ref=ai/task/unknown&vs=other",
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("GET %s = %d, want 400 (%s)", target, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestAcceptGitProjectCreatesMR(t *testing.T) {
 	git := &fakeGit{starts: map[string]string{
 		"git status --porcelain": " M file.go\n",

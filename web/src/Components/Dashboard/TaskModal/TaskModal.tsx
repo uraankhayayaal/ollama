@@ -2,7 +2,7 @@
 // доски). Переходы статуса — рядом с эпиком в заголовке: минус/плюс.
 // Ф-5: блок «ветка + MR» — ветка/MR, кнопки «Создать ветку задачи» (от ветки
 // эпика) и «Создать MR» (push → MR в ветку эпика).
-import type { GitView, TaskRow } from "@/Types";
+import type { BranchDiffContext, GitView, TaskRow } from "@/Types";
 import { MOVES, STATUS_LABEL } from "../board";
 import { Modal } from "../Modal";
 import { GitBlock } from "../GitBlock";
@@ -13,6 +13,7 @@ export function TaskModal({
   git,
   onCreateBranch,
   onCreateMR,
+  onShowDiff,
   onTaskUpdate,
   onClose,
 }: {
@@ -20,10 +21,12 @@ export function TaskModal({
   git?: GitView;
   onCreateBranch?: (t: TaskRow) => Promise<void>;
   onCreateMR?: (t: TaskRow) => Promise<void>;
+  onShowDiff?: (context: BranchDiffContext) => void;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onClose: () => void;
 }) {
   const m = MOVES[task.status] ?? { prev: null, next: null };
+  const taskBranch = git?.tasks?.[task.task_id]?.branch;
 
   return (
     <Modal title={"Задача · " + task.task_id} onClose={onClose}>
@@ -64,6 +67,11 @@ export function TaskModal({
           epicId={task.epic_id}
           onCreateBranch={onCreateBranch ? () => onCreateBranch(task) : undefined}
           onCreateMR={onCreateMR ? () => onCreateMR(task) : undefined}
+          onShowDiff={onShowDiff && taskBranch ? () => onShowDiff({
+            ref: taskBranch,
+            vs: git.base || "main",
+            label: `Задача · ${task.task_id} · ${task.title}`,
+          }) : undefined}
         />
       )}
 

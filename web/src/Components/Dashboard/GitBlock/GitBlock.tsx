@@ -29,6 +29,7 @@ export function GitBlock({
   epicId,
   onCreateBranch,
   onCreateMR,
+  onShowDiff,
 }: {
   git: GitView;
   kind: "epic" | "task";
@@ -36,6 +37,7 @@ export function GitBlock({
   epicId?: string; // для задачи — ветка её эпика нужна как база фича-ветки
   onCreateBranch?: () => Promise<void>;
   onCreateMR?: () => Promise<void>;
+  onShowDiff?: () => void;
 }) {
   const [busy, setBusy] = useState<Busy>(null);
   const [err, setErr] = useState("");
@@ -146,6 +148,12 @@ export function GitBlock({
               </>
             )}
           </dd>
+        </div>
+      )}
+      {link?.branch && onShowDiff && (
+        <div className="row">
+          <dt>Изменения</dt>
+          <dd><button className="diff-open" onClick={onShowDiff}>Дифф</button></dd>
         </div>
       )}
       {err && <div className="gitblock-err">{err}</div>}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"ai/agents/chatassist"
 	"ai/board"
@@ -11,8 +12,8 @@ import (
 	"ai/models"
 	"ai/projects"
 	"ai/rag"
-	"ai/runevents"
 	"ai/runctx"
+	"ai/runevents"
 )
 
 // --- Ассистент проекта (Ф-1) ---
@@ -55,7 +56,18 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 		// Репортёр в контексте диалога: ответ ассистента и потребление токенов
 		// транслируются в живую шину (type=chat_delta/chat, type=tokens), иначе
 		// счётчик токенов чата остаётся на нулях.
-		rctx := runevents.WithReporter(ctx, sess.router.WithAgent("assistant"))
+		var finalReported atomic.Bool
+		chatReporter := runevents.NewRouter(func(ev runevents.Event) {
+			if ev.Type == runevents.TypeMessage {
+				// Пустой финал заменяется человекочитаемым уточнением ниже.
+				if strings.TrimSpace(ev.Content) == "" {
+					return
+				}
+				finalReported.Store(true)
+			}
+			sess.chatEvent(ev)
+		}).WithAgent("assistant")
+		rctx := runevents.WithReporter(ctx, chatReporter)
 		// Расширенное сжатие истории (Ф-6..Ф-11): RAG-вытеснение/ранжирование
 		// поверх ragClient и LSP-оглавления проекта. Флаги CODEGEN_HISTORY_*
 		// из окружения; выключено по умолчанию.
@@ -69,7 +81,12 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 			sess.append(chat.RoleAssistant, "Не расслышал — уточните, пожалуйста. Могу рассказать о состоянии проекта и работах на доске, создать эпик/задачу/баг или просто поболтать.", "assistant", "", nil)
 			return
 		}
-		sess.append(chat.RoleAssistant, rep.Content, "assistant", "", nil)
+		// runner.Generate публикует финальный текст через Reporter.OnMessage,
+		// тогда как некоторые реализации LLMProvider возвращают только ответ.
+		// Записываем вручную лишь во втором случае.
+		if !finalReported.Load() {
+			sess.append(chat.RoleAssistant, rep.Content, "assistant", "", nil)
+		}
 	}()
 }
 

@@ -127,6 +127,33 @@ func TestChatAssistAnswersQuestion(t *testing.T) {
 	}
 }
 
+func TestChatAssistRunnerResponseIsAppendedOnce(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-qa-once")
+	sess, _, err := srv.getOrCreate("proj-qa-once")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.append(chat.RoleUser, "что делает проект?", "user", "", nil)
+	prov := &scriptedGenerateProvider{chat: &scriptedChatProvider{replies: []*runner.ModelReply{{Content: "Ответ без повтора", FinishReason: "stop"}}}}
+	sess.runChatAssistant(context.Background(), "что делает проект?", prov)
+	sess.wg.Wait()
+
+	hist, err := sess.chat.History(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, m := range hist {
+		if m.Role == chat.RoleAssistant && m.Content == "Ответ без повтора" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("одинаковых ответов в истории = %d, want 1; history=%+v", count, hist)
+	}
+}
+
 // TestChatAssistHistoryInjected — ассистент получает историю диалога: прошлые
 // реплики пользователя/ассистента уходят в History и в системный промпт, а
 // текущий вопрос (последняя запись стрима) из истории исключается.

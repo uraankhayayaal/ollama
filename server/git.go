@@ -225,12 +225,26 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if inf.Kind == workspace.KindGit {
-		c, err := s.gitProjectDiff(r.Context(), inf)
+		ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+		base := strings.TrimSpace(r.URL.Query().Get("vs"))
+		if base == "" {
+			base = inf.GitBase
+		}
+		if base != inf.GitBase {
+			writeErr(w, http.StatusBadRequest, "точка сравнения должна быть основной веткой проекта: "+inf.GitBase)
+			return
+		}
+		if ref != "" && !s.registeredDiffRef(inf, ref) {
+			writeErr(w, http.StatusBadRequest, "ветка не зарегистрирована в проекте: "+ref)
+			return
+		}
+		file := r.URL.Query().Get("file")
+		c, err := s.gitProjectDiff(r.Context(), inf, ref, base, file == "")
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "ошибка диффа: "+err.Error())
 			return
 		}
-		if file := r.URL.Query().Get("file"); file != "" {
+		if file != "" {
 			patch, ok := c.File[file]
 			if !ok {
 				writeErr(w, http.StatusNotFound, "файл не найден в диффе: "+file)
@@ -254,7 +268,7 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"kind":   "git",
 			"branch": c.Branch,
-			"base":   c.Base,
+			"base":   base,
 			"remote": c.Remote,
 			"files":  c.Files,
 		})
@@ -294,6 +308,23 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		"removed":  removed,
 		"patches":  patches,
 	})
+}
+
+func (s *Server) registeredDiffRef(inf workspace.Info, ref string) bool {
+	if inf.GitBranches == nil {
+		return false
+	}
+	for _, branch := range inf.GitBranches.Epics {
+		if branch.Branch == ref {
+			return true
+		}
+	}
+	for _, branch := range inf.GitBranches.Tasks {
+		if branch.Branch == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // snapDiff считает изменение каталога не-git проекта через tools.Snap.Diff
@@ -470,9 +501,7 @@ func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.diffMu.Lock()
-	delete(s.diffs, project)
-	s.diffMu.Unlock()
+	s.invalidateDiffs(project)
 	repositories[project] = map[string]string{"url": mrURL, "branch": repo.Branch, "base": repo.Base}
 	_ = s.reg.SetProjectMR(project, workspace.MRRef{URL: mrURL, Source: repo.Branch, Target: repo.Base, State: "open"})
 
@@ -517,9 +546,7 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "возврат сабмодуля к detached HEAD "+sub.Path+": "+err.Error())
 			return
 		}
-		s.diffMu.Lock()
-		delete(s.diffs, childName)
-		s.diffMu.Unlock()
+		s.invalidateDiffs(childName)
 	}
 	if err := repo.RejectBranch(r.Context()); err != nil {
 		writeErr(w, http.StatusBadGateway, "отклонение ветки: "+err.Error())
@@ -530,9 +557,7 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Рабочая копия сброшена на базу — кэш диффа устарел.
-	s.diffMu.Lock()
-	delete(s.diffs, project)
-	s.diffMu.Unlock()
+	s.invalidateDiffs(project)
 
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,

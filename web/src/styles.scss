@@ -267,7 +267,7 @@ body {
   }
 }
 
-// Плавающие кнопки открытия Diffboard / Logboard (справа внизу).
+// Плавающая кнопка открытия Logboard (справа внизу).
 .fabs {
   position: fixed;
   right: 18px;
@@ -299,7 +299,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 50;
+  z-index: 120;
   height: 90vh;
   display: flex;
   flex-direction: column;
@@ -320,6 +320,13 @@ body {
   .logboard {
     flex: 1;
     min-height: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .diff-drawer {
+    height: 95dvh;
+    padding: 10px;
   }
 }
 

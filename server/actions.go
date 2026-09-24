@@ -280,9 +280,7 @@ func (sess *Session) BranchReject(ctx context.Context) error {
 		return err
 	}
 	// Рабочая копия сброшена на базу — кэш диффа устарел.
-	sess.srv.diffMu.Lock()
-	delete(sess.srv.diffs, sess.project)
-	sess.srv.diffMu.Unlock()
+	sess.srv.invalidateDiffs(sess.project)
 
 	sess.log.Infof("gitflow: ассистент отклоняет ветку %s, копия возвращена на %s", repo.Branch, repo.Base)
 	sess.append(chat.RoleStatus,

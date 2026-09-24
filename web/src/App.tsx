@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { AskAnswerBody, AskAnswerResult, BoardView, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
+import type { AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
@@ -78,9 +78,9 @@ export function App() {
     const v = saved ? parseFloat(saved) : CHAT_DEFAULT_RATIO;
     return Number.isFinite(v) && v > 0 && v < 1 ? v : CHAT_DEFAULT_RATIO;
   });
-  // Diffboard/Logboard по умолчанию скрыты; открываются плавающими кнопками
-  // справа внизу (взаимоисключающе).
-  const [showDiffboard, setShowDiffboard] = useState(false);
+  // Контекстный Diffboard открывается из модалки конкретной ветки;
+  // Logboard остаётся доступен отдельной плавающей кнопкой.
+  const [diffContext, setDiffContext] = useState<BranchDiffContext | null>(null);
   const [showLogboard, setShowLogboard] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -191,6 +191,7 @@ export function App() {
     setLive(null);
     setThinking(false);
     setBoard(null);
+    setDiffContext(null);
     // Счётчик токенов принадлежит прошлому проекту — обнуляем, иначе
     // счётчик подмешает чужие значения до прихода свежего REST-ответа.
     setTokens({ in: 0, out: 0 });
@@ -755,6 +756,7 @@ export function App() {
                 onTaskBranch={onTaskBranch}
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
+                onShowDiff={setDiffContext}
                 collapsed
                 onToggleCollapse={() => toggleCollapse("dash")}
               />
@@ -773,6 +775,7 @@ export function App() {
                 onTaskBranch={onTaskBranch}
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
+                onShowDiff={setDiffContext}
                 collapsed={false}
                 onToggleCollapse={() => toggleCollapse("dash")}
               />
@@ -785,11 +788,8 @@ export function App() {
         </div>
       )}
 
-      {project && !showDiffboard && !showLogboard && (
+      {project && !showLogboard && (
         <div className="fabs">
-          <button className="fab" onClick={() => setShowDiffboard(true)} title="Показать дифф проекта">
-            Дифф
-          </button>
           <button className="fab" onClick={() => setShowLogboard(true)} title="Показать логи проекта">
             Логи
           </button>
@@ -797,15 +797,14 @@ export function App() {
       )}
 
       {project && (
-        <div className={"diff-drawer" + (showDiffboard || showLogboard ? " open" : "")}>
-          <Diffboard
-            project={project.project_name}
-            kind={project.kind}
-            showDiffboard={showDiffboard}
-            toggleDiffboard={() => {
-              setShowDiffboard(false);
-            }}
-          />
+        <div className={"diff-drawer" + (diffContext || showLogboard ? " open" : "")}>
+          {diffContext && (
+            <Diffboard
+              project={project.project_name}
+              context={diffContext}
+              onClose={() => setDiffContext(null)}
+            />
+          )}
           <Logboard
             project={project.project_name}
             showLogboard={showLogboard}

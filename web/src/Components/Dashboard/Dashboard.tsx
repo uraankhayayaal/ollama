@@ -4,7 +4,7 @@
 // между соседними статусами внутри своего эпика.
 
 import { useState } from "react";
-import type { BoardView, BugRow, EpicRow, TaskRow } from "@/Types";
+import type { BoardView, BranchDiffContext, BugRow, EpicRow, TaskRow } from "@/Types";
 import { STATUS_LABEL, STATUS_ORDER } from "./board";
 import { EpicRow as EpicRowView } from "./EpicRow";
 import { EpicModal } from "./EpicModal";
@@ -27,6 +27,7 @@ export function Dashboard({
   onTaskBranch,
   onEpicMR,
   onTaskMR,
+  onShowDiff,
   collapsed = false,
   onToggleCollapse,
 }: {
@@ -44,6 +45,7 @@ export function Dashboard({
   onTaskBranch?: (t: TaskRow) => Promise<void>;
   onEpicMR?: (e: EpicRow) => Promise<void>;
   onTaskMR?: (t: TaskRow) => Promise<void>;
+  onShowDiff?: (context: BranchDiffContext) => void;
   // Свёрнутый режим: тонкая вертикальная полоска справа с кнопкой разворота
   // и метриками (эпики/задачи/баги + разбивка по статусам).
   collapsed?: boolean;
@@ -255,6 +257,7 @@ export function Dashboard({
           git={board.git}
           onCreateBranch={onEpicBranch}
           onCreateMR={onEpicMR}
+          onShowDiff={onShowDiff}
           onPause={onEpicPause}
           onResume={onEpicResume}
           onCancel={onEpicCancel}
@@ -267,6 +270,7 @@ export function Dashboard({
           git={board.git}
           onCreateBranch={onTaskBranch}
           onCreateMR={onTaskMR}
+          onShowDiff={onShowDiff}
           onTaskUpdate={onTaskUpdate}
           onClose={() => setTaskId(null)}
         />

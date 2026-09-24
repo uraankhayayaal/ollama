@@ -163,6 +163,13 @@ export interface GitView {
   tasks?: Record<string, GitLinkView>; // task_id → ветка/MR
 }
 
+// Контекст для просмотра диффа отдельной ветки эпика/задачи.
+export interface BranchDiffContext {
+  ref: string;
+  vs: string;
+  label: string;
+}
+
 // Сообщение чата (тип события chat; история — тот же формат).
 export interface ChatMsg {
   id: string;

@@ -111,6 +111,7 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 		logging.For(project).Warnf("gitflow: worktree задачи %s: реестр: %v", task.TaskID, err)
 		return
 	}
+	s.invalidateDiffs(project)
 	logging.For(project).Infof("gitflow: задача %s → worktree %s (%s)", task.TaskID, wtPath, taskRef.Branch)
 	s.srvEmitBoard(project, "gitflow: worktree задачи")
 }
@@ -210,6 +211,7 @@ func (s *Server) removeTaskWorktree(project, taskID, worktree string) {
 				_ = repo.RemoveWorktree(context.Background(), ref.Worktree)
 			}
 			_ = s.reg.DeleteTaskBranch(child, key)
+			s.invalidateDiffs(child)
 		}
 	}
 	if repo, err := s.repoOf(context.Background(), project); err == nil {
@@ -220,6 +222,7 @@ func (s *Server) removeTaskWorktree(project, taskID, worktree string) {
 	if ref, err := s.reg.TaskBranch(project, taskID); err == nil {
 		_ = s.reg.SetTaskBranch(project, taskID, workspace.BranchRef{Branch: ref.Branch, Base: ref.Base})
 	}
+	s.invalidateDiffs(project)
 }
 
 func childTaskKey(project, taskID string) string { return project + "::" + taskID }

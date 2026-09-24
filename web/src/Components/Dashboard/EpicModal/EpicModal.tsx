@@ -4,7 +4,7 @@
 // Ф-6: «Пауза»/«Продолжить»/«Отменить» — эпик изолирован в своей ветке,
 // поэтому приостановка/отмена не откатывают код.
 import { useState } from "react";
-import type { EpicRow, GitView } from "@/Types";
+import type { BranchDiffContext, EpicRow, GitView } from "@/Types";
 import { STATUS_LABEL } from "../board";
 import { Modal } from "../Modal";
 import { GitBlock } from "../GitBlock";
@@ -15,6 +15,7 @@ export function EpicModal({
   git,
   onCreateBranch,
   onCreateMR,
+  onShowDiff,
   onPause,
   onResume,
   onCancel,
@@ -24,6 +25,7 @@ export function EpicModal({
   git?: GitView;
   onCreateBranch?: (e: EpicRow) => Promise<void>;
   onCreateMR?: (e: EpicRow) => Promise<void>;
+  onShowDiff?: (context: BranchDiffContext) => void;
   onPause?: (e: EpicRow) => Promise<void>;
   onResume?: (e: EpicRow) => Promise<void>;
   onCancel?: (e: EpicRow) => Promise<void>;
@@ -40,6 +42,7 @@ export function EpicModal({
   const canResume = !!onResume && epic.status === "paused";
   const canCancel =
     !!onCancel && epic.status !== "done" && epic.status !== "cancelled";
+  const epicBranch = git?.epics?.[epic.task_id]?.branch;
 
   const run = async (action: string, fn: () => Promise<void>) => {
     if (busy) {
@@ -130,6 +133,11 @@ export function EpicModal({
           id={epic.task_id}
           onCreateBranch={onCreateBranch ? () => onCreateBranch(epic) : undefined}
           onCreateMR={onCreateMR ? () => onCreateMR(epic) : undefined}
+          onShowDiff={onShowDiff && epicBranch ? () => onShowDiff({
+            ref: epicBranch,
+            vs: git.base || "main",
+            label: `Эпик · ${epic.task_id} · ${epic.title}`,
+          }) : undefined}
         />
       )}
 

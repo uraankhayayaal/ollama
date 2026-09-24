@@ -924,6 +924,7 @@ func (s *Server) removeTaskBranch(project, taskID string) {
 	if err := s.reg.DeleteTaskMR(project, taskID); err != nil {
 		logging.For(project).Warnf("gitflow: снятие MR задачи %s: %v", taskID, err)
 	}
+	s.invalidateDiffs(project)
 }
 
 // handleSetEpicStatus — REST-перевод эпика в новый статус (кнопки «Пауза»/

@@ -386,8 +386,14 @@ export async function createTaskMR(
 export async function projectDiff(
   base: string,
   project: string,
+  ref?: string,
+  vs?: string,
 ): Promise<DiffView> {
-  return req<DiffView>("GET", `${base}/api/projects/${enc(project)}/diff`);
+  const query = new URLSearchParams();
+  if (ref) query.set("ref", ref);
+  if (vs) query.set("vs", vs);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return req<DiffView>("GET", `${base}/api/projects/${enc(project)}/diff${suffix}`);
 }
 
 // Патч конкретного файла git-диффа (ленивая загрузка, Ф-3).
@@ -395,10 +401,15 @@ export async function projectDiffFile(
   base: string,
   project: string,
   path: string,
+  ref?: string,
+  vs?: string,
 ): Promise<DiffFileView> {
+  const query = new URLSearchParams({ file: path });
+  if (ref) query.set("ref", ref);
+  if (vs) query.set("vs", vs);
   return req<DiffFileView>(
     "GET",
-    `${base}/api/projects/${enc(project)}/diff?file=${enc(path)}`,
+    `${base}/api/projects/${enc(project)}/diff?${query.toString()}`,
   );
 }
 

@@ -12,10 +12,6 @@
   overflow-y: auto;
   color: var(--ink, #1b2330);
 
-  &.hidden {
-    display: none;
-  }
-
   .err {
     color: var(--err, #dc2626);
     font-size: 13px;
@@ -35,11 +31,6 @@
       font-size: 20px;
       &:hover { background: #f1f3f6; color: var(--ink, #1b2330); }
     }
-  }
-
-  .ok {
-    color: var(--add, #16a34a);
-    font-size: 13px;
   }
 
   .hint {
@@ -370,64 +361,6 @@
     }
   }
 
-  .actions {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px;
-    border: 1px solid var(--line, #e2e8f0);
-    border-radius: 8px;
-    background: var(--card, #fff);
-
-    input {
-      font-size: 13px;
-      padding: 6px 10px;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 8px;
-      background: var(--bg, #fff);
-      color: var(--ink, #1b2330);
-    }
-
-    .row {
-      display: flex;
-      gap: 8px;
-    }
-
-    .btn {
-      font-size: 13px;
-      padding: 6px 12px;
-      border: 1px solid var(--line, #e2e8f0);
-      border-radius: 8px;
-      background: var(--btn, #f1f5f9);
-      cursor: pointer;
-
-      &:hover:not(:disabled) {
-        background: var(--btn-hover, #e2e8f0);
-      }
-      &:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-
-      &.accept {
-        background: var(--primary, #2563eb);
-        border-color: var(--primary, #2563eb);
-        color: #fff;
-
-        &:hover:not(:disabled) {
-          background: var(--primary-hover, #1d4ed8);
-        }
-      }
-
-      &.reject {
-        color: var(--err, #dc2626);
-
-        &:hover:not(:disabled) {
-          background: #fef2f2;
-        }
-      }
-    }
-  }
 }
 
 .diff-summary {

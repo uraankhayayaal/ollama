@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -45,13 +46,106 @@ type cachedDiff struct {
 	Remote string
 }
 
-// gitProjectDiff возвращает разобранный дифф git-проекта из кэша или строит
-// его заново (git add -N -A + git diff <base>). Кэш пересоздаётся на каждый
-// запрос списка (/diff без ?file=), чтобы отражать актуальные правки агентов;
-// per-file патчи отдаются из последнего кэша — они дешёвые.
-func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info) (*cachedDiff, error) {
+// branchDiff строит diff зарегистрированной ветки относительно base. Ветки
+// резолвятся до вызова по side-реестру, поэтому сюда не попадают пути клиента.
+func (s *Server) branchDiff(ctx context.Context, inf workspace.Info, ref workspace.BranchRef, base string) (*cachedDiff, error) {
+	if strings.TrimSpace(ref.Branch) == "" {
+		return nil, fmt.Errorf("ветка не создана")
+	}
+	root := inf.Root
+	worktree := strings.TrimSpace(ref.Worktree)
+	if worktree != "" {
+		root = worktree
+		// Worktree может быть уже снят после завершения задачи, пока запись
+		// реестра ещё не обновилась. Не маскируем это как пустой diff.
+		if _, err := s.gitExec.Exec(ctx, root, "git", "rev-parse", "--git-dir"); err != nil {
+			return nil, fmt.Errorf("worktree ветки %s недоступен: %w", ref.Branch, err)
+		}
+		mergeBase, err := s.gitExec.Exec(ctx, inf.Root, "git", "merge-base", base, ref.Branch)
+		if err != nil {
+			return nil, fmt.Errorf("не удалось найти общую базу %s и %s: %w", base, ref.Branch, err)
+		}
+		// -N включает новые файлы, сохраняя их содержимое в worktree.
+		if _, err := s.gitExec.Exec(ctx, root, "git", "add", "-N", "-A"); err != nil {
+			return nil, fmt.Errorf("git add -N в worktree: %w", err)
+		}
+		base = strings.TrimSpace(mergeBase)
+	}
+	var raw string
+	var err error
+	if worktree != "" {
+		// Для worktree diff от merge-base должен включать и рабочее дерево.
+		// Трёхточечная форма напрямую сравнивает коммиты, поэтому используем
+		// найденный merge-base как обычную точку сравнения.
+		raw, err = s.gitExec.Exec(ctx, root, "git", "-c", "diff.submodule=log", "diff", base)
+	} else {
+		raw, err = s.gitExec.Exec(ctx, root, "git", "-c", "diff.submodule=log", "diff", base+"..."+ref.Branch)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("git diff ветки %s: %w", ref.Branch, err)
+	}
+	c := parseUnifiedDiff(raw)
+	c.Branch, c.Base, c.Remote = ref.Branch, inf.GitBase, inf.GitRemote
+	return c, nil
+}
+
+// invalidateDiffs удаляет все варианты кэша веток и проекта.
+func (s *Server) invalidateDiffs(project string) {
 	s.diffMu.Lock()
 	defer s.diffMu.Unlock()
+	prefix := project + "\x00"
+	for key := range s.diffs {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.diffs, key)
+		}
+	}
+}
+
+// gitProjectDiff возвращает разобранный дифф проекта или зарегистрированной
+// ветки. Кэш пересоздаётся на каждый запрос списка, а ленивые патчи берутся из
+// последнего результата с тем же ключом (проект, ref, vs).
+func diffCacheKey(project, ref, base string) string {
+	return project + "\x00" + ref + "\x00" + base
+}
+
+func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info, ref, base string, refresh bool) (*cachedDiff, error) {
+	s.diffMu.Lock()
+	defer s.diffMu.Unlock()
+	key := diffCacheKey(inf.Name, ref, base)
+	if !refresh {
+		if c := s.diffs[key]; c != nil {
+			return c, nil
+		}
+	}
+	if ref != "" {
+		var branch workspace.BranchRef
+		found := false
+		if inf.GitBranches != nil {
+			for _, candidate := range inf.GitBranches.Epics {
+				if candidate.Branch == ref {
+					branch, found = candidate, true
+					break
+				}
+			}
+			if !found {
+				for _, candidate := range inf.GitBranches.Tasks {
+					if candidate.Branch == ref {
+						branch, found = candidate, true
+						break
+					}
+				}
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("ветка %q не зарегистрирована в проекте", ref)
+		}
+		c, err := s.branchDiff(ctx, inf, branch, base)
+		if err != nil {
+			return nil, err
+		}
+		s.diffs[key] = c
+		return c, nil
+	}
 	repo := gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
 	if inf.Parent == "" {
 		if subs, err := gitops.ListSubmodules(ctx, s.gitExec, inf.Root); err != nil {
@@ -85,7 +179,7 @@ func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info) (*cache
 	c.Branch = inf.GitBranch
 	c.Base = inf.GitBase
 	c.Remote = inf.GitRemote
-	s.diffs[inf.Name] = c
+	s.diffs[key] = c
 	return c, nil
 }
 

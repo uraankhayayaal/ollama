@@ -93,6 +93,7 @@ func (s *Server) handleCreateEpicBranch(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "ошибка записи ветки в реестр: "+err.Error())
 		return
 	}
+	s.invalidateDiffs(project)
 	if epic.GitBranch == "" {
 		epic.GitBranch = branch
 		if err := store.SaveEpic(r.Context(), epic); err != nil {
@@ -159,6 +160,7 @@ func (s *Server) handleCreateTaskBranch(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "ошибка записи ветки в реестр: "+err.Error())
 		return
 	}
+	s.invalidateDiffs(project)
 	if task.GitBranch == "" {
 		task.GitBranch = branch
 		if err := store.SaveTask(r.Context(), task); err != nil {
@@ -357,6 +359,7 @@ func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*gito
 		}
 		return nil, "", "", &apiError{code: http.StatusBadGateway, msg: err.Error()}
 	}
+	s.invalidateDiffs(project)
 	return res, epicRef.Branch, main, nil
 }
 
@@ -405,10 +408,14 @@ func (s *Server) mergeTaskBranch(ctx context.Context, project string, t *board.T
 	lock.Lock()
 	defer lock.Unlock()
 
-	return repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, gitops.MergeFeatureOptions{
+	res, err := repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, gitops.MergeFeatureOptions{
 		Message: fmt.Sprintf("задача %s: влитие в релиз эпика %s", t.TaskID, t.EpicID),
 		PushURL: remotePushURL(inf),
 	})
+	if err == nil {
+		s.invalidateDiffs(project)
+	}
+	return res, err
 }
 
 // remotePushURL выбирает URL push релизной ветки: токенизированный HTTPS-URL
@@ -518,6 +525,7 @@ func (s *Server) autoCreateEpicBranch(ctx context.Context, project string, epic 
 		logging.For(project).Warnf("gitflow: авто-ветка эпика %s: реестр: %v", epic.TaskID, err)
 		return
 	}
+	s.invalidateDiffs(project)
 	if epic.GitBranch == "" {
 		epic.GitBranch = branch
 		if err := store.SaveEpic(ctx, epic); err != nil {
@@ -567,6 +575,7 @@ func (s *Server) autoCreateTaskBranch(ctx context.Context, project string, task 
 		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: реестр: %v", task.TaskID, err)
 		return
 	}
+	s.invalidateDiffs(project)
 	if task.GitBranch == "" {
 		task.GitBranch = branch
 		if err := store.SaveTask(ctx, task); err != nil {
@@ -598,6 +607,7 @@ func (s *Server) deleteEpicBranches(project, epicID string, epicTasks []string) 
 			logging.For(project).Warnf("gitflow: снятие MR задачи %s: %v", tid, err)
 		}
 	}
+	s.invalidateDiffs(project)
 }
 
 // apiError — ошибка REST-хендлера с HTTP-кодом: единый носитель «каким кодом

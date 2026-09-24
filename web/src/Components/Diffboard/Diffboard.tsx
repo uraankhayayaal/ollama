@@ -1,26 +1,17 @@
-// Diffboard — панель «Дифф»: разница предложенного и текущего состояния
-// (GET /api/projects/<name>/diff), а для git-проектов — приёмка:
-// «Принять → MR» (commit+push+MR/PR через фордж) и «Отклонить ветку».
-// Ф-3: для git-проектов дифф загружается лениво — список файлов (метаданные),
+// Diffboard — панель веточного diff. Список файлов загружается отдельно,
 // патч конкретного файла подтягивается при раскрытии (projectDiffFile) и
 // показывается side-by-side «до → после» в стиле JetBrains (см. sidebyside.ts).
-// Пропс kind приходит из ProjectMeta (workspace.Info.Kind).
-//
-// Панель скрыта по умолчанию (showDiffboard=false): выдвигается снизу по
-// плавающей кнопке «Дифф», а внутри — кнопкой «×» сверху справа
-// (toggleDiffboard) сворачивается обратно.
 
-import { useCallback, useEffect, useState } from "react";
-import { acceptProject, projectDiff, projectDiffFile, rejectBranch } from "@/Api";
-import type { DiffFile, DiffFileView, DiffView, ProjectKind } from "@/Types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { projectDiff, projectDiffFile } from "@/Api";
+import type { BranchDiffContext, DiffFile, DiffFileView, DiffView } from "@/Types";
 import { sideBySide, type SideRow } from "./sidebyside";
 import "./styles.scss";
 
 export interface DiffboardProps {
   project: string;
-  kind?: ProjectKind;
-  showDiffboard?: boolean;
-  toggleDiffboard?: () => void;
+  context: BranchDiffContext;
+  onClose: () => void;
 }
 
 const BASE = "";
@@ -32,78 +23,64 @@ export function Diffboard(props: DiffboardProps) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [title, setTitle] = useState("");
-  const [mr, setMr] = useState<{ url: string; branch: string; base: string; repositories?: Record<string, { url: string; branch: string; base: string }> } | null>(null);
   const [fileQuery, setFileQuery] = useState("");
   const [fileStatus, setFileStatus] = useState("all");
+  const requestID = useRef(0);
+  const contextKey = `${props.context?.ref ?? ""}\0${props.context?.vs ?? ""}`;
+  const currentContextKey = useRef(contextKey);
+  currentContextKey.current = contextKey;
 
   const load = useCallback(async () => {
+    const id = ++requestID.current;
+    const key = `${props.context?.ref ?? ""}\0${props.context?.vs ?? ""}`;
     setLoading(true);
     setError("");
+    setDiff(null);
     setPatches({});
     setOpen({});
+    setFileQuery("");
+    setFileStatus("all");
     try {
-      setDiff(await projectDiff(BASE, props.project));
+      const next = await projectDiff(BASE, props.project, props.context?.ref, props.context?.vs);
+      if (id === requestID.current && key === currentContextKey.current) setDiff(next);
     } catch (e) {
-      setError(fmtErr(e));
+      if (id === requestID.current && key === currentContextKey.current) setError(fmtErr(e));
     } finally {
-      setLoading(false);
+      if (id === requestID.current) setLoading(false);
     }
-  }, [props.project]);
+  }, [props.project, props.context?.ref, props.context?.vs]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Esc закрывает верхнюю панель diff, не закрывая модалку под ней.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        props.onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [props.onClose]);
 
   // Раскрытие файла: подтягиваем патч (если ещё не загружен) — лениво.
   const toggle = async (path: string) => {
     setOpen((prev) => ({ ...prev, [path]: !prev[path] }));
     if (diff?.kind === "git" && !patches[path]) {
       try {
-        const pv = await projectDiffFile(BASE, props.project, path);
-        setPatches((prev) => ({ ...prev, [path]: pv }));
+        const key = contextKey;
+        const pv = await projectDiffFile(BASE, props.project, path, props.context?.ref, props.context?.vs);
+        if (key === currentContextKey.current) setPatches((prev) => ({ ...prev, [path]: pv }));
       } catch (e) {
-        setError(fmtErr(e));
+        if (contextKey === currentContextKey.current) setError(fmtErr(e));
       }
     }
   };
 
-  const onAccept = async () => {
-    if (!props.kind) return;
-    setBusy(true);
-    setError("");
-    try {
-      const res = await acceptProject(BASE, props.project, {
-        title: title.trim() || undefined,
-      });
-      setMr(res);
-    } catch (e) {
-      setError(fmtErr(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onReject = async () => {
-    if (!props.kind) return;
-    if (!window.confirm("Удалить фича-ветку на remote и вернуть рабочую копию на базу?")) {
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setMr(null);
-    try {
-      await rejectBranch(BASE, props.project);
-      await load();
-    } catch (e) {
-      setError(fmtErr(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const isGit = props.kind === "git";
   const gitFiles = diff?.files ?? [];
   const snapFiles: DiffFile[] = diff?.kind === "snap" ? [
     ...(diff.added ?? []).map((f) => ({ path: f, status: "added" as const, added: 0, deleted: 0 })),
@@ -118,15 +95,13 @@ export function Diffboard(props: DiffboardProps) {
   const countFiles = (status: string) => allFiles.filter((f) => f.status === status).length;
 
   return (
-    <div className={"diffboard" + (props.showDiffboard === false ? " hidden" : "")}>
-      {props.toggleDiffboard && (
-        <div className="head title-head">
-          <p className="hint">Дифф</p>
-          <button className="btn close" onClick={props.toggleDiffboard} title="Свернуть окно">
-            ×
-          </button>
-        </div>
-      )}
+    <div className="diffboard" role="dialog" aria-modal="true" aria-label={props.context.label}>
+      <div className="head title-head">
+        <p className="hint">{props.context.label}</p>
+        <button className="btn close" onClick={props.onClose} title="Закрыть дифф">
+          ×
+        </button>
+      </div>
 
       {loading && <p className="hint">Загружаю дифф…</p>}
 
@@ -137,12 +112,8 @@ export function Diffboard(props: DiffboardProps) {
           <span><b>{allFiles.length}</b> файлов</span>
           <span className="added">+{allFiles.reduce((n, f) => n + f.added, 0)}</span>
           <span className="removed">−{allFiles.reduce((n, f) => n + f.deleted, 0)}</span>
-          <span className="branch">{diff.branch} → {diff.base}</span>
+          <span className="branch">{diff.branch} → {diff.base || props.context.vs}</span>
         </div>
-      )}
-
-      {!loading && !error && diff?.kind === "snap" && (
-        <p className="hint snap-hint">Локальные изменения относительно baseline-снимка</p>
       )}
 
       {!loading && !error && diff && allFiles.length > 0 && (
@@ -194,42 +165,9 @@ export function Diffboard(props: DiffboardProps) {
       )}
 
       {!loading && !error && diff && allFiles.length === 0 && (
-        <p className="empty-diff">Изменений относительно точки отхода нет.</p>
+        <p className="empty-diff">Изменений в этой ветке относительно {props.context.vs} нет.</p>
       )}
 
-      {!loading && !error && diff && !isGit && (
-        <p className="hint">Приёмка через MR доступна только git-проектам (открытым по git-URL).</p>
-      )}
-
-      {isGit && (
-        <div className="actions">
-          <input
-            type="text"
-            placeholder="Заголовок MR/PR (пусто — по умолчанию)"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            disabled={busy}
-          />
-          <div className="row">
-            <button className="btn accept" onClick={() => void onAccept()} disabled={busy}>
-              {busy ? "Работаю…" : "Принять → MR"}
-            </button>
-            <button className="btn reject" onClick={() => void onReject()} disabled={busy}>
-              Отклонить ветку
-            </button>
-          </div>
-          {mr && (
-            <div className="ok">
-              <p>Созданы запросы на слияние:</p>
-              {Object.entries(mr.repositories ?? { [props.project]: mr }).map(([name, result]) => (
-                <p key={name}>
-                  {name}: <a href={result.url} target="_blank" rel="noreferrer">{result.url}</a>
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
