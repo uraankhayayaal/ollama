@@ -4,6 +4,7 @@ import (
 	"ai/logging"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -35,7 +36,7 @@ func Accept(dir string, cfg Config) *Report {
 	case len(projects) == 0:
 		return unknownProjectReport(dir)
 	case len(projects) == 1:
-		return acceptOne(projects[0].Dir, projects[0].Kind, cfg)
+		return acceptOne(dir, dir, projects[0].Kind, cfg)
 	default:
 		return acceptMany(dir, projects, cfg)
 	}
@@ -71,7 +72,7 @@ func acceptMany(root string, projects []ProjectRoot, cfg Config) *Report {
 	}
 
 	for _, p := range projects {
-		sub := acceptOne(p.Dir, p.Kind, cfg)
+		sub := acceptOne(root, p.Dir, p.Kind, cfg)
 		sub.Project = p.Rel
 		rep.Projects = append(rep.Projects, sub)
 
@@ -99,20 +100,50 @@ func acceptMany(root string, projects []ProjectRoot, cfg Config) *Report {
 // acceptOne — приёмка одного проекта с известным типом (kind). Вся логика
 // одиночной приёмки: установка зависимостей, сборка, стилизатор, анализатор,
 // запуск и анализ логов.
-func acceptOne(dir string, kind Kind, cfg Config) *Report {
+//
+// Приоритет команд (Р-5 PLAN-2026-09-24-todo-makefile.md): env ACCEPT_* →
+// цель корневого Makefile проекта (`make build`/`make run`/`make lint`/`make
+// test`) → автодетект по типу. root — корень приёмки (для монорепо — верхняя
+// директория, в которой ищется Makefile), dir — директория конкретного проекта.
+func acceptOne(root, dir string, kind Kind, cfg Config) *Report {
 	rep := &Report{
 		Project: filepath.Base(dir),
 		Verdict: VerdictApprove,
 		Tool:    string(kind),
 	}
 
+	// Makefile проекта (поиск от подпроекта вверх до корня приёмки) — единый
+	// контракт целей команд для субагентов и приёмки: при наличии цели она
+	// приоритетнее автодетекта по типу, env ACCEPT_* — над Makefile.
+	mkDir, mk := makefileLocate(root, dir)
+
 	buildCmd := cfg.BuildCmd
 	if strings.TrimSpace(buildCmd) == "" {
-		buildCmd = kind.buildCommand(dir)
+		if mc := makeCommand(mk, "build"); mc != "" {
+			buildCmd = mc
+		} else {
+			buildCmd = kind.buildCommand(dir)
+		}
 	}
 	runCmd := cfg.RunCmd
 	if strings.TrimSpace(runCmd) == "" {
-		runCmd = kind.runCommand(dir)
+		if mc := makeCommand(mk, "run"); mc != "" {
+			runCmd = mc
+		} else {
+			runCmd = kind.runCommand(dir)
+		}
+	}
+
+	// Долгоживущие процессы и каталоги: make-цели исполняем в директории
+	// расположения Makefile (монорепо — корень, цели сами делают cd), обычные
+	// команды — в директории подпроекта.
+	buildDir := dir
+	if strings.HasPrefix(buildCmd, "make ") && mkDir != "" {
+		buildDir = mkDir
+	}
+	runDir := dir
+	if strings.HasPrefix(runCmd, "make ") && mkDir != "" {
+		runDir = mkDir
 	}
 
 	// Неизвестный тип проекта и нет явно заданных команд — принимать нечего:
@@ -162,17 +193,32 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 		rep.Build.Skipped = true
 		logging.Detailf("[приёмка] %s: сборка не требуется (%s)", rep.Project, rep.Tool)
 	} else {
-		out, code, timedOut, err := runCommand(dir, buildCmd, cfg.BuildTimeout)
+		out, code, timedOut, _ := runCommand(buildDir, buildCmd, cfg.BuildTimeout)
 		rep.Build = BuildResult{
 			OK:       code == 0 && !timedOut,
 			Command:  buildCmd,
 			Output:   trimOutput(out, cfg.MaxLog),
 			TimedOut: timedOut,
 		}
-		if !rep.Build.OK && isToolMissing(out, code) {
+		if !rep.Build.OK && toolMissing(out, code) {
 			// Инструмент сборки (npm/go/pip) отсутствует в окружении: это не
-			// дефект кода, а свойство хоста — шаг пропускается с предупреждением
+			// дефект кода, а свойство хоста — шаг может быть повторён в
+			// контейнерном тулчейне инфра-зеркала Makefile (infra.<цель> =
+			// docker compose run). Зеркала нет — пропускаем с предупреждением
 			// по той же конвенции, что и для установки зависимостей.
+			if mirror := makeInfraMirror(mk, buildCmd); mirror != "" {
+				mout, mcode, mtimedOut, _ := runCommand(buildDir, mirror, cfg.BuildTimeout)
+				logging.Infof("[приёмка] %s: сборка через инфра-зеркало %q (хост-инструмент недоступен)", rep.Project, mirror)
+				out, code, timedOut = mout, mcode, mtimedOut
+				rep.Build = BuildResult{
+					OK:       code == 0 && !timedOut,
+					Command:  mirror,
+					Output:   trimOutput(out, cfg.MaxLog),
+					TimedOut: timedOut,
+				}
+			}
+		}
+		if !rep.Build.OK && toolMissing(out, code) {
 			rep.Build.Skipped = true
 			rep.Build.Output = "инструмент сборки недоступен в окружении — шаг пропущен"
 			rep.Issues = append(rep.Issues, Issue{
@@ -180,7 +226,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 				Severity: "warning",
 				Text:     "инструмент сборки недоступен — шаг пропущен",
 			})
-			logging.Warnf("[приёмка] %s: сборка %q пропущена (инструмент недоступен)", rep.Project, buildCmd)
+			logging.Warnf("[приёмка] %s: сборка %q пропущена (инструмент недоступен)", rep.Project, rep.Build.Command)
 		} else if !rep.Build.OK {
 			issues, _ := analyzeOutput(StageBuild, out)
 			rep.Issues = append(rep.Issues, issues...)
@@ -188,13 +234,9 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 			if timedOut {
 				msg = "сборка превысила таймаут"
 			}
-			if err != nil && timedOut {
-				rep.Issues = append(rep.Issues, Issue{Stage: StageBuild, Severity: "error", Text: msg})
-			} else if !timedOut {
-				rep.Issues = append(rep.Issues, Issue{Stage: StageBuild, Severity: "error", Text: msg})
-			}
+			rep.Issues = append(rep.Issues, Issue{Stage: StageBuild, Severity: "error", Text: msg})
 		}
-		logging.Infof("[приёмка] %s: сборка %q -> ok=%v skipped=%v", rep.Project, buildCmd, rep.Build.OK, rep.Build.Skipped)
+		logging.Infof("[приёмка] %s: сборка %q -> ok=%v skipped=%v", rep.Project, rep.Build.Command, rep.Build.OK, rep.Build.Skipped)
 	}
 
 	// Если сборка уже упала — запуск не имеет смысла: фиксируем вердикт и
@@ -211,12 +253,23 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 	if cfg.CheckFormat {
 		formatCmd, tool := cfg.FormatCmd, "по команде ACCEPT_FORMAT_CMD"
 		if strings.TrimSpace(formatCmd) == "" {
-			formatCmd, tool = kind.formatCommand(dir)
-			if formatCmd == "" {
-				tool = "не найден"
+			if mc := makeCommand(mk, "lint"); mc != "" {
+				formatCmd, tool = mc, "make lint"
+			} else {
+				formatCmd, tool = kind.formatCommand(dir)
+				if formatCmd == "" {
+					tool = "не найден"
+				}
 			}
 		}
-		formatted, fmtIssues := runFormatCheck(dir, cfg, formatCmd, tool)
+		formatDir := dir
+		if strings.HasPrefix(formatCmd, "make ") && mkDir != "" {
+			formatDir = mkDir
+		}
+		formatted, fmtIssues := runFormatCheck(formatDir, cfg, formatCmd, tool)
+		if r, mi := retryInfraMirror(mk, formatDir, cfg, formatted, runFormatCheck); r != formatted {
+			formatted, fmtIssues = r, mi
+		}
 		rep.Format = formatted
 		rep.Issues = append(rep.Issues, fmtIssues...)
 		logging.Detailf("[приёмка] %s: стилизатор %q -> %s", rep.Project, formatCmd, formatStatus(rep.Format))
@@ -227,12 +280,23 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 	if cfg.CheckAnalyze {
 		analyzeCmd, tool := cfg.AnalyzeCmd, "по команде ACCEPT_ANALYZE_CMD"
 		if strings.TrimSpace(analyzeCmd) == "" {
-			analyzeCmd, tool = kind.analyzeCommand(dir)
-			if analyzeCmd == "" {
-				tool = "не найден"
+			if mc, mt := makeAnalyzeCommand(mk); mc != "" {
+				analyzeCmd, tool = mc, mt
+			} else {
+				analyzeCmd, tool = kind.analyzeCommand(dir)
+				if analyzeCmd == "" {
+					tool = "не найден"
+				}
 			}
 		}
-		analyzed, anIssues := runAnalyzeCheck(dir, cfg, analyzeCmd, tool)
+		analyzeDir := dir
+		if strings.HasPrefix(analyzeCmd, "make ") && mkDir != "" {
+			analyzeDir = mkDir
+		}
+		analyzed, anIssues := runAnalyzeCheck(analyzeDir, cfg, analyzeCmd, tool)
+		if r, mi := retryInfraMirror(mk, analyzeDir, cfg, analyzed, runAnalyzeCheck); r != analyzed {
+			analyzed, anIssues = r, mi
+		}
 		rep.Analyze = analyzed
 		rep.Issues = append(rep.Issues, anIssues...)
 		if !rep.Analyze.OK && !rep.Analyze.Skipped {
@@ -268,7 +332,7 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 		return rep
 	}
 
-	out, code, timedOut, _ := runCommand(dir, runCmd, cfg.RunTimeout)
+	out, code, timedOut, _ := runCommand(runDir, runCmd, cfg.RunTimeout)
 	run := &RunResult{
 		Command:    runCmd,
 		Output:     trimOutput(out, cfg.MaxLog),
@@ -276,9 +340,11 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 		ServerMode: timedOut,
 		OK:         false,
 	}
-	if isToolMissing(out, code) {
+	if toolMissing(out, code) {
 		// Инструмент запуска (node/npm) отсутствует в окружении: пропускаем
-		// запуск с предупреждением, как и для установки/сборки.
+		// запуск с предупреждением, как и для установки/сборки. Инфра-зеркало
+		// для запуска НЕ применяется (долгоживущие процессы в контейнере
+		// не завершаются сами).
 		run.Skipped = true
 		run.OK = true
 		run.Output = "инструмент запуска недоступен в окружении — шаг пропущен"
@@ -332,6 +398,51 @@ func acceptOne(dir string, kind Kind, cfg Config) *Report {
 
 	rep.Summary = summarize(rep)
 	return rep
+}
+
+// makeToolMissingRE — маркер недоступного инструмента внутри make-рецепта:
+// make возвращает собственный код 2, но в выводе печатает «Error/Ошибка 127».
+var makeToolMissingRE = regexp.MustCompile(`(?m)(Ошибка|Error) 127\b`)
+
+// toolMissing определяет, что команда упала на недоступном инструменте хоста
+// (isToolMissing), в т.ч. при исполнении через make (makeToolMissingRE).
+func toolMissing(out string, code int) bool {
+	return isToolMissing(out, code) || makeToolMissingRE.MatchString(out)
+}
+
+// retryInfraMirror перезапускает прикладную проверку через зеркальную
+// инфра-цель ('make infra.<цель>' = docker compose run) в случаях, когда
+// хост-инструмент недоступен (см. isToolMissing). Возвращает исходный
+// результат, если зеркала нет, или если и зеркальная команда недоступна:
+// тогда шаг, как и раньше, остаётся пропущенным с предупреждением
+// (Р-6 PLAN-2026-09-24-todo-makefile.md; для run зеркало не используется).
+func retryInfraMirror(targets map[string]bool, execDir string, cfg Config, res *CheckResult, run func(string, Config, string, string) (*CheckResult, []Issue)) (*CheckResult, []Issue) {
+	if res == nil || res.Command == "" || !strings.HasPrefix(res.Command, "make ") {
+		return res, nil
+	}
+	missing := res.Skipped && strings.Contains(res.Output, "недоступен")
+	if !missing && !res.OK && toolMissing(res.Output, 0) {
+		missing = true
+	}
+	if !missing {
+		return res, nil
+	}
+	mirror := makeInfraMirror(targets, res.Command)
+	if mirror == "" {
+		return res, nil
+	}
+	mres, mIssues := run(execDir, cfg, mirror, strings.TrimPrefix(mirror, "make "))
+	if mres == nil {
+		return res, nil
+	}
+	if mres.Skipped && strings.Contains(mres.Output, "недоступен") {
+		return res, nil
+	}
+	if !mres.OK && toolMissing(mres.Output, 0) {
+		// Зеркало тоже недоступно — оставляем исходный пропущенный результат.
+		return res, nil
+	}
+	return mres, mIssues
 }
 
 // summarize составляет краткую однострочную сводку результата приёмки.

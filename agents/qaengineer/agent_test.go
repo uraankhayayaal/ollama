@@ -3,6 +3,7 @@ package qaengineer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,21 @@ func TestQAConstrainScopePreventsWriteOutsideScope(t *testing.T) {
 	}
 	if err := q.Write("main.go", "package main\n"); err == nil {
 		t.Fatal("запись вне области работы должна быть отклонена")
+	}
+}
+
+// TestQAPromptMentionsMakefile — Ф-2/Ф-4 PLAN-2026-09-24-todo-makefile.md:
+// единая команда автотестов — из корневого Makefile (make test / make e2e),
+// приёмка через make build/make lint; запрет дев-процессов сохраняется.
+func TestQAPromptMentionsMakefile(t *testing.T) {
+	q := newTestQA(t)
+	p := q.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"Makefile", "make test", "make e2e", "make build", "make lint"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт QA-инженера не содержит %q:\n%s", want, p)
+		}
+	}
+	if !strings.Contains(p, "НЕ запускай приложение через Run") {
+		t.Errorf("промпт должен сохранять запрет дев-процессов:\n%s", p)
 	}
 }

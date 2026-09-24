@@ -292,6 +292,38 @@ func TestBugExpertAndReviewPromptsMentionAskUser(t *testing.T) {
 	}
 }
 
+// TestArchitectPromptMentionsMakefile — Ф-1 PLAN-2026-09-24-todo-makefile.md:
+// промпт архитектора велит управлять наличием корневого Makefile через бэклог
+// (эпик «Makefile проекта» с эталонным контрактом целей: backend-*/frontend-*,
+// e2e, инфра-блок). Режимы экспертизы и ревизии содержат правило сверки
+// контракта Makefile при эпиках о сборке/тестах/запуске.
+func TestArchitectPromptMentionsMakefile(t *testing.T) {
+	a := newTestArchitect(t)
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"MAKEFILE ПРОЕКТА", "Makefile", "backend-*", "frontend-*", "e2e",
+		"infra.<цель>", "docker compose run -it --rm", "assigned_role",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+	for _, want := range []string{"build", "test", "lint", "run", "deps", "up", "down"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не упоминает контрактную цель %q:\n%s", want, p)
+		}
+	}
+
+	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
+	if !strings.Contains(bug, "MAKEFILE ПРОЕКТА") || !strings.Contains(bug, "контракт целей корневого Makefile") {
+		t.Errorf("промпт экспертизы багов не упоминает сверку контракта Makefile:\n%s", bug)
+	}
+	r := a.AsReviewer().GetSystemMessages(nil)[0].Message
+	if !strings.Contains(r, "MAKEFILE ПРОЕКТА") || !strings.Contains(r, "контракт целей корневого Makefile") {
+		t.Errorf("промпт ревизии черновиков не упоминает сверку контракта Makefile:\n%s", r)
+	}
+}
+
 // TestArchitectSystemMessagesIncludeRAGBlock — Ф-1: при подключённом RAG
 // (SetRAG) в системный промпт попадает блок «Релевантный код по задаче»
 // (поиск — по проекту из OutputDir, scope пуст).

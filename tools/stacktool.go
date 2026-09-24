@@ -28,12 +28,13 @@ type StackRoles struct {
 
 // StackInfo — результат детекта стека и состава проекта.
 type StackInfo struct {
-	Status  string     `json:"status"`
-	Kind    string     `json:"kind"`
-	Stack   string     `json:"stack,omitempty"`
-	Roles   StackRoles `json:"roles"`
-	Summary string     `json:"summary,omitempty"`
-	Markers []string   `json:"markers,omitempty"`
+	Status   string     `json:"status"`
+	Kind     string     `json:"kind"`
+	Stack    string     `json:"stack,omitempty"`
+	Roles    StackRoles `json:"roles"`
+	Summary  string     `json:"summary,omitempty"`
+	Makefile bool       `json:"makefile"`
+	Markers  []string   `json:"markers,omitempty"`
 }
 
 type stackTool struct {
@@ -44,8 +45,8 @@ func (t *stackTool) Name() string { return DetectStack }
 
 func (t *stackTool) Definition() ToolDefinition {
 	return ToolDefinition{
-		Name: DetectStack,
-		Description: "Определить фактический тип проекта (стек) и состав направлений по маркерам корня проекта: go.mod/composer.json/package.json, директории server/frontend/backend/web/infra/deploy/tests, Docker Compose и др. Возвращает kind, roles (frontend/backend/devops/qa) и markers. Используй перед публикацией эпиков, чтобы назначать эпики только реально нужным лидам.",
+		Name:        DetectStack,
+		Description: "Определить фактический тип проекта (стек) и состав направлений по маркерам корня проекта: go.mod/composer.json/package.json, директории server/frontend/backend/web/infra/deploy/tests, Docker Compose, Makefile и др. Возвращает kind, roles (frontend/backend/devops/qa), makefile (признак наличия Makefile) и markers. Используй перед публикацией эпиков, чтобы назначать эпики только реально нужным лидам.",
 		Parameters: map[string]any{
 			"type":                 "object",
 			"properties":           map[string]any{},
@@ -128,6 +129,13 @@ func detectStackAt(dir string) StackInfo {
 		markers = append(markers, "ci(.github/workflows)")
 	}
 
+	// Makefile проекта — единая точка входа команд для субагентов (Ф-1
+	// PLAN-2026-09-24-todo-makefile.md): детерминированный признак архитектору,
+	// чтобы управлять обязательным эпиком «Makefile проекта».
+	if hasFile(dir, "Makefile") {
+		markers = append(markers, "Makefile")
+	}
+
 	// QA/tests
 	if hasDir(dir, "tests") || hasDir(dir, "test") || hasDir(dir, "__tests__") || hasDir(dir, "spec") || hasDir(dir, "e2e") {
 		roles.QA = true
@@ -149,11 +157,12 @@ func detectStackAt(dir string) StackInfo {
 	summary := buildSummary(kind, roles, markers)
 
 	return StackInfo{
-		Status:  "ok",
-		Kind:    kstr,
-		Roles:   roles,
-		Summary: summary,
-		Markers: markers,
+		Status:   "ok",
+		Kind:     kstr,
+		Roles:    roles,
+		Summary:  summary,
+		Makefile: hasFile(dir, "Makefile"),
+		Markers:  markers,
 	}
 }
 

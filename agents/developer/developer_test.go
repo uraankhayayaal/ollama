@@ -54,6 +54,27 @@ func TestRoleInSystemPrompt(t *testing.T) {
 	}
 }
 
+// TestPromptMentionsMakefile — Ф-2 PLAN-2026-09-24-todo-makefile.md: п.5 велит
+// разработчику сперва читать корневой Makefile проекта и запускать через Run
+// его цели (профильные backend-*/frontend-*), а зашитые команды оставляет
+// фолбэком.
+func TestPromptMentionsMakefile(t *testing.T) {
+	backend := newBackendDeveloperInDir("задание", t.TempDir())
+	p := backend.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"Makefile", "make backend-build", "make backend-test", "make backend-lint", "make test"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("бэкенд-промпт не содержит %q:\n%s", want, p)
+		}
+	}
+	frontend := newFrontendDeveloperInDir("задание", t.TempDir())
+	p = frontend.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"Makefile", "make frontend-build", "make frontend-test", "make frontend-lint"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("фронтенд-промпт не содержит %q:\n%s", want, p)
+		}
+	}
+}
+
 func TestNewDeveloperUsesProjectDir(t *testing.T) {
 	cases := []struct {
 		name string

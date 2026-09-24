@@ -78,6 +78,125 @@ func DetectProjects(dir string) []ProjectRoot {
 	return roots
 }
 
+// makefileLocate ищет корневой Makefile проекта: от подпроекта dir вверх до
+// корня приёмки root включительно. Возвращает директорию с найденным файлом
+// и множество имён целей (пустые — Makefile не найден).
+func makefileLocate(root, dir string) (string, map[string]bool) {
+	for d := dir; ; {
+		if hasFile(d, "Makefile") {
+			return d, makefileTargets(filepath.Join(d, "Makefile"))
+		}
+		if d == root {
+			break
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	return "", nil
+}
+
+// makefileTargets парсит цели Makefile: строки вида «имя...:» до первого
+// двоеточия, с поддержкой нескольких имён-целей на одной строке
+// («build test: ...»). Пропускаются переменные («=»), шаблонные правила («%»),
+// служебные имена с ведущей точкой (.PHONY/.DEFAULT_GOAL/.ONESHELL) и имена
+// вне допустимого набора символов [A-Za-z0-9_.-]. Детерминированный, без сети.
+func makefileTargets(path string) map[string]bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	targets := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.Contains(line, ":") {
+			continue
+		}
+		name := strings.TrimSpace(strings.SplitN(line, ":", 2)[0])
+		if name == "" || strings.ContainsAny(name, "=%$") {
+			continue
+		}
+		// Присваивание переменной «SHELL := /bin/bash» — не цель.
+		if i := strings.Index(line, ":"); i+1 < len(line) && line[i+1] == '=' {
+			continue
+		}
+		names := strings.Fields(name)
+		if len(names) == 0 {
+			continue
+		}
+		clean := true
+		for _, n := range names {
+			if strings.HasPrefix(n, ".") || !makefileTargetName(n) {
+				clean = false
+				break
+			}
+		}
+		if !clean {
+			continue
+		}
+		for _, n := range names {
+			targets[n] = true
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	return targets
+}
+
+// makefileTargetName проверяет имя цели по контракту: только латиница,
+// цифры, подчёркивание, точка и дефис.
+func makefileTargetName(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_', r == '.', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// makeCommand возвращает make-команду цели, если Makefile её объявляет
+// (приоритет Makefile выше автодетекта по типу: Р-5
+// PLAN-2026-09-24-todo-makefile.md).
+func makeCommand(targets map[string]bool, target string) string {
+	if targets[target] {
+		return "make " + target
+	}
+	return ""
+}
+
+// makeAnalyzeCommand выбирает цель анализатора: приоритет 'test', затем 'lint'
+// (дополнительная проверка через автотесты, если именно тесты объявлены).
+func makeAnalyzeCommand(targets map[string]bool) (cmd, tool string) {
+	switch {
+	case targets["test"]:
+		return "make test", "make test"
+	case targets["lint"]:
+		return "make lint", "make lint"
+	}
+	return "", ""
+}
+
+// makeInfraMirror возвращает зеркальную инфра-цель ('make infra.<цель>') для
+// прикладной make-команды, если Makefile её объявляет. Контейнерный тулчейн
+// Docker Compose, к которому приёмка переходит при недоступном инструменте
+// хоста (exit 127/command not found).
+func makeInfraMirror(targets map[string]bool, cmd string) string {
+	t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cmd), "make "))
+	if t == "" || t == strings.TrimSpace(cmd) || !targets["infra."+t] {
+		return ""
+	}
+	return "make infra." + t
+}
+
 func hasFile(dir, name string) bool {
 	info, err := os.Stat(filepath.Join(dir, name))
 	return err == nil && !info.IsDir()

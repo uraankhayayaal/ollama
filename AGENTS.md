@@ -91,3 +91,27 @@ REST `POST /api/projects/{id}/index` + кнопка в Web UI (необязат�
 согласию, декомпозирует с учётом стека и ролей; консольный проект — без
 Frontend Lead. Далее по плану — Ф-8 и следующие фазы уже реализованы
 (Ф-8 в списке: эпики из чата — ревизия архитектора).
+
+Состояние последней сессии (PLAN-2026-09-24-todo-makefile, Ф-1..Ф-5 готовы,
+остался ручной E2E): корневой Makefile проекта (temp/<проект>/Makefile) —
+единая точка входа команд субагентов и приёмки. Ф-1: `tools/stacktool.go`
+`StackInfo.Makefile (json:"makefile")` + маркер «Makefile»; секция «MAKEFILE
+ПРОЕКТА» в `architectureSystemPrompt` (обязательный эпик «Makefile проекта»,
+эталонный контракт целей, assigned_role Backend Lead/DevOps Lead) + п.8
+`bugExpertSystemPrompt`/п.7 `epicReviewSystemPrompt`. Ф-2: `developer.go:264`
+п.5 (сначала ReadFiles Makefile → `make backend-*`/`make frontend-*`), QA
+(`make test`/`make e2e`, приёмка `make build`/`make lint`), лиды backend/
+frontend/devops/qa — «ЦЕЛЬ ПРОВЕРКИ ИЗ MAKEFILE» (devopslead — «ИНФРА-БЛОК
+ЧЕРЕЗ MAKEFILE»). Ф-3: `acceptor/detect.go` `makefileLocate(root,dir)` (поиск
+от подпроекта до корня приёмки) + `makefileTargets` (парсер целей, multi-target
+`build test:`, пропуск `:=`, `.PHONY`, `%`, с переменными) + `makeCommand`/
+`makeAnalyzeCommand` (test→lint)/`makeInfraMirror`; приоритет env ACCEPT_* →
+make-цель → автодетект kind; make-команды исполняются в mkDir (Makefile);
+фолбэк `make infra.<цель>` при недоступном инструменте хоста (make-специфичный
+маркер «Ошибка/Error 127» в `toolMissing`, accept.go — в checks.go/run.go
+правок нет); для run инфра-зеркало НЕ применяется. Ф-4: `devops/agent.go` п.5-6
+(инфра-блок: up/down/logs/ps, зеркальные infra.<цель>, самозавершающийся e2e),
+`fileops.go:991` missingToolHint → «make infra.<цель>». Верификация зелёная
+(плюс 3 пред-существующих флака чат-ассистента на чистой HEAD:
+`TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
+`TestChatAssistantPublishesBoardWhenIdle`).

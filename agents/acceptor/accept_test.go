@@ -490,6 +490,358 @@ func testTimeout(t *testing.T) time.Duration {
 	return 60 * time.Second
 }
 
+// writeMakefile создаёт Makefile проекта в указанной директории.
+func writeMakefile(t *testing.T, dir, content string) {
+	t.Helper()
+	writeTestFile(t, dir, "Makefile", content)
+}
+
+// Парсинг целей Makefile: контрактные имена, несколько целей на строке,
+// переменные, шаблонные и служебные правила и рецепты исключаются.
+func TestMakefileTargets(t *testing.T) {
+	dir := t.TempDir()
+	writeMakefile(t, dir, `
+# комментарий
+build:
+	go build ./...
+
+test lint:
+	@echo ok
+
+SHELL := /bin/bash
+.PHONY: build test lint
+%.o: %.c
+	cc -c $<
+
+CC = gcc
+run:
+	@go run .
+infra.build:
+	docker compose run -it --rm backend go build ./...
+`)
+	mk := makefileTargets(filepath.Join(dir, "Makefile"))
+	for _, want := range []string{"build", "test", "lint", "run", "infra.build"} {
+		if !mk[want] {
+			t.Errorf("цель %q не распознана, targets=%#v", want, mk)
+		}
+	}
+	for _, bad := range []string{".PHONY", "%.o", "SHELL"} {
+		if mk[bad] {
+			t.Errorf("цель %q не должна распознаваться, targets=%#v", bad, mk)
+		}
+	}
+}
+
+// Единичный тест поиска Makefile: от подпроекта вверх до корня приёмки.
+func TestMakefileLocate(t *testing.T) {
+	dir := t.TempDir()
+	writeMakefile(t, dir, "build:\n\t@true\n")
+	sub := filepath.Join(dir, "server")
+	writeTestFile(t, sub, "go.mod", "module server\n")
+
+	mkDir, mk := makefileLocate(dir, sub)
+	if mkDir != dir {
+		t.Fatalf("mkDir: got %q, want %q", mkDir, dir)
+	}
+	if !mk["build"] {
+		t.Fatalf("в корневом Makefile не найдена цель build, targets=%#v", mk)
+	}
+	// Пустая директория без Makefile: ничего не находится.
+	if got, _ := makefileLocate(dir, t.TempDir()); got != "" {
+		t.Fatalf("ожидали отсутствие Makefile, got %q", got)
+	}
+}
+
+// make-команды: приоритет цели, выбор анализатора (test → lint) и инфра-зеркало.
+func TestMakefileCommands(t *testing.T) {
+	targets := map[string]bool{"build": true, "test": true, "lint": true, "infra.test": true}
+
+	if got := makeCommand(targets, "build"); got != "make build" {
+		t.Fatalf("makeCommand(build): got %q", got)
+	}
+	if got := makeCommand(targets, "run"); got != "" {
+		t.Fatalf("makeCommand(run): got %q, want ''", got)
+	}
+	if got, tool := makeAnalyzeCommand(targets); got != "make test" || tool != "make test" {
+		t.Fatalf("makeAnalyzeCommand: got %q (%s)", got, tool)
+	}
+	if got := makeInfraMirror(targets, "make test"); got != "make infra.test" {
+		t.Fatalf("makeInfraMirror(test): got %q", got)
+	}
+	if got := makeInfraMirror(targets, "go test ./..."); got != "" {
+		t.Fatalf("makeInfraMirror не-make команды: got %q, want ''", got)
+	}
+	if got, tool := makeAnalyzeCommand(map[string]bool{"lint": true}); got != "make lint" || tool != "make lint" {
+		t.Fatalf("makeAnalyzeCommand с только lint: got %q (%s)", got, tool)
+	}
+	if _, tool := makeAnalyzeCommand(map[string]bool{}); tool != "" {
+		t.Fatalf("makeAnalyzeCommand без цели: got %q, want ''", tool)
+	}
+}
+
+// Makefile с целями build/run перекрывает автодетект по типу: приёмка
+// использует make build и make run.
+func TestAcceptUsesMakefileTargets(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make не установлен")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module good\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+func main() { println("привет") }
+`)
+	writeMakefile(t, dir, `build:
+	go build ./...
+
+run:
+	go run .
+`)
+
+	cfg := DefaultConfig()
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Verdict != VerdictApprove {
+		t.Fatalf("проект с Makefile должен быть принят, got %s (%s)", rep.Verdict, rep.Summary)
+	}
+	if rep.Build.Command != "make build" {
+		t.Fatalf("build: got %q, want 'make build'", rep.Build.Command)
+	}
+	if rep.Run == nil || rep.Run.Command != "make run" {
+		t.Fatalf("run: got %#v, want 'make run'", rep.Run)
+	}
+}
+
+// env ACCEPT_BUILD_CMD перекрывает цель Makefile (приоритет env → make → вид).
+func TestAcceptEnvOverridesMakefileTarget(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module good\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+func main() { println("привет") }
+`)
+	writeMakefile(t, dir, "build:\n\tgo build ./...\n")
+
+	cfg := DefaultConfig()
+	cfg.BuildCmd = "echo custom build"
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Build.Command != "echo custom build" {
+		t.Fatalf("build: got %q, want env-команду", rep.Build.Command)
+	}
+	if !rep.Build.OK {
+		t.Fatalf("env-команда сборки должна пройти, got %#v", rep.Build)
+	}
+}
+
+// CheckFormat/CheckAnalyze через Makefile: make lint и make test вместо
+// зашитых gofmt/go vet.
+func TestAcceptMakefileFormatAnalyze(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make не установлен")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module good\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+func main() { println("привет") }
+`)
+	writeMakefile(t, dir, `build:
+	@go build ./...
+
+lint:
+	@true
+
+test:
+	@true
+
+run:
+	@go run .
+`)
+
+	cfg := DefaultConfig()
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Format == nil || rep.Format.Command != "make lint" || !rep.Format.OK {
+		t.Fatalf("формат через make lint: got %#v", rep.Format)
+	}
+	if rep.Analyze == nil || rep.Analyze.Command != "make test" || !rep.Analyze.OK {
+		t.Fatalf("анализ через make test: got %#v", rep.Analyze)
+	}
+	if rep.Build.Command != "make build" {
+		t.Fatalf("build: got %q, want 'make build'", rep.Build.Command)
+	}
+}
+
+// Нет цели test — анализатор деградирует на make lint (общая цель).
+func TestAcceptMakefileAnalyzeFallsBackToLint(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make не установлен")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module good\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+func main() { println("привет") }
+`)
+	writeMakefile(t, dir, `build:
+	@go build ./...
+
+lint:
+	@true
+
+run:
+	@go run .
+`)
+
+	cfg := DefaultConfig()
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Analyze == nil || rep.Analyze.Command != "make lint" || !rep.Analyze.OK {
+		t.Fatalf("анализ должен деградировать на make lint, got %#v", rep.Analyze)
+	}
+}
+
+// Монорепозиторий: подпроекты без своего Makefile находят корневой
+// и используют его цели (make build/make run исполняются из корня).
+func TestAcceptMonorepoFindsRootMakefile(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make не установлен")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go не установлен")
+	}
+	dir := t.TempDir()
+	writeMakefile(t, dir, `build:
+	cd server && go build ./...
+
+run:
+	cd server && go run .
+`)
+	writeTestFile(t, dir, "server/go.mod", "module server\n")
+	writeTestFile(t, dir, "server/main.go", `package main
+
+func main() { println("привет") }
+`)
+	writeTestFile(t, dir, "frontend/package.json", `{"scripts": {"build": "echo front build ok"}}`)
+
+	cfg := DefaultConfig()
+	cfg.InstallDeps = false
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Verdict != VerdictApprove {
+		t.Fatalf("монорепозиторий с корневым Makefile должен быть принят, got %s (%s)", rep.Verdict, rep.Summary)
+	}
+	if len(rep.Projects) != 2 {
+		t.Fatalf("ожидали 2 подпроекта, got %d", len(rep.Projects))
+	}
+	for _, pr := range rep.Projects {
+		if pr.Build.Command != "make build" {
+			t.Fatalf("%s: build: got %q, want 'make build' (общий Makefile)", pr.Project, pr.Build.Command)
+		}
+		if pr.Project == "server" && (pr.Run == nil || pr.Run.Command != "make run") {
+			t.Fatalf("server: run: got %#v, want 'make run'", pr.Run)
+		}
+	}
+}
+
+// Хост-инструмент недоступен (exit 127), но Makefile объявляет зеркальную
+// infra.build (docker compose): приёмка повторяет сборку через зеркало.
+func TestAcceptBuildFallsBackToInfraMirror(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module toolmissing\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+func main() { println("привет") }
+`)
+	writeMakefile(t, dir, `build:
+	no-such-binary-xyz
+
+infra.build:
+	echo infra-built
+
+run:
+	@echo run ok
+`)
+
+	cfg := DefaultConfig()
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if rep.Build.Command != "make infra.build" {
+		t.Fatalf("build должен повториться через инфра-зеркало, got %q", rep.Build.Command)
+	}
+	if !rep.Build.OK {
+		t.Fatalf("сборка через зеркало должна пройти, got %#v", rep.Build)
+	}
+	if !strings.Contains(rep.Build.Output, "infra-built") {
+		t.Fatalf("ожидали вывод зеркальной сборки, got %q", rep.Build.Output)
+	}
+	// Ошибки 127 для run через зеркало НЕ переиспользуются (инфра-зеркало
+	// не заменяет запуск): если бы это сработало, Run.Command был бы make infra.run.
+	if rep.Run == nil || rep.Run.Command != "make run" {
+		t.Fatalf("run не должен использовать зеркало, got %#v", rep.Run)
+	}
+}
+
+// Инструмент недоступен и зеркала в Makefile нет — сборка пропускается
+// с предупреждением, вердикт не меняется.
+func TestAcceptBuildToolMissingSkips(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make не установлен")
+	}
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module toolmissing\n")
+	writeTestFile(t, dir, "main.go", `package main
+
+func main() { println("привет") }
+`)
+	writeMakefile(t, dir, `build:
+	no-such-binary-xyz
+
+run:
+	@echo run ok
+`)
+
+	cfg := DefaultConfig()
+	cfg.BuildTimeout = 2 * testTimeout(t)
+	cfg.RunTimeout = testTimeout(t)
+
+	rep := Accept(dir, cfg)
+	if !rep.Build.Skipped {
+		t.Fatalf("сборка без зеркала должна быть пропущена, got %#v", rep.Build)
+	}
+	if rep.Verdict != VerdictApprove {
+		t.Fatalf("пропуск сборки не должен менять вердикт, got %s (%s)", rep.Verdict, rep.Summary)
+	}
+}
+
 // Автодетект команды установки зависимостей по типу проекта.
 func TestInstallCommandByKind(t *testing.T) {
 	dir := t.TempDir()

@@ -250,59 +250,60 @@ Makefile проекта — контракт целей (файл артефак
 ## Этапы и чеклист
 
 ### Ф-1 — Контракт Makefile и промпт архитектора
-- [ ] `tools/stacktool.go`: поле `Makefile` в `StackInfo` (+маркер) — детект
+- [x] `tools/stacktool.go`: поле `Makefile` в `StackInfo` (+маркер) — детект
       файла в корне `OutputDir`
-- [ ] `agents/architect/agent.go`: секция «MAKEFILE ПРОЕКТА» в
+- [x] `agents/architect/agent.go`: секция «MAKEFILE ПРОЕКТА» в
       `architectureSystemPrompt` (обязательный эпик, эталонный контракт Р-3) и
       краткие правила в `epicReviewSystemPrompt`/`bugExpertSystemPrompt`
-- [ ] Тесты: `detectStackAt` на проекте с/без Makefile; grep промпта по
+- [x] Тесты: `detectStackAt` на проекте с/без Makefile; grep промпта по
       «Makefile», «backend-*», «e2e»; тест контракта целей не требуется (промпт)
 
 ### Ф-2 — Промпты субагентов: использование Makefile
-- [ ] `agents/developer/developer.go:264`: в п.5 «сначала ReadFiles корневого
+- [x] `agents/developer/developer.go:264`: в п.5 «сначала ReadFiles корневого
       Makefile → тестируемая/собираемая цель — `make <цель>`; нет цели —
       стандартная команда»
-- [ ] `agents/qaengineer/agent.go:148-150`: единая команда автотестов — цель
+- [x] `agents/qaengineer/agent.go:148-150`: единая команда автотестов — цель
       Makefile (`make test`, при наличии `make e2e` — e2e), приёмка через
       `make build`/`make lint`
-- [ ] Лиды backend/frontend/devops/qa (промпты): в задачах о
+- [x] Лиды backend/frontend/devops/qa (промпты): в задачах о
       сборке/тестах/запуске указывать цель проверки из Makefile
-- [ ] Тесты: grep промптов по «Makefile», «make test», «make e2e»,
+- [x] Тесты: grep промптов по «Makefile», «make test», «make e2e»,
       «backend-build»
 
 ### Ф-3 — Приёмка через Makefile (acceptor)
-- [ ] `agents/acceptor/detect.go`: `makefileTargets(dir)` (парсер целей, поиск
+- [x] `agents/acceptor/detect.go`: `makefileTargets(dir)` (парсер целей, поиск
       в dir → родителях до корня)
-- [ ] `buildCommand/runCommand/formatCommand/analyzeCommand`: приоритет
+- [x] `buildCommand/runCommand/formatCommand/analyzeCommand`: приоритет
       env `ACCEPT_*` → Makefile-цель (`make build`/`make run`/`make lint`+`make test`)
       → автодетект по kind
-- [ ] Фолбэк: `isToolMissing` + есть `infra.<цель>` → повтор через
+- [x] Фолбэк: `isToolMissing` + есть `infra.<цель>` → повтор через
       `make infra.<цель>` (кроме run)
-- [ ] Hermetic-тесты (`accept_test.go`): проект Go без Makefile (прежние
+- [x] Hermetic-тесты (`accept_test.go`): проект Go без Makefile (прежние
       команды); с Makefile без целей; с Makefile с целями build/test/lint/run;
       ACCEPT_BUILD_CMD перекрывает Makefile; подпроект монорепо находит
       корневой Makefile; infra-фолбэк (fake-окружение, exit 127)
 
 ### Ф-4 — E2E, запуск/отладка целиком, DevOps-блок
-- [ ] `agents/devops/agent.go`: «прочитай корневой Makefile; добавь инфра-блок:
+- [x] `agents/devops/agent.go`: «прочитай корневой Makefile; добавь инфра-блок:
       `up/down/logs/ps`, зеркальные `infra.<цель>` =
       `docker compose run -it --rm <сервис> <исходная команда>`; самозавершающийся
       `e2e` (up → проверки → down → exit code)»
-- [ ] `agents/devopslead/agent.go`: эпик/задачи на инфра-блок требуют наличия
+- [x] `agents/devopslead/agent.go`: эпик/задачи на инфра-блок требуют наличия
       «Makefile проекта» (dependencies) и зеркал по сервисам docker-compose
-- [ ] `agents/qaengineer/agent.go`: в приёмке при наличии `make e2e` — опция
+- [x] `agents/qaengineer/agent.go`: в приёмке при наличии `make e2e` — опция
       e2e-прогона; дев-процессы не запускать (остаётся)
-- [ ] `tools/fileops.go:991` `missingToolHint`: добавить «при наличии Makefile —
+- [x] `tools/fileops.go:991` `missingToolHint`: добавить «при наличии Makefile —
       `make infra.<цель>`»
-- [ ] Тесты: grep промптов по «infra.», «docker compose run -it --rm»,
+- [x] Тесты: grep промптов по «infra.», «docker compose run -it --rm»,
       «e2e», «up/down»; hint-текст
 
 ### Ф-5 — Верификация и полировка
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
-- [ ] `go vet  . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
-      (падают только 2 пред-существующих флака ассистента —
-      `TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`)
+- [x] `go build . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
+- [x] `go vet  . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
+      (падают только 3 пред-существующих флака чат-ассистента —
+      `TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
+      `TestChatAssistantPublishesBoardWhenIdle`; воспроизводятся и на чистой HEAD)
 - [ ] Ручной E2E на реальном проекте (Web UI): новая задача → архитектор даёт
       эпик «Makefile проекта» → бэкенд-разработчик пишет `Makefile` с контрактом
       целей → приёмка идёт через `make build`/`make lint`/`make test`; на

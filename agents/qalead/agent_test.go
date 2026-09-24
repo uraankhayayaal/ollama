@@ -83,3 +83,16 @@ func TestLeadWriteOnlyReadme(t *testing.T) {
 		t.Fatal("запись вне readme должна быть отклонена")
 	}
 }
+
+// TestLeadPromptMentionsMakefile — Ф-2 PLAN-2026-09-24-todo-makefile.md: лид
+// QA фиксирует единую команду автотестов из корневого Makefile (make test /
+// make e2e / make build / make lint).
+func TestLeadPromptMentionsMakefile(t *testing.T) {
+	l := newTestLead(t)
+	p := l.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"Makefile", "make test", "make e2e", "make build", "make lint"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт QA-лида не содержит %q:\n%s", want, p)
+		}
+	}
+}

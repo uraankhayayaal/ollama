@@ -3,6 +3,7 @@ package frontendlead
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,17 @@ func TestLeadWriteOnlyReadme(t *testing.T) {
 	}
 	if err := l.Write("main.go", "package main\n"); err == nil {
 		t.Fatal("запись вне readme должна быть отклонена")
+	}
+}
+
+// TestLeadPromptMentionsMakefile — Ф-2 PLAN-2026-09-24-todo-makefile.md: лид
+// вшивает в задачи о сборке/тестах цель проверки из корневого Makefile.
+func TestLeadPromptMentionsMakefile(t *testing.T) {
+	l := newTestLead(t)
+	p := l.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{"Makefile", "make frontend-build", "make frontend-test", "make frontend-lint"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт фронтенд-лида не содержит %q:\n%s", want, p)
+		}
 	}
 }

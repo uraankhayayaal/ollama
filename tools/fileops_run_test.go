@@ -115,6 +115,11 @@ func TestRunCommandMissingToolHint(t *testing.T) {
 	if !strings.Contains(hint, "definitely-not-installed-xyz") {
 		t.Fatalf("подсказка должна называть команду, got %q", hint)
 	}
+	// Ф-4 PLAN-2026-09-24-todo-makefile.md: при наличии Makefile-контракта
+	// подсказка направляет на инфра-цели 'make infra.<цель>'.
+	if !strings.Contains(hint, "make infra.<цель>") {
+		t.Fatalf("ожидалась подсказка про инфра-цели Makefile, got %q", hint)
+	}
 
 	// Успешная команда подсказки не получает.
 	ok, err := runCommand("echo hi", t.TempDir())

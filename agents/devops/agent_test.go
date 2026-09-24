@@ -3,6 +3,7 @@ package devops
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,21 @@ func TestConstrainScopePreventsWriteOutsideScope(t *testing.T) {
 	}
 	if err := d.Write("compose.yaml", "services: {}\n"); err == nil {
 		t.Fatal("запись вне области работы должна быть отклонена")
+	}
+}
+
+// TestDevopsPromptMentionsMakefile — Ф-4 PLAN-2026-09-24-todo-makefile.md:
+// инфра-блок DevOps живёт в корневом Makefile: цели up/down/logs/ps,
+// зеркальные infra.<цель> (docker compose run) и самозавершающийся e2e.
+func TestDevopsPromptMentionsMakefile(t *testing.T) {
+	d := newTestDevops(t)
+	p := d.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"Makefile", "infra.<цель>", "docker compose run -it --rm",
+		"up", "down", "logs", "ps", "e2e",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт DevOps-инженера не содержит %q:\n%s", want, p)
+		}
 	}
 }

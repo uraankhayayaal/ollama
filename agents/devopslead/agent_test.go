@@ -83,3 +83,20 @@ func TestLeadWriteOnlyReadme(t *testing.T) {
 		t.Fatal("запись вне readme должна быть отклонена")
 	}
 }
+
+// TestLeadPromptMentionsMakefile — Ф-2/Ф-4 PLAN-2026-09-24-todo-makefile.md:
+// лид DevOps считает корневой Makefile источником команд, требует наличия
+// эпика «Makefile проекта» (dependencies) и зеркальных инфра-целей.
+func TestLeadPromptMentionsMakefile(t *testing.T) {
+	d := newTestLead(t)
+	p := d.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"Makefile", "make test", "make build",
+		"infra.<цель>", "docker compose run -it --rm",
+		"e2e", "up → проверки → down",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт девопс-лида не содержит %q:\n%s", want, p)
+		}
+	}
+}
