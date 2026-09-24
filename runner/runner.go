@@ -87,6 +87,27 @@ type StreamChatProvider interface {
 	ChatStream(ctx context.Context, agent agents.Agent, messages []Message, onChunk func(StreamChunk)) (*ModelReply, error)
 }
 
+// ModelLimits — ключевые лимиты модели, известные провайдеру ДО запроса.
+// Позволяют раннеру держать входной контекст в пределах окна даже без явных
+// настроек сжатия (CODEGEN_HISTORY_*): разросшаяся история агентского цикла
+// не должна ронять запрос ошибкой провайдера «exceeds available context size».
+type ModelLimits struct {
+	// InputTokens — размер входного окна контекста (n_ctx / num_ctx).
+	// 0 — провайдер не сообщает окно (сжатие только по явным настройкам).
+	InputTokens int
+	// OutputTokens — лимит генерации (num_predict / max_completion_tokens).
+	// 0 — неизвестен; резервируется доля окна.
+	OutputTokens int
+	// ThinkTokens — бюджет цепочки рассуждения (thinking). 0 — не задан.
+	ThinkTokens int
+}
+
+// ModelLimitsProvider — опциональное расширение ChatProvider: сообщает лимиты
+// модели для авто-ограничения истории диалога перед каждым раундом.
+type ModelLimitsProvider interface {
+	ModelLimits() ModelLimits
+}
+
 // EstimateTextTokens — грубая оценка количества токенов в тексте без словаря
 // токенизатора (проект использует разные LLM — Ollama, Yandex, OpenAI-совместимые).
 // Ориентир: ~4 символа на токен для ASCII/латиницы и более плотные языки

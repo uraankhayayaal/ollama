@@ -51,6 +51,17 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 	return runner.Generate(ctx, o, agent)
 }
 
+// ModelLimits сообщает ключевые лимиты модели (окно входа/вывода, бюджет
+// thinking) — раннер использует их для авто-ограничения истории диалога по
+// умолчанию (см. runner.ModelLimitsProvider, runner/compression.go).
+func (o *OllamaProvider) ModelLimits() runner.ModelLimits {
+	return runner.ModelLimits{
+		InputTokens:  o.settings.InputTokens,
+		OutputTokens: o.settings.OutputTokens,
+		ThinkTokens:  o.settings.ThinkTokens,
+	}
+}
+
 // ChatOnce выполняет один запрос к модели Ollama. Реализуется через ChatStream
 // с убранным потоковым колбэком — поведение сохранено (полный текст ответа).
 func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {

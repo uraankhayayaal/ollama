@@ -56,6 +56,17 @@ func (y *AlisaProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 	return runner.Generate(ctx, y, agent)
 }
 
+// ModelLimits сообщает ключевые лимиты модели (окно входа/вывода, бюджет
+// thinking) — раннер использует их для авто-ограничения истории диалога по
+// умолчанию (см. runner.ModelLimitsProvider, runner/compression.go).
+func (y *AlisaProvider) ModelLimits() runner.ModelLimits {
+	return runner.ModelLimits{
+		InputTokens:  y.settings.InputTokens,
+		OutputTokens: y.settings.OutputTokens,
+		ThinkTokens:  y.settings.ThinkTokens,
+	}
+}
+
 // ChatOnce выполняет один запрос к YandexGPT.
 func (y *AlisaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
 	// Перевод tools

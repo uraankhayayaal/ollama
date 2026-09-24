@@ -106,6 +106,40 @@ func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 	return heavResp, nil
 }
 
+// ModelLimits сообщает лимиты слоёв маршрутизации: входное окно — по самому
+// маленькому из слоёв (история должна влезать в обе модели), вывод/thinking —
+// по максимуму (резерв под худший случай). Generate делегирует раунды
+// конкретному слою, и раннер видит лимиты именно его — этот метод страховка
+// для прямого использования LayeredProvider как ChatProvider.
+func (l *LayeredProvider) ModelLimits() runner.ModelLimits {
+	return mergeModelLimits(l.Small, l.Large)
+}
+
+// mergeModelLimits объединяет лимиты двух слоёв консервативно: входное окно —
+// минимальное из ненулевых, вывод/thinking — максимальное из двух.
+func mergeModelLimits(small, large LLMProvider) runner.ModelLimits {
+	var out runner.ModelLimits
+	take := func(p LLMProvider) {
+		mp, ok := p.(runner.ModelLimitsProvider)
+		if !ok {
+			return
+		}
+		ml := mp.ModelLimits()
+		if ml.InputTokens > 0 && (out.InputTokens == 0 || ml.InputTokens < out.InputTokens) {
+			out.InputTokens = ml.InputTokens
+		}
+		if ml.OutputTokens > out.OutputTokens {
+			out.OutputTokens = ml.OutputTokens
+		}
+		if ml.ThinkTokens > out.ThinkTokens {
+			out.ThinkTokens = ml.ThinkTokens
+		}
+	}
+	take(small)
+	take(large)
+	return out
+}
+
 // ChatOnce маршрутизирует отдельный запрос по тому же правилу слоёв (без
 // эскалации раунда — финальные решения принимает Generate). Используется,
 // когда провайдера зовут напрямую как ChatProvider.

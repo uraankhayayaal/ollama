@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"ai/agents"
 	"ai/tools"
 	"context"
 	"errors"
@@ -320,6 +321,84 @@ func TestExtractFiles(t *testing.T) {
 	}
 	if got[0] != "internal/auth/token.go" || got[1] != "server/main.go" {
 		t.Fatalf("extractFiles: got %v", got)
+	}
+}
+
+// limitsProvider — fake-провайдер с лимитами модели для тестов авто-сжатия
+// по окну провайдера.
+type limitsProvider struct {
+	limits ModelLimits
+}
+
+func (p *limitsProvider) ModelLimits() ModelLimits { return p.limits }
+func (p *limitsProvider) ChatOnce(_ context.Context, _ agents.Agent, _ []Message) (*ModelReply, error) {
+	return nil, nil
+}
+
+// providerInputCap — лимит входа: окно минус резерв под вывод (ответ+thinking);
+// неизвестное окно и провайдер без лимитов — 0.
+func TestProviderInputCap(t *testing.T) {
+	cases := []struct {
+		name string
+		ml   ModelLimits
+		want int
+	}{
+		{"окно с выводом и thinking", ModelLimits{InputTokens: 32768, OutputTokens: 16384, ThinkTokens: 4096}, 12288},
+		{"окно только с выводом", ModelLimits{InputTokens: 32768, OutputTokens: 16384}, 16384},
+		{"окно без вывода — четверть резерв", ModelLimits{InputTokens: 32768}, 24576},
+		{"окно без лимитов", ModelLimits{}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := providerInputCap(&limitsProvider{limits: tc.ml}); got != tc.want {
+				t.Fatalf("providerInputCap = %d, want %d", got, tc.want)
+			}
+		})
+	}
+	if providerInputCap(nil) != 0 {
+		t.Fatal("nil-провайдер не должен давать лимит")
+	}
+}
+
+// Авто-сжатие по окну провайдера без env-бюджета (CODEGEN_HISTORY_* выключены):
+// разросшаяся история, превышающая окно, сжимается; в пределах окна — нет.
+func TestCompressHistoryProviderWindowDefault(t *testing.T) {
+	t.Setenv("CODEGEN_HISTORY_BUDGET", "")
+	t.Setenv("CODEGEN_HISTORY_TOKENS", "")
+	provider := &limitsProvider{limits: ModelLimits{InputTokens: 32768, OutputTokens: 16384}}
+
+	// История в пределах окна (вход на ~50 токенов) — не тронута и при раздутом
+	// usage прошлого раунда: сжимать нечего, история уже в бюджете.
+	small := []Message{msg("system", "sys"), msg("user", "задача"), msg("assistant", "краткий ответ")}
+	for i := 1; i <= 3; i++ {
+		small = append(small, buildPair(fmt.Sprint(i), "короткий результат")...)
+	}
+	compacted, _ := compressHistoryForRound(context.Background(), provider, small, 20000)
+	if len(compacted) != len(small) {
+		t.Fatalf("малая история не должна сжиматься: %d -> %d", len(small), len(compacted))
+	}
+
+	// Разросшаяся история (оценка входа > кап = окно − вывод) — старые
+	// середины выбрасываются, голова и хвост сохраняются. Триггер идёт и по
+	// упреждающей оценке текущего раунда (lastInputTokens=0), и по реальному
+	// usage прошлого раунда — оба включают сжатие по умолчанию.
+	task := strings.Repeat("Д", 2000)
+	var big []Message
+	big = append(big, msg("system", "sys"), msg("user", "задача"))
+	for i := 0; i < 40; i++ {
+		big = append(big, buildPair(fmt.Sprint(i), task)...)
+	}
+	big = append(big, msg("assistant", "финал"))
+
+	for _, last := range []int{0, 20000} {
+		compacted, rep := compressHistoryForRound(context.Background(), provider, big, last)
+		if len(compacted) == len(big) || rep.Dropped == 0 {
+			t.Fatalf("вход выше окна (usage=%d) должен включить сжатие по умолчанию", last)
+		}
+		if compacted[0].Content != "sys" || compacted[len(compacted)-1].Content != "финал" {
+			t.Fatalf("голова и хвост должны сохраниться, got first=%q last=%q",
+				compacted[0].Content, compacted[len(compacted)-1].Content)
+		}
 	}
 }
 

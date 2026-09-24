@@ -100,6 +100,17 @@ func (t *TrimProvider) Generate(ctx context.Context, agent agents.Agent) (*runne
 	return runner.Generate(ctx, t, agent)
 }
 
+// ModelLimits сообщает ключевые лимиты модели (окно входа/вывода, бюджет
+// thinking) — раннер использует их для авто-ограничения истории диалога по
+// умолчанию (см. runner.ModelLimitsProvider, runner/compression.go).
+func (t *TrimProvider) ModelLimits() runner.ModelLimits {
+	return runner.ModelLimits{
+		InputTokens:  t.settings.InputTokens,
+		OutputTokens: t.settings.OutputTokens,
+		ThinkTokens:  t.settings.ThinkTokens,
+	}
+}
+
 // ChatOnce выполняет один запрос к модели Trim через обычный HTTP.
 func (t *TrimProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
 	// forceTool — обязательный инструмент первого раунда: если агент требует

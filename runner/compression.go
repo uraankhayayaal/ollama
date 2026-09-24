@@ -114,10 +114,35 @@ func (c *providerCompactor) Compact(ctx context.Context, text string) (string, e
 // compactEnabled включена ли компакция (Ф-10).
 func compactEnabled() bool { return envFlag("CODEGEN_HISTORY_COMPACT") }
 
+// providerInputCap — токен-лимит входного контекста, выведенный из лимитов
+// провайдера: окно (n_ctx) минус резерв под вывод (ответ + thinking). Окно
+// разделяется между входом и генерацией, поэтому вход не должен занимать его
+// целиком. 0 — окно неизвестно или полностью занято резервом.
+func providerInputCap(provider ChatProvider) int {
+	ml, ok := provider.(ModelLimitsProvider)
+	if !ok {
+		return 0
+	}
+	limits := ml.ModelLimits()
+	if limits.InputTokens <= 0 {
+		return 0
+	}
+	reserve := limits.OutputTokens + limits.ThinkTokens
+	if reserve <= 0 {
+		// Провайдер не сообщил лимит вывода — резервируем четверть окна.
+		reserve = limits.InputTokens / 4
+	}
+	if reserve >= limits.InputTokens {
+		reserve = limits.InputTokens / 4
+	}
+	return limits.InputTokens - reserve
+}
+
 // compressHistoryForRound — единая точка сжатия в цикле Generate:
-// считает бюджет (история + Ф-11 по фактическому usage), собирает опции из
-// контекстного клиента и провайдера и выполняет пайплайн. Возвращает новые
-// сообщения и отчёт (могут совпадать с входом, если сжатие не нужно/выключено).
+// считает бюджет (история + Ф-11 по фактическому usage + окно провайдера по
+// умолчанию), собирает опции из контекстного клиента и провайдера и выполняет
+// пайплайн. Возвращает новые сообщения и отчёт (могут совпадать с входом, если
+// сжатие не нужно/выключено).
 func compressHistoryForRound(ctx context.Context, provider ChatProvider, messages []Message, lastInputTokens int) ([]Message, *CompressionReport) {
 	opts := CompressOptions{}
 	if cc := CompressionClientFromContext(ctx); cc != nil {
@@ -133,6 +158,24 @@ func compressHistoryForRound(ctx context.Context, provider ChatProvider, message
 			Debugf("COMPRESS: фактический вход %d > лимита %d токенов, ужесточаю бюджет до %d символов",
 				lastInputTokens, tokenBudget, charBudget)
 			opts.Budget = charBudget
+		}
+	}
+
+	// Страховка по умолчанию: даже без CODEGEN_HISTORY_* разросшаяся история
+	// не должна превышать окно контекста провайдера — иначе цикл (десятки
+	// раундов с результатами инструментов) падает с 400 exceed_context_size
+	// («request (N tokens) exceeds the available context size»). Лимит входа =
+	// окно минус резерв на вывод; срабатывает по фактическому usage прошлого
+	// раунда и упреждающе — когда уже собранный в этом раунде вход по оценке
+	// превышает лимит. Явный бюджет из окружения имеет приоритет.
+	if opts.Budget <= 0 {
+		if capTokens := providerInputCap(provider); capTokens > 0 {
+			est, _ := EstimateUsage(messages, nil)
+			if lastInputTokens > capTokens || est > capTokens {
+				opts.Budget = capTokens * 4
+				Debugf("COMPRESS: вход выше окна провайдера (usage=%d, оценка=%d > %d) — бюджет по умолчанию %d символов",
+					lastInputTokens, est, capTokens, opts.Budget)
+			}
 		}
 	}
 
