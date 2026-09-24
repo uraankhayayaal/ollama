@@ -77,7 +77,14 @@ func (sess *Session) IndexBackground(ctx context.Context) error {
 			sess.mu.Unlock()
 		}()
 		defer cl.Close()
-		sess.runBackgroundIndex(ctx, cl)
+		// Фоновая индексация НЕ привязывается к контексту вызывающего
+		// (REST-запрос/раунд агента завершается сразу после запуска): и то и
+		// другое к первому embed-вызову уже отменено, и прогон падает с
+		// «context canceled» на определение размерности. Бужется контекст
+		// жизненного цикла процесса: индексация сама себя завершает.
+		bgctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sess.runBackgroundIndex(bgctx, cl)
 	}()
 
 	sess.append(chat.RoleStatus,

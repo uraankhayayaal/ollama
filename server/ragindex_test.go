@@ -228,6 +228,40 @@ func TestSessionIndexBackground(t *testing.T) {
 	}
 }
 
+// TestSessionIndexBackgroundCallerCtxIgnored — регрессия: фоновая индексация
+// НЕ наследует отменённый контекст вызывающего (REST-запрос/раунд агента
+// завершается до первого embed-вызова). Даже если ctx вызова уже
+// отменён при запуске, индексация доходит до IndexProject с живым ctx.
+func TestSessionIndexBackgroundCallerCtxIgnored(t *testing.T) {
+	orig := buildProjectIndexer
+	defer func() { buildProjectIndexer = orig }()
+
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-rag-cancel")
+	sess, _, err := srv.getOrCreate("proj-rag-cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx := &fakeProjectIndexer{}
+	buildProjectIndexer = func() (projectIndexerCloser, error) { return idx, nil }
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel() // контекст вызывающего уже мёртв (как r.Context() после ответа).
+	if err := sess.IndexBackground(canceled); err != nil {
+		t.Fatalf("IndexBackground с отменённым ctx вызывающего: %v", err)
+	}
+
+	if m := waitChatRole(t, sess, chat.RoleStatus, 3*time.Second); !containsCase(m.Content, "RAG-индекс") {
+		t.Fatalf("индексация не завершилась со status-отчётом, последний: %q", m.Content)
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if len(idx.calls) != 1 {
+		t.Fatalf("IndexProject вызван %d раз(а), want 1 (ctx вызывающего отменён до запуска)", len(idx.calls))
+	}
+}
+
 // TestRESTProjectIndex — кнопка «Индекс RAG» (опциональный нюанс Ф-5):
 // POST /api/projects/{id}/index запускает фоновую индексацию (горутину),
 // отвечает 200 {ok,message}; по завершении — status-сообщение в чат.
