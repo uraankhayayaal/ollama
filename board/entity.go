@@ -143,11 +143,22 @@ type TaskSpec struct {
 	Contracts      []string `json:"contracts,omitempty"`
 }
 
+// Opportunity — кросс-функциональная возможность/инсайт архитектора для
+// смежного направления (Ф-6 PLAN-architect-intelligence.md): целевая роль и
+// предложение. Опциональное поле бэклога — не эпик, а рекомендация лидам.
+type Opportunity struct {
+	TargetRole string `json:"target_role"`
+	Suggestion string `json:"suggestion"`
+}
+
 // Backlog — аргументы функции submit_architecture_backlog Системного
 // архитектора. Каждая задача бэклога становится эпиком на доске.
+// Opportunities — опциональные кросс-функциональные возможности (Ф-6):
+// фиксируются в Summary эпиков и видны лидам направлений.
 type Backlog struct {
-	ArchitectureSummary string     `json:"architecture_summary"`
-	Tasks               []TaskSpec `json:"tasks"`
+	ArchitectureSummary string        `json:"architecture_summary"`
+	Tasks               []TaskSpec    `json:"tasks"`
+	Opportunities       []Opportunity `json:"opportunities,omitempty"`
 }
 
 // Epic — эпик (крупная задача верхнего уровня) на общей доске. Создаётся из

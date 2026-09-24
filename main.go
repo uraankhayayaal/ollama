@@ -237,8 +237,14 @@ func main() {
 		}
 		// Расширенное сжатие агентских циклов фаз (Ф-6..Ф-11) — как у плана:
 		// контекст инжектируется в ctx, которой пользуются все call к Generate.
-		kctx := runctx.WithCompression(ctx, kanbanProject, projects.ProjectDir(kanbanProject), rag.NewClientSafe(rag.Config{}))
-		if err := planner.NewKanbanRunner(provider, store).Run(kctx, kanbanProject, kanbanPrompt); err != nil {
+		ragClient := rag.NewClientSafe(rag.Config{})
+		kctx := runctx.WithCompression(ctx, kanbanProject, projects.ProjectDir(kanbanProject), ragClient)
+		runner := planner.NewKanbanRunner(provider, store)
+		// Р-6: архитектор получает RAG (CodeSearch + блок «релевантный код»).
+		// Консоль без серверных мостов — extras (AskUser) не передаются:
+		// архитектор работает автономно (degrade).
+		runner.SetRAG(ragClient)
+		if err := runner.Run(kctx, kanbanProject, kanbanPrompt); err != nil {
 			_ = store.Close()
 			logging.Fatalf("Kanban: %v", err)
 		}

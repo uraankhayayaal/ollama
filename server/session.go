@@ -15,8 +15,8 @@ import (
 	"ai/models"
 	"ai/projects"
 	"ai/rag"
-	"ai/runevents"
 	"ai/runctx"
+	"ai/runevents"
 	"ai/tokens"
 	"ai/tools"
 	"ai/workspace"
@@ -42,6 +42,11 @@ type Session struct {
 	// работу нечего (нет эпиков/задач, которые можно исполнить). Сессия жива и
 	// ждёт появления работы; статус в шину — «standby».
 	standby bool
+
+	// indexing — фоновая индексация RAG проекта идёт (Ф-5, Р-2): повторный
+	// вызов IndexBackground при уже идущей отклоняется. Читается/пишется под
+	// mu.
+	indexing bool
 
 	// decide — решение человека по текущему HITL-затвору (буфер 1 позволяет
 	// принять решение ДО того, как runner дошёл до затвора).
@@ -212,7 +217,8 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	if inf, err := sess.srv.reg.Get(sess.project); err == nil {
 		dir = inf.Root
 	}
-	cctx = runctx.WithCompression(cctx, sess.project, dir, rag.NewClientSafe(rag.Config{}))
+	ragClient := rag.NewClientSafe(rag.Config{})
+	cctx = runctx.WithCompression(cctx, sess.project, dir, ragClient)
 	sess.ctx = cctx
 	sess.cancel = func() { cancel() }
 	sess.mu.Unlock()
@@ -226,6 +232,14 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 
 	runner := planner.NewKanbanRunner(provider, sess.board)
 	runner.SetGate(sess)
+	// Ф-4/Р-6: архитектор получает RAG (CodeSearch + блок «релевантный код»).
+	runner.SetRAG(ragClient)
+	// Ф-4/Р-5: архитектор может задать уточняющий вопрос пользователю (AskUser)
+	// ДО публикации бэклога при противоречивом/неполном ТЗ. Мост-инструмент
+	// блокирует фазу до ответа; в консольном CLI его нет — архитектор автономен.
+	// Ф-5/Р-2: рядом — безопасный мост фоновой индексации RAG (предложить
+	// пользователю построить индекс, не прерывая проектирование).
+	runner.SetArchitectExtras(&askTool{b: sess}, newIndexBackgroundTool(sess))
 	// Запуск по кнопке — board-only: новые эпики не создаются, но записи доски
 	// (включая эпики без задач — их декомпозируют лиды) берутся в работу; при
 	// отсутствии работы раннер сообщает сессии (standby) и ждёт эпиков/задач.
@@ -581,7 +595,7 @@ func (sess *Session) broadcastSnapshot() {
 		Gate:   gateTyp,
 	})
 	if v, err := boardView(ctx, sess.board); err == nil {
-v.Git = sess.srv.gitStatus(ctx, sess.project, v.Epics, v.Tasks)
+		v.Git = sess.srv.gitStatus(ctx, sess.project, v.Epics, v.Tasks)
 		sess.srv.hub.publish(sess.project, "board", v)
 	}
 	if in, out, err := sess.tok.Get(ctx); err == nil {

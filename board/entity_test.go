@@ -35,6 +35,36 @@ func TestUnmarshalBacklog(t *testing.T) {
 	}
 }
 
+func TestUnmarshalBacklogWithOpportunities(t *testing.T) {
+	raw := `{"architecture_summary": "План", "tasks": [{"task_id": "ARC-01", "title": "Бэкенд", "description": "x", "assigned_role": "Backend Lead", "sequence_order": 1, "can_run_parallel": true, "dependencies": []}], "opportunities": [{"target_role": "QA Lead", "suggestion": "Смоук-тесты"}, {"target_role": "DevOps Lead", "suggestion": "Канарейка"}]}`
+	b, err := UnmarshalBacklog(raw)
+	if err != nil {
+		t.Fatalf("UnmarshalBacklog: %v", err)
+	}
+	if len(b.Opportunities) != 2 {
+		t.Fatalf("opportunities = %d, ожидалось 2", len(b.Opportunities))
+	}
+	if b.Opportunities[0].TargetRole != "QA Lead" || b.Opportunities[0].Suggestion != "Смоук-тесты" {
+		t.Errorf("opportunity 0 = %+v", b.Opportunities[0])
+	}
+	if b.Opportunities[1].TargetRole != "DevOps Lead" {
+		t.Errorf("opportunity 1 = %+v", b.Opportunities[1])
+	}
+}
+
+// TestUnmarshalBacklogOpportunitiesOptional — старые вызовы без поля
+// opportunities остаются валидными (опциональность, Ф-6).
+func TestUnmarshalBacklogOpportunitiesOptional(t *testing.T) {
+	raw := `{"architecture_summary": "План", "tasks": [{"task_id": "ARC-01", "title": "Бэкенд", "description": "x", "assigned_role": "Backend Lead", "sequence_order": 1, "can_run_parallel": true, "dependencies": []}]}`
+	b, err := UnmarshalBacklog(raw)
+	if err != nil {
+		t.Fatalf("UnmarshalBacklog: %v", err)
+	}
+	if len(b.Opportunities) != 0 {
+		t.Fatalf("opportunities без поля = %d, ожидался 0", len(b.Opportunities))
+	}
+}
+
 func TestUnmarshalTasksTolerantToLeadRootKey(t *testing.T) {
 	raw := "{\"frontend_lead_summary\": \"Модуль UI\", \"tasks\": [{\"task_id\": \"FEL-01\", \"title\": \"Компонент\", \"description\": \"xD\", \"assigned_role\": \"Frontend Dev\", \"sequence_order\": 1, \"can_run_parallel\": true, \"dependencies\": []}]}"
 	tasks, err := UnmarshalTasks(raw)

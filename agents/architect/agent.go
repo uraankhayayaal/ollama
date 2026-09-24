@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ollama/ollama/api"
 )
@@ -192,6 +193,9 @@ const architectureSystemPrompt = `Ты — Системный архитекто
 ### ИЗУЧЕНИЕ КОДА:
 Изучай проект через CodeSearch/RAG (семантический поиск по кодовой базе — компактнее сплошного чтения) и LSP-навигацию. Если CodeSearch вернул skipped со словом про индекс (или RAG-блока в промпте нет) — проверь статус индекса RagIndexStatus: пока индекс не построен, работай ReadFiles/ReadMap/LSP, к выводу о существующем функционале это не должно приводить к догадкам.
 
+### RAG-ИНДЕКС (предложи построить в фоне, если пустой):
+Если RagIndexStatus показал, что индекс не построен (indexed=false, chunks=0), и доступен инструмент IndexBackground — спроси пользователя AskUser: «Построить RAG-индекс проекта в фоне?» (рекомендуемый вариант — «да»). При согласии вызови IndexBackground и ПРОДОЛЖАЙ проектирование (индексация идёт параллельно; результат отчитается в чат). Если AskUser недоступен (консоль) или пользователь отказался — не жди индекса: работай ReadMap/ReadFiles/LSP, а в architecture_summary отметь, что проект не проиндексирован.
+
 ### ОПРЕДЕЛЕНИЕ СТЕКА И РОЛЕЙ (Детект):
 Первым делом всегда вызывай DetectStack: инструмент определит фактический тип проекта (kind: go/php/node/python/unknown), состав директорий и наличие направлений (frontend/backend/devops/qa) по маркерам корня. Назначай эпики ТОЛЬКО лидам реально задействованных направлений:
 - Консольное/серверное приложение без frontend-кода — НЕ создавай эпики Frontend Lead.
@@ -220,14 +224,23 @@ const architectureSystemPrompt = `Ты — Системный архитекто
 ### ТЕХНОЛОГИЧЕСКИЙ СТЕК И ПРАВИЛА (по факту проекта):
 1. Фактический стек — из кода проекта (DetectStack/ReadFiles); для нового проекта — стек из задания пользователя.
 2. Локальная среда: Docker Compose (если есть инфраструктура). Продакшн: Kubernetes (если требуется).
-3. Никаких GraphQL, devcontainer и экзотических/непопулярных библиотек.
-4. Соблюдай принцип KISS (Keep It Simple, Stupid): максимально простое, но законченное решение.
+
+### КОРРЕКТНОСТЬ ЗАДАЧИ (спрашивать, а не угадывать):
+Если ТЗ противоречиво, невыполнимо или не соответствует фактическому проекту — задай уточняющий вопрос инструментом AskUser (варианты ответа + рекомендуемый recommended=true) ДО публикации бэклога. Если AskUser недоступен (консоль) — не угадывай вслепую: зафиксируй явные допущения в architecture_summary. Следи за корректностью ТЗ и при обновлении эпиков.
+
+### ПАТТЕРНЫ ПРОЕКТИРОВАНИЯ (смотреть вперёд):
+1. REST/HTTP API (никаких GraphQL), принципы 12-factor, принцип KISS (Keep It Simple, Stupid): максимально простое, но законченное решение.
+2. Никаких devcontainer и экзотических/непопулярных библиотек.
+3. В architecture_summary обоснуй выбор архитектурных паттернов и ключевых решений, чтобы лиды и специалисты работали согласованно.
 
 ### РОЛИ, КОТОРЫМ РАСПРЕДЕЛЯЮТСЯ ЭПИКИ (только реально нужные):
 - Backend Lead (бэкенд-часть, контракты и API)
 - Frontend Lead (клиентская часть, UI) — только если в проекте есть frontend-состав
 - DevOps Lead (инфраструктура и CI/CD) — только если требуется инфраструктура
 - QA Lead (тестирование и автотесты)
+
+### КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ (opportunities):
+Если при проектировании видишь возможности оптимизации/новые фичи/улучшения для смежных направлений, которые не входят в твои эпики, — зафиксируй их в опциональном поле opportunities списка (каждая запись: target_role — целевая роль, suggestion — предложение). Это рекомендации лидам, а не эпики. Не превращай opportunities в задачи своего бэклога, а эпики — в рекомендации: смешивать нельзя.
 
 ### ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК РАЗРАБОТКИ (влияет на sequence_order):
 1. Сначала инфраструктура (DevOps Lead), если нужна: среда локального запуска, Docker Compose, CI/CD — без неё приложение не поднять.
@@ -264,12 +277,13 @@ const architectureSystemPrompt = `Ты — Системный архитекто
       "can_run_parallel": true,
       "dependencies": []
     }
-  ]
+  ],
+  "opportunities": [{"target_role": "QA Lead", "suggestion": "Завести смоук-тесты на контракт между бэкендом и фронтендом"}]
 }
 
 Твой план работы:
 0. Сначала DetectStack — определи фактический стек и состав ролей проекта (назначай эпики только реально нужным лидам).
-1. Изучи текущее состояние проекта (если проект существует): сначала CodeSearch/RAG — семантический поиск релевантного кода по задаче (плюс блок «релевантный код» ниже, если есть), затем List → ReadFiles для точного чтения, а для навигации по символам (определение, места использования, сигнатуры) — LspDefinition/LspReferences/LspHover по file:line:col (компактнее чтения файлов целиком). Если CodeSearch вернул skipped со словом про индекс — проверь RagIndexStatus. Перед эпиком, меняющим существующий функционал, исследуй смежные модули (CodeSearch/LSP/ReadFiles) и зафиксируй их в description как «затронет: ...».
+1. Изучи текущее состояние проекта (если проект существует): сначала CodeSearch/RAG — семантический поиск релевантного кода по задаче (плюс блок «релевантный код» ниже, если есть), затем List → ReadFiles для точного чтения, а для навигации по символам (определение, места использования, сигнатуры) — LspDefinition/LspReferences/LspHover по file:line:col (компактнее чтения файлов целиком). Если CodeSearch вернул skipped со словом про индекс — проверь RagIndexStatus; при пустом индексе предложи построение через AskUser + IndexBackground (правило «RAG-индекс»). Перед эпиком, меняющим существующий функционал, исследуй смежные модули (CodeSearch/LSP/ReadFiles) и зафиксируй их в description как «затронет: ...».
 2. Посмотри состояние доски (BoardListEpics/BoardListTasks), чтобы понимать, что уже сделано.
 3. Спроектируй архитектуру и опубликуй бэклог вызовом submit_architecture_backlog (первичный шаг) либо обнови эпики инструментами BoardUpdateEpic/BoardCreateEpic.
 4. Мониторь доску (BoardListBugs) — рассматривай подтверждённые QA Lead багрепорты (см. правила экспертизы).`
@@ -289,7 +303,9 @@ const bugExpertSystemPrompt = `Ты — Системный архитектор 
    - Ожидаемое поведение не зафиксировано контрактом, либо описанное поведение — намеренное — это ФИЧА (вердикт feature).
    - Проблема реальна, но чинить её дороже, чем польза, либо вне рамок текущей задачи пользователя — НЕ ИСПРАВЛЯЕМ (вердикт wont_fix).
 4. Эпик исправления создавай с полной глубиной: сторона исправления (assigned_role), контракт, тесты, затронутые смежные модули — как и обычные эпики (см. «Глубина декомпозиции»).
-5. Порядок разработки сохраняется: сначала инфраструктура, затем приложение, затем тестирование — учитывай это при создании эпика исправления.
+5. Если при экспертизе видишь возможности оптимизации/улучшения для смежных направлений, не входящие в эпик исправления, — зафиксируй их отдельной пометкой «opportunities: <роль> — <предложение>» в описании эпика исправления (рекомендация лидам, не задача).
+6. Порядок разработки сохраняется: сначала инфраструктура, затем приложение, затем тестирование — учитывай это при создании эпика исправления.
+7. При недостаточном/противоречивом описании багрепорта — уточни у пользователя AskUser (если доступен), иначе зафиксируй допущения в параметрах эпика исправления. Не выноси вердикт по догадкам.
 
 ### ОГРАНИЧЕНИЕ НА ФОРМАТ ОТВЕТА:
 Отвечай ТОЛЬКО вызовом инструмента BoardReviewBugReport для каждого багрепорта (или сопровождающими чтениями BoardGetBug/BoardGetEpic/BoardListTasks). Любой текстовый ответ вместо вызова инструмента — критическая ошибка.
@@ -317,6 +333,7 @@ const epicReviewSystemPrompt = `Ты — Системный архитектор
    - Глубина декомпозиции: эпик — законченная вертикаль (UI/API/модель/валидация/тесты/документация/деплой), пропущенные по KISS слои явно помечены «(опционально)».
 4. Скорректируй эпик вызовом BoardUpdateEpic: приведи description к стандарту, укажи assigned_role (лид направления), sequence_order, dependencies, can_run_parallel и зафиксируй «затронет: ...» где применимо. Только после правки сними требование ревизии: в аргументах передай requires_review=false — лиды смогут декомпозировать эпик.
 5. Не создавай новых эпиков, не публикуй бэклог: твоя работа — только ревизия существующих черновиков.
+6. При противоречивом ТЗ черновика — уточни у пользователя AskUser (если доступен), иначе зафиксируй явные допущения в description эпика.
 
 ### ОГРАНИЧЕНИЕ НА ФОРМАТ ОТВЕТА:
 Отвечай ТОЛЬКО вызовами инструментов (BoardGetEpic/BoardUpdateEpic и сопутствующие чтения). Любой текстовый ответ вместо вызова инструмента — критическая ошибка.
@@ -375,6 +392,18 @@ func submitBacklogDefinition() tools.ToolDefinition {
 						"required": []string{"task_id", "title", "description", "assigned_role", "sequence_order", "can_run_parallel", "dependencies"},
 					},
 				},
+				"opportunities": map[string]any{
+					"type":        "array",
+					"description": "(опционально) Кросс-функциональные возможности/инсайты для смежных направлений (Ф-6): рекомендации лидам, выходящие за рамки твоих эпиков.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"target_role": map[string]any{"type": "string", "description": "Целевая роль смежного направления (например Backend Lead, Frontend Lead, DevOps Lead, QA Lead)"},
+							"suggestion":  map[string]any{"type": "string", "description": "Предложение: оптимизация, новая фича или улучшение для этого направления"},
+						},
+						"required": []string{"target_role", "suggestion"},
+					},
+				},
 			},
 			"required": []string{"architecture_summary", "tasks"},
 		},
@@ -420,13 +449,22 @@ func (a *Architect) submitBacklog(args map[string]any) ([]byte, error) {
 		})
 	}
 
+	summary := backlog.ArchitectureSummary
+	valid, skippedOpps := validOpportunities(backlog.Opportunities)
+	if len(valid) > 0 {
+		summary += "\n\n### КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ (рекомендации смежным направлениям):\n"
+		for _, opp := range valid {
+			summary += "- " + strings.TrimSpace(opp.TargetRole) + ": " + strings.TrimSpace(opp.Suggestion) + "\n"
+		}
+	}
+
 	ctx := context.Background()
 	var created []string
 	var skipped []string
 	for _, ts := range backlog.Tasks {
 		epic := &board.Epic{
 			TaskSpec: ts,
-			Summary:  backlog.ArchitectureSummary,
+			Summary:  summary,
 		}
 		epic.RequiresReview = false // Ф-8: собственный бэклог архитектора ревизии не требует.
 		if err := a.Store.CreateEpic(ctx, epic); err != nil {
@@ -443,13 +481,35 @@ func (a *Architect) submitBacklog(args map[string]any) ([]byte, error) {
 	}
 
 	res, _ := json.Marshal(map[string]any{
-		"status":               "success",
-		"created_epics":        created,
-		"skipped_dups":         skipped,
-		"total_epics":          len(backlog.Tasks),
-		"architecture_summary": backlog.ArchitectureSummary,
+		"status":                "success",
+		"created_epics":         created,
+		"skipped_dups":          skipped,
+		"total_epics":           len(backlog.Tasks),
+		"architecture_summary":  backlog.ArchitectureSummary,
+		"opportunities":         len(valid),
+		"skipped_opportunities": skippedOpps,
 	})
 	return res, nil
+}
+
+// validOpportunities фильтрует кросс-функциональные возможности (Ф-6) и
+// возвращает валидные (непустые target_role и suggestion) и число/список
+// отбракованных. Запись без обязательных полей деградирует в «пропущено»
+// (skipped), а не валит весь бэклог.
+func validOpportunities(opps []board.Opportunity) ([]board.Opportunity, int) {
+	if len(opps) == 0 {
+		return nil, 0
+	}
+	valid := make([]board.Opportunity, 0, len(opps))
+	skipped := 0
+	for _, o := range opps {
+		if strings.TrimSpace(o.TargetRole) == "" || strings.TrimSpace(o.Suggestion) == "" {
+			skipped++
+			continue
+		}
+		valid = append(valid, o)
+	}
+	return valid, skipped
 }
 
 // Обёртки доступных инструментов. Наблюдаемые снаружи сигнатуры сохранены

@@ -326,49 +326,62 @@ IndexBackground (server-мост, безопасный):
       «затрагиваемых», «AskUser»
 
 ### Ф-4 — Корректность задачи, паттерны, AskUser
-- [ ] `runner/runner.go` (если нужно): `RequiredToolFirstRound` архитектора →
+- [x] `runner/runner.go` (если нужно): `RequiredToolFirstRound` архитектора →
       разрешены предварительные чтения/AskUser (группа обязательных
-      инструментов, по образцу `RequiredToolGroups`)
-- [ ] `agents/planner/kanban.go`: `KanbanRunner.SetArchitectExtras(...)`;
-      передать extras в `phaseArchitect` (`:596`) и фазу экспертизы (`:1090`)
-- [ ] `server/session.go:227`: `sess.start` передаёт runner-у
-      `SetRAG(ragClient)` и `SetArchitectExtras(askTool{sess})`
-- [ ] Промпт: «если ТЗ противоречиво/невыполнимо/не соответствует проекту —
+      инструментов, по образцу `RequiredToolGroups`); функционально runner уже
+      умел группы — обновлены только doc-комментарии `ToolRequiringAgent`
+- [x] `agents/planner/kanban.go`: `KanbanRunner.SetArchitectExtras(...)`;
+      передать extras в `phaseArchitect` (`:596`), ревизию (`phaseArchitectReview`)
+      и фазу экспертизы (`:1090`)
+- [x] `server/session.go:227`: `sess.start` передаёт runner-у
+      `SetRAG(ragClient)` и `SetArchitectExtras(askTool{sess})` (`&askTool{b: sess}`)
+- [x] Промпт: «если ТЗ противоречиво/невыполнимо/не соответствует проекту —
       задай уточняющий вопрос AskUser (с рекомендуемым вариантом) ДО
       публикации; иначе — явные допущения в architecture_summary»; секция
       «Паттерны» (REST/12-factor/KISS, анти-ГрафQL/devcontainer)
-- [ ] Тесты: fake-провайдер вызывает AskUser до `submit_architecture_backlog`;
-      без AskUser (консоль) — архитектор автономен
+- [x] Тесты: fake-провайдер вызывает AskUser до `submit_architecture_backlog`;
+      без AskUser (консоль) — архитектор автономен; grep промпта по
+      «противоречиво»/«допущения»/«Паттерны»/«12-factor»/«GraphQL»/«devcontainer»;
+      AskUser-нотки в bug/review-промптах
 
 ### Ф-5 — Фоновая индексация RAG
-- [ ] `server/ragindex.go`: фоновая горутина (walk + `IndexProject`) + отчёт в
+- [x] `server/ragindex.go`: фоновая горутина (walk + `IndexProject`) + отчёт в
       `chat.RoleStatus`/лог; `server/actions.go`: мост `IndexBackground`
       (безопасный, без подтверждения) + `ActionsBackend.IndexBackground`
-- [ ] `sess.start` передаёт `IndexBackground` в extras архитектора
-- [ ] Промпт: «если `RagIndexStatus` показывает не проиндексирован — AskUser
-      „Построить RAG-индекс в фоне?“ → при «да» вызови `IndexBackground` и
+- [x] `sess.start` передаёт `IndexBackground` в extras архитектора
+      (`SetArchitectExtras(&askTool{b: sess}, newIndexBackgroundTool(sess))`)
+- [x] Промпт: «если `RagIndexStatus` показывает не проиндексирован — AskUser
+      „Построить RAG-индекс в фоне?" → при «да» вызови `IndexBackground` и
       продолжай проектирование; при «нет»/недоступности — работай
       ReadMap/ReadFiles/LSP и пометь в architecture_summary, что RAG пуст»
 - [ ] Опц.: `POST /api/projects/{id}/index` + кнопка в Web UI (EntryPoint —
-      `server/server.go`, `web/src/Components/Dashboard`)
-- [ ] Тесты: мост `IndexBackground` запускает индексацию (fake-walker/фейк Qdrant),
-      не блокирует цикл; повторный запуск идемпотентен
+      `server/server.go`, `web/src/Components/Dashboard`) — отложено (не
+      обязательный нюанс; мост доступен из цикла архитектора)
+- [x] Тесты: мост `IndexBackground` запускает индексацию (fake-walker/фейк
+      Qdrant), не блокирует цикл; повторный запуск идемпотентен; два запуска
+      подряд при идущей индексации отклоняется (single-flight)
 
 ### Ф-6 — Кросс-функциональные инсайты
-- [ ] `submit_architecture_backlog`: опциональное поле `opportunities`
+- [x] `submit_architecture_backlog`: опциональное поле `opportunities`
       (список `{target_role, suggestion}`) в схеме (`agent.go:236-271`) и
       сериализации; сохранение в `Summary` эпиков (как складывается
-      `architecture_summary`)
-- [ ] Промпт: «фиксируй возможности оптимизации/новые фичи для смежных
-      направлений (opportunities)» — в основной фазе и экспертизе багов
-- [ ] Тесты: парсинг предложений, round-trip в доску, опциональность (старые
-      вызовы без поля валидны)
+      `architecture_summary`); валидация обязательных полей — запись без
+      role/suggestion деградирует в `skipped_opportunities` (не валит бэклог)
+- [x] Промпт: «фиксируй возможности оптимизации/новые фичи для смежных
+      направлений (opportunities)» — в основной фазе (секция
+      «КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ») и экспертизе багов (пометка
+      «opportunities: <роль> — <предложение>» в описании эпика исправления)
+- [x] Тесты: парсинг предложений, round-trip в доску (Summary эпиков),
+      опциональность (старые вызовы без поля валидны), скип грязных записей
 
 ### Ф-7 — Верификация и полировка
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
-- [ ] `go vet  . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
-- [ ] `npm run build` (web/) при реализации UI-части
+- [x] `go build . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
+- [x] `go vet  . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/`
+      (падают только 2 пред-существующих флака ассистента —
+      `TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
+      падают и на чистой базе; не связаны с Ф-4..Ф-6)
+- [x] `npm run build` (web/) — зелёный
 - [ ] Ручной E2E на реальном проекте (Web UI): новая задача на существующий
       репозиторий → архитектор поднимает RAG-индекс в фоне по согласию,
       декомпозирует с учётом стека и ролей; «кнопка на фронте» → эпик покрывает
@@ -389,9 +402,10 @@ IndexBackground (server-мост, безопасный):
       ДО `phaseLeads`, включая board-only); режим архитектора `.AsReviewer()`;
       `nextLeadEpic` пропускает эпики `RequiresReview`; после ревизии флаг
       снимается и `LeadSyncedRev` синхронизируется
-- [ ] `KanbanRunner.SetArchitectExtras` (Ф-4/Р-5) передаёт `AskUser`/
+- [x] `KanbanRunner.SetArchitectExtras` (Ф-4/Р-5) передаёт `AskUser`/
       `IndexBackground` и в режим ревью — архитектор может уточнить ТЗ
-      у пользователя до публикации лидам
+      у пользователя до публикации лидам (prepareArchitect применяется в
+      phaseArchitectReview и фазе экспертизы)
 - [x] Промпт архитектора (режим ревью): «проанализируй эпики, созданные
       в чате: корректность ТЗ, стек (Р-3), глубина (Р-4), смежные модули;
       скорректируй `BoardUpdateEpic` ДО декомпозиции»

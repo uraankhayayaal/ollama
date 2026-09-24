@@ -25,6 +25,8 @@ type fakeActions struct {
 	merged    string
 	released  string
 	rejected  bool
+	indexBg   bool
+	indexErr  error
 }
 
 func (f *fakeActions) KanbanStart(context.Context) error { f.started = true; return nil }
@@ -37,6 +39,10 @@ func (f *fakeActions) EpicRelease(_ context.Context, epicID string) (string, err
 	return "эпик в main", nil
 }
 func (f *fakeActions) BranchReject(context.Context) error { f.rejected = true; return nil }
+func (f *fakeActions) IndexBackground(context.Context) error {
+	f.indexBg = true
+	return f.indexErr
+}
 func (f *fakeActions) ActionConfirmed(context.Context) bool { return f.confirmed }
 
 // harnessStubProvider — LLM-провайдер оркестрации, немедленно останавливающий

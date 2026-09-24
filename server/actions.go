@@ -26,10 +26,11 @@ import (
 
 // Имена мостов-инструментов ассистента (вне общего реестра tools).
 const (
-	actionKanbanStart  = "KanbanStart"
-	actionTaskMerge    = "TaskMerge"
-	actionEpicRelease  = "EpicRelease"
-	actionBranchReject = "BranchReject"
+	actionKanbanStart     = "KanbanStart"
+	actionTaskMerge       = "TaskMerge"
+	actionEpicRelease     = "EpicRelease"
+	actionBranchReject    = "BranchReject"
+	actionIndexBackground = "IndexBackground"
 )
 
 // ActionsBackend — серверные действия, к которым мосты-инструменты обращаются
@@ -49,6 +50,11 @@ type ActionsBackend interface {
 	// BranchReject отклоняет текущую фича-ветку git-проекта (аналог
 	// POST /api/projects/{id}/reject-branch). Деструктивно.
 	BranchReject(ctx context.Context) error
+	// IndexBackground запускает фоновую индексацию RAG-памяти проекта
+	// (walk + IndexProject, Ф-5, Р-2). Безопасно — подтверждения не требует:
+	// прогон идемпотентен (IndexProject сперва очищает точки проекта), не
+	// блокирует агентский цикл — вернуться должна сразу.
+	IndexBackground(ctx context.Context) error
 	// ActionConfirmed сообщает, подтвердил ли пользователь действие в чате
 	// (последнее user-сообщение содержит явное согласие, Р-3). Деструктивные
 	// мосты вызывают её ПЕРЕД выполнением и возвращают status=confirm иначе.
@@ -163,6 +169,25 @@ func actionTools(b ActionsBackend) []tools.Tool {
 				}
 				return map[string]any{"message": "Фича-ветка отклонена, рабочая копия возвращена на базу."}, nil
 			},
+		},
+	}
+}
+
+// newIndexBackgroundTool — безопасный мост «построить RAG-индекс в фоне»
+// (Ф-5, Р-2). Без подтверждения: индексация идемпотентна (IndexProject сперва
+// удаляет точки проекта) и не блокирует цикл — executes сразу, работа идёт
+// параллельно в Session.IndexBackground, результат отчитывается в чат/лог.
+func newIndexBackgroundTool(b ActionsBackend) *actionTool {
+	return &actionTool{
+		name: actionIndexBackground, b: b,
+		description: "Построить/обновить RAG-индекс проекта в фоне (семантическая память для CodeSearch). Вызов не блокирует проектирование: индексация идёт параллельно и идемпотентна. Пока индекс строится, работай ReadMap/ReadFiles/LSP; после завершения в чате появится статус-отчёт (файлы/чанки).",
+		run: func(ctx context.Context, _ map[string]any) (map[string]any, error) {
+			if err := b.IndexBackground(ctx); err != nil {
+				return nil, err
+			}
+			return map[string]any{
+				"message": "Фоновая индексация RAG запущена: продолжай проектирование (ReadFiles/ReadMap/LSP), CodeSearch заработает после построения индекса.",
+			}, nil
 		},
 	}
 }

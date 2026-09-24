@@ -13,6 +13,7 @@ import (
 	"ai/board"
 	"ai/logging"
 	"ai/models"
+	"ai/tools"
 	"context"
 	"errors"
 	"fmt"
@@ -65,6 +66,14 @@ type KanbanRunner struct {
 	// проекта известно; до этого nil, и сообщения идут в файл по умолчанию
 	// (нулевой получатель logging.Logger допустим — проверки не нужны).
 	log *logging.Logger
+	// rag — клиент векторной памяти для фаз архитектора (Ф-1/Ф-4): CodeSearch/
+	// RagIndexStatus и блок «релевантный код» в промпте. nil — архитектор
+	// работает без RAG (degrade, как раньше).
+	rag tools.RAGSearcher
+	// architectExtras — серверные мосты-инструменты для архитектора (Ф-4/Р-5):
+	// например AskUser для уточняющего вопроса до публикации бэклога.
+	// nil/пустой — автономный режим (консоль), архитектор работает без них.
+	architectExtras []tools.Tool
 }
 
 // standbyPoll — период опроса доски в режиме ожидания: раз в 5 с runner
@@ -111,6 +120,39 @@ func (k *KanbanRunner) SetStandbyNotifier(fn func(bool)) { k.onStandby = fn }
 // (project, taskID) (Ф-3): worktree ветки задачи для git, temp/<проект> —
 // стандартно. nil возвращает поведение по умолчанию.
 func (k *KanbanRunner) SetOutputDir(fn func(project, taskID string) string) { k.outputDir = fn }
+
+// SetRAG подключает клиент векторной памяти к фазам архитектора (Ф-1/Ф-6):
+// CodeSearch/RagIndexStatus и блок «релевантный код» в промпте начинают
+// работать по индексу. nil — архитектор работает без RAG (degrade). Клиент
+// ленивый и nil-safe: недоступный Qdrant/эмбеддинги не роняют фазу.
+func (k *KanbanRunner) SetRAG(r tools.RAGSearcher) *KanbanRunner {
+	k.rag = r
+	return k
+}
+
+// SetArchitectExtras дополняет набор инструментов архитектора мостами вне
+// общего реестра (Ф-4/Р-5) — например серверным AskUser для уточняющего
+// вопроса до публикации бэклога. nil/пустой список возвращает автономный
+// режим (консоль). Применяется в фазе архитектора, ревизии черновиков и
+// экспертизы багрепортов.
+func (k *KanbanRunner) SetArchitectExtras(extra ...tools.Tool) *KanbanRunner {
+	k.architectExtras = append([]tools.Tool{}, extra...)
+	return k
+}
+
+// prepareArchitect применяет к архитектору RAG и серверные extras (Ф-4):
+// CodeSearch/RagIndexStatus начинают искать по индексу, мост AskUser
+// добавляется в набор инструментов. Повторный вызов безопасен (Set.Add не
+// дублирует уже присутствующие имена, SetRAG пересобирает набор из реестра).
+func (k *KanbanRunner) prepareArchitect(a *architect.Architect) *architect.Architect {
+	if k.rag != nil {
+		a.SetRAG(k.rag)
+	}
+	if len(k.architectExtras) > 0 {
+		a.Tools.Add(k.architectExtras...)
+	}
+	return a
+}
 
 // Wake побуждает runner, ожидающий работу на доске (standby), немедленно
 // перепроверить её (Ф-2, PLAN-dashboard-events) — вместо ожидания следующего
@@ -605,6 +647,7 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 	}
 
 	arch := architect.NewArchitectWithStore(k.store.Project(), meta.Task, k.store)
+	arch = k.prepareArchitect(arch)
 	resp, err := k.provider.Generate(ctx, arch)
 	if err != nil {
 		return false, fmt.Errorf("фаза архитектора: %w", err)
@@ -651,6 +694,7 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 	}
 
 	reviewer := architect.NewArchitectWithStore(k.store.Project(), k.epicReviewPrompt(k.store.Project(), drafts), k.store).AsReviewer()
+	reviewer = k.prepareArchitect(reviewer)
 	resp, err := k.provider.Generate(ctx, reviewer)
 	if err != nil {
 		return false, fmt.Errorf("фаза ревизии эпиков: %w", err)
@@ -1168,6 +1212,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 	if len(confirmedBugs) > 0 {
 		arch := architect.NewArchitectWithStore(k.store.Project(),
 			k.bugExpertPrompt(k.store.Project(), confirmedBugs), k.store).AsBugExpert()
+		arch = k.prepareArchitect(arch)
 		resp, err := k.provider.Generate(ctx, arch)
 		if err != nil {
 			return false, fmt.Errorf("фаза экспертизы багрепортов: %w", err)

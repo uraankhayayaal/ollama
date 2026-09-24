@@ -260,6 +260,38 @@ func TestArchitectPromptMentionsStackAndDepth(t *testing.T) {
 	}
 }
 
+// TestArchitectPromptCorrectnessAndPatterns — Ф-4: промпт архитектора велит
+// спрашивать пользователя (AskUser) при противоречивом/невыполнимом ТЗ ДО
+// публикации бэклога (иначе — явные допущения в architecture_summary) и
+// содержит секцию «Паттерны»: REST/12-factor/KISS, анти-GraphQL/devcontainer.
+func TestArchitectPromptCorrectnessAndPatterns(t *testing.T) {
+	a := newTestArchitect(t)
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"AskUser", "противоречиво", "recommended=true", "допущения",
+		"ПАТТЕРНЫ", "12-factor", "GraphQL", "devcontainer", "KISS",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+}
+
+// TestBugExpertAndReviewPromptsMentionAskUser — Ф-4/Ф-8: режимы экспертизы
+// багрепортов и ревизии черновиков тоже умеют уточнять ТЗ (AskUser) до
+// вердикта/правки, иначе фиксируют допущения.
+func TestBugExpertAndReviewPromptsMentionAskUser(t *testing.T) {
+	a := newTestArchitect(t)
+	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
+	if !strings.Contains(bug, "AskUser") || !strings.Contains(bug, "допущения") {
+		t.Errorf("промпт экспертизы багов не упоминает AskUser/допущения:\n%s", bug)
+	}
+	r := a.AsReviewer().GetSystemMessages(nil)[0].Message
+	if !strings.Contains(r, "AskUser") || !strings.Contains(r, "допущения") {
+		t.Errorf("промпт ревизии черновиков не упоминает AskUser/допущения:\n%s", r)
+	}
+}
+
 // TestArchitectSystemMessagesIncludeRAGBlock — Ф-1: при подключённом RAG
 // (SetRAG) в системный промпт попадает блок «Релевантный код по задаче»
 // (поиск — по проекту из OutputDir, scope пуст).
@@ -342,5 +374,107 @@ func TestProjectNameFromOutputDir(t *testing.T) {
 		if got := projectNameFromOutputDir(tc.dir); got != tc.want {
 			t.Errorf("projectNameFromOutputDir(%q) = %q, ожидался %q", tc.dir, got, tc.want)
 		}
+	}
+}
+
+// TestSubmitBacklogSchemaHasOpportunities — Ф-6: схема submit_architecture_backlog
+// объявляет опциональное поле opportunities (массив {target_role, suggestion}).
+func TestSubmitBacklogSchemaHasOpportunities(t *testing.T) {
+	td := defByName(newTestArchitect(t).GetTools(), SubmitBacklogToolName)
+	if td == nil {
+		t.Fatal("не найдено определение submit_architecture_backlog")
+	}
+	props := td.Parameters["properties"].(map[string]any)
+	opps, ok := props["opportunities"].(map[string]any)
+	if !ok {
+		t.Fatal("схема не содержит поле opportunities")
+	}
+	if opps["type"] != "array" {
+		t.Fatalf("opportunities.type = %v, ожидался array", opps["type"])
+	}
+	items := opps["items"].(map[string]any)
+	itemProps := items["properties"].(map[string]any)
+	for _, field := range []string{"target_role", "suggestion"} {
+		if _, ok := itemProps[field]; !ok {
+			t.Errorf("схема opportunity не содержит поле %q", field)
+		}
+	}
+	if req, ok := items["required"].([]string); !ok || len(req) != 2 {
+		t.Errorf("opportunity.required = %v, ожидались target_role и suggestion", items["required"])
+	}
+}
+
+// TestSubmitBacklogWithOpportunities — Ф-6: кросс-функциональные возможности
+// складываются в Summary эпиков (после architecture_summary) и учитываются в
+// JSON-результате; совместимость: грязные записи (без обязательных полей)
+// деградируют в skipped_opportunities, а не валят бэклог.
+func TestSubmitBacklogWithOpportunities(t *testing.T) {
+	a := newTestArchitect(t)
+
+	args := map[string]any{
+		"architecture_summary": "Сводка решения",
+		"tasks": []map[string]any{
+			{
+				"task_id":          "ARCH-01",
+				"title":            "Backend модуль",
+				"description":      "Описание",
+				"assigned_role":    "Backend Lead",
+				"sequence_order":   1,
+				"can_run_parallel": true,
+				"dependencies":     []string{},
+			},
+		},
+		"opportunities": []map[string]any{
+			{"target_role": "QA Lead", "suggestion": "Завести смоук-тесты на контракт"},
+			{"target_role": "DevOps Lead", "suggestion": "Подготовить канарейку"},
+			{"target_role": "Frontend Lead", "suggestion": ""}, // без suggestion — skipped
+		},
+	}
+
+	out, err := a.CallFunction(SubmitBacklogToolName, args)
+	if err != nil {
+		t.Fatalf("CallFunction: %v", err)
+	}
+	if !strings.Contains(string(out), `"skipped_opportunities":1`) &&
+		!strings.Contains(string(out), `"skipped_opportunities": 1`) {
+		t.Fatalf("ожидался skipped_opportunities=1, получено: %s", out)
+	}
+
+	epics, err := a.Store.ListEpics(context.Background())
+	if err != nil {
+		t.Fatalf("ListEpics: %v", err)
+	}
+	if len(epics) != 1 {
+		t.Fatalf("на доске %d эпиков, ожидался 1", len(epics))
+	}
+	s := epics[0].Summary
+	if !strings.Contains(s, "Сводка решения") {
+		t.Errorf("Summary потеряла architecture_summary: %q", s)
+	}
+	for _, want := range []string{
+		"КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ",
+		"QA Lead: Завести смоук-тесты на контракт",
+		"DevOps Lead: Подготовить канарейку",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("Summary не содержит %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "Frontend Lead") {
+		t.Errorf("невалидная возможность (пустой suggestion) попала в Summary:\n%s", s)
+	}
+}
+
+// TestArchitectPromptMentionsOpportunities — Ф-6: промпты (основной и режим
+// экспертизы багов) упоминают кросс-функциональные возможности (opportunities).
+func TestArchitectPromptMentionsOpportunities(t *testing.T) {
+	a := newTestArchitect(t)
+	p := a.GetSystemMessages(nil)[0].Message
+	if !strings.Contains(p, "opportunities") || !strings.Contains(p, "КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ") {
+		t.Errorf("промпт не упоминает opportunities:\n%s", p)
+	}
+	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
+	if !strings.Contains(bug, "opportunities") {
+		t.Errorf("промпт экспертизы багов не упоминает opportunities:\n%s", bug)
 	}
 }

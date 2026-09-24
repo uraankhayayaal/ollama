@@ -38,21 +38,56 @@ go test . ./agents/... ./tools/ ./board/
 - Предсуществующие неформатированные файлы (`agents/acceptor/checks.go`,
   `agents/acceptor/run.go`) не трогать.
 
-Состояние Ф-2-3 (последняя сессия): сервер открывает git-проекты через
-`git_url` — `handleOpenGitProject` клонирует репозиторий в `temp/<имя>`
-(фича-ветка `ai/<имя>`, база = ветка по умолчанию), регистрирует
-workspace KindGit; REST: `GET /api/projects/{id}/diff` (git — unified-дифф
-`git diff base` от рабочего каталога; обычно папки — `Snap.Diff` по
-baseline-снимку), `POST /api/projects/{id}/accept` (dirty → commit → push →
-`forges.NewByRemote` → `CreateMergeRequest`; токен GITHUB_TOKEN/GITLAB_TOKEN
-по remote), `POST /api/projects/{id}/reject-branch` (delete на remote +
-`reset --hard` базы + удаление ветки). Push на HTTPS в headless-среде:
-`server.pushRepo` встраивает токен в URL (`https://x-access-token:<токен>@…`)
-и зовёт `gitops.Repo.PushTo` (без `-u`, чтобы upstream/токен не попадали в
-конфиг; SSH-remote — обычный `git push origin`). Web: Diffboard — дифф,
-«Принять → MR» и «Отклонить ветку» (`projectDiff`/`acceptProject`/`rejectBranch`
-в Api.ts>, тип DiffView в Types.ts). Hermetic-тесты (fake-исполнитель git +
-stub-фордж, без сети) и E2E на реальном git-протоколе (gitops/cli_test.go)
-зелёные; `npm run build` web/ проходит. VI плана выполнен: end-to-end на
-реальном проекте GitHub (`uraankhayayaal/my-rust-app`) — открытие по git_url,
-дифф, accept → push + PR (#1).
+Состояние последней сессии (PLAN-architect-intelligence, Ф-4/Ф-5):
+Ф-4 «Корректность задачи, паттерны, AskUser» — архитектор получил
+`KanbanRunner.SetRAG` (Р-6) и `KanbanRunner.SetArchitectExtras` (Р-5),
+применяемые в `phaseArchitect`/`phaseArchitectReview`/`phaseBugs` через
+`prepareArchitect` (kanban.go); `sess.start` передаёт
+`SetRAG(ragClient)` + `SetArchitectExtras(&askTool{b: sess}, newIndexBackgroundTool(sess))`
+(server/session.go:235); CLI-канбан (main.go) — только `SetRAG(ragClient)`
+(автономно, без AskUser/IndexBackground — degrade). Промпт архитектора —
+секции «КОРРЕКТНОСТЬ ЗАДАЧИ (спрашивать, а не угадывать)» (AskUser с
+`recommended=true` до публикации бэклога, иначе явные допущения в
+`architecture_summary`), «ПАТТЕРНЫ ПРОЕКТИРОВАНИЯ» (REST/12-factor/KISS,
+анти-GraphQL/devcontainer), «RAG-ИНДЕКС (предложи построить в фоне)»
+(RagIndexStatus → AskUser → IndexBackground, продолжать проектирование).
+Runner: `RequiredToolFirstRound` трактуется как группа обязательных
+инструментов (предварительные чтения/AskUser разрешены) — правка только
+doc-комментариев.
+
+Ф-5 «Фоновая индексация RAG» — `server/ragindex.go`: мост
+`IndexBackground` (безопасный, без подтверждения) в `ActionsBackend` +
+`Session.IndexBackground` — горутина (walk + `IndexProject`, single-flight
+через `sess.indexing`, отчёт в `chat.RoleStatus`/лог проекта), идемпотентный
+прогон (`IndexProject` сперва очищает точки проекта). Фоновая индексация не
+блокирует агентский цикл; клиент RAG создаётся фабрикой `buildProjectIndexer`
+(замена для hermetic-тестов). `npm run build` web/ зелёный; `go test
+./server/` — неизвестно 2 флаки чат-ассистента
+(`TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`),
+падают и на чистой базе (не связаны с Ф-4/Ф-5). Отложено: опциональный
+REST `POST /api/projects/{id}/index` + кнопка в Web UI (необязательный нюанс
+Ф-5).
+
+Ф-6 «Кросс-функциональные инсайты» — `board/entity.go`: тип
+`Opportunity{TargetRole, Suggestion}` + `Backlog.Opportunities []Opportunity`
+(`json:"opportunities,omitempty"`). `agents/architect/agent.go`: опциональное
+поле `opportunities` в схеме `submit_architecture_backlog`; `submitBacklog`
+валидирует записи (непустые target_role+suggestion) — грязные деградируют в
+`skipped_opportunities`, валидные складываются в `Summary` эпиков секцией
+«КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ (рекомендации смежным направлениям)»;
+промпт — секция «КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ (opportunities)» (в
+основной фазе) и пометка «opportunities: <роль> — <предложение>» в описании
+эпика исправления (экспертиза багов). Тесты: парсинг + round-trip в Summary
+(`agents/architect/agent_test.go`, `board/entity_test.go`), опциональность
+(старые вызовы без поля валидны), скип грязных записей.
+
+Ф-7 «Верификация и полировка»: `go build/vet` по всем пакетам
+(./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/) — зелёные;
+`go test` — зелёные, кроме 2 пред-существующих флаков aссистента
+(`TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
+падают и на чистой базе); `npm run build` web/ зелёный. Остался ручной E2E
+на реальном проекте (Web UI, инфраструктура Redis/Qdrant/модель у
+пользователя): новая задача → архитектор поднимает RAG-индекс в фоне по
+согласию, декомпозирует с учётом стека и ролей; консольный проект — без
+Frontend Lead. Далее по плану — Ф-8 и следующие фазы уже реализованы
+(Ф-8 в списке: эпики из чата — ревизия архитектора).
