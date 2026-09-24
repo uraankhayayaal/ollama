@@ -50,6 +50,10 @@ type FileOps struct {
 	// touchedMu; сама мутация сериализуется пер-проектной блокировкой.
 	touched   []string
 	touchedMu sync.Mutex
+	// readAttempts — счётчик попыток чтения несуществующих файлов по
+	// относительным (slash) путям; защищает от зацикливания модели.
+	readAttempts   map[string]int
+	readAttemptsMu sync.Mutex
 }
 
 // SetScope задаёт области работы для инструментов (нормализует записи через
@@ -66,6 +70,9 @@ func (ops *FileOps) SetScope(scope []string) {
 // *FileOps), поэтому сигнатура — часть публичного контракта.
 func (ops *FileOps) SetOutputDir(dir string) {
 	ops.OutputDir = dir
+	ops.readAttemptsMu.Lock()
+	ops.readAttempts = nil // смена проекта = чистый счёт попыток
+	ops.readAttemptsMu.Unlock()
 }
 
 // allowed проверяет, разрешён ли файл (относительный slash-путь) областью
@@ -258,6 +265,34 @@ func deepestExistingPath(dir string) string {
 	}
 }
 
+// readMaxMissingAttempts — порог повторных попыток чтения несуществующего
+// файла: после него подсказка усиливается запретом повторных вызовов.
+const readMaxMissingAttempts = 2
+
+// readMissingHint возвращает (подсказка, true) если файл не существует,
+// и инкрементирует счётчик попыток. При превышении readMaxMissingAttempts
+// подсказка усиливается запретом повторных попыток.
+func (ops *FileOps) readMissingHint(rel string) (string, bool) {
+	full, err := ops.ResolvePath(rel)
+	if err != nil {
+		return "", false
+	}
+	if _, serr := os.Stat(full); !os.IsNotExist(serr) {
+		return "", false
+	}
+	ops.readAttemptsMu.Lock()
+	if ops.readAttempts == nil {
+		ops.readAttempts = make(map[string]int)
+	}
+	ops.readAttempts[rel]++
+	n := ops.readAttempts[rel]
+	ops.readAttemptsMu.Unlock()
+	if n <= readMaxMissingAttempts {
+		return fmt.Sprintf("файл %s не существует. Не повторяй вызов: сначала проверь структуру проекта инструментом List (или ReadMap для карты кода), и читай только реально существующие пути.", rel), true
+	}
+	return fmt.Sprintf("файл %s не существует (повторная попытка %d). Повторные вызовы ReadFiles для этого пути запрещены — используй List для поиска реального пути.", rel, n), true
+}
+
 // ReadResult читает файл и возвращает результат-статус.
 func (ops *FileOps) ReadResult(name string) map[string]string {
 	full, err := ops.ResolvePath(name)
@@ -266,6 +301,14 @@ func (ops *FileOps) ReadResult(name string) map[string]string {
 	}
 	if !ops.allowed(ops.relPath(full)) {
 		return map[string]string{"filename": name, "status": "error", "message": "файл вне области работы (scope)"}
+	}
+	if info, serr := os.Stat(full); serr == nil {
+		if info.IsDir() {
+			return map[string]string{"filename": name, "status": "error", "message": "это директория, а не файл: перечисли её инструментом List"}
+		}
+	} else if os.IsNotExist(serr) {
+		hint, _ := ops.readMissingHint(ops.relPath(full))
+		return map[string]string{"filename": name, "status": "error", "message": hint, "hint": "true"}
 	}
 	content, err := os.ReadFile(full)
 	if err != nil {
@@ -702,6 +745,9 @@ func (ops *FileOps) ReadFiles(args map[string]any) ([]byte, error) {
 
 		r := ops.ReadResult(filename)
 		if r["status"] != "success" {
+			if r["hint"] == "true" {
+				r["retry"] = "forbidden"
+			}
 			result = append(result, r)
 			continue
 		}
