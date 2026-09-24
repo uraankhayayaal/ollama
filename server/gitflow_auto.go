@@ -67,6 +67,43 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 		logging.For(project).Warnf("gitflow: worktree задачи %s: %v", task.TaskID, err)
 		return
 	}
+	if subs, err := gitops.EnsureSubmodules(ctx, s.gitExec, wt.Root); err != nil {
+		_ = wt.RemoveWorktree(ctx, wtPath)
+		logging.For(project).Warnf("gitflow: submodule worktree задачи %s: %v", task.TaskID, err)
+		return
+	} else {
+		for _, sub := range subs {
+			childName := submoduleProjectName(project, sub.Path)
+			child, err := s.reg.Get(childName)
+			if err != nil || child.Parent != project {
+				continue
+			}
+			base, err := s.gitExec.Exec(ctx, sub.Root, "git", "rev-parse", "HEAD")
+			if err != nil {
+				_ = wt.RemoveWorktree(ctx, wtPath)
+				logging.For(project).Warnf("gitflow: base сабмодуля %s задачи %s: %v", sub.Path, task.TaskID, err)
+				return
+			}
+			branch := taskRef.Branch + "/submodule/" + gitops.SanitizeBranchName(filepath.ToSlash(sub.Path))
+			if _, err := s.gitExec.Exec(ctx, wt.Root, "git", "submodule", "deinit", "-f", "--", sub.Path); err != nil {
+				_ = wt.RemoveWorktree(ctx, wtPath)
+				logging.For(project).Warnf("gitflow: deinit сабмодуля %s для task worktree: %v", sub.Path, err)
+				return
+			}
+			if _, err := gitops.Worktree(ctx, s.gitExec, child.Root, branch, strings.TrimSpace(base), sub.Root); err != nil {
+				_ = wt.RemoveWorktree(ctx, wtPath)
+				logging.For(project).Warnf("gitflow: worktree сабмодуля %s задачи %s: %v", sub.Path, task.TaskID, err)
+				return
+			}
+			if err := s.reg.SetTaskBranch(childName, childTaskKey(project, task.TaskID), workspace.BranchRef{
+				Branch: branch, Base: strings.TrimSpace(base), Worktree: sub.Root,
+			}); err != nil {
+				_ = wt.RemoveWorktree(ctx, wtPath)
+				logging.For(project).Warnf("gitflow: регистрация submodule task branch %s: %v", sub.Path, err)
+				return
+			}
+		}
+	}
 	if err := s.reg.SetTaskBranch(project, task.TaskID, workspace.BranchRef{
 		Branch: taskRef.Branch, Base: taskRef.Base, Worktree: wtPath,
 	}); err != nil {
@@ -95,11 +132,61 @@ func (s *Server) taskOutputDir(project, taskID string) string {
 // ничего не менял/работал в общей копии) — no-op. Ошибки логируются.
 func (s *Server) commitTaskWorktree(ctx context.Context, project string, task *board.Task, worktree string) {
 	wt := gitops.RepoFromState(s.gitExec, worktree, "", "", "")
+	message := fmt.Sprintf("задача %s: работа специалиста (авто-коммит)", task.TaskID)
+	subs, err := gitops.ListSubmodules(ctx, s.gitExec, worktree)
+	if err != nil {
+		logging.For(project).Warnf("gitflow: чтение сабмодулей worktree задачи %s: %v", task.TaskID, err)
+		return
+	}
+	for _, sub := range subs {
+		childName := submoduleProjectName(project, sub.Path)
+		child, err := s.reg.Get(childName)
+		if err != nil || child.Parent != project {
+			continue
+		}
+		ref, err := s.reg.TaskBranch(childName, childTaskKey(project, task.TaskID))
+		if err != nil {
+			continue
+		}
+		subRoot := filepath.Join(worktree, sub.Path)
+		taskRepo := gitops.RepoFromState(s.gitExec, subRoot, child.GitRemote, ref.Branch, ref.Base)
+		dirty, err := taskRepo.Dirty(ctx)
+		if err != nil {
+			logging.For(project).Warnf("gitflow: status сабмодуля %s: %v", sub.Path, err)
+			return
+		}
+		if !dirty {
+			continue
+		}
+		if err := taskRepo.Commit(ctx, message); err != nil {
+			logging.For(project).Warnf("gitflow: commit сабмодуля %s: %v", sub.Path, err)
+			return
+		}
+		if child.GitBranch != "" && ref.Branch != child.GitBranch {
+			childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+			if _, err := childRepo.MergeFeature(ctx, child.GitBranch, ref.Branch, gitops.MergeFeatureOptions{Message: message}); err != nil {
+				logging.For(project).Warnf("gitflow: merge сабмодуля %s в %s: %v", sub.Path, child.GitBranch, err)
+				return
+			}
+			if _, err := s.gitExec.Exec(ctx, child.Root, "git", "checkout", child.GitBranch); err != nil {
+				logging.For(project).Warnf("gitflow: checkout feature branch сабмодуля %s: %v", sub.Path, err)
+				return
+			}
+			if err := s.pushRepo(ctx, childRepo, child.GitRemote); err != nil {
+				logging.For(project).Warnf("gitflow: push сабмодуля %s: %v", sub.Path, err)
+				return
+			}
+			if _, err := s.gitExec.Exec(ctx, subRoot, "git", "reset", "--hard", child.GitBranch); err != nil {
+				logging.For(project).Warnf("gitflow: обновление gitlink сабмодуля %s: %v", sub.Path, err)
+				return
+			}
+		}
+	}
 	dirty, err := wt.Dirty(ctx)
 	if err != nil || !dirty {
 		return
 	}
-	if err := wt.Commit(ctx, fmt.Sprintf("задача %s: работа специалиста (авто-коммит)", task.TaskID)); err != nil {
+	if err := wt.Commit(ctx, message); err != nil {
 		logging.For(project).Warnf("gitflow: авто-коммит задачи %s в %s: %v", task.TaskID, worktree, err)
 		return
 	}
@@ -113,6 +200,18 @@ func (s *Server) removeTaskWorktree(project, taskID, worktree string) {
 	if strings.TrimSpace(worktree) == "" {
 		return
 	}
+	for _, child := range s.repositoriesForProject(project) {
+		if child == project {
+			continue
+		}
+		key := childTaskKey(project, taskID)
+		if ref, err := s.reg.TaskBranch(child, key); err == nil && ref.Worktree != "" {
+			if repo, err := s.repoOf(context.Background(), child); err == nil {
+				_ = repo.RemoveWorktree(context.Background(), ref.Worktree)
+			}
+			_ = s.reg.DeleteTaskBranch(child, key)
+		}
+	}
 	if repo, err := s.repoOf(context.Background(), project); err == nil {
 		if err := repo.RemoveWorktree(context.Background(), worktree); err != nil {
 			logging.For(project).Warnf("gitflow: снятие worktree задачи %s: %v", taskID, err)
@@ -122,6 +221,8 @@ func (s *Server) removeTaskWorktree(project, taskID, worktree string) {
 		_ = s.reg.SetTaskBranch(project, taskID, workspace.BranchRef{Branch: ref.Branch, Base: ref.Base})
 	}
 }
+
+func childTaskKey(project, taskID string) string { return project + "::" + taskID }
 
 // autoCommitAndMergeTask — Ф-2/Ф-3: авто-действия при переводе задачи в done:
 //

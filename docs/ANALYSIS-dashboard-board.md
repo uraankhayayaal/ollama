@@ -35,8 +35,8 @@
 
 ## Git-flow (текущее)
 
-Реализовано в `PLAN-dashboard-workflow.md` (Ф-1..Ф-5, все выполнено) и
-дополняется `PLAN-dashboard-gitflow-auto.md`.
+Реализовано в `PLAN-2026-09-20-done-dashboard-workflow.md` (Ф-1..Ф-5, все выполнено) и
+дополняется `PLAN-2026-09-22-done-dashboard-gitflow-auto.md`.
 
 - **Эпик** = релизная ветка `ai/epic/<epic_id>` (база = `main`).
 - **Задача** = фича-ветка `ai/task/<task_id>` (база = релизная ветка эпика).

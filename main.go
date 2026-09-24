@@ -67,7 +67,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Индексация кодовой базы проекта в Qdrant (RAG, см. PLAN-qdrant.md, Ф-2).
+	// Индексация кодовой базы проекта в Qdrant (RAG, см. PLAN-2026-09-19-done-qdrant.md, Ф-2).
 	// Не требует провайдера модели — только эмбеддинги Ollama и Qdrant.
 	// go run . index <имя_проекта>
 	if len(os.Args) > 1 && os.Args[1] == "index" {
@@ -426,7 +426,7 @@ func parseTimeout(raw string) time.Duration {
 }
 
 // runIndexCommand индексирует кодовую базу temp/<projectName> в Qdrant
-// (см. PLAN-qdrant.md, Ф-2): обходит дерево (игнор .git/node_modules/бинарных/
+// (см. PLAN-2026-09-19-done-qdrant.md, Ф-2): обходит дерево (игнор .git/node_modules/бинарных/
 // .gitignore), нарезает файлы на структурные чанки и пакетно грузит векторы.
 // Коллекция создаётся при первом запуске (create-if-not-exists).
 func runIndexCommand(projectName string) {

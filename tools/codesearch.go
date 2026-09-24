@@ -1,7 +1,7 @@
 package tools
 
 // Инструмент CodeSearch — семантический поиск по кодовой базе проекта
-// (RAG поверх Qdrant, см. PLAN-qdrant.md, Ф-3).
+// (RAG поверх Qdrant, см. PLAN-2026-09-19-done-qdrant.md, Ф-3).
 //
 // Модель передаёт описание функциональности одной строкой (query) и, при
 // необходимости, scope (server/frontend/...). Инструмент эмбеддит запрос,
@@ -31,7 +31,7 @@ const CodeSearch = "CodeSearch"
 // RAGSearcher — минимальный интерфейс семантического поиска, используемый
 // инструментом. Реализуется *rag.Client; выделен, чтобы hermetic-тесты
 // работали с fake-реализацией без сети (ProjectInfo — статус индекса для
-// RagIndexStatus, Ф-1 PLAN-architect-intelligence.md).
+// RagIndexStatus, Ф-1 PLAN-2026-09-24-wip-architect-intelligence.md).
 type RAGSearcher interface {
 	Ping(ctx context.Context) error
 	Search(ctx context.Context, p rag.SearchParams) ([]rag.SearchResult, error)

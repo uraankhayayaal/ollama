@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -19,10 +20,11 @@ import (
 type diffFileStatus string
 
 const (
-	diffAdded    diffFileStatus = "added"
-	diffModified diffFileStatus = "modified"
-	diffRemoved  diffFileStatus = "removed"
-	diffRenamed  diffFileStatus = "renamed"
+	diffAdded     diffFileStatus = "added"
+	diffModified  diffFileStatus = "modified"
+	diffRemoved   diffFileStatus = "removed"
+	diffRenamed   diffFileStatus = "renamed"
+	diffSubmodule diffFileStatus = "submodule"
 )
 
 // diffFileEntry — один файл в диффе git-проекта (метаданные, без патча).
@@ -50,15 +52,36 @@ type cachedDiff struct {
 func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info) (*cachedDiff, error) {
 	s.diffMu.Lock()
 	defer s.diffMu.Unlock()
-	if c, ok := s.diffs[inf.Name]; ok {
-		return c, nil
-	}
 	repo := gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
+	if inf.Parent == "" {
+		if subs, err := gitops.ListSubmodules(ctx, s.gitExec, inf.Root); err != nil {
+			return nil, err
+		} else {
+			repo.Submodules = subs
+		}
+	}
 	raw, err := repo.Diff(ctx)
 	if err != nil {
 		return nil, err
 	}
 	c := parseUnifiedDiff(raw)
+	for _, sub := range repo.Submodules {
+		child, err := s.reg.Get(submoduleProjectName(inf.Name, sub.Path))
+		if err != nil {
+			continue
+		}
+		childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+		childRaw, err := childRepo.Diff(ctx)
+		if err != nil {
+			return nil, err
+		}
+		childDiff := parseUnifiedDiff(childRaw)
+		for _, f := range childDiff.Files {
+			f.Path = filepath.ToSlash(sub.Path) + "/" + f.Path
+			c.Files = append(c.Files, f)
+			c.File[f.Path] = prefixDiffPath(childDiff.File[strings.TrimPrefix(f.Path, filepath.ToSlash(sub.Path)+"/")], sub.Path)
+		}
+	}
 	c.Branch = inf.GitBranch
 	c.Base = inf.GitBase
 	c.Remote = inf.GitRemote
@@ -105,6 +128,24 @@ func splitDiffBlocks(raw string) []string {
 	return blocks
 }
 
+func prefixDiffPath(patch, prefix string) string {
+	prefix = filepath.ToSlash(prefix)
+	lines := strings.Split(patch, "\n")
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "diff --git a/"):
+			line = strings.ReplaceAll(line, "diff --git a/", "diff --git a/"+prefix+"/")
+			line = strings.ReplaceAll(line, " b/", " b/"+prefix+"/")
+		case strings.HasPrefix(line, "--- a/"):
+			line = strings.ReplaceAll(line, "--- a/", "--- a/"+prefix+"/")
+		case strings.HasPrefix(line, "+++ b/"):
+			line = strings.ReplaceAll(line, "+++ b/", "+++ b/"+prefix+"/")
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
 // parseDiffBlock разбирает блок одного файла: метаданные и патч.
 func parseDiffBlock(block string) (*diffFileEntry, string) {
 	f := &diffFileEntry{Status: diffModified}
@@ -130,6 +171,9 @@ func parseDiffBlock(block string) (*diffFileEntry, string) {
 		f.Status = diffAdded
 	case new == "/dev/null" && old != "":
 		f.Status = diffRemoved
+	}
+	if strings.Contains(block, "Subproject commit ") || strings.Contains(block, "160000") || strings.Contains(block, "Submodule ") {
+		f.Status = diffSubmodule
 	}
 	if f.Path == "" {
 		switch {

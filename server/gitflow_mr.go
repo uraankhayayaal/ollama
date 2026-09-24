@@ -410,7 +410,7 @@ func branchWebURL(remote, branch string) string {
 // изменился — вызывающему стоит перепубликовать снимок доски.
 func (s *Server) reconcileMRs(ctx context.Context, project string) (bool, error) {
 	inf, err := s.reg.Get(project)
-	if err != nil || inf.Kind != workspace.KindGit || inf.GitBranches == nil {
+	if err != nil || inf.Kind != workspace.KindGit {
 		return false, nil
 	}
 	// Локальный проект без remote — фордж не нужен (MR всё равно не создать).
@@ -427,20 +427,43 @@ func (s *Server) reconcileMRs(ctx context.Context, project string) (bool, error)
 	}
 
 	changed := false
-	for epicID, ref := range inf.GitBranches.Epics {
-		set := reconcileOne(project, prov, ref.Branch, ref.Base, epicID,
-			func(id string, mr workspace.MRRef) error { return s.reg.SetEpicMR(project, id, mr) },
-			func(id string) (workspace.MRRef, error) { return s.reg.EpicMR(project, id) })
-		if set {
-			changed = true
+	target := inf.GitTarget
+	if target == "" {
+		target = inf.GitBase
+	}
+	if inf.GitBranch != "" && target != "" && reconcileOne(project, prov, inf.GitBranch, target, project,
+		func(_ string, mr workspace.MRRef) error { return s.reg.SetProjectMR(project, mr) },
+		func(_ string) (workspace.MRRef, error) { return s.reg.ProjectMR(project) }) {
+		changed = true
+	}
+	if inf.GitBranches != nil {
+		for epicID, ref := range inf.GitBranches.Epics {
+			set := reconcileOne(project, prov, ref.Branch, ref.Base, epicID,
+				func(id string, mr workspace.MRRef) error { return s.reg.SetEpicMR(project, id, mr) },
+				func(id string) (workspace.MRRef, error) { return s.reg.EpicMR(project, id) })
+			if set {
+				changed = true
+			}
+		}
+		for taskID, ref := range inf.GitBranches.Tasks {
+			set := reconcileOne(project, prov, ref.Branch, ref.Base, taskID,
+				func(id string, mr workspace.MRRef) error { return s.reg.SetTaskMR(project, id, mr) },
+				func(id string) (workspace.MRRef, error) { return s.reg.TaskMR(project, id) })
+			if set {
+				changed = true
+			}
 		}
 	}
-	for taskID, ref := range inf.GitBranches.Tasks {
-		set := reconcileOne(project, prov, ref.Branch, ref.Base, taskID,
-			func(id string, mr workspace.MRRef) error { return s.reg.SetTaskMR(project, id, mr) },
-			func(id string) (workspace.MRRef, error) { return s.reg.TaskMR(project, id) })
-		if set {
-			changed = true
+	if inf.Parent == "" {
+		for _, child := range s.repositoriesForProject(project) {
+			if child == project {
+				continue
+			}
+			childChanged, err := s.reconcileMRs(ctx, child)
+			if err != nil {
+				logging.For(project).Detailf("gitflow: сверка MR сабмодуля %s: %v", child, err)
+			}
+			changed = changed || childChanged
 		}
 	}
 	return changed, nil

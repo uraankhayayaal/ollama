@@ -10,7 +10,7 @@ import (
 )
 
 // fakeStore — hermetic-реализация QdrantStore для тестов: никакой сети,
-// только состояние в памяти (см. PLAN-qdrant.md, Ф-1: fake-клиент Qdrant).
+// только состояние в памяти (см. PLAN-2026-09-19-done-qdrant.md, Ф-1: fake-клиент Qdrant).
 type fakeStore struct {
 	exists    bool
 	existsErr error

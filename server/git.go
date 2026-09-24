@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"ai/logging"
@@ -68,7 +69,35 @@ func (s *Server) handleOpenGitProject(w http.ResponseWriter, r *http.Request, gi
 		return
 	}
 	logging.For(name).Infof("git-проект %s: клон %s → ветка %s (база %s)", name, repo.Remote, repo.Branch, repo.Base)
+	for _, sub := range repo.Submodules {
+		childName := submoduleProjectName(name, sub.Path)
+		if _, err := s.reg.Add(workspace.AddParams{
+			Name: childName, Kind: workspace.KindGit, Root: sub.Root,
+			GitRemote: sub.Remote, GitBranch: sub.Branch, GitBase: sub.Base,
+			GitTarget: sub.DefaultBranch,
+			Parent:    name,
+		}); err != nil {
+			writeErr(w, http.StatusBadRequest, "ошибка регистрации сабмодуля "+sub.Path+": "+err.Error())
+			return
+		}
+	}
 	s.writeProjectMetaFromInfo(w, inf)
+}
+
+func submoduleProjectName(parent, path string) string {
+	path = strings.Trim(filepath.ToSlash(path), "/")
+	path = strings.NewReplacer("~", "~t", "/", "~s", "\\", "~s").Replace(path)
+	return parent + "--" + path
+}
+
+func (s *Server) repositoriesForProject(project string) []string {
+	repos := []string{project}
+	for _, inf := range s.reg.List() {
+		if inf.Parent == project {
+			repos = append(repos, inf.Name)
+		}
+	}
+	return repos
 }
 
 // gitProjectName извлекает стабильное имя проекта из git-URL:
@@ -106,7 +135,7 @@ func gitProjectName(url string) string {
 
 // repoOf восстанавливает gitops.Repo из реестра (root/remote/branch/base).
 // Не-git проекты отклоняются явной ошибкой.
-func (s *Server) repoOf(_ context.Context, project string) (*gitops.Repo, error) {
+func (s *Server) repoOf(ctx context.Context, project string) (*gitops.Repo, error) {
 	inf, err := s.reg.Get(project)
 	if err != nil {
 		return nil, err
@@ -118,7 +147,24 @@ func (s *Server) repoOf(_ context.Context, project string) (*gitops.Repo, error)
 	if inf.Root == "" || inf.GitRemote == "" || inf.GitBranch == "" {
 		return nil, fmt.Errorf("проект %s: неполные git-данные (root/remote/branch)", project)
 	}
-	return gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase), nil
+	repo := gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
+	if inf.Parent == "" {
+		subs, err := gitops.ListSubmodules(ctx, s.gitExec, inf.Root)
+		if err != nil {
+			return nil, err
+		}
+		for i := range subs {
+			subs[i].Root = filepath.Join(inf.Root, subs[i].Path)
+			child, err := s.reg.Get(submoduleProjectName(inf.Name, subs[i].Path))
+			if err != nil || child.Parent != inf.Name {
+				continue
+			}
+			subs[i].Remote, subs[i].Branch, subs[i].Base = child.GitRemote, child.GitBranch, child.GitBase
+			subs[i].DefaultBranch = child.GitTarget
+			repo.Submodules = append(repo.Submodules, subs[i])
+		}
+	}
+	return repo, nil
 }
 
 // gitToken выбирает токен API форджа по remote: GitHub → GITHUB_TOKEN,
@@ -154,10 +200,13 @@ func tokenPushURL(remote string) string {
 // сохраняется в конфиг git (см. gitops.Repo.PushTo). SSH-remote токеном не
 // помогает — там остаётся штатный `git push origin` (SSH-ключ).
 func (s *Server) pushRepo(ctx context.Context, repo *gitops.Repo, remote string) error {
-	if u := tokenPushURL(remote); u != "" {
-		return repo.PushTo(ctx, u)
-	}
-	return repo.Push(ctx)
+	pushURL := tokenPushURL(remote)
+	return repo.PushToWith(ctx, pushURL, func(ctx context.Context, child *gitops.Repo, childRemote string) error {
+		if u := tokenPushURL(childRemote); u != "" {
+			return child.PushTo(ctx, u)
+		}
+		return child.Push(ctx)
+	})
 }
 
 // --- REST: дифф ---
@@ -338,42 +387,104 @@ func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !dirty {
-		writeErr(w, http.StatusBadRequest, "в фича-ветке нет изменений для коммита")
-		return
-	}
-
-	if err := repo.Commit(r.Context(), message); err != nil {
+		committedDiff, err := repo.Diff(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "проверка закоммиченных изменений: "+err.Error())
+			return
+		}
+		if strings.TrimSpace(committedDiff) == "" {
+			writeErr(w, http.StatusBadRequest, "в фича-ветке нет изменений для коммита")
+			return
+		}
+	} else if err := repo.Commit(r.Context(), message); err != nil {
 		writeErr(w, http.StatusBadGateway, "git commit: "+err.Error())
 		return
 	}
+	// Дочерние MR создаются до родительского: их коммиты должны быть доступны
+	// до публикации gitlink родителя.
+	repositories := map[string]map[string]string{}
+	for _, sub := range repo.Submodules {
+		childName := submoduleProjectName(project, sub.Path)
+		child, err := s.reg.Get(childName)
+		if err != nil {
+			continue
+		}
+		childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+		childDiff, err := childRepo.Diff(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "diff сабмодуля "+sub.Path+": "+err.Error())
+			return
+		}
+		if strings.TrimSpace(childDiff) == "" {
+			continue
+		}
+		if err := s.pushRepo(r.Context(), childRepo, child.GitRemote); err != nil {
+			writeErr(w, http.StatusBadGateway, "git push сабмодуля "+sub.Path+": "+err.Error())
+			return
+		}
+		target := child.GitTarget
+		if target == "" {
+			target = child.GitBase
+		}
+		mrURL := ""
+		if prior, err := s.reg.ProjectMR(childName); err == nil && prior.State != "closed" && prior.State != "merged" {
+			mrURL = prior.URL
+		} else {
+			childForge, err := s.forgeFactory(child.GitRemote, gitToken(child.GitRemote))
+			if err != nil {
+				writeErr(w, http.StatusBadGateway, "фордж сабмодуля "+sub.Path+": "+err.Error())
+				return
+			}
+			mrURL, err = childForge.CreateMergeRequest(forges.MergeRequestOptions{
+				SourceBranch: childRepo.Branch, TargetBranch: target,
+				Title: title + " [submodule " + sub.Path + "]", Description: body.Description,
+			})
+			if err != nil {
+				writeErr(w, http.StatusBadGateway, "создание MR сабмодуля "+sub.Path+": "+err.Error())
+				return
+			}
+		}
+		repositories[childName] = map[string]string{"url": mrURL, "branch": childRepo.Branch, "base": target}
+		_ = s.reg.SetProjectMR(childName, workspace.MRRef{URL: mrURL, Source: childRepo.Branch, Target: target, State: "open"})
+	}
+	repo.Submodules = nil // сабмодули уже отправлены и опубликованы отдельно выше
 	if err := s.pushRepo(r.Context(), repo, inf.GitRemote); err != nil {
 		writeErr(w, http.StatusBadGateway, "git push: "+err.Error())
 		return
 	}
 
-	forge, err := s.forgeFactory(inf.GitRemote, gitToken(inf.GitRemote))
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "создание провайдера форджа: "+err.Error())
-		return
+	mrURL := ""
+	if prior, err := s.reg.ProjectMR(project); err == nil && prior.State != "closed" && prior.State != "merged" {
+		mrURL = prior.URL
+	} else {
+		forge, err := s.forgeFactory(inf.GitRemote, gitToken(inf.GitRemote))
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "создание провайдера форджа: "+err.Error())
+			return
+		}
+		mrURL, err = forge.CreateMergeRequest(forges.MergeRequestOptions{
+			SourceBranch: repo.Branch, TargetBranch: repo.Base, Title: title, Description: body.Description,
+		})
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "создание MR/PR: "+err.Error())
+			return
+		}
 	}
-	mrURL, err := forge.CreateMergeRequest(forges.MergeRequestOptions{
-		SourceBranch: repo.Branch,
-		TargetBranch: repo.Base,
-		Title:        title,
-		Description:  body.Description,
-	})
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "создание MR/PR: "+err.Error())
-		return
-	}
+	s.diffMu.Lock()
+	delete(s.diffs, project)
+	s.diffMu.Unlock()
+	repositories[project] = map[string]string{"url": mrURL, "branch": repo.Branch, "base": repo.Base}
+	_ = s.reg.SetProjectMR(project, workspace.MRRef{URL: mrURL, Source: repo.Branch, Target: repo.Base, State: "open"})
 
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus, "Создан запрос на слияние: "+mrURL, "", "", nil)
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"url":    mrURL,
-		"branch": repo.Branch,
-		"base":   repo.Base,
+	if len(repositories) == 1 {
+		writeJSON(w, http.StatusOK, map[string]string{"url": mrURL, "branch": repo.Branch, "base": repo.Base})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"url": mrURL, "branch": repo.Branch, "base": repo.Base, "repositories": repositories,
 	})
 }
 
@@ -387,8 +498,35 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	for _, sub := range repo.Submodules {
+		childName := submoduleProjectName(project, sub.Path)
+		child, err := s.reg.Get(childName)
+		if err != nil {
+			continue
+		}
+		childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+		if err := childRepo.RejectBranch(r.Context()); err != nil {
+			writeErr(w, http.StatusBadGateway, "отклонение сабмодуля "+sub.Path+": "+err.Error())
+			return
+		}
+		if _, err := s.gitExec.Exec(r.Context(), child.Root, "git", "checkout", "-b", child.GitBranch, child.GitBase); err != nil {
+			writeErr(w, http.StatusBadGateway, "повторное создание ветки сабмодуля "+sub.Path+": "+err.Error())
+			return
+		}
+		if _, err := s.gitExec.Exec(r.Context(), child.Root, "git", "checkout", "--detach", child.GitBranch); err != nil {
+			writeErr(w, http.StatusBadGateway, "возврат сабмодуля к detached HEAD "+sub.Path+": "+err.Error())
+			return
+		}
+		s.diffMu.Lock()
+		delete(s.diffs, childName)
+		s.diffMu.Unlock()
+	}
 	if err := repo.RejectBranch(r.Context()); err != nil {
 		writeErr(w, http.StatusBadGateway, "отклонение ветки: "+err.Error())
+		return
+	}
+	if _, err := s.gitExec.Exec(r.Context(), repo.Root, "git", "checkout", "-b", repo.Branch, repo.Base); err != nil {
+		writeErr(w, http.StatusBadGateway, "повторное создание feature-ветки: "+err.Error())
 		return
 	}
 	// Рабочая копия сброшена на базу — кэш диффа устарел.

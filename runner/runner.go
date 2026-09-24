@@ -169,7 +169,7 @@ func EstimateUsage(messages []Message, reply *ModelReply) (in, out int) {
 // submit_architecture_backlog у архитектора). Требование трактуется как группа
 // обязательных инструментов (см. RequiredToolGroupsAgent): предварительные
 // чтения и уточняющие вопросы (AskUser) до обязательного вызова разрешены
-// (Р-5, PLAN-architect-intelligence). Если модель завершила ответ ТЕКСТОМ, не
+// (Р-5, PLAN-wip-architect-intelligence). Если модель завершила ответ ТЕКСТОМ, не
 // выполнив требование, — раннер повторит запрос с подсказкой.
 type ToolRequiringAgent interface {
 	// RequiredToolFirstRound возвращает имя инструмента, обязательного к

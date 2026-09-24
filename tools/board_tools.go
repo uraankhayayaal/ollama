@@ -584,7 +584,7 @@ func (t *boardCreateTaskTool) Name() string { return BoardCreateTask }
 func (t *boardCreateTaskTool) Definition() ToolDefinition {
 	props := taskSpecProps()
 	props["epic_id"] = map[string]any{"type": "string", "description": "ID эпика, в который добавляется задача. Задача ВСЕГДА создаётся внутри существующего эпика: бери эпик из контекста разговора, при сомнении — спроси у пользователя, не выдумывай."}
-	props["assigned_role"] = map[string]any{"type": "string", "description": "Конкретный специалист направления, к которому относится эпик (например Senior Go Developer, QA Engineer). Если задача затрагивает несколько направлений — не создавай её как задачу: предложи оформить эпиком, архитектор раздаст лидам."}
+	props["assigned_role"] = map[string]any{"type": "string", "description": "Конкретный специалист направления, к которому относится эпик (например Senior Go Developer, QA Engineer). Если требуется параллельная работа разных направлений, предложи эпик; одна задача одного специалиста может затрагивать несколько связанных репозиториев."}
 	return ToolDefinition{
 		Name:        BoardCreateTask,
 		Description: "Создать задачу в эпике на Kanban-доске. Задача выполняемая специалистом. Используется лидами направлений при декомпозиции эпика.",

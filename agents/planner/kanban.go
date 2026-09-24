@@ -155,7 +155,7 @@ func (k *KanbanRunner) prepareArchitect(a *architect.Architect) *architect.Archi
 }
 
 // Wake побуждает runner, ожидающий работу на доске (standby), немедленно
-// перепроверить её (Ф-2, PLAN-dashboard-events) — вместо ожидания следующего
+// перепроверить её (Ф-2, PLAN-done-dashboard-events) — вместо ожидания следующего
 // 5-секундного тика опроса. Сервер зовёт его по событию board_changed из
 // другого процесса-компонента (REST-правка доски, созданный чатом эпик).
 // Безопасен из любых горутин; вне ожидания — no-op (буфер 1 поглощает сигнал).
@@ -1561,6 +1561,11 @@ func (k *KanbanRunner) taskPrompt(t *board.Task) string {
 	b.WriteString("Постановка задачи:\n")
 	b.WriteString(t.Description)
 	b.WriteString("\n\n")
+	if len(t.Repositories) > 1 {
+		b.WriteString("В задаче участвуют связанные git-репозитории: ")
+		b.WriteString(strings.Join(t.Repositories, ", "))
+		b.WriteString(". Корень OutputDir содержит их по путям из .gitmodules. Используй пути внутри OutputDir; изменения во вложенных репозиториях будут зафиксированы и опубликованы отдельно.\n\n")
+	}
 	b.WriteString("Правила:\n")
 	b.WriteString("- Работай в своей выходной директории (OutputDir): учи структуру через List, читай контракты через ReadFiles.\n")
 	b.WriteString("- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n")

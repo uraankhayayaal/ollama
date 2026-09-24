@@ -4,9 +4,9 @@
 Решения: (1) задача по умолчанию `vs=main` + переключатель `vs=ветка-эпика`;
 (2) первая волна — только просмотр диффа, действия не привязываем;
 (3) режим «Все изменения» включается в план отдельным этапом (Ф-5).
-Формат — как в `PLAN-webui.md` / `PLAN-dashboard-gitflow-auto.md`.
+Формат — как в `PLAN-2026-09-17-wip-webui.md` / `PLAN-2026-09-22-done-dashboard-gitflow-auto.md`.
 
-Дополняет выполненный git-workflow (`PLAN-dashboard-workflow.md`, `PLAN-dashboard-gitflow-auto.md`):
+Дополняет выполненный git-workflow (`PLAN-2026-09-20-done-dashboard-workflow.md`, `PLAN-2026-09-22-done-dashboard-gitflow-auto.md`):
 ветки `ai/epic/<id>` / `ai/task/<id>`, worktree задач и авто-мёрджи уже есть, но
 панель «Дифф» (Diffboard) о них не знает.
 
@@ -186,7 +186,7 @@ npm run build   # web/
 
 1. Прочитать «Решения», уточнить ответы на открытые вопросы (ниже).
 2. Выполнять этапы по порядку (Ф-1 → Ф-4), отмечая `[x]` и дописывая факты
-   реализации в этот файл, как в `PLAN-dashboard-gitflow-auto.md`.
+   реализации в этот файл, как в `PLAN-2026-09-22-done-dashboard-gitflow-auto.md`.
 3. После каждой фазы — верификация.
 
 ## Открытые вопросы

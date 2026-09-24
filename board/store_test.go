@@ -3,6 +3,7 @@ package board
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -367,5 +368,29 @@ func TestStoreEpicPauseDoesNotBlockAllDone(t *testing.T) {
 	}
 	if done {
 		t.Fatal("эпик на паузе не даёт успешного решения задачи")
+	}
+}
+
+func TestRepositoriesPersistOnNewEpicsAndTasks(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	s.SetRepositories([]string{"app", "app--packages--auth"})
+	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "E-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTask(ctx, &Task{TaskSpec: TaskSpec{TaskID: "T-1"}, EpicID: "E-1"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.GetEpic(ctx, "E-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := s.GetTask(ctx, "T-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"app", "app--packages--auth"}
+	if !reflect.DeepEqual(e.Repositories, want) || !reflect.DeepEqual(task.Repositories, want) {
+		t.Fatalf("repositories epic=%v task=%v", e.Repositories, task.Repositories)
 	}
 }

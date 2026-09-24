@@ -1,9 +1,10 @@
 # План: «Умный Системный архитектор» — RAG, роли, глубина, смежные системы
 
-Статус: **ПЛАН (реализация позже)**. Формат — как остальные `PLAN-*.md`:
-текущее состояние (`file:line`), решения пользователя, архитектурные решения,
-новые компоненты, этапы с чекбоксами, верификация. Обновлять по мере
-выполнения (чекбоксы `[x]`), статус менять только после зелёной верификации.
+Статус: **В РАБОТЕ** (Ф-4/Ф-5 выполнены, осталось: опциональный REST-индекс и ручной E2E).
+Формат — как остальные `PLAN-*.md`: текущее состояние (`file:line`), решения
+пользователя, архитектурные решения, новые компоненты, этапы с чекбоксами,
+верификация. Обновлять по мере выполнения (чекбоксы `[x]`), статус менять
+только после зелёной верификации.
 
 ## Цель
 
@@ -245,7 +246,7 @@
 | `server/actions.go` (правка) | мост `IndexBackground` + `ActionsBackend.IndexBackground` |
 | `server/ragindex.go` | фоновая индексация: walk + `IndexProject` + отчёт в чат/лог |
 | `main.go` (правка) | CLI-канбан: `runner.SetRAG(ragClient)` |
-| `docs/PLAN-architect-intelligence.md` | этот план |
+| `docs/PLAN-2026-09-24-wip-architect-intelligence.md` | этот план |
 
 ## Интеграции с существующим кодом
 
@@ -256,7 +257,7 @@
 - **`tools/registry.go`** — `newTool` дополняется ветками `RagIndexStatus` и
   `DetectStack` (оба — через `FileOps`/`RAG`, без новых зависимостей).
 - **`rag/client.go`** — интерфейс `QdrantStore` (+`Count`); hermetic-тесты
-  обновляются fake-реализацией (как в `PLAN-qdrant.md`).
+  обновляются fake-реализацией (как в `PLAN-2026-09-19-done-qdrant.md`).
 - **KanbanRunner** — RAG/мосты опциональны (nil-safe): консоль без Qdrant и
   без сервера работает как сейчас (degrade, как ЛСП/CodeSearch).
 - **Board** — у `Epic` появляется `RequiresReview`; write-инструменты задач
@@ -438,15 +439,15 @@ npm run build   # web/ (при UI-части Ф-5)
 
 ## Связанные планы
 
-- `PLAN-lsp.md` — LSP-навигация (LspDefinition/LspReferences/LspHover) уже у
+- `PLAN-2026-09-19-done-lsp.md` — LSP-навигация (LspDefinition/LspReferences/LspHover) уже у
   архитектора; Ф-3 опирается на неё для исследования смежного функционала.
-- `PLAN-qdrant.md` — RAG/Qdrant: фоновая индексация наследует идемпотентность
+- `PLAN-2026-09-19-done-qdrant.md` — RAG/Qdrant: фоновая индексация наследует идемпотентность
   `IndexProject`, авто-переиндексация (`runner/reindex.go`, `RAG_AUTO_REINDEX`).
-- `PLAN-assistant.md` — паттерн server-мостов (`ActionsBackend`, `AskUser`) и
+- `PLAN-2026-09-21-todo-assistant.md` — паттерн server-мостов (`ActionsBackend`, `AskUser`) и
   RAG-блока в промпте (Ф-1/Ф-3 ассистента) — первоисточник для этого плана.
-- `PLAN-dashboard-chat-create.md` — сводка перед созданием эпиков и поле
+- `PLAN-2026-09-22-done-dashboard-chat-create.md` — сводка перед созданием эпиков и поле
   «ревью архитектора» доски; AskUser-поток архитектора продолжает его.
-- `PLAN-epic-task-token.md` — прогноз/факт токенов по эпикам: правила ролей
+- `PLAN-2026-09-19-todo-epic-task-token.md` — прогноз/факт токенов по эпикам: правила ролей
   эпиков (кто назначен) пригодятся для прогноза.
 
 ## Как продолжить

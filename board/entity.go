@@ -144,7 +144,7 @@ type TaskSpec struct {
 }
 
 // Opportunity — кросс-функциональная возможность/инсайт архитектора для
-// смежного направления (Ф-6 PLAN-architect-intelligence.md): целевая роль и
+// смежного направления (Ф-6 PLAN-2026-09-24-wip-architect-intelligence.md): целевая роль и
 // предложение. Опциональное поле бэклога — не эпик, а рекомендация лидам.
 type Opportunity struct {
 	TargetRole string `json:"target_role"`
@@ -166,11 +166,12 @@ type Backlog struct {
 // декомпозиции на подзадачи.
 type Epic struct {
 	TaskSpec
-	ProjectName string   `json:"project_name"`
-	Tasks       []string `json:"tasks"` // ID подзадач (задачи лидов)
-	Status      Status   `json:"status"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	ProjectName  string   `json:"project_name"`
+	Repositories []string `json:"repositories,omitempty"`
+	Tasks        []string `json:"tasks"` // ID подзадач (задачи лидов)
+	Status       Status   `json:"status"`
+	CreatedAt    string   `json:"created_at"`
+	UpdatedAt    string   `json:"updated_at"`
 	// GitBranch — релизная ветка эпика (git-workflow Ф-1, префикс
 	// ai/epic/<id>). Пусто, пока ветка не создана.
 	GitBranch string `json:"git_branch,omitempty"`
@@ -187,7 +188,7 @@ type Epic struct {
 	// содержание эпика изменилось, лиду нужна повторная ревизия задач.
 	LeadSyncedRev int `json:"lead_synced_rev"`
 	// RequiresReview — требуется ли ревизия Системного архитектора перед
-	// декомпозицией лидом (Ф-8 PLAN-architect-intelligence.md). Эпики,
+	// декомпозицией лидом (Ф-8 PLAN-2026-09-24-wip-architect-intelligence.md). Эпики,
 	// созданные в чате ассистентом, — черновики: им обязательна ревизия
 	// (безопасный дефолт true для новых записей). Эпики бэклога самого
 	// архитектора (submit_architecture_backlog) — явный false: свой план
@@ -202,12 +203,13 @@ type Epic struct {
 // архитектора/лида (встроена TaskSpec) плюс связь с эпиком (EpicID).
 type Task struct {
 	TaskSpec
-	ProjectName string `json:"project_name"`
-	EpicID      string `json:"epic_id"` // связь с родительским эпиком
-	Status      Status `json:"status"`
-	Assignee    string `json:"assignee"` // специалист, назначенный на задачу (одна задача на одного специалиста)
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ProjectName  string   `json:"project_name"`
+	Repositories []string `json:"repositories,omitempty"`
+	EpicID       string   `json:"epic_id"` // связь с родительским эпиком
+	Status       Status   `json:"status"`
+	Assignee     string   `json:"assignee"` // специалист, назначенный на задачу (одна задача на одного специалиста)
+	CreatedAt    string   `json:"created_at"`
+	UpdatedAt    string   `json:"updated_at"`
 	// GitBranch — фича-ветка задачи (git-workflow Ф-1, префикс
 	// ai/task/<id>, база = ветка эпика). Пусто, пока ветка не создана.
 	GitBranch string `json:"git_branch,omitempty"`

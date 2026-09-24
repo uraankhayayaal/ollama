@@ -93,6 +93,7 @@ func (s *Server) newSession(project string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	boardStore.SetRepositories(s.repositoriesForProject(project))
 	// Ф-1..Ф-4: авто-действия git-workflow при изменениях доски (ветки эпиков/
 	// задач при создании, мёрдж done→релиз, worktree задачи, синхрон с main).
 	s.attachGitHooks(project, boardStore)

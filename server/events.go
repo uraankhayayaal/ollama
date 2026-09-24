@@ -1,7 +1,7 @@
 package server
 
 // EventType — тип события проекта во внутренней шине сессии (Ф-1,
-// PLAN-dashboard-events). Вместо разрозненных «кто-то позвал kickBoard»
+// PLAN-done-dashboard-events). Вместо разрозненных «кто-то позвал kickBoard»
 // компоненты эмитят события с типом и причиной; потребители (boardFlusher,
 // а в Ф-2 — внутренние слушатели) сами решают, что делать.
 type EventType string

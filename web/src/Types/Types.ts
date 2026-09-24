@@ -26,6 +26,7 @@ export interface GateDecisionBody {
 export interface EpicRow {
   task_id: string;
   project_name: string;
+  repositories?: string[];
   title: string;
   description: string;
   status: Status;
@@ -43,6 +44,7 @@ export interface EpicRow {
 export interface TaskRow {
   task_id: string;
   project_name: string;
+  repositories?: string[];
   epic_id: string;
   title: string;
   description: string;
@@ -114,7 +116,7 @@ export interface DiffView {
 // patch — unified-патч файла (для lazy-loading git и snap-проектов).
 export interface DiffFile {
   path: string;
-  status: "added" | "modified" | "removed" | "renamed";
+  status: "added" | "modified" | "removed" | "renamed" | "submodule";
   added: number;
   deleted: number;
   patch?: string;

@@ -5,7 +5,7 @@ package tools
 // Ф-1: оборачивает однократные CLI-чекеры по стеку проекта (gopls / tsc /
 // pyright / ruff) через общий runCommand и возвращает модели ТОЛЬКО строки
 // ошибок (файл:строка:колонка:описание), а не сырые логи сборки (токено-
-// эффективный вывод, см. PLAN-lsp.md). Если подходящий чекер не установлен —
+// эффективный вывод, см. PLAN-2026-09-19-done-lsp.md). Если подходящий чекер не установлен —
 // graceful degrade: статус skipped с подсказкой использовать Run, шаг не падает.
 //
 // Параметры: files (optional) — список относительных путей для точечной
@@ -68,7 +68,7 @@ type LspCheckParams struct {
 	Files []string `json:"files"`
 }
 
-// lspLimit — лимиты вывода (LSP_MAX_DIAGS / LSP_MAX_OUTPUT). См. PLAN-lsp.md.
+// lspLimit — лимиты вывода (LSP_MAX_DIAGS / LSP_MAX_OUTPUT). См. PLAN-2026-09-19-done-lsp.md.
 type lspLimit struct{ maxDiags, maxOutput int }
 
 func lspLimits() lspLimit {

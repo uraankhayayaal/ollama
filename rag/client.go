@@ -1,4 +1,4 @@
-// Клиент векторной памяти RAG поверх Qdrant (gRPC, см. PLAN-qdrant.md, Ф-1).
+// Клиент векторной памяти RAG поверх Qdrant (gRPC, см. PLAN-2026-09-19-done-qdrant.md, Ф-1).
 //
 // Инфраструктурный слой: инициализация клиента и create-if-not-exists
 // коллекции. Размерность векторов определяется пробой модели эмбеддингов
@@ -51,7 +51,7 @@ type Config struct {
 
 // QdrantStore — минимальный набор операций Qdrant gRPC, используемых RAG.
 // Выделен в интерфейс, чтобы hermetic-тесты работали с fake-реализацией
-// без сети (см. PLAN-qdrant.md, Ф-1: «fake-клиент Qdrant (интерфейс)»).
+// без сети (см. PLAN-2026-09-19-done-qdrant.md, Ф-1: «fake-клиент Qdrant (интерфейс)»).
 type QdrantStore interface {
 	CollectionExists(ctx context.Context, collectionName string) (bool, error)
 	CreateCollection(ctx context.Context, request *qdrant.CreateCollection) error

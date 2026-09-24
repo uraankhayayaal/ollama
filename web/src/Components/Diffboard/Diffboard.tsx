@@ -34,7 +34,7 @@ export function Diffboard(props: DiffboardProps) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState("");
-  const [mr, setMr] = useState<{ url: string; branch: string; base: string } | null>(null);
+  const [mr, setMr] = useState<{ url: string; branch: string; base: string; repositories?: Record<string, { url: string; branch: string; base: string }> } | null>(null);
   const [fileQuery, setFileQuery] = useState("");
   const [fileStatus, setFileStatus] = useState("all");
 
@@ -154,7 +154,7 @@ export function Diffboard(props: DiffboardProps) {
               {fileQuery && <button type="button" onClick={() => setFileQuery("")}>×</button>}
             </label>
             <div className="file-filters" aria-label="Фильтр файлов">
-              {([ ["all", "Все", allFiles.length], ["modified", "Изменены", countFiles("modified")], ["added", "Добавлены", countFiles("added")], ["removed", "Удалены", countFiles("removed")], ["renamed", "Переименованы", countFiles("renamed")] ] as const)
+              {([ ["all", "Все", allFiles.length], ["modified", "Изменены", countFiles("modified")], ["added", "Добавлены", countFiles("added")], ["removed", "Удалены", countFiles("removed")], ["renamed", "Переименованы", countFiles("renamed")], ["submodule", "Сабмодули", countFiles("submodule")] ] as const)
                 .filter(([value, , count]) => value === "all" || count > 0)
                 .map(([value, label, count]) => (
                   <button key={value} className={fileStatus === value ? "active" : ""} onClick={() => setFileStatus(value)}>
@@ -219,12 +219,14 @@ export function Diffboard(props: DiffboardProps) {
             </button>
           </div>
           {mr && (
-            <p className="ok">
-              Создан запрос на слияние:{" "}
-              <a href={mr.url} target="_blank" rel="noreferrer">
-                {mr.url}
-              </a>
-            </p>
+            <div className="ok">
+              <p>Созданы запросы на слияние:</p>
+              {Object.entries(mr.repositories ?? { [props.project]: mr }).map(([name, result]) => (
+                <p key={name}>
+                  {name}: <a href={result.url} target="_blank" rel="noreferrer">{result.url}</a>
+                </p>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -286,6 +288,8 @@ function statusWord(s: string): string {
       return "удалён";
     case "renamed":
       return "переименован";
+    case "submodule":
+      return "сабмодуль";
     default:
       return "изменён";
   }
@@ -296,6 +300,7 @@ function fileIcon(status: string): string {
     case "added": return "+";
     case "removed": return "−";
     case "renamed": return "↗";
+    case "submodule": return "↳";
     default: return "•";
   }
 }

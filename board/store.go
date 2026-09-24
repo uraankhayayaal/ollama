@@ -45,9 +45,10 @@ type StoreConfig struct {
 // Store — Redis-хранилище общей Kanban-доски проекта: эпики, задачи,
 // метаданные и статусы. Ключи сгруппированы под префиксом board:<project>.
 type Store struct {
-	client  *redis.Client
-	project string
-	ttl     time.Duration
+	client       *redis.Client
+	project      string
+	ttl          time.Duration
+	repositories []string
 
 	// TaskDoneHook — опциональный обратный вызов после перевода задачи в
 	// StatusDone (Ф-2). Вызывается из SetTaskStatus вне блокировок, после
@@ -144,6 +145,25 @@ func (s *Store) Client() *redis.Client { return s.client }
 // Project возвращает имя проекта, для которого ведётся доска.
 func (s *Store) Project() string { return s.project }
 
+// SetRepositories sets the participating repository names stored with new
+// epics and tasks. The primary board project is always included.
+func (s *Store) SetRepositories(repositories []string) {
+	s.repositories = append([]string(nil), repositories...)
+	if len(s.repositories) == 0 {
+		s.repositories = []string{s.project}
+	}
+}
+
+func (s *Store) applyRepositories(dst *[]string) {
+	if len(*dst) == 0 {
+		if len(s.repositories) > 0 {
+			*dst = append([]string(nil), s.repositories...)
+		} else {
+			*dst = []string{s.project}
+		}
+	}
+}
+
 // setTTL применяет TTL к ключу (если он задан).
 func (s *Store) setTTL(ctx context.Context, key string) {
 	if s.ttl > 0 {
@@ -163,6 +183,7 @@ func (s *Store) CreateEpic(ctx context.Context, e *Epic) error {
 		return fmt.Errorf("board: ID эпика обязателен")
 	}
 	e.ProjectName = s.project
+	s.applyRepositories(&e.Repositories)
 	e.Status = FirstNonZeroStatus(e.Status, StatusNew)
 	e.CreatedAt = now()
 	e.UpdatedAt = e.CreatedAt
@@ -382,6 +403,7 @@ func (s *Store) CreateTask(ctx context.Context, t *Task) error {
 		return fmt.Errorf("board: задача %q должна ссылаться на эпик (epic_id)", t.TaskID)
 	}
 	t.ProjectName = s.project
+	s.applyRepositories(&t.Repositories)
 
 	if _, err := s.GetEpic(ctx, t.EpicID); err != nil {
 		return &ErrDependency{Ref: "epic:" + t.EpicID}

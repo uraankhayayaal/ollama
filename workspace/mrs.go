@@ -26,8 +26,28 @@ type MRRef struct {
 
 // MergeRequestMap — реестр MR эпиков и задач git-проекта.
 type MergeRequestMap struct {
+	Project *MRRef               `json:"project,omitempty"`
 	Epics map[string]MRRef `json:"epics,omitempty"` // epic_id → MR эпика (→ main)
 	Tasks map[string]MRRef `json:"tasks,omitempty"` // task_id → MR задачи (→ ветка эпика)
+}
+
+// SetProjectMR records the project-level MR created by accept.
+func (r *Registry) SetProjectMR(name string, ref MRRef) error {
+	return r.update(name, func(in *Info) {
+		if in.GitMergeRequests == nil { in.GitMergeRequests = &MergeRequestMap{} }
+		copy := ref
+		in.GitMergeRequests.Project = &copy
+	})
+}
+
+// ProjectMR returns the project-level MR when one has been recorded.
+func (r *Registry) ProjectMR(name string) (MRRef, error) {
+	inf, err := r.Get(name)
+	if err != nil { return MRRef{}, err }
+	if inf.GitMergeRequests == nil || inf.GitMergeRequests.Project == nil {
+		return MRRef{}, errors.New("MR проекта не создан")
+	}
+	return *inf.GitMergeRequests.Project, nil
 }
 
 var (

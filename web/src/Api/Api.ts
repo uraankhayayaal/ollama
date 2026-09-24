@@ -407,7 +407,7 @@ export async function acceptProject(
   base: string,
   project: string,
   body?: { title?: string; description?: string; message?: string },
-): Promise<{ url: string; branch: string; base: string }> {
+): Promise<{ url: string; branch: string; base: string; repositories?: Record<string, { url: string; branch: string; base: string }> }> {
   return req(
     "POST",
     `${base}/api/projects/${enc(project)}/accept`,

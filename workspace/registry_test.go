@@ -115,6 +115,47 @@ func TestAddDuplicateName(t *testing.T) {
 	}
 }
 
+func TestAddNestedGitSubmoduleOnlyWithRegisteredParent(t *testing.T) {
+	r, _ := Open(filepath.Join(t.TempDir(), "ws.json"))
+	parentRoot := t.TempDir()
+	childRoot := filepath.Join(parentRoot, "packages", "auth")
+	if err := os.MkdirAll(childRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Add(AddParams{Name: "app", Kind: KindGit, Root: parentRoot, GitRemote: "https://example.test/app.git"}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := r.Add(AddParams{Name: "app--packages--auth", Kind: KindGit, Root: childRoot,
+		GitRemote: "https://example.test/auth.git", GitTarget: "main", Parent: "app"})
+	if err != nil {
+		t.Fatalf("register child: %v", err)
+	}
+	if child.Parent != "app" {
+		t.Fatalf("Parent=%q", child.Parent)
+	}
+	if err := r.SetProjectMR(child.Name, MRRef{URL: "https://example.test/mr/1", Source: "feature", Target: "main", State: "open"}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(r.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := reopened.Get(child.Name)
+	if err != nil || loaded.Parent != "app" || loaded.GitTarget != "main" {
+		t.Fatalf("loaded child=%+v err=%v", loaded, err)
+	}
+	if mr, err := reopened.ProjectMR(child.Name); err != nil || mr.URL == "" {
+		t.Fatalf("ProjectMR=%+v err=%v", mr, err)
+	}
+	other := filepath.Join(parentRoot, "packages", "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Add(AddParams{Name: "orphan", Kind: KindGit, Root: other, GitRemote: "https://example.test/o.git"}); !errors.Is(err, ErrNested) {
+		t.Fatalf("unparented nested repo error=%v", err)
+	}
+}
+
 func TestAddValidation(t *testing.T) {
 	r, _ := Open(filepath.Join(t.TempDir(), "ws.json"))
 

@@ -811,7 +811,7 @@ func TestKanbanBoardOnlyEmptyGoesStandby(t *testing.T) {
 
 // TestKanbanBoardOnlyWakeLeavesStandby — runner в standby (пустая доска);
 // после появления работы событие Wake выводит его из ожидания сразу, а не по
-// 5-секундному тику опроса (Ф-2, PLAN-dashboard-events: board_changed → Wake).
+// 5-секундному тику опроса (Ф-2, PLAN-done-dashboard-events: board_changed → Wake).
 func TestKanbanBoardOnlyWakeLeavesStandby(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 

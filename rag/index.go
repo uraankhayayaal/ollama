@@ -1,4 +1,4 @@
-// Индексация чанков в Qdrant (см. PLAN-qdrant.md, Ф-2).
+// Индексация чанков в Qdrant (см. PLAN-2026-09-19-done-qdrant.md, Ф-2).
 //
 // Чанк становится точкой коллекции с payload (project_name/file_path/
 // start_line/end_line/code_content/scope). ID точки детерминированный

@@ -40,6 +40,8 @@ type Info struct {
 	GitRemote string `json:"git_remote,omitempty"`
 	GitBranch string `json:"git_branch,omitempty"` // фича-ветка (KindGit)
 	GitBase   string `json:"git_base,omitempty"`   // точка отхода (ветка по умолчанию)
+	GitTarget string `json:"git_target,omitempty"` // целевая branch для MR (submodule)
+	Parent    string `json:"parent,omitempty"`     // родитель KindGit для git submodule
 	// GitBranches — side-реестр веток эпиков/задач git-workflow (Ф-1):
 	// epic_id/task_id → имя ветки + точка отхода. Пустой (nil) — workflow
 	// не активирован, работает прежняя приёмка «Принять → MR».
@@ -65,6 +67,8 @@ type AddParams struct {
 	GitRemote string // обязателен для KindGit
 	GitBranch string // фича-ветка git-проекта (KindGit)
 	GitBase   string // точка отхода/базовая ветка git-проекта (KindGit)
+	GitTarget string // базовая ветка MR, если отличается от точки отхода
+	Parent    string // имя родительского KindGit для вложенного submodule
 	Confirm   bool   // явное подтверждение для KindDir (не из temp/)
 }
 
@@ -151,7 +155,19 @@ func (r *Registry) Add(p AddParams) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	if p.Parent != "" {
+		parent, ok := r.projects[p.Parent]
+		if !ok || parent.Kind != KindGit || p.Kind != KindGit {
+			return Info{}, fmt.Errorf("workspace: родитель сабмодуля %q не является зарегистрированным git-проектом", p.Parent)
+		}
+		if !hasPrefix(root, parent.Root) {
+			return Info{}, fmt.Errorf("workspace: сабмодуль %s должен находиться внутри %s", root, parent.Root)
+		}
+	}
 	for _, other := range r.projects {
+		if p.Parent == other.Name && hasPrefix(root, other.Root) {
+			continue
+		}
 		if err := checkNesting(other.Root, root); err != nil {
 			return Info{}, err
 		}
@@ -164,6 +180,8 @@ func (r *Registry) Add(p AddParams) (Info, error) {
 		GitRemote: p.GitRemote,
 		GitBranch: p.GitBranch,
 		GitBase:   p.GitBase,
+		GitTarget: p.GitTarget,
+		Parent:    p.Parent,
 		CreatedAt: time.Now().UTC(),
 	}
 	r.projects[p.Name] = in

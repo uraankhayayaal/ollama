@@ -1,7 +1,7 @@
 package tools
 
 // Инструмент RagIndexStatus — статус RAG-индекса проекта (см.
-// PLAN-architect-intelligence.md, Ф-1/Р-2).
+// PLAN-2026-09-24-wip-architect-intelligence.md, Ф-1/Р-2).
 //
 // Модель узнаёт, построена ли векторная память проекта, чтобы решить: искать
 // через CodeSearch или (при пустом индексе) читать файлы ReadMap/ReadFiles/LSP

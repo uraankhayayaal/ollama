@@ -1,7 +1,7 @@
 package tools
 
 // Инструмент DetectStack — определение типа проекта и состава ролей по
-// маркерам в корне директории (Ф-2 PLAN-architect-intelligence.md).
+// маркерам в корне директории (Ф-2 PLAN-2026-09-24-wip-architect-intelligence.md).
 //
 // Использует stackdetect для базового Kind (go/php/node/python/unknown) и
 // эвристику состава (директории/маркеры frontend/backend/infra/tests), чтобы

@@ -32,6 +32,14 @@ type Executor interface {
 	Exec(ctx context.Context, dir string, argv ...string) (string, error)
 }
 
+// ExecutorFunc — функциональная реализация Executor (для подстановки в тестах
+// и композиций, когда одним исполнителем нельзя описать все вызовы).
+type ExecutorFunc func(ctx context.Context, dir string, argv ...string) (string, error)
+
+func (f ExecutorFunc) Exec(ctx context.Context, dir string, argv ...string) (string, error) {
+	return f(ctx, dir, argv...)
+}
+
 // Repo описывает изолированную рабочую копию фича-ветки проекта.
 type Repo struct {
 	// Remote — URL remote (например git@gitlab.com:g/r.git).
@@ -42,6 +50,13 @@ type Repo struct {
 	Branch string
 	// Base — точка отхода (SHA/ref), от которой ведётся дифф.
 	Base string
+
+	// Submodules — git-сабмодули проекта (Ф-1, PLAN-2026-09-22-todo-submodule):
+	// заполняется после клона/открытия через ListSubmodules+EnsureSubmodules
+	// (лениво — в Push/PushTo/Diff, если не заполнен заранее) и позволяет
+	// родителю пушить сабмодули ДО себя: remote родителя ссылается на gitlink,
+	// поэтому SHA сабмодуля обязан лечь на remote раньше.
+	Submodules []Submodule
 
 	ex Executor
 }
@@ -111,6 +126,17 @@ func (r *Repo) Commit(ctx context.Context, message string) error {
 	if msg == "" {
 		return fmt.Errorf("gitops: пустое сообщение коммита")
 	}
+	for _, sub := range r.Submodules {
+		dirty, err := r.SubmoduleDirty(ctx, sub)
+		if err != nil {
+			return err
+		}
+		if dirty {
+			if err := r.SubmoduleCommit(ctx, sub, msg); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err := r.ex.Exec(ctx, r.Root, "git", "add", "-A"); err != nil {
 		return fmt.Errorf("gitops: git add: %w", err)
 	}
@@ -141,13 +167,39 @@ func (r *Repo) CommitAllowEmpty(ctx context.Context, message string) error {
 // Push пушит фича-ветку в remote (origin) с upstream.
 // При отсутствии remote (локальный проект без origin) — ничего не делает.
 func (r *Repo) Push(ctx context.Context) error {
+	return r.PushToWith(ctx, "", nil)
+}
+
+// PushToWith пушит сначала вложенные сабмодули, затем текущий репозиторий.
+// pushFn при наличии позволяет вызывающему слою выбирать credentialed URL
+// отдельно для remote каждого сабмодуля.
+func (r *Repo) PushToWith(ctx context.Context, remoteURL string, pushFn func(context.Context, *Repo, string) error) error {
 	if r == nil || r.Root == "" {
 		return fmt.Errorf("gitops: пустой Repo")
 	}
-	if r.Remote == "" {
+	if r.Remote == "" && remoteURL == "" {
 		return nil // нет push-цели — изолированная ветка остаётся локальной
 	}
-	if _, err := r.ex.Exec(ctx, r.Root, "git", "push", "-u", "origin", r.Branch); err != nil {
+	for _, sub := range r.Submodules {
+		if sub.Branch == "" || sub.Remote == "" {
+			continue
+		}
+		child := &Repo{Root: sub.Root, Remote: sub.Remote, Branch: sub.Branch, Base: sub.Base, ex: r.ex}
+		var err error
+		if pushFn != nil {
+			err = pushFn(ctx, child, sub.Remote)
+		} else {
+			err = child.Push(ctx)
+		}
+		if err != nil {
+			return fmt.Errorf("gitops: push сабмодуля %s: %w", sub.Path, err)
+		}
+	}
+	argv := []string{"push", "-u", "origin", r.Branch}
+	if remoteURL != "" {
+		argv = []string{"push", remoteURL, r.Branch}
+	}
+	if _, err := r.ex.Exec(ctx, r.Root, append([]string{"git"}, argv...)...); err != nil {
 		return fmt.Errorf("gitops: git push %s: %w", r.Branch, err)
 	}
 	return nil
@@ -165,10 +217,7 @@ func (r *Repo) PushTo(ctx context.Context, remoteURL string) error {
 	if strings.TrimSpace(remoteURL) == "" {
 		return fmt.Errorf("gitops: пустой push-URL")
 	}
-	if _, err := r.ex.Exec(ctx, r.Root, "git", "push", remoteURL, r.Branch); err != nil {
-		return fmt.Errorf("gitops: git push %s: %w", r.Branch, err)
-	}
-	return nil
+	return r.PushToWith(ctx, remoteURL, nil)
 }
 
 // Clone клонирует удалённый репозиторий remote в новый каталог dest и создаёт
@@ -193,8 +242,16 @@ func Clone(ctx context.Context, ex Executor, remoteURL, branch, dest string) (*R
 	}
 
 	parent := filepath.Dir(dest)
-	if _, err := ex.Exec(ctx, parent, "git", "clone", remoteURL, dest); err != nil {
+	cloneArgs := []string{"clone"}
+	cloneArgs = append(cloneArgs, remoteURL, dest)
+	argv := append([]string{"git"}, cloneArgs...)
+	if _, err := ex.Exec(ctx, parent, argv...); err != nil {
 		return nil, fmt.Errorf("gitops: git clone %s: %w", remoteURL, err)
+	}
+	if os.Getenv("GITOPS_SUBMODULES") != "0" {
+		if _, err := EnsureSubmodules(ctx, ex, dest); err != nil {
+			return nil, fmt.Errorf("gitops: сабмодули %s: %w", remoteURL, err)
+		}
 	}
 
 	// Ветка по умолчанию (точка отхода базы) — до создания фича-ветки.
@@ -210,13 +267,21 @@ func Clone(ctx context.Context, ex Executor, remoteURL, branch, dest string) (*R
 	if _, err := ex.Exec(ctx, dest, "git", "checkout", "-b", branch); err != nil {
 		return nil, fmt.Errorf("gitops: создание фича-ветки %s: %w", branch, err)
 	}
+	var subs []Submodule
+	if os.Getenv("GITOPS_SUBMODULES") != "0" {
+		subs, err = PrepareSubmodules(ctx, ex, dest, branch)
+		if err != nil {
+			return nil, fmt.Errorf("gitops: подготовка сабмодулей: %w", err)
+		}
+	}
 
 	return &Repo{
-		Remote: strings.TrimSpace(remoteURL),
-		Root:   dest,
-		Branch: branch,
-		Base:   base,
-		ex:     ex,
+		Remote:     strings.TrimSpace(remoteURL),
+		Root:       dest,
+		Branch:     branch,
+		Base:       base,
+		Submodules: subs,
+		ex:         ex,
 	}, nil
 }
 
@@ -319,7 +384,7 @@ func (r *Repo) Diff(ctx context.Context) (string, error) {
 	if _, err := r.ex.Exec(ctx, r.Root, "git", "add", "-N", "-A"); err != nil {
 		return "", fmt.Errorf("gitops: git add -N: %w", err)
 	}
-	out, err := r.ex.Exec(ctx, r.Root, "git", "diff", r.Base)
+	out, err := r.ex.Exec(ctx, r.Root, "git", "-c", "diff.submodule=log", "diff", r.Base)
 	if err != nil {
 		return "", fmt.Errorf("gitops: git diff: %w", err)
 	}

@@ -38,7 +38,7 @@ go test . ./agents/... ./tools/ ./board/
 - Предсуществующие неформатированные файлы (`agents/acceptor/checks.go`,
   `agents/acceptor/run.go`) не трогать.
 
-Состояние последней сессии (PLAN-architect-intelligence, Ф-4/Ф-5):
+Состояние последней сессии (PLAN-wip-architect-intelligence, Ф-4/Ф-5):
 Ф-4 «Корректность задачи, паттерны, AskUser» — архитектор получил
 `KanbanRunner.SetRAG` (Р-6) и `KanbanRunner.SetArchitectExtras` (Р-5),
 применяемые в `phaseArchitect`/`phaseArchitectReview`/`phaseBugs` через

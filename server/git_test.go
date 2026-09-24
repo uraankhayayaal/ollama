@@ -196,7 +196,7 @@ func TestGetDiffGitProject(t *testing.T) {
 	const raw = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n-старая\n+строка\n+nовая\n" +
 		"diff --git a/f.go b/f.go\nnew file mode 100644\n--- /dev/null\n+++ b/f.go\n@@ -0,0 +1 @@\n+package f\n"
 	git := &fakeGit{starts: map[string]string{
-		"git diff main": raw,
+		"git -c diff.submodule=log diff main": raw,
 	}}
 	srv, handler, _ := newTestServerGit(t, git, nil)
 	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
@@ -410,8 +410,8 @@ func TestRejectBranchGitProject(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reject-branch: %d, body: %s", rec.Code, rec.Body.String())
 	}
-	if !git.saw("git reset --hard main") || !git.saw("git branch -D ai/myrepo") {
-		t.Fatalf("ожидали reset --hard базы + удаление ветки, вызовы: %v", git.callsList())
+	if !git.saw("git reset --hard main") || !git.saw("git branch -D ai/myrepo") || !git.saw("git checkout -b ai/myrepo main") {
+		t.Fatalf("ожидали reset базы, удаление и повторное создание ветки, вызовы: %v", git.callsList())
 	}
 }
 

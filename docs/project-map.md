@@ -8,7 +8,7 @@
 `go-redis/v9`, `miniredis/v2`, `godotenv`.
 
 > **В работе:** Web UI-оболочка «Доска + Чат + Дифф» с полным HITL —
-> см. [PLAN-webui.md](PLAN-webui.md).
+> см. [PLAN-2026-09-17-wip-webui.md](PLAN-2026-09-17-wip-webui.md).
 
 ---
 
@@ -143,9 +143,15 @@ ollama/  (go.mod module ai)
   `path|size|mtime`, кап 512, очистка при переполнении.
 - **Сжатие истории** (`runner/compress.go`) — под символьный бюджет
   `CODEGEN_HISTORY_BUDGET`: начало (system + задача) + хвост диалога, разрыв
-  внутри tool-сообщений запрещён. Без явного бюджета включена страховка по
-  окну провайдера (`runner.ModelLimits`: вход = `n_ctx` минус резерв под
-  вывод) — разросшаяся история не падает с 400 `exceed_context_size`.
+  внутри tool-сообщений запрещён (юниты неделимы). Без явного бюджета включена
+  страховка по окну провайдера (`runner.ModelLimits`: вход = `n_ctx` минус
+  резерв под вывод) — разросшаяся история не падает с 400 `exceed_context_size`.
+- **Сжатие с памятью** (`runner/compression.go`, флаги `CODEGEN_HISTORY_*`):
+  памятка модели (Ф-6), RAG-вытеснение выброшенного в эпизоды «памяти»
+  (Ф-7), семантический выбор кандидатов (Ф-8), LSP-оглавления убранных
+  файлов (Ф-9), компакция середины моделью (Ф-10), бюджет по фактическому
+  usage провайдера (Ф-11). Адаптеры (`runctx.WithCompression`) подключаются
+  в CLI, planner и сервер; всё опционально и выключено по умолчанию.
 - **Resume-состояние** агентного цикла в чекпоинте (продолжение прерванного шага).
 
 ### Приёмка кода
@@ -234,6 +240,12 @@ ollama/  (go.mod module ai)
 | `CODEGEN_ROLLBACK_ON_FAIL` | откат неудачного шага (выкл: `0/false/off`) | вкл |
 | `CODEGEN_CONTRACT_ENFORCE` | строгий аудит контрактов (`1` = Warn-уровень) | вкл (мягкий) |
 | `CODEGEN_HISTORY_BUDGET` | бюджет истории диалога в символах (0 = выкл) | выкл |
+| `CODEGEN_HISTORY_TOKENS` | токен-лимит истории по фактическому usage (0 = выкл, Ф-11) | выкл |
+| `CODEGEN_HISTORY_NOTICE` | памятка модели о сжатии (Ф-6) | выкл |
+| `CODEGEN_HISTORY_EVICT` | вытеснение выброшенного в RAG-эпизоды (Ф-7) | выкл |
+| `CODEGEN_HISTORY_RANK` | семантический выбор кандидатов на выброс (Ф-8) | выкл |
+| `CODEGEN_HISTORY_OUTLINE` | LSP-оглавления убранных файлов в памятке (Ф-9) | выкл |
+| `CODEGEN_HISTORY_COMPACT` | компакция середины моделью (Ф-10) | выкл |
 | `CODEGEN_SKELETON_CACHE` | скелетон-кеш (выкл: `0/false/off`) | вкл |
 
 ### По ролям
@@ -337,7 +349,7 @@ ollama/  (go.mod module ai)
 ## 6. TODO
 
 ### Сделано в последних итерациях
-- **Ф-3 Web UI (полировка)** — см. [PLAN-webui.md](PLAN-webui.md): потоковый
+- **Ф-3 Web UI (полировка)** — см. [PLAN-2026-09-17-wip-webui.md](PLAN-2026-09-17-wip-webui.md): потоковый
   ответ модели (`StreamChatProvider` → `runevents.TypeMessageDelta`, WS
   `chat_delta`, `OllamaProvider.ChatStream`), безопасность (`AI_WEB_PASSWORD`,
   `server/auth.go` + `server/ratelimit.go`, CSRF, rate-limit; фронт — Login-вью

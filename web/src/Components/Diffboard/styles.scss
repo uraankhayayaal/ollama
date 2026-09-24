@@ -170,6 +170,9 @@
         &.renamed {
           border-left-color: var(--mod, #7c3aed);
         }
+        &.submodule {
+          border-left-color: var(--accent, #2563eb);
+        }
 
         &.added { border-left-color: var(--add, #16a34a); }
         &.removed { border-left-color: var(--rem, #dc2626); }
@@ -188,6 +191,7 @@
           &.added { background: #e8f6ec; color: #16803c; }
           &.removed { background: #fcebec; color: #bd343b; }
           &.renamed { background: #f1ebff; color: #7544b8; }
+          &.submodule { background: #eaf2ff; color: #2457a6; }
         }
 
         .fpath {

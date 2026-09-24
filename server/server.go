@@ -286,7 +286,7 @@ func computeStatus(running, gating, standby bool, meta *board.Meta) string {
 
 // standbyReason — причина режима ожидания оркестрации. Единая строка для
 // broadcastStatus, снапшота при WS-подключении и REST-меты: фронт должен видеть
-// одно объяснение, откуда бы статус ни пришёл (Ф-3, PLAN-dashboard-events).
+// одно объяснение, откуда бы статус ни пришёл (Ф-3, PLAN-done-dashboard-events).
 const standbyReason = "нет работы на доске — жду эпики и задачи"
 
 // statusDetail — человекочитаемая причина текущего состояния (поле detail

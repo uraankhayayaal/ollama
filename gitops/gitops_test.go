@@ -151,7 +151,7 @@ func TestPushToRequiresURL(t *testing.T) {
 func TestDiffReturnsBaseHead(t *testing.T) {
 	ctx := context.Background()
 	ex := &fakeExecutor{resp: map[string]string{
-		"/work | git diff base": "секретный дифф\n",
+		"/work | git -c diff.submodule=log diff base": "секретный дифф\n",
 	}}
 	repo := &Repo{Root: "/work", Base: "base", ex: ex}
 	out, err := repo.Diff(ctx)
@@ -162,7 +162,7 @@ func TestDiffReturnsBaseHead(t *testing.T) {
 		t.Fatalf("Diff = %q", out)
 	}
 	want := `/work | git add -N -A
-/work | git diff base`
+/work | git -c diff.submodule=log diff base`
 	if got := strings.Join(ex.calls, "\n"); got != want {
 		t.Fatalf("вызовы:\n%s\n\nwant:\n%s", got, want)
 	}
