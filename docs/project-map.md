@@ -8,7 +8,7 @@
 `go-redis/v9`, `miniredis/v2`, `godotenv`.
 
 > **В работе:** Web UI-оболочка «Доска + Чат + Дифф» с полным HITL —
-> см. [PLAN-2026-09-17-wip-webui.md](PLAN-2026-09-17-wip-webui.md).
+> см. [PLAN-2026-09-17-done-webui.md](PLAN-2026-09-17-done-webui.md).
 
 ---
 
@@ -349,7 +349,7 @@ ollama/  (go.mod module ai)
 ## 6. TODO
 
 ### Сделано в последних итерациях
-- **Ф-3 Web UI (полировка)** — см. [PLAN-2026-09-17-wip-webui.md](PLAN-2026-09-17-wip-webui.md): потоковый
+- **Ф-3 Web UI (полировка)** — см. [PLAN-2026-09-17-done-webui.md](PLAN-2026-09-17-done-webui.md): потоковый
   ответ модели (`StreamChatProvider` → `runevents.TypeMessageDelta`, WS
   `chat_delta`, `OllamaProvider.ChatStream`), безопасность (`AI_WEB_PASSWORD`,
   `server/auth.go` + `server/ratelimit.go`, CSRF, rate-limit; фронт — Login-вью

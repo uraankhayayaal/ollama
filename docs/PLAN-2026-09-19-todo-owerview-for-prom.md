@@ -3,10 +3,10 @@
 Статус: **ДОРОЖНАЯ КАРТА (реализация по приоритетам)**. Это переработанный
 `PLAN-2026-09-19-todo-owerview-for-prom.md`: вместо списка «чего не хватает» — радар зон роста с
 привязкой к текущему коду, статусом (что уже сделано) и этапами внедрения.
-Часть пунктов закрыта в `PLAN-2026-09-17-wip-webui.md`, `PLAN-2026-09-19-done-lsp.md`, `PLAN-2026-09-19-todo-bash.md`; часть
+Часть пунктов закрыта в `PLAN-2026-09-17-done-webui.md`, `PLAN-2026-09-19-done-lsp.md`, `PLAN-2026-09-19-todo-bash.md`; часть
 уехала в отдельные планы (`PLAN-2026-09-19-done-qdrant.md`).
 
-Формат этапов — как в `PLAN-2026-09-17-wip-webui.md`: чекбоксы `[x]`, верификация, ссылки на
+Формат этапов — как в `PLAN-2026-09-17-done-webui.md`: чекбоксы `[x]`, верификация, ссылки на
 файлы. Обновлять по мере выполнения.
 
 ## Цель
@@ -24,7 +24,7 @@
 | **3. Runtime-наблюдаемость** | частично: приёмка запускает приложение и читает логи (`agents/acceptor/run.go`); Logboard показывает логи проекта `logs/` (`server/logs.go`, `web/.../Logboard`) | лог-файлы агентов (`logging/`), а не живые логи контейнера |
 | **4. Точечные правки ≠ только Go** | ограничено: `PatchGoFunction` — только `go/ast` (`tools/gopatch.go`); для TS/Python — текстовый `SearchReplace` (`tools/searchreplace.go`) | CODEGEN_LANG=Go по умолчанию |
 | **5. Песочница выполнения** | отсутствует: `Run` исполняет команды в `OutputDir` на хосте (`tools/fileops.go` `runCommand`, `sh -c`, timeout + kill группы) | Dockerfile агента нет; в `compose.yaml` только ollama/qdrant/redis |
-| **6. Web UI (было 4-м пунктом)** | **сделано**: `PLAN-2026-09-17-wip-webui.md` Ф-1..Ф-3 закрыты | `server/`, `web/`, `workspace/`, `gitops/`, `chat/`, `runevents/` |
+| **6. Web UI (было 4-м пунктом)** | **сделано**: `PLAN-2026-09-17-done-webui.md` Ф-1..Ф-3 закрыты | `server/`, `web/`, `workspace/`, `gitops/`, `chat/`, `runevents/` |
 
 ## Приоритизация
 
@@ -118,7 +118,7 @@ npm run build   # web/
 ## Связанные планы
 
 - `PLAN-2026-09-19-done-qdrant.md` — RAG (зона 1 дорожной карты, отдельный детальный план).
-- `PLAN-2026-09-17-wip-webui.md` — Web UI (зона 6, выполнена).
+- `PLAN-2026-09-17-done-webui.md` — Web UI (зона 6, выполнена).
 - `PLAN-2026-09-19-done-lsp.md` / `PLAN-2026-09-19-todo-bash.md` — токен-гигиена и точность правок (контекст для зон 3/4).
 
 ## Как продолжить
