@@ -20,6 +20,14 @@ services:
     # AOF для durability чекпоинтов планировщика
     command: ["redis-server", "--appendonly", "yes"]
 
+  ollama:
+    image: golang:1.26-alpine
+    container_name: ollama_go
+    working_dir: /go/src/ai
+    volumes:
+      - .:/go/src/ai
+    restart: "no"
+
 volumes:
   qdrant: {}
   redis: {}
