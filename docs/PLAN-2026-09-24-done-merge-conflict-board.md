@@ -1,6 +1,8 @@
 # План: конфликты мёрджа на доске + без зацикливания ассистента
 
-Статус: **DONE** (реализованы Ф-1..Ф-5; остался ручной E2E на живом проекте).
+Статус: **DONE с находками** (Ф-1..Ф-5 реализованы; ручной E2E 2026-09-25
+пройден на авто-синхроне, но вскрыл 2 дефекта — см.
+`PLAN-2026-09-25-todo-e2e-findings.md`).
 
 ## Цель
 
@@ -176,7 +178,31 @@ WS type=board               — то же поле в объектах Epic/Task
 ### Ф-5 — Верификация
 - [x] `go build` / `go vet` / `go test` по перечню AGENTS.md — зелёные (кроме пред-существующих флаков ассистента)
 - [x] `npm run build` зелёный
-- [ ] Ручной E2E на живом проекте: конфликт бинарника в эпике → бейдж на доске → резолв/повторный мёрдж → признак снят
+- [ ] Ручной E2E на живом проекте (2026-09-25, `e2e-conflict-app`, Web UI):
+      основной сценарий пройден, но с двумя дефектами (см. новый план
+      `PLAN-2026-09-25-todo-e2e-findings.md`).
+      - ПРОЙДЕНО (авто-синхрон): эпик `CONF-03` переведён в `done` при
+        расхождении `ai/epic/CONF-03` ↔ `main`; лог
+        `gitflow: авто-синхрон эпика CONF-03: сложные конфликты [app.py] — флоу
+        rebase/резолв`, на доске `merge_conflict_files=["app.py"]`, в чате
+        статус о конфликте;
+      - бейдж в UI: `EpicModal` показывает «Релизная ветка не влилась в main:
+        app.py» + подсказку про `ResolveGitConflicts`
+        (`/tmp/opencode/e2e/shots/91-conflict-modal.png`);
+      - `POST …/epics/CONF-03/rebase` → 200 `status:resolving`,
+        `files:["app.py"]`, `resolved:["assets/logo.png"]`, конфликтный worktree
+        `temp/.conflict-e2e-conflict-app-CONF-03`; после ручной правки `app.py` и
+        `POST …/resolve` → 200, `main` получил merge-коммит
+        `эпик CONF-03: релиз в main после резолва конфликтов`, признак на доске
+        снят (`merge_conflict_files=null`), конфликтный worktree удалён,
+        `main == origin/main`;
+      - ДЕФЕКТ 1: бинарный конфликт (`assets/logo.png`) не распознаётся —
+        `mergeTreeConflicts` (`gitops/merge.go`) ищет только текстовые маркеры,
+        релиз падает в 502 «Конфликт слияния в assets/logo.png», а
+        `POST …/rebase` для бинарника отвечает «конфликтов не найдено»;
+      - ДЕФЕКТ 2: ручной релиз эпика (`POST …/release`) при конфликте не
+        записывает `epic.MergeConflictFiles` (`server/gitflow.go:handleReleaseEpic`)
+        → 409 с файлами, но бейдж на доске пуст.
 
 ## Не входит в задачу
 
