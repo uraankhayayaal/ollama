@@ -279,6 +279,18 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ae.mce != nil {
+			// Конфликт на доске: эпик помечается списком файлов (бейдж в
+			// EpicModal, снимется успешным релизом/резолвом) — раньше признак
+			// ставили только авто-синхрон и резолв, и ручной «Залить в main»
+			// отдавал 409 с файлами, но доска оставалась пустой.
+			s.setEpicMergeConflict(r.Context(), project, epicID, ae.mce.Files)
+			s.srvEmitBoard(project, "gitflow: релиз эпика — конфликт")
+			if sess := s.session(project); sess != nil {
+				sess.append(chat.RoleStatus,
+					fmt.Sprintf("Эпик %s: релиз в main упёрся в конфликт в файлах [%s]. Доступен флоу rebase/резолв (ResolveGitConflicts).",
+						epicID, strings.Join(ae.mce.Files, ", ")),
+					"", "", nil)
+			}
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"status":  "conflicts",
 				"files":   ae.mce.Files,

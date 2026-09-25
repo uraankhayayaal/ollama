@@ -173,6 +173,60 @@ changed in both
 `,
 			want: []string{"a.txt", "b.txt"},
 		},
+		{
+			name: "бинарный конфликт: warning без маркеров",
+			out: `warning: Cannot merge binary files: assets/logo.png (.our vs. .their)
+changed in both
+  base   100644 0d433352c34b91496f536e89e445ea60d6ff8bc0 assets/logo.png
+  our    100644 e099760674525f418d9bb8b5495e11d4974dad48 assets/logo.png
+  their  100644 611668ea98a0f249cd99d425dae6253cb1f7864d assets/logo.png
+`,
+			want: []string{"assets/logo.png"},
+		},
+		{
+			name: "бинарный и текстовый конфликты вместе",
+			out: `warning: Cannot merge binary files: bin/icon (ours vs. theirs)
+changed in both
+  base   100644 0d433352c34b91496f536e89e445ea60d6ff8bc0 bin/icon
+  our    100644 e099760674525f418d9bb8b5495e11d4974dad48 bin/icon
+  their  100644 611668ea98a0f249cd99d425dae6253cb1f7864d bin/icon
+changed in both
+  base   100644 df967b96a579e45a18b8251732d16804b2e56a55 f.txt
+  our    100644 b19a1e93bec1317dc6097229e12afaffbfa74dc2 f.txt
+  their  100644 950b81b7eee953d050aa05a641f8e056c85dd1bd f.txt
+@@ -1 +1,5 @@
++<<<<<<< .our
++ours
++=======
++theirs
++>>>>>>> .their
+`,
+			want: []string{"bin/icon", "f.txt"},
+		},
+		{
+			name: "бинарный путь с пробелами и скобкой",
+			out: `warning: Cannot merge binary files: assets/my logo (v2).png (.our vs. .their)
+changed in both
+  base   100644 0d433352c34b91496f536e89e445ea60d6ff8bc0 assets/my logo (v2).png
+  our    100644 e099760674525f418d9bb8b5495e11d4974dad48 assets/my logo (v2).png
+  their  100644 611668ea98a0f249cd99d425dae6253cb1f7864d assets/my logo (v2).png
+`,
+			want: []string{"assets/my logo (v2).png"},
+		},
+		{
+			name: "бинарный конфликт дублируется маркером — путь один раз",
+			out: `warning: Cannot merge binary files: b.dat (.our vs. .their)
+changed in both
+  base   100644 0d433352c34b91496f536e89e445ea60d6ff8bc0 b.dat
+  our    100644 e099760674525f418d9bb8b5495e11d4974dad48 b.dat
+  their  100644 611668ea98a0f249cd99d425dae6253cb1f7864d b.dat
+@@ -1 +1,5 @@
++<<<<<<< .our
++=======
++>>>>>>> .their
+`,
+			want: []string{"b.dat"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

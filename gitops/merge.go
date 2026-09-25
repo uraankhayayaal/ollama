@@ -190,9 +190,38 @@ func SanitizeBranchName(id string) string {
 //	+line1-b2
 //	+>>>>>>> .their
 //	 line2
+//
+// Для БИНАРНЫХ файлов git хунков не печатает вовсе — только предупреждение
+// ПЕРЕД блоком файла (плюс сам блок с base/our/their):
+//
+//	warning: Cannot merge binary files: logo.png (.our vs. .their)
+//	changed in both
+//	  base   100644 <sha> logo.png
+//	  our    100644 <sha> logo.png
+//	  their  100644 <sha> logo.png
+//
+// Такие файлы — тоже конфликт, но без маркеров: раньше они молча терялись,
+// релиз падал в общий 502 вместо 409 со списком файлов, а авто-синхрон/epic
+// считал бинарник «чистым» и молча брал одну из сторон.
 func mergeTreeConflicts(out string) []string {
 	var conflicts []string
 	seen := make(map[string]bool)
+	add := func(path string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		conflicts = append(conflicts, path)
+	}
+
+	// Проход 1: бинарные конфликты по warning-строкам.
+	for _, line := range strings.Split(out, "\n") {
+		if path, ok := binaryConflictPath(line); ok {
+			add(path)
+		}
+	}
+
+	// Проход 2: текстовые конфликты по маркерам в хунках.
 	cur := ""
 	for _, line := range strings.Split(out, "\n") {
 		if path, ok := mergeTreeFilePath(line); ok {
@@ -203,11 +232,32 @@ func mergeTreeConflicts(out string) []string {
 			continue
 		}
 		if isConflictMarker(line) {
-			seen[cur] = true
-			conflicts = append(conflicts, cur)
+			add(cur)
 		}
 	}
 	return conflicts
+}
+
+// binaryConflictPath разбирает warning git о бинарном конфликте:
+// «warning: Cannot merge binary files: <path> (<ours> vs. <theirs>)».
+// Путь может содержать пробелы и « (», поэтому суффикс « (… vs. …)» режется
+// с конца строки. Возвращает (путь, ok).
+func binaryConflictPath(line string) (string, bool) {
+	const prefix = "warning: Cannot merge binary files: "
+	s := strings.TrimSpace(line)
+	if !strings.HasPrefix(s, prefix) {
+		return "", false
+	}
+	rest := strings.TrimSpace(s[len(prefix):])
+	i := strings.LastIndex(rest, " (")
+	if i <= 0 || !strings.HasSuffix(rest, ")") {
+		return "", false
+	}
+	path := strings.TrimSpace(rest[:i])
+	if path == "" {
+		return "", false
+	}
+	return path, true
 }
 
 // mergeTreeFilePath извлекает путь файла из строки блока merge-tree вида

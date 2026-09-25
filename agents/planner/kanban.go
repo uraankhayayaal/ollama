@@ -748,19 +748,35 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 
 	// Пока на доске есть незавершённые задачи (новая / в анализе / готова к
 	// работе / в работе), следующий эпик лиду не выдаётся: сначала должен
-	// выполниться уже запланированный объём работы.
+	// выполниться уже запланированный объём работы. Исключение — взаимная
+	// блокировка: задача ждёт готовности ЭПИКА-зависимости, а этот эпик ещё не
+	// разобран. Без исключения цикл вставал: DOL-01 ждал `done` эпика ARCH-01,
+	// а разобрать ARCH-01 нельзя, пока DOL-01 не выполнена → «Kanban-цикл N: нет
+	// прогресса». В этом случае лиду выдаётся именно эпик-зависимость
+	// (см. blockingDependencyEpic), порядок «по одному эпику за раз» сохраняется.
 	idle, err := k.pipelineIdle(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !idle {
-		return false, nil
-	}
 
-	// Следующий эпик очереди лидов, которому нужна декомпозиция/ревизия.
-	epic, needDecompose, needResync, err := k.nextLeadEpic(epics)
-	if err != nil {
-		return false, err
+	var epic *board.Epic
+	var needDecompose, needResync bool
+	if idle {
+		// Следующий эпик очереди лидов, которому нужна декомпозиция/ревизия.
+		epic, needDecompose, needResync, err = k.nextLeadEpic(epics)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		epic, err = k.blockingDependencyEpic(ctx, epics)
+		if err != nil {
+			return false, err
+		}
+		if epic != nil {
+			needDecompose, needResync = true, false
+			k.log.Infof("[Kanban] на доске есть незавершённые задачи, но они ждут эпик %s "+
+				"(зависимость ещё не разобрана) — разбираю его, чтобы снять блокировку", epic.TaskID)
+		}
 	}
 	if epic == nil {
 		return false, nil
@@ -968,6 +984,45 @@ func epicLess(a, b *board.Epic) bool {
 		return ao < bo
 	}
 	return a.TaskID < b.TaskID
+}
+
+// blockingDependencyEpic ищет эпик, который блокирует уже запланированные
+// задачи: у незавершённой задачи в dependencies стоит ID эпика, который ещё не
+// декомпозирован лидом (len(epic.Tasks)==0), не ждёт ревизии архитектора
+// (RequiresReview=false) и не терминален/приостановлен. Такой эпик разбирается
+// вне очереди `pipelineIdle` — иначе задача и эпик блокируют друг друга.
+//
+// Возвращает nil, если блокирующих эпиков нет: тогда поведение phaseLeads
+// прежнее (следующий эпик выдаётся только на «пустой» доске).
+func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*board.Epic) (*board.Epic, error) {
+	byID := make(map[string]*board.Epic, len(epics))
+	for _, e := range epics {
+		byID[e.TaskID] = e
+	}
+	tasks, err := k.store.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var best *board.Epic
+	for _, t := range tasks {
+		switch t.Status {
+		case board.StatusDone, board.StatusCancelled, board.StatusPaused:
+			continue
+		}
+		for _, dep := range t.Dependencies {
+			depEpic, ok := byID[dep]
+			if !ok || depEpic.Status.Terminal() || depEpic.Status == board.StatusPaused {
+				continue
+			}
+			if depEpic.RequiresReview || len(depEpic.Tasks) > 0 {
+				continue
+			}
+			if best == nil || epicLess(depEpic, best) {
+				best = depEpic
+			}
+		}
+	}
+	return best, nil
 }
 
 // nextLeadEpic выбирает следующий эпик для декомпозиции/ревизии лидом по

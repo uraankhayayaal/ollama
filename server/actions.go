@@ -39,10 +39,12 @@ const (
 // через интерфейс (реализует *Session). Отделяет инструменты от HTTP-хендлеров:
 // Execute инструмента не должен знать про декодирование тел и коды ответов.
 type ActionsBackend interface {
-	// KanbanStart запускает/возобновляет оркестрацию по текущей доске
-	// (аналог POST /api/projects/{id}/continue). Безопасно — подтверждения
-	// не требует.
-	KanbanStart(ctx context.Context) error
+	// KanbanStart запускает/возобновляет оркестрацию. task != "" — новая
+	// задача: полный конвейер (главная фаза Системного архитектора создаёт
+	// эпики по ТЗ, затем затвор «утвердить эпики»). task == "" — работа по
+	// текущей доске (аналог POST /api/projects/{id}/continue, board-only).
+	// Безопасно — подтверждения не требует.
+	KanbanStart(ctx context.Context, task string) error
 	// TaskMerge вливает ветку задачи в релизную ветку её эпика (аналог
 	// POST /api/projects/{id}/tasks/{tid}/merge). Деструктивно.
 	TaskMerge(ctx context.Context, taskID string) (string, error)
@@ -124,10 +126,19 @@ func actionTools(b ActionsBackend) []tools.Tool {
 	return []tools.Tool{
 		&actionTool{
 			name: actionKanbanStart, b: b,
-			description: "Запустить или возобновить оркестрацию по Kanban-доске проекта (продолжить выполнение задач доски). Безопасное действие, подтверждения не требует.",
-			run: func(ctx context.Context, _ map[string]any) (map[string]any, error) {
-				if err := b.KanbanStart(ctx); err != nil {
+			description: "Запустить оркестрацию Kanban по проекту. Безопасное действие, подтверждения не требует.\n" +
+				"task задан (новая задача) — полный конвейер: Системный архитектор разберёт ТЗ (учтёт стека, ролей, RAG-индекса), опубликует эпики и попросит утвердить их; после утверждения лиды декомпозируют эпики в задачи и специалисты выполнят их.\n" +
+				"task не задан — только работа по текущей доске: берутся в работу уже существующие записи (эпики без задач декомпозируются лидами), новые эпики не создаются.",
+			args: map[string]any{
+				"task": map[string]any{"type": "string", "description": "Текст НОВОЙ задачи, которую нужно спланировать и выполнить (как пользователь её сформулировал). Не заполняй, если нужно лишь продолжить/возобновить работу по уже существующей доске."},
+			},
+			run: func(ctx context.Context, args map[string]any) (map[string]any, error) {
+				task := actionArg(args, "task")
+				if err := b.KanbanStart(ctx, task); err != nil {
 					return nil, err
+				}
+				if task != "" {
+					return map[string]any{"message": "Оркестрация запущена по новой задаче: Системный архитектор спланирует работу (эпики → утверждение → лиды → специалисты)."}, nil
 				}
 				return map[string]any{"message": "Оркестрация запущена по доске проекта."}, nil
 			},
@@ -215,16 +226,21 @@ func actionArg(args map[string]any, key string) string {
 // механика handleContinue). Раннер работает в board-only режиме: новые эпики
 // не создаются, но эпики без задач декомпозируются лидами; при отсутствии
 // работы уходит в режим ожидания.
-func (sess *Session) KanbanStart(ctx context.Context) error {
+func (sess *Session) KanbanStart(ctx context.Context, task string) error {
 	prov, err := sess.srv.provider()
 	if err != nil {
 		return fmt.Errorf("LLM-провайдер не настроен: %v", err)
 	}
-	taskText, err := sess.continueTaskText(ctx)
-	if err != nil {
-		return err
+	var taskText string
+	if task != "" {
+		taskText = task
+	} else {
+		taskText, err = sess.continueTaskText(ctx)
+		if err != nil {
+			return err
+		}
 	}
-	return sess.start(ctx, taskText, prov)
+	return sess.start(ctx, taskText, prov, task != "")
 }
 
 // TaskMerge вливает ветку задачи в релизную ветку её эпика. Возвращает

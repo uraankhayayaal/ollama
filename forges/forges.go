@@ -89,10 +89,22 @@ type MRStatusProvider interface {
 
 // DetectType определяет тип провайдера по URL.
 // Возвращает kind ("gitlab"/"github"/"local") или "" если тип не распознан.
+// Входит в работу SSH-remote в SCP-виде (git@host:owner/repo.git) и
+// обычные URL (https://…, ssh://git@host/…).
 func DetectType(prURL string) kind {
 	// Локальная директория адресуется схемой local://<path>.
 	if strings.HasPrefix(prURL, localSchemeLegacy) {
 		return KindLocal
+	}
+
+	// SSH-SCP-вид git@host:owner/repo.git схемы не имеет: урл.парс его
+	// возьмёт как относительный path, и хост получится пустым.
+	if strings.HasPrefix(prURL, "git@") {
+		scp := strings.TrimPrefix(prURL, "git@")
+		if i := strings.IndexByte(scp, ':'); i > 0 {
+			return kindForHost(scp[:i])
+		}
+		return ""
 	}
 
 	u, err := url.Parse(prURL)
@@ -100,8 +112,11 @@ func DetectType(prURL string) kind {
 		return ""
 	}
 
-	host := u.Hostname()
+	return kindForHost(u.Hostname())
+}
 
+// kindForHost маппит хост на тип провайдера.
+func kindForHost(host string) kind {
 	switch {
 	case host == "gitlab.com", host == "gitlab", host == "gitee.com":
 		return KindGitLab

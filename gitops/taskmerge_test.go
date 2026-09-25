@@ -73,6 +73,37 @@ func TestMergeFeatureConflicts(t *testing.T) {
 	}
 }
 
+func TestMergeFeatureBinaryConflict(t *testing.T) {
+	// Бинарный конфликт: git merge-tree не печатает маркеров, только warning.
+	// Раньше такой файл молча терялся, и MergeFeature уходил в реальный merge,
+	// где слияние падало (в сервере — 502 вместо 409 со списком файлов).
+	ctx := context.Background()
+	ex := &fakeExecutor{resp: map[string]string{
+		"/clone | git merge-base ai/epic/e1 ai/task/t1": "beef\n",
+		"/clone | git rev-parse ai/task/t1":             "cafe\n",
+		"/clone | git merge-tree beef ai/epic/e1 ai/task/t1": `warning: Cannot merge binary files: assets/logo.png (.our vs. .their)
+changed in both
+  base   100644 0d433352c34b91496f536e89e445ea60d6ff8bc0 assets/logo.png
+  our    100644 e099760674525f418d9bb8b5495e11d4974dad48 assets/logo.png
+  their  100644 611668ea98a0f249cd99d425dae6253cb1f7864d assets/logo.png
+`,
+	}}
+	repo := &Repo{Root: "/clone", ex: ex}
+	_, err := repo.MergeFeature(ctx, "ai/epic/e1", "ai/task/t1", MergeFeatureOptions{Message: "m"})
+	var ce *MergeConflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("ошибка не MergeConflictError: %v", err)
+	}
+	if len(ce.Files) != 1 || ce.Files[0] != "assets/logo.png" {
+		t.Fatalf("MergeConflictError = %+v", ce)
+	}
+	for _, c := range ex.calls {
+		if strings.Contains(c, "worktree add") {
+			t.Fatalf("бинарный конфликт должен ловиться до worktree, вызовы: %v", ex.calls)
+		}
+	}
+}
+
 func TestMergeFeatureAlreadyMerged(t *testing.T) {
 	ctx := context.Background()
 	ex := &fakeExecutor{resp: map[string]string{

@@ -14,6 +14,13 @@ func TestDetectType(t *testing.T) {
 		{"https://git.example.org/a/b/-/merge_requests/1", ""},
 		{"https://example.com/x/y/pull/1", ""},
 		{"не-улр", ""},
+		// SSH-remote в SCP-виде (git-remote из .git/config).
+		{"git@github.com:uraankhayayaal/ollama.git", KindGitHub},
+		{"git@gitlab.com:group/proj.git", KindGitLab},
+		{"git@gitlab.company.com:g1/g2/proj.git", KindGitLab},
+		{"git@git.example.org:a/b.git", ""},
+		// SSH-URL-вид.
+		{"ssh://git@github.com/user/repo.git", KindGitHub},
 	}
 
 	for _, c := range cases {
