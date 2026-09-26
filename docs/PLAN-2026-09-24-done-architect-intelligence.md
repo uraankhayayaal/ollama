@@ -465,7 +465,7 @@ npm run build   # web/ (при UI-части Ф-5)
   архитектора; Ф-3 опирается на неё для исследования смежного функционала.
 - `PLAN-2026-09-19-done-qdrant.md` — RAG/Qdrant: фоновая индексация наследует идемпотентность
   `IndexProject`, авто-переиндексация (`runner/reindex.go`, `RAG_AUTO_REINDEX`).
-- `PLAN-2026-09-21-todo-assistant.md` — паттерн server-мостов (`ActionsBackend`, `AskUser`) и
+- `PLAN-2026-09-21-done-assistant.md` — паттерн server-мостов (`ActionsBackend`, `AskUser`) и
   RAG-блока в промпте (Ф-1/Ф-3 ассистента) — первоисточник для этого плана.
 - `PLAN-2026-09-22-done-dashboard-chat-create.md` — сводка перед созданием эпиков и поле
   «ревью архитектора» доски; AskUser-поток архитектора продолжает его.
