@@ -38,6 +38,11 @@ type Session struct {
 	running bool
 	gating  bool
 	gateTyp string
+	// gateMsg — payload активного затвора (gateEvent). Нужен для повторной
+	// публикации в broadcastSnapshot: событие gate одноразовое, поэтому после
+	// перезагрузки страницы (новая WS-подписка) баннер затвора не появлялся,
+	// хотя runner живо ждёт решения. nil вне затвора.
+	gateMsg *gateEvent
 	// standby — режим ожидания: оркестрация запущена по доске, но брать в
 	// работу нечего (нет эпиков/задач, которые можно исполнить). Сессия жива и
 	// ждёт появления работы; статус в шину — «standby».
@@ -131,31 +136,45 @@ func (s *Server) newSession(project string) (*Session, error) {
 		events:  make(chan ProjectEvent, 64),
 		log:     logging.For(project),
 	}
-	sess.router = runevents.NewRouter(func(ev runevents.Event) {
-		sess.chatEvent(ev)
-		// Потоковые фрагменты не меняют доску — не дёргаем флашер на каждый токен.
-		if ev.Type == runevents.TypeMessageDelta {
-			return
-		}
-		// Инструменты доски (Board*: создание/правка эпиков, задач, багов)
-		// меняют доску — бамп снимка. Остальные события цикла (текст модели,
-		// файловые инструменты) доску не меняют — только чат.
-		if (ev.Type == runevents.TypeToolStart || ev.Type == runevents.TypeToolResult) && tools.IsBoardTool(ev.Tool) {
-			// emitBoard, а не голый emit: вне оркестрации (idle-чат) boardFlusher
-			// не крутится, и обычный тик никто бы не дренул — созданные чатом
-			// эпики/задачи/баги не появились бы на доске до ручного обновления
-			// страницы. emitBoard публикует снимок сразу, когда флашера нет.
-			sess.emitBoard("ассистент: инструмент доски")
-			return
-		}
-		sess.emit(ProjectEvent{Type: EventChatUpdated})
-	})
+	sess.router = runevents.NewRouter(sess.routeRunEvent)
+	// Ф-5: прогноз расхода токенов для новых единиц доски (эпиков/задач) —
+	// считается по истории завершённых единиц этой же доски. Источник внедряется
+	// в хранилище, поэтому оценка появляется при любом создании записи
+	// (архитектор, лид, чат-ассистент), а не только в агентском цикле.
+	sess.board.TokenEstimate = sess.tokenEstimate()
 	// Ф-2: событийная связь «доска ↔ чат» на слушателях шины проекта.
 	// Сессия подписывает своих внутренних потребителей; другие компоненты
 	// (будущие аналитики, эпики/задачи) добавляются как новые Listen-подписки
 	// без правки хендлеров.
 	s.listeners(project, sess)
 	return sess, nil
+}
+
+// routeRunEvent — единая маршрутизация событий агентского цикла сессии: трансляция
+// в чат плюс реакция на изменение доски. Её используют ВСЕ репортёры проекта — и
+// оркестрации (sess.router), и idle-чат-ассистента (runChatAssistant). Раньше
+// ассистент собирал отдельный роутер с голым sess.chatEvent и терял emitBoard:
+// в idle-сессии boardFlusher не крутится, поэтому снимок доски после Board* не
+// публиковался и созданный чатом эпик/баг не появлялся в Web UI до ручного
+// обновления страницы.
+func (sess *Session) routeRunEvent(ev runevents.Event) {
+	sess.chatEvent(ev)
+	// Потоковые фрагменты не меняют доску — не дёргаем флашера на каждый токен.
+	if ev.Type == runevents.TypeMessageDelta {
+		return
+	}
+	// Инструменты доски (Board*: создание/правка эпиков, задач, багов)
+	// меняют доску — бамп снимка. Остальные события цикла (текст модели,
+	// файловые инструменты) доску не меняют — только чат.
+	if (ev.Type == runevents.TypeToolStart || ev.Type == runevents.TypeToolResult) && tools.IsBoardTool(ev.Tool) {
+		// emitBoard, а не голый emit: вне оркестрации (idle-чат) boardFlusher
+		// не крутится, и обычный тик никто бы не дренул — созданные чатом
+		// эпики/задачи/баги не появились бы на доске до ручного обновления
+		// страницы. emitBoard публикует снимок сразу, когда флашера нет.
+		sess.emitBoard("ассистент: инструмент доски")
+		return
+	}
+	sess.emit(ProjectEvent{Type: EventChatUpdated})
 }
 
 // listeners регистрирует внутренних слушателей событий проекта на шине (Ф-2).
@@ -196,7 +215,11 @@ func (sess *Session) continueTaskText(ctx context.Context) (string, error) {
 }
 
 // start запускает оркестрацию в отдельной горутине (single-flight).
-func (sess *Session) start(ctx context.Context, taskText string, provider models.LLMProvider) error {
+// boardOnly — режим «только доска»: новые эпики не создаются, зато уже
+// записанные (включая эпики без задач — их декомпозируют лиды) берутся в
+// работу, а при отсутствии работы раннер уходит в standby. Так стартует
+// кнопка «Продолжить» (handleContinue) и KanbanStart без текста задачи.
+func (sess *Session) start(ctx context.Context, taskText string, provider models.LLMProvider, boardOnly bool) error {
 	sess.mu.Lock()
 	if sess.running {
 		sess.mu.Unlock()
@@ -241,10 +264,15 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// Ф-5/Р-2: рядом — безопасный мост фоновой индексации RAG (предложить
 	// пользователю построить индекс, не прерывая проектирование).
 	runner.SetArchitectExtras(&askTool{b: sess}, newIndexBackgroundTool(sess))
-	// Запуск по кнопке — board-only: новые эпики не создаются, но записи доски
-	// (включая эпики без задач — их декомпозируют лиды) берутся в работу; при
-	// отсутствии работы раннер сообщает сессии (standby) и ждёт эпиков/задач.
-	runner.SetBoardOnly(true)
+	// Ф-2/Ф-3: учёт расхода токенов по задачам и эпикам. Оркестратор помечает
+	// раунды scope'ом единицы работы, а по завершении записывает факт в доску
+	// (board.TokenUsage). В консольном CLI (main.go) счётчика нет — вызовы
+	// идут без атрибуции, поведение прежнее.
+	runner.SetTokens(sess.tok)
+	// Режим запуска: boardOnly — работа только с доской (кнопка «Продолжить»
+	// и KanbanStart без текста задачи); иначе полный конвейер с проектированием
+	// архитектором (KanbanStart с текстом задачи).
+	runner.SetBoardOnly(boardOnly)
 	runner.SetStandbyNotifier(sess.setStandby)
 	// Ф-3: git-проекты — специалист работает в своём worktree ветки задачи
 	// (OutputDir = worktree), поэтому авто-коммит на done соберёт его правки.
@@ -261,6 +289,7 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 		sess.running = false
 		sess.gating = false
 		sess.gateTyp = ""
+		sess.gateMsg = nil
 		sess.standby = false
 		sess.runner = nil
 		sess.mu.Unlock()
@@ -305,11 +334,7 @@ func (sess *Session) Epics(ctx context.Context, epics []*board.Epic) (planner.Ga
 		for _, e := range epics {
 			ids = append(ids, e.TaskID)
 		}
-		sess.srv.hub.publish(sess.project, "gate", gateEvent{
-			Gate:    "epics",
-			Summary: "Ожидается подтверждение эпиков архитектора",
-			IDs:     ids,
-		})
+		sess.publishGate("epics", "Ожидается подтверждение эпиков архитектора", ids)
 	})
 }
 
@@ -319,11 +344,7 @@ func (sess *Session) Tasks(ctx context.Context, tasks []*board.Task) (planner.Ga
 		for _, t := range tasks {
 			ids = append(ids, t.TaskID)
 		}
-		sess.srv.hub.publish(sess.project, "gate", gateEvent{
-			Gate:    "tasks",
-			Summary: "Ожидается подтверждение задач, готовых к работе",
-			IDs:     ids,
-		})
+		sess.publishGate("tasks", "Ожидается подтверждение задач, готовых к работе", ids)
 	})
 }
 
@@ -332,6 +353,16 @@ type gateEvent struct {
 	Gate    string   `json:"gate"` // epics | tasks
 	Summary string   `json:"summary"`
 	IDs     []string `json:"ids"`
+}
+
+// publishGate шлёт событие затвора в шину и запоминает его в сессии, чтобы
+// broadcastSnapshot мог переиграть баннер новому клиенту (перезагрузка страницы).
+func (sess *Session) publishGate(gate, summary string, ids []string) {
+	ev := gateEvent{Gate: gate, Summary: summary, IDs: ids}
+	sess.mu.Lock()
+	sess.gateMsg = &ev
+	sess.mu.Unlock()
+	sess.srv.hub.publish(sess.project, "gate", ev)
 }
 
 // waitGate блокирует runner до решения (approve/reject) или отмены контекста.
@@ -358,6 +389,7 @@ func (sess *Session) waitGate(ctx context.Context, typ string, notify func()) (p
 		sess.mu.Lock()
 		sess.gating = false
 		sess.gateTyp = ""
+		sess.gateMsg = nil
 		sess.mu.Unlock()
 	}()
 
@@ -385,6 +417,7 @@ func (sess *Session) approve(typ string, approved bool, reason string) error {
 	sess.decide <- planner.GateDecision{Approved: approved, Reason: reason}
 	sess.gating = false
 	sess.gateTyp = ""
+	sess.gateMsg = nil
 	return nil
 }
 
@@ -410,8 +443,10 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 	case runevents.TypeTokenCount:
 		// Потребление токенов раунда: накапливаем в Redis (за время жизни
 		// проекта) и транслируем новые тоталы в шину — фронт обновляет
-		// счётчик рядом с кнопкой «Продолжить» в реальном времени.
-		sess.addTokens(ev.In, ev.Out, ev.TPS)
+		// счётчик рядом с кнопкой «Продолжить» в реальном времени. Scope
+		// раунда (Ф-2) дополнительно копит расход по задаче/эпику — по нему
+		// оркестратор запишет факт в сущность доски при завершении.
+		sess.addTokens(ev.In, ev.Out, ev.TPS, ev.Scope)
 	}
 }
 
@@ -446,12 +481,19 @@ func (sess *Session) toolTrace(ev runevents.Event) {
 
 // addTokens прибавляет порцию токенов раунда к счётчику проекта, запоминает
 // последнюю реальную скорость генерации и публикует новые итоговые суммы (+
-// скорость) в шину (type=tokens).
-func (sess *Session) addTokens(in, out int64, tps float64) {
+// скорость) в шину (type=tokens). Непустой scope (Ф-2) — порция дополнительно
+// копится в счётчике единицы работы (tokens:<project>:scoped:<scope>), откуда
+// оркестратор возьмёт факт при фиксации итогов задачи/эпика.
+func (sess *Session) addTokens(in, out int64, tps float64, scope string) {
 	totIn, totOut, err := sess.tok.Add(context.Background(), in, out)
 	if err != nil {
 		sess.log.Warnf("server: счётчик токенов %s: %v", sess.project, err)
 		return
+	}
+	if scope != "" {
+		if err := sess.tok.AddScoped(context.Background(), scope, in, out); err != nil {
+			sess.log.Warnf("server: счётчик токенов %s (%s): %v", sess.project, scope, err)
+		}
 	}
 	sess.mu.Lock()
 	if tps > 0 {
@@ -587,6 +629,7 @@ func (sess *Session) broadcastSnapshot() {
 
 	sess.mu.Lock()
 	running, gating, gateTyp, standby := sess.running, sess.gating, sess.gateTyp, sess.standby
+	gateMsg := sess.gateMsg
 	sess.mu.Unlock()
 	meta, _ := sess.board.GetMeta(ctx)
 	sess.srv.hub.publish(sess.project, "status", statusEvent{
@@ -595,6 +638,12 @@ func (sess *Session) broadcastSnapshot() {
 		Gating: gating,
 		Gate:   gateTyp,
 	})
+	// Событие gate одноразовое: переживший перезагрузку страницы клиент его не
+	// получал и показывал пустую доску при живом затворе. Переигрываем payload
+	// активного затвора — баннер восстанавливается без действий пользователя.
+	if gating && gateMsg != nil {
+		sess.srv.hub.publish(sess.project, "gate", *gateMsg)
+	}
 	if v, err := boardView(ctx, sess.board); err == nil {
 		v.Git = sess.srv.gitStatus(ctx, sess.project, v.Epics, v.Tasks)
 		sess.srv.hub.publish(sess.project, "board", v)
@@ -649,7 +698,10 @@ func (sess *Session) broadcastStatus(status, detail string) {
 type statusEvent struct {
 	Status string `json:"status"`           // running|waiting|standby|done|stopped|error
 	Detail string `json:"detail,omitempty"` // причина (например, текст ошибки)
-	Gating bool   `json:"gating,omitempty"`
+	// Gating сериализуется всегда (без omitempty): клиент должен отличать
+	// «затвор снят» (gating=false) от «поля нет» и убирать баннер, если
+	// решение приняли в другой вкладке/клиенте.
+	Gating bool   `json:"gating"`
 	Gate   string `json:"gate,omitempty"`
 }
 

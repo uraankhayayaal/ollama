@@ -75,6 +75,17 @@
     overflow-wrap: anywhere;
   }
 
+  // Ф-4: подпись расхода токенов эпика (прогноз «≈N», факт «N» и ошибка
+  // прогноза для завершённых). Компактная, полные числа — в title.
+  .tokens {
+    width: fit-content;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted, #8a94a6);
+    white-space: nowrap;
+    cursor: help;
+  }
+
   .status {
     width: fit-content;
     font-size: 11px;
@@ -95,6 +106,9 @@
     align-items: center;
     gap: 6px;
     padding: 8px 9px;
+
+    // В свёрнутой строке подпись токенов — сразу после названия.
+    .tokens { flex: none; }
 
     .toggle {
       align-self: center;

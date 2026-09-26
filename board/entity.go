@@ -161,11 +161,60 @@ type Backlog struct {
 	Opportunities       []Opportunity `json:"opportunities,omitempty"`
 }
 
+// TokenUsage — учёт расхода LLM-токенов единицей доски (Ф-1
+// PLAN-2026-09-19-done-epic-task-token.md). Встроен в Epic и Task, поэтому
+// поля сериализуются в те же JSON-объекты верхнего уровня.
+//
+// Факт (TokensInput/Output/Total) накапливается по scope задачи/эпика, пока
+// единица в работе, и фиксируется при переводе в терминальный статус.
+// Прогноз (TokenEstimate) ставится в момент создания единицы по истории
+// завершённых (см. tokens.Predictor). Нулевые значения не сериализуются —
+// старая доска читается без изменений.
+type TokenUsage struct {
+	// TokensInput — входные токены, потраченные на единицу работы.
+	TokensInput int64 `json:"tokens_in,omitempty"`
+	// TokensOutput — выходные токены, потраченные на единицу работы.
+	TokensOutput int64 `json:"tokens_out,omitempty"`
+	// TokensTotal — сумма входа и выхода (денормализована для UI и прогноза).
+	TokensTotal int64 `json:"tokens_total,omitempty"`
+	// TokenEstimate — прогноз расхода токенов (0 = прогноза нет: история
+	// слишком мала или прогноз не считался).
+	TokenEstimate int64 `json:"token_estimate,omitempty"`
+}
+
+// Add прибавляет порцию токенов к накопленному факту.
+func (u *TokenUsage) Add(in, out int64) {
+	u.TokensInput += in
+	u.TokensOutput += out
+	u.TokensTotal = u.TokensInput + u.TokensOutput
+}
+
+// Set записывает факт расхода (финализация: итог перезаписывает накопленное).
+func (u *TokenUsage) Set(in, out int64) {
+	u.TokensInput = in
+	u.TokensOutput = out
+	u.TokensTotal = in + out
+}
+
+// Error возвращает ошибку прогноза в процентах от оценки. Оценка нулевая —
+// ошибку посчитать нельзя (ok=false).
+func (u TokenUsage) Error() (pct float64, ok bool) {
+	if u.TokenEstimate <= 0 {
+		return 0, false
+	}
+	diff := float64(u.TokensTotal - u.TokenEstimate)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff / float64(u.TokenEstimate) * 100, true
+}
+
 // Epic — эпик (крупная задача верхнего уровня) на общей доске. Создаётся из
 // задач Системного архитектора и передаётся Тимлиду направления для
 // декомпозиции на подзадачи.
 type Epic struct {
 	TaskSpec
+	TokenUsage
 	ProjectName  string   `json:"project_name"`
 	Repositories []string `json:"repositories,omitempty"`
 	Tasks        []string `json:"tasks"` // ID подзадач (задачи лидов)
@@ -208,6 +257,7 @@ type Epic struct {
 // архитектора/лида (встроена TaskSpec) плюс связь с эпиком (EpicID).
 type Task struct {
 	TaskSpec
+	TokenUsage
 	ProjectName  string   `json:"project_name"`
 	Repositories []string `json:"repositories,omitempty"`
 	EpicID       string   `json:"epic_id"` // связь с родительским эпиком

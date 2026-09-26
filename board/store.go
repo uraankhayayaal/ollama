@@ -81,6 +81,14 @@ type Store struct {
 	// сохранения. Назначение: сервер внедряет сюда авто-синхрон релизной ветки
 	// эпика с main (merge + авто-резолв конфликтов). nil — хука нет.
 	EpicDoneHook func(ctx context.Context, epic *Epic, from Status)
+
+	// TokenEstimate — необязательный источник прогноза расхода токенов для
+	// новых единиц доски (Ф-5 PLAN-2026-09-19-done-epic-task-token.md).
+	// Вызывается в CreateEpic/CreateTask, если оценка ещё не задана (0);
+	// задача/эпик с явной оценкой не переоцениваются. Возвращаемое значение
+	// <= 0 — оценки нет (история мала/прогноз не считается). nil — доска
+	// просто не проставляет оценки (консольный режим).
+	TokenEstimate func(ctx context.Context, e *Epic, t *Task) int64
 }
 
 // key возвращает полный ключ Redis для относительного имени.
@@ -187,6 +195,12 @@ func (s *Store) CreateEpic(ctx context.Context, e *Epic) error {
 	e.Status = FirstNonZeroStatus(e.Status, StatusNew)
 	e.CreatedAt = now()
 	e.UpdatedAt = e.CreatedAt
+	// Ф-5: прогноз расхода токенов по истории завершённых единиц (если задан).
+	if e.TokenEstimate == 0 && s.TokenEstimate != nil {
+		if v := s.TokenEstimate(ctx, e, nil); v > 0 {
+			e.TokenEstimate = v
+		}
+	}
 
 	if ok, err := s.client.SIsMember(ctx, s.epicsID(), e.TaskID).Result(); err != nil {
 		return err
@@ -422,6 +436,12 @@ func (s *Store) CreateTask(ctx context.Context, t *Task) error {
 	t.Status = FirstNonZeroStatus(t.Status, StatusNew)
 	t.CreatedAt = now()
 	t.UpdatedAt = t.CreatedAt
+	// Ф-5: прогноз расхода токенов по истории завершённых единиц (если задан).
+	if t.TokenEstimate == 0 && s.TokenEstimate != nil {
+		if v := s.TokenEstimate(ctx, nil, t); v > 0 {
+			t.TokenEstimate = v
+		}
+	}
 
 	data, err := json.Marshal(t)
 	if err != nil {

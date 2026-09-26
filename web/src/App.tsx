@@ -256,9 +256,15 @@ export function App() {
     });
     l.on("status", (ev) => {
       try {
-        const p = ev.payload as { status?: string; detail?: string };
+        const p = ev.payload as { status?: string; detail?: string; gating?: boolean };
         setStatus(p.status ?? "running");
         setDetail(p.detail ?? "");
+        // Затвор снят (в т.ч. решение принято в другой вкладке) — баннер убираем.
+        // Поле gating приходит всегда, поэтому «нет затвора» отличается от
+        // отсутствия поля. При входе снапшот шлёт status, а gate следом.
+        if (p.gating === false) {
+          setGate(null);
+        }
       } catch {}
     });
     l.on("tokens", (ev) => {

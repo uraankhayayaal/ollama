@@ -290,6 +290,10 @@ func TestChatAssistPromptShowsMergeConflict(t *testing.T) {
 		"задачи (ветка ↔ релиз эпика): task-c [my-rust-app]",
 		"эпики (main ↔ релизная ветка): epic-c [src/main.rs]",
 		"НЕ повторяй TaskMerge",
+		// Ф-4b: ассистенту доступен автономный резолв конфликта эпика через
+		// мосты, для конфликта задачи автоматики нет.
+		"action=status", "action=start", "action=apply", "EpicResolve",
+		"автоматического резолва нет",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("промпт не содержит %q:\n%s", want, p)
@@ -481,9 +485,11 @@ func readBoardSnapshot(t *testing.T, conn net.Conn, timeout time.Duration) (boar
 	return boardSnapshot{}, false
 }
 
-// TestChatAssistantCreatesBugAndTask — «хочу канбан на рефакторинг» и «заведи
-// баг про тормоза» приводят к действиям на доске (эпик+задача, баг).
-func TestChatAssistantCreatesBugAndTask(t *testing.T) {
+// TestChatAssistantCreatesEpicAndBug — «хочу канбан на рефакторинг» и «заведи
+// баг» приводят к действиям на доске (эпик-черновик, баг). С Ф-8 ассистент НЕ
+// создаёт задачи (их заводят лиды направлений), поэтому эпик помечается как
+// черновик на обязательную ревизию архитектора.
+func TestChatAssistantCreatesEpicAndBug(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	registerTestDir(t, srv, "proj-act-bug")
 	sess, _, err := srv.getOrCreate("proj-act-bug")
@@ -491,15 +497,12 @@ func TestChatAssistantCreatesBugAndTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Раунд 1: канбан на рефакторинг → эпик + задача. Раунд 2: баг → баг.
+	// Раунд 1: канбан на рефакторинг → эпик-черновик (без задач).
 	runScriptedChatAssistant(t, sess, "хочу канбан на рефакторинг сервера",
 		&runner.ModelReply{
 			ToolCalls: []tools.ToolCall{{
 				Name:      tools.BoardCreateEpic,
 				Arguments: `{"task_id":"CHAT-01","title":"Канбан на рефакторинг","description":"рефакторинг сервера","assigned_role":"Backend Lead"}`,
-			}, {
-				Name:      tools.BoardCreateTask,
-				Arguments: `{"epic_id":"CHAT-01","task_id":"T-01","title":"Разбить сервер","description":"декомпозировать","assigned_role":"Senior Go Developer"}`,
 			}},
 			FinishReason: "tool_calls",
 		},
@@ -508,14 +511,12 @@ func TestChatAssistantCreatesBugAndTask(t *testing.T) {
 
 	waitBoard(t, sess, 3*time.Second, func() bool {
 		epics, err := sess.board.ListEpics(context.Background())
-		if err != nil {
+		if err != nil || len(epics) != 1 {
 			return false
 		}
-		if len(epics) != 1 {
-			return false
-		}
+		// Ф-8: задачи в эпике создают лиды, ассистент — только черновик.
 		tasks, err := sess.board.ListTasks(context.Background())
-		return err == nil && len(tasks) == 1 && tasks[0].EpicID == "CHAT-01"
+		return err == nil && len(tasks) == 0 && epics[0].RequiresReview
 	})
 
 	runScriptedChatAssistant(t, sess, "заведи баг про тормоза интерфейса",

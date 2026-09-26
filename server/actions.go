@@ -39,10 +39,12 @@ const (
 // через интерфейс (реализует *Session). Отделяет инструменты от HTTP-хендлеров:
 // Execute инструмента не должен знать про декодирование тел и коды ответов.
 type ActionsBackend interface {
-	// KanbanStart запускает/возобновляет оркестрацию по текущей доске
-	// (аналог POST /api/projects/{id}/continue). Безопасно — подтверждения
-	// не требует.
-	KanbanStart(ctx context.Context) error
+	// KanbanStart запускает/возобновляет оркестрацию. task != "" — новая
+	// задача: полный конвейер (главная фаза Системного архитектора создаёт
+	// эпики по ТЗ, затем затвор «утвердить эпики»). task == "" — работа по
+	// текущей доске (аналог POST /api/projects/{id}/continue, board-only).
+	// Безопасно — подтверждения не требует.
+	KanbanStart(ctx context.Context, task string) error
 	// TaskMerge вливает ветку задачи в релизную ветку её эпика (аналог
 	// POST /api/projects/{id}/tasks/{tid}/merge). Деструктивно.
 	TaskMerge(ctx context.Context, taskID string) (string, error)
@@ -57,6 +59,17 @@ type ActionsBackend interface {
 	// прогон идемпотентен (IndexProject сперва очищает точки проекта), не
 	// блокирует агентский цикл — вернуться должна сразу.
 	IndexBackground(ctx context.Context) error
+	// ConflictResolve — безопасная часть резолва конфликта main ↔ релизная
+	// ветка эпика (Ф-4b, actions_resolve.go): status/start — состояние и
+	// открытие процесса резолва, apply — запись выбранного содержимого в
+	// конфликтный worktree. main и remote не трогает, поэтому подтверждения
+	// не требует. Наружу отдаёт содержимое конфликтных файлов: файловые
+	// инструменты ассистента смотрят в каталог проекта, а worktree лежит вне
+	// его.
+	ConflictResolve(ctx context.Context, req ConflictRequest) (map[string]any, error)
+	// ConflictFinish финализирует резолв (обязательная приёмка worktree,
+	// коммит резолва, merge main ← релизной ветки, push). Деструктивно.
+	ConflictFinish(ctx context.Context, epicID string) (map[string]any, error)
 	// ActionConfirmed сообщает, подтвердил ли пользователь действие в чате
 	// (последнее user-сообщение содержит явное согласие, Р-3). Деструктивные
 	// мосты вызывают её ПЕРЕД выполнением и возвращают status=confirm иначе.
@@ -124,10 +137,19 @@ func actionTools(b ActionsBackend) []tools.Tool {
 	return []tools.Tool{
 		&actionTool{
 			name: actionKanbanStart, b: b,
-			description: "Запустить или возобновить оркестрацию по Kanban-доске проекта (продолжить выполнение задач доски). Безопасное действие, подтверждения не требует.",
-			run: func(ctx context.Context, _ map[string]any) (map[string]any, error) {
-				if err := b.KanbanStart(ctx); err != nil {
+			description: "Запустить оркестрацию Kanban по проекту. Безопасное действие, подтверждения не требует.\n" +
+				"task задан (новая задача) — полный конвейер: Системный архитектор разберёт ТЗ (учтёт стека, ролей, RAG-индекса), опубликует эпики и попросит утвердить их; после утверждения лиды декомпозируют эпики в задачи и специалисты выполнят их.\n" +
+				"task не задан — только работа по текущей доске: берутся в работу уже существующие записи (эпики без задач декомпозируются лидами), новые эпики не создаются.",
+			args: map[string]any{
+				"task": map[string]any{"type": "string", "description": "Текст НОВОЙ задачи, которую нужно спланировать и выполнить (как пользователь её сформулировал). Не заполняй, если нужно лишь продолжить/возобновить работу по уже существующей доске."},
+			},
+			run: func(ctx context.Context, args map[string]any) (map[string]any, error) {
+				task := actionArg(args, "task")
+				if err := b.KanbanStart(ctx, task); err != nil {
 					return nil, err
+				}
+				if task != "" {
+					return map[string]any{"message": "Оркестрация запущена по новой задаче: Системный архитектор спланирует работу (эпики → утверждение → лиды → специалисты)."}, nil
 				}
 				return map[string]any{"message": "Оркестрация запущена по доске проекта."}, nil
 			},
@@ -200,6 +222,10 @@ func newIndexBackgroundTool(b ActionsBackend) *actionTool {
 func (sess *Session) serverActionTools() []tools.Tool {
 	ts := actionTools(sess)
 	ts = append(ts, &askTool{b: sess})
+	// Ф-4b: резолв конфликтов эпика — мосты поверх REST-ядра rebase/resolve
+	// (файловые инструменты ассистента привязаны к каталогу проекта, а
+	// конфликтный worktree лежит вне его).
+	ts = append(ts, newConflictResolveTools(sess)...)
 	return ts
 }
 
@@ -215,16 +241,21 @@ func actionArg(args map[string]any, key string) string {
 // механика handleContinue). Раннер работает в board-only режиме: новые эпики
 // не создаются, но эпики без задач декомпозируются лидами; при отсутствии
 // работы уходит в режим ожидания.
-func (sess *Session) KanbanStart(ctx context.Context) error {
+func (sess *Session) KanbanStart(ctx context.Context, task string) error {
 	prov, err := sess.srv.provider()
 	if err != nil {
 		return fmt.Errorf("LLM-провайдер не настроен: %v", err)
 	}
-	taskText, err := sess.continueTaskText(ctx)
-	if err != nil {
-		return err
+	var taskText string
+	if task != "" {
+		taskText = task
+	} else {
+		taskText, err = sess.continueTaskText(ctx)
+		if err != nil {
+			return err
+		}
 	}
-	return sess.start(ctx, taskText, prov)
+	return sess.start(ctx, taskText, prov, task != "")
 }
 
 // TaskMerge вливает ветку задачи в релизную ветку её эпика. Возвращает
@@ -253,7 +284,7 @@ func (sess *Session) TaskMerge(ctx context.Context, taskID string) (string, erro
 				sess.log.Warnf("gitflow: TaskMerge %s: запись конфликта: %v", taskID, serr)
 			}
 			sess.emitBoard("ассистент: мёрдж задачи — конфликт")
-			return "", fmt.Errorf("конфликт при вливании ветки задачи %s: файлы [%s]. Ветки не тронуты — нужен резолв: правьте файлы инструментом ResolveGitConflicts или сделайте ручной rebase, затем повторите мёрдж",
+			return "", fmt.Errorf("конфликт при вливании ветки задачи %s: файлы [%s]. Ветки не тронуты — автоматического резолва для конфликта ветки задачи с релизной веткой нет: сообщите пользователю конфликтующие файлы и предложите путь (пересоздать ветку задачи, ручной rebase) либо спросите, как действовать",
 				taskID, strings.Join(ce.Files, ", "))
 		}
 		return "", err

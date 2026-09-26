@@ -103,9 +103,9 @@ func TestGetBoardWithLimitOffsetOverHTTP(t *testing.T) {
 		t.Fatalf("GET board: %d, body: %s", rec.Code, rec.Body.String())
 	}
 	var snap struct {
-		Epics []any         `json:"epics"`
-		Tasks []any         `json:"tasks"`
-		Bugs  []any         `json:"bugs"`
+		Epics []any `json:"epics"`
+		Tasks []any `json:"tasks"`
+		Bugs  []any `json:"bugs"`
 		Total *struct {
 			Epics int `json:"epics"`
 			Tasks int `json:"tasks"`
@@ -120,5 +120,83 @@ func TestGetBoardWithLimitOffsetOverHTTP(t *testing.T) {
 	}
 	if snap.Total == nil || snap.Total.Tasks != 5 {
 		t.Fatalf("HTTP total = %+v", snap.Total)
+	}
+}
+
+// TestBoardSnapshotIncludesTokenFields проверяет, что факт и прогноз расхода
+// токенов попадают в снимок доски (Ф-4
+// PLAN-2026-09-19-done-epic-task-token.md): поля сериализуются в JSON сущностей
+// без отдельной обработки, потому что живут в самой сущности доски.
+func TestBoardSnapshotIncludesTokenFields(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mr.Close)
+	store := seedBoardPage(t, mr, "tok-page-proj")
+	ctx := context.Background()
+
+	if err := store.FinalizeTaskTokens(ctx, "task-1", 12_000, 3_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinalizeEpicTokens(ctx, "epic-a", 40_000, 10_000); err != nil {
+		t.Fatal(err)
+	}
+	// Прогноз остаётся в сущности после фиксации факта.
+	task, err := store.GetTask(ctx, "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.TokenEstimate = 20_000
+	if err := store.SaveTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := boardView(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotTask *board.Task
+	var gotEpic *board.Epic
+	for i := range view.Tasks {
+		if view.Tasks[i].TaskID == "task-1" {
+			gotTask = view.Tasks[i]
+		}
+	}
+	for i := range view.Epics {
+		if view.Epics[i].TaskID == "epic-a" {
+			gotEpic = view.Epics[i]
+		}
+	}
+	if gotTask == nil || gotEpic == nil {
+		t.Fatal("снимок доски не содержит task-1/epic-a")
+	}
+	if gotTask.TokensTotal != 15_000 || gotTask.TokenEstimate != 20_000 {
+		t.Errorf("поля задачи в снимке = %+v, ожидалось total=15000 estimate=20000", gotTask.TokenUsage)
+	}
+	if gotEpic.TokensTotal != 50_000 {
+		t.Errorf("поля эпика в снимке = %+v, ожидалось total=50000", gotEpic.TokenUsage)
+	}
+
+	// Те же поля видны в JSON-ответе REST.
+	data, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range raw.Tasks {
+		if task["task_id"] != "task-1" {
+			continue
+		}
+		for _, k := range []string{"tokens_in", "tokens_out", "tokens_total", "token_estimate"} {
+			if _, ok := task[k]; !ok {
+				t.Errorf("ключ %q отсутствует в JSON задачи снимка доски", k)
+			}
+		}
 	}
 }

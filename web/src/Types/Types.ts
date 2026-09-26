@@ -42,6 +42,13 @@ export interface EpicRow {
   // Конфликтующие файлы мёрджа релизной ветки ↔ main (Ф-4/Ф-5). Непусто —
   // ветка не влилась, нужен резолв (ResolveGitConflicts / ручной rebase).
   merge_conflict_files?: string[];
+  // Учёт расхода LLM-токенов (Ф-1
+  // PLAN-2026-09-19-done-epic-task-token.md): факт (вход/выход/всего)
+  // и прогноз token_estimate. Нулевые поля сервер не отдаёт.
+  tokens_in?: number;
+  tokens_out?: number;
+  tokens_total?: number;
+  token_estimate?: number;
 }
 
 export interface TaskRow {
@@ -65,6 +72,13 @@ export interface TaskRow {
   // Статус, из которого задача приостановлена (пауза эпика, Ф-6):
   // возобновление возвращает её на прежнее место цепочки.
   resume_status?: Status;
+  // Учёт расхода LLM-токенов (Ф-1
+  // PLAN-2026-09-19-done-epic-task-token.md): факт (вход/выход/всего)
+  // и прогноз token_estimate. Нулевые поля сервер не отдаёт.
+  tokens_in?: number;
+  tokens_out?: number;
+  tokens_total?: number;
+  token_estimate?: number;
 }
 
 export interface BugRow {

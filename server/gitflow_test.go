@@ -700,6 +700,55 @@ func TestReleaseEpicConflict409(t *testing.T) {
 	if git.saw("git worktree add ") || git.saw("git merge --no-ff") || git.saw("git push ") {
 		t.Fatalf("конфликт не должен доходить до worktree-мёрджа, вызовы: %v", git.callsList())
 	}
+	// Признак конфликта записан на доску эпика: бейдж в EpicModal виден сразу
+	// после ручного «Залить в main» (раньше 409 уходил, а доска оставалась пустой).
+	ctx := context.Background()
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+	epic, err := store.GetEpic(ctx, "epic-1")
+	if err != nil || len(epic.MergeConflictFiles) != 1 || epic.MergeConflictFiles[0] != "f.txt" {
+		t.Fatalf("epic.merge_conflict_files = %v, %v; want [f.txt]", epic.MergeConflictFiles, err)
+	}
+}
+
+// TestReleaseEpicConflictBinary409 — конфликт БИНАРНОГО файла: git merge-tree
+// не печатает маркеров, только warning — раньше релиз падал в 502 «Конфликт
+// слияния в assets/logo.png», а признак на доске не появлялся.
+func TestReleaseEpicConflictBinary409(t *testing.T) {
+	const binaryConflict = `warning: Cannot merge binary files: assets/logo.png (.our vs. .their)
+changed in both
+  base   100644 0d433352c34b91496f536e89e445ea60d6ff8bc0 assets/logo.png
+  our    100644 e099760674525f418d9bb8b5495e11d4974dad48 assets/logo.png
+  their  100644 611668ea98a0f249cd99d425dae6253cb1f7864d assets/logo.png
+`
+	git := mockReleaseGit(binaryConflict)
+	srv, handler, mr := setupGitflow(t, git)
+	seedReleaseBoard(t, mr, srv)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		"POST", "/api/projects/myrepo/epics/epic-1/release", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("релиз с бинарным конфликтом: %d, want 409 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := out["files"].([]any)
+	if len(files) != 1 || files[0] != "assets/logo.png" {
+		t.Fatalf("files = %v, want [assets/logo.png]", out["files"])
+	}
+	if git.saw("git worktree add ") || git.saw("git merge --no-ff") {
+		t.Fatalf("бинарный конфликт должен ловиться до worktree, вызовы: %v", git.callsList())
+	}
+	ctx := context.Background()
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+	epic, err := store.GetEpic(ctx, "epic-1")
+	if err != nil || len(epic.MergeConflictFiles) != 1 || epic.MergeConflictFiles[0] != "assets/logo.png" {
+		t.Fatalf("epic.merge_conflict_files = %v, %v; want [assets/logo.png]", epic.MergeConflictFiles, err)
+	}
 }
 
 // TestReleaseEpicAlreadyMerged — релизная ветка уже в main: ответ ok с

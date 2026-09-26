@@ -161,6 +161,24 @@ func readFramePayload(t *testing.T, r io.Reader) []byte {
 		t.Fatalf("чтение кадра: %v", err)
 	}
 	n := int(hdr[1] & 0x7f)
+	// Кадры длиннее 125 байт (например, gate с русским summary или снимок
+	// доски) несут extended length — без его разбора тело читается со сдвигом.
+	switch n {
+	case 126:
+		var ext [2]byte
+		if _, err := io.ReadFull(r, ext[:]); err != nil {
+			t.Fatalf("чтение extended length: %v", err)
+		}
+		n = int(ext[0])<<8 | int(ext[1])
+	case 127:
+		var ext [8]byte
+		if _, err := io.ReadFull(r, ext[:]); err != nil {
+			t.Fatalf("чтение extended length: %v", err)
+		}
+		for _, b := range ext {
+			n = n<<8 | int(b)
+		}
+	}
 	body := make([]byte, n)
 	if _, err := io.ReadFull(r, body); err != nil {
 		t.Fatalf("тело кадра: %v", err)
@@ -219,6 +237,102 @@ func TestSessionSnapshotDeliversStateRightAfterSubscribe(t *testing.T) {
 		if !got[typ] {
 			t.Fatalf("снапшот не содержит событие %q", typ)
 		}
+	}
+
+	sess.mu.Lock()
+	sess.running = false
+	sess.mu.Unlock()
+}
+
+// TestSessionSnapshotReplaysActiveGate — Ф-5: событие gate одноразовое, поэтому
+// клиент, перезагрузивший страницу при живом затворе, баннер не получал и видел
+// пустую доску. broadcastSnapshot переигрывает payload активного затвора, а после
+// решения payload забывается (снапшот не воскрешает старый баннер).
+func TestSessionSnapshotReplaysActiveGate(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	sess, _, err := srv.getOrCreate("gate-replay-proj")
+	if err != nil {
+		t.Fatalf("getOrCreate: %v", err)
+	}
+	sess.mu.Lock()
+	sess.running = true
+	sess.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gateDone := make(chan struct{})
+	go func() {
+		defer close(gateDone)
+		// Затвор блокирует до решения — вызываем в горутине.
+		if _, gerr := sess.Epics(ctx, []*board.Epic{{TaskSpec: board.TaskSpec{TaskID: "EP-1", Title: "эпик"}}}); gerr != nil {
+			t.Errorf("Epics: %v", gerr)
+		}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		sess.mu.Lock()
+		gating := sess.gating
+		sess.mu.Unlock()
+		if gating {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("затвор не встал")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	srvConn, cliConn := net.Pipe()
+	defer cliConn.Close()
+	ws := &WsConn{conn: srvConn, br: bufio.NewReader(srvConn), closed: make(chan struct{})}
+	t.Cleanup(func() { _ = ws.Close() })
+	srv.hub.Subscribe("gate-replay-proj", ws)
+
+	sess.broadcastSnapshot()
+
+	// При живом затворе снапшот: status + gate + board + tokens.
+	var gate *gateEvent
+	for i := 0; i < 4; i++ {
+		var ev struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(readFramePayload(t, cliConn), &ev); err != nil {
+			t.Fatalf("кадр %d: %v", i, err)
+		}
+		if ev.Type != "gate" {
+			continue
+		}
+		var g gateEvent
+		if err := json.Unmarshal(ev.Payload, &g); err != nil {
+			t.Fatalf("gate payload: %v", err)
+		}
+		gate = &g
+	}
+	if gate == nil {
+		t.Fatal("снапшот не переиграл активный затвор (событие gate отсутствует)")
+	}
+	if gate.Gate != "epics" || len(gate.IDs) != 1 || gate.IDs[0] != "EP-1" {
+		t.Fatalf("gate = %+v, want epics/[EP-1]", gate)
+	}
+	if gate.Summary == "" {
+		t.Fatal("gate без summary — баннер нечего показать")
+	}
+
+	// Решение человека снимает затвор и забывает payload.
+	if err := sess.approve("epics", true, ""); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	select {
+	case <-gateDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("затвор не завершился после approve")
+	}
+	sess.mu.Lock()
+	stored := sess.gateMsg
+	sess.mu.Unlock()
+	if stored != nil {
+		t.Fatalf("после решения payload затвора должен быть забыт, got %+v", stored)
 	}
 
 	sess.mu.Lock()

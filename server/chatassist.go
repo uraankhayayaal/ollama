@@ -65,7 +65,10 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 				}
 				finalReported.Store(true)
 			}
-			sess.chatEvent(ev)
+			// Общий маршрут сессии (не голый chatEvent): события board-инструментов
+			// ассистента публикуют снимок доски сразу — в idle-сессии флашера нет,
+			// иначе новый эпик/баг появился бы в UI только после обновления страницы.
+			sess.routeRunEvent(ev)
 		}).WithAgent("assistant")
 		rctx := runevents.WithReporter(ctx, chatReporter)
 		// Расширенное сжатие истории (Ф-6..Ф-11): RAG-вытеснение/ранжирование
@@ -276,7 +279,7 @@ func (sess *Session) chatAssistantPrompt(question string) string {
 		if len(conflictTasks) > 0 {
 			fmt.Fprintf(&b, "- задачи (ветка ↔ релиз эпика): %s\n", strings.Join(conflictTasks, "; "))
 		}
-		b.WriteString("НЕ повторяй TaskMerge при конфликте — сообщи пользователю список файлов и предложи резолв (ResolveGitConflicts / ручной rebase) или спроси, как действовать.\n")
+		b.WriteString("НЕ повторяй TaskMerge/EpicRelease при том же конфликте по кругу. Для ЭПИКА (main ↔ релизная ветка) резолв доступен тебе через мосты: ResolveGitConflicts (action=status — конфликтующие файлы и их содержимое, action=start — открыть процесс резолва, action=apply — записать правки) и EpicResolve (приёмка + влитие в main + push, ДЕСТРУКТИВЕН — только после «да»). Для КОНФЛИКТА ЗАДАЧИ (ветка задачи ↔ релизная ветка эпика) автоматического резолва нет — сообщи пользователю файлы и предложи путь (пересоздать ветку задачи, ручной rebase) или спроси через AskUser.\n")
 	}
 
 	// Баги: сводка по статусам.

@@ -160,6 +160,11 @@ type blockingIndexer struct {
 	launched chan struct{}
 	release  chan struct{}
 	closed   chan struct{}
+	// closeOnce — Close идемпотентен: фабрика buildProjectIndexer в тесте отдаёт
+	// один и тот же индексатор на каждый вызов, а IndexBackground честно закрывает
+	// свежеоткрытый клиент и при отклонении повторного запуска. Без once второй
+	// Close паниковал бы «close of closed channel».
+	closeOnce sync.Once
 }
 
 func newBlockingIndexer() *blockingIndexer {
@@ -178,7 +183,10 @@ func (i *blockingIndexer) IndexProject(_ context.Context, p string, _ []rag.Inde
 	return &rag.IndexResult{Files: 0, Chunks: 0}, nil
 }
 
-func (i *blockingIndexer) Close() error { close(i.closed); return nil }
+func (i *blockingIndexer) Close() error {
+	i.closeOnce.Do(func() { close(i.closed) })
+	return nil
+}
 
 // TestSessionIndexBackground — Session.IndexBackground: запускает горутину
 // (возврат без блокировки), повторный вызов при идущей индексации отклоняется,

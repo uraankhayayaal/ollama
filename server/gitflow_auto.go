@@ -469,6 +469,14 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 // clearEpicMergeConflict снимает признак конфликта мёрджа с эпика на доске
 // (успешный синхрон с main / релиз / резолв). Идемпотентно; ошибки логируются.
 func (s *Server) clearEpicMergeConflict(ctx context.Context, project, epicID string) {
+	s.setEpicMergeConflict(ctx, project, epicID, nil)
+}
+
+// setEpicMergeConflict ставит (files != nil) или снимает (files == nil) признак
+// конфликта мёрджа релизной ветки эпика. Идемпотентно; ошибки логируются, но
+// не ломают вызывающий поток: признак — витрина для UI, источник истины —
+// результат следующего merge.
+func (s *Server) setEpicMergeConflict(ctx context.Context, project, epicID string, files []string) {
 	store, err := s.boardStore(ctx, project)
 	if err != nil {
 		return
@@ -478,11 +486,11 @@ func (s *Server) clearEpicMergeConflict(ctx context.Context, project, epicID str
 	if err != nil {
 		return
 	}
-	if len(epic.MergeConflictFiles) == 0 {
+	if len(files) == 0 && len(epic.MergeConflictFiles) == 0 {
 		return
 	}
-	epic.MergeConflictFiles = nil
+	epic.MergeConflictFiles = files
 	if err := store.SaveEpic(ctx, epic); err != nil {
-		logging.For(project).Warnf("gitflow: снятие конфликта эпика %s: %v", epicID, err)
+		logging.For(project).Warnf("gitflow: запись конфликта эпика %s: %v", epicID, err)
 	}
 }
