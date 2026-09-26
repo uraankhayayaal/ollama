@@ -204,6 +204,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/rebase", s.handleEpicRebase)
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/resolve", s.handleEpicResolve)
 	mux.HandleFunc("GET /api/projects/{id}/epics/{eid}/resolve", s.handleResolveStatus)
+	// Git-workflow (Ф-9): авторезолвинг конфликтов через LLM.
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/resolve", s.handleTaskLLMResolve)
+	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/auto-resolve", s.handleEpicLLMResolve)
 	// Git-workflow (Ф-5): «Создать MR» — push ветки эпика/задачи в remote и MR.
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/mr", s.handleCreateEpicMR)
 	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/mr", s.handleCreateTaskMR)

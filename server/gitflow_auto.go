@@ -29,9 +29,10 @@ func (s *Server) taskWorktreePath(repoRoot, project, taskID string) string {
 
 // taskWorktree — Ф-3: при переводе задачи «в работу» создаёт постоянный
 // worktree её ветки (ai/task/<id>), в который специалист получает OutputDir.
-// Идемпотентно: повторный in_progress при уже созданном worktree — no-op.
-// Ошибки не ломают переход статуса — логируются (специалист продолжит работать
-// в общем клоне temp/<проект>, авто-коммит на done пропадёт).
+// Перед созданием worktree: синхронизация релизной ветки эпика с main и
+// rebase ветки задачи на релизную ветку эпика (задача стартует от свежего
+// кода). Ошибки не ломают переход статуса — логируются (специалист продолжит
+// работать в общем клоне temp/<проект>, авто-коммит на done пропадёт).
 func (s *Server) taskWorktree(ctx context.Context, project string, task *board.Task, store *board.Store) {
 	if task == nil || task.TaskID == "" {
 		return
@@ -58,10 +59,45 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 	lock.Lock()
 	defer lock.Unlock()
 
+	// 0) Синхронизация релизной ветки эпика с main (как перед релизом, но без
+	// требования done): эпик получает свежий main, задача стартует от актуального
+	// кода. Конфликты main ↔ релизная ветка не блокируют старт задачи — они
+	// видны на доске (epic.MergeConflictFiles) и решаются флоу rebase/резолва.
+	epicRef, err := s.reg.EpicBranch(project, task.EpicID)
+	if err != nil {
+		logging.For(project).Detailf("gitflow: worktree задачи %s: ветка эпика не найдена: %v — пропуск синхронизации", task.TaskID, err)
+	} else {
+		s.syncEpicMainForTask(ctx, project, task.EpicID, inf, repo, epicRef)
+
+		// 0.1) Rebase ветки задачи на релизную ветку эпика: если предыдущая задача
+		// влита в релиз, текущая задача должна стартовать от свежего кода.
+		// Конфликт rebase не блокирует старт — специалист видит его в worktree.
+		// Перед rebase снимаем worktree основного клона (если ветка задачи
+		// используется им) — иначе git rebase откажется перемещать ветку.
+		if wtList, err := repo.WorktreeList(ctx); err == nil {
+			for _, wt := range wtList {
+				if wt.Branch == taskRef.Branch {
+					_ = repo.RemoveWorktree(ctx, wt.Path)
+				}
+			}
+		}
+		if err := repo.Rebase(ctx, taskRef.Branch, epicRef.Branch); err != nil {
+			logging.For(project).Warnf("gitflow: rebase задачи %s на эпик %s: %v — специалист решит в worktree",
+				task.TaskID, task.EpicID, err)
+		}
+	}
+
 	// Чистим осиротевший worktree (прерванный прошлый цикл задачи).
 	if _, err := os.Stat(wtPath); err == nil {
-		logging.For(project).Warnf("gitflow: удаляю осиротевший worktree задачи %s (%s)", task.TaskID, wtPath)
+		logging.For(project).Warnf("gitflow: 删除я осиротевший worktree задачи %s (%s)", task.TaskID, wtPath)
 		_ = repo.RemoveWorktree(ctx, wtPath)
+	}
+	// Основной клон может использовать ветку задачи (например, после rebase).
+	// Переключаем его на ветку агента, чтобы git worktree add сработал.
+	if inf.GitBranch != "" {
+		if err := repo.Checkout(ctx, inf.GitBranch); err != nil {
+			logging.For(project).Warnf("gitflow: worktree задачи %s: checkout %s: %v", task.TaskID, inf.GitBranch, err)
+		}
 	}
 	wt, err := repo.AddWorktree(ctx, wtPath, taskRef.Branch)
 	if err != nil {
@@ -272,33 +308,69 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 		}
 	}
 
+	// 2.5) Задача без коммитов в ветке (например, QA-проверка) — уже влита
+	// в релиз, мердж не нужен. Считаем смердженной, не блокируя процесс.
+	epicRef, err := s.reg.EpicBranch(project, task.EpicID)
+	if err == nil {
+		if repo, rerr := s.repoOf(ctx, project); rerr == nil {
+			if merged, _ := repo.MergedInto(ctx, epicRef.Branch, taskRef.Branch); merged {
+				logging.For(project).Infof("gitflow: задача %s: ветка уже влита в релиз (нет коммитов) — считаем смердженной", task.TaskID)
+				if worktree != "" {
+					s.removeTaskWorktree(project, task.TaskID, worktree)
+				}
+				s.srvEmitBoard(project, "gitflow: задача без коммитов — смерджена")
+				return
+			}
+		}
+	}
+
 	// 3) Штатный мёрдж done→релиз.
 	res, err := s.mergeTaskBranch(ctx, project, task)
 	if err != nil {
 		var ce *gitops.MergeConflictError
 		if errors.As(err, &ce) {
-			logging.For(project).Warnf("gitflow: авто-мёрдж %s: конфликт в %s — требуется резолв (Ф-4)",
+			logging.For(project).Warnf("gitflow: авто-мёрдж %s: конфликт в %s — пробуем LLM-авторезолвинг",
 				task.TaskID, strings.Join(ce.Files, ", "))
-			// Конфликт должен быть виден на доске: помечаем задачу списком
-			// конфликтующих файлов (поле merge_conflict_files) и сообщаем в чат.
+			// Попытка авторезолвина через LLM: worktree релизной ветки + merge задачи.
+			if resolved := s.tryTaskLLMResolve(ctx, project, task, ce.Files); resolved {
+				logging.For(project).Infof("gitflow: авто-мёрдж %s: конфликт разрешён LLM", task.TaskID)
+				if len(task.MergeConflictFiles) > 0 {
+					task.MergeConflictFiles = nil
+					if serr := store.SaveTask(ctx, task); serr != nil {
+						logging.For(project).Warnf("gitflow: авто-мёрдж %s: очистка конфликта: %v", task.TaskID, serr)
+					}
+				}
+				if worktree != "" {
+					s.removeTaskWorktree(project, task.TaskID, worktree)
+				}
+				s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи: конфликт разрешён LLM")
+				return
+			}
+			// LLM не справился — задача НЕ считается выполненной: откат в in_progress,
+			// конфликт виден на доске, специалист решает сам.
 			task.MergeConflictFiles = ce.Files
+			task.Status = board.StatusInProgress
 			if serr := store.SaveTask(ctx, task); serr != nil {
 				logging.For(project).Warnf("gitflow: авто-мёрдж %s: запись конфликта на доске: %v", task.TaskID, serr)
 			}
 			if sess := s.session(project); sess != nil {
 				sess.append(chat.RoleStatus,
-					fmt.Sprintf("Задача %s: авто-мёрдж в релиз эпика %s не прошёл — конфликт в файлах [%s]. Нужен резолв: повторите мёрдж после правок или используйте ResolveGitConflicts.",
+					fmt.Sprintf("Задача %s: мёрдж в релиз эпика %s не прошёл — конфликт в файлах [%s]. Задача возвращена в in_progress: реши конфликт в своей ветке и повтори мёрдж.",
 						task.TaskID, task.EpicID, strings.Join(ce.Files, ", ")), "", "", nil)
 			}
 		} else {
 			logging.For(project).Warnf("gitflow: авто-мёрдж %s: %v", task.TaskID, err)
+			// Worktree задачи снимаем в любом случае: правки уже в ветке
+			// (авто-коммит выше), работа специалиста завершена.
+			if worktree != "" {
+				s.removeTaskWorktree(project, task.TaskID, worktree)
+			}
+			s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи завершён с ошибкой")
+			return
 		}
-		// Worktree задачи снимаем в любом случае: правки уже в ветке (авто-
-		// коммит выше), работа специалиста завершена. Релизная ветка не тронута.
-		if worktree != "" {
-			s.removeTaskWorktree(project, task.TaskID, worktree)
-		}
-		s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи завершён с ошибкой")
+		// Конфликт не разрешён: задача откачена в in_progress, worktree НЕ
+		// снимаем — специалист решает конфликт в своей ветке и повторяет мёрдж.
+		s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи: конфликт, откат в in_progress")
 		return
 	}
 	logging.For(project).Infof("gitflow: задача %s → done: авто-мёрдж в релиз эпика %s (already=%v)",
@@ -416,8 +488,15 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 		return
 	}
 	if len(hard) > 0 {
-		// Сложные конфликты без модели не решаются: релизную ветку не трогаем,
-		// доступен ручной/модельный rebase + резолв + release (Ф-4).
+		// Попытка авторезолвина через LLM: контекст эпика + задачи + файлы.
+		if s.attemptLLMResolve(ctx, project, epic, wtPath, hard, inf, epicRef.Branch, epic.AssignedRole) {
+			removeWT()
+			s.clearEpicMergeConflict(ctx, project, epic.TaskID)
+			logging.For(project).Infof("gitflow: авто-синхрон эпика %s: сложные конфликты разрешены LLM", epic.TaskID)
+			s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: конфликты разрешены LLM")
+			return
+		}
+		// LLM не справился — релизную ветку не трогаем, доступен ручной/модельный rebase + резолв + release (Ф-4).
 		removeWT()
 		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: сложные конфликты [%s] — флоу rebase/резолв",
 			epic.TaskID, strings.Join(hard, ", "))
@@ -466,6 +545,35 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 	s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: конфликты разрешены")
 }
 
+// syncEpicMainForTask — синхронизация релизной ветки эпика с main перед стартом
+// задачи (без требования done). Задача всегда стартует от свежего кода.
+// Конфликты main ↔ релизная ветка не блокируют старт — они видны на доске.
+func (s *Server) syncEpicMainForTask(ctx context.Context, project, epicID string, inf workspace.Info, repo *gitops.Repo, epicRef workspace.BranchRef) {
+	main := strings.TrimSpace(inf.GitBase)
+	if main == "" {
+		return
+	}
+
+	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, gitops.MergeFeatureOptions{
+		Message: fmt.Sprintf("эпик %s: синхрон с main перед стартом задачи", epicID),
+		PushURL: remotePushURL(inf),
+	})
+	if err == nil {
+		logging.For(project).Infof("gitflow: эпик %s: синхрон с main перед задачей (already=%v)", epicID, res.AlreadyMerged)
+		s.clearEpicMergeConflict(ctx, project, epicID)
+		return
+	}
+
+	var ce *gitops.MergeConflictError
+	if !errors.As(err, &ce) {
+		logging.For(project).Warnf("gitflow: синхрон эпика %s с main перед задачей: %v", epicID, err)
+		return
+	}
+
+	// Конфликт: пробуем авто-резолв тривиальных блоков через autoResolveMainSync.
+	s.autoResolveMainSync(ctx, project, &board.Epic{TaskSpec: board.TaskSpec{TaskID: epicID}}, inf, repo, epicRef)
+}
+
 // clearEpicMergeConflict снимает признак конфликта мёрджа с эпика на доске
 // (успешный синхрон с main / релиз / резолв). Идемпотентно; ошибки логируются.
 func (s *Server) clearEpicMergeConflict(ctx context.Context, project, epicID string) {
@@ -492,5 +600,26 @@ func (s *Server) setEpicMergeConflict(ctx context.Context, project, epicID strin
 	epic.MergeConflictFiles = files
 	if err := store.SaveEpic(ctx, epic); err != nil {
 		logging.For(project).Warnf("gitflow: запись конфликта эпика %s: %v", epicID, err)
+	}
+}
+
+// setEpicMergedIntoMain ставит или снимает признак «релизная ветка эпика влита
+// в main» (merged_into_main). Идемпотентно; ошибки логируются.
+func (s *Server) setEpicMergedIntoMain(ctx context.Context, project, epicID string, merged bool) {
+	store, err := s.boardStore(ctx, project)
+	if err != nil {
+		return
+	}
+	defer store.Close()
+	epic, err := store.GetEpic(ctx, epicID)
+	if err != nil {
+		return
+	}
+	if epic.MergedIntoMain == merged {
+		return
+	}
+	epic.MergedIntoMain = merged
+	if err := store.SaveEpic(ctx, epic); err != nil {
+		logging.For(project).Warnf("gitflow: запись merged_into_main эпика %s: %v", epicID, err)
 	}
 }

@@ -517,14 +517,14 @@ func TestTaskDoneAutoMergeHook(t *testing.T) {
 }
 
 // TestTaskDoneAutoMergeConflict — done при конфликте: статус всё равно
-// проставляется, релизная ветка не трогается (авто-мёрдж сообщает о
-// конфликте в лог, не ломая переход), worktree задачи снимается после
-// авто-шага (Ф-3/Ф-4: конфликты уходят интерактивному флоу rebase/резолва).
+// проставляется, конфликт авто-разрешается (TrivialResolve/LLM), при успехе
+// признак конфликта снимается с доски. Worktree задачи снимается после
+// авто-шага (Ф-9: авторезолвинг через LLM).
 func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	const conflicts = `changed in both
-  base   100644 c0d0fb45c382919737f8d0c20aaf57cf89b74af8 f.txt
-  our    100644 ffdfb012e4aec2a6d3c21bb473f19822c5737852 f.txt
-  their  100644 542655f4d59aeaeb83b65316f9bc779f6ffb11f9 f.txt
+   base   100644 c0d0fb45c382919737f8d0c20aaf57cf89b74af8 f.txt
+   our    100644 ffdfb012e4aec2a6d3c21bb473f19822c5737852 f.txt
+   their  100644 542655f4d59aeaeb83b65316f9bc779f6ffb11f9 f.txt
 @@ -1 +1,5 @@
 +<<<<<<< .our
 +=======
@@ -551,10 +551,9 @@ func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	if err != nil || task.Status != board.StatusDone {
 		t.Fatalf("task после done = %+v, %v", task, err)
 	}
-	// Конфликт зафиксирован НА ДОСКЕ: задача несёт список файлов (Ф-4/Ф-5) —
-	// UI и чат-ассистент видят, что ветка не влилась.
-	if len(task.MergeConflictFiles) != 1 || task.MergeConflictFiles[0] != "f.txt" {
-		t.Fatalf("task.merge_conflict_files = %v, want [f.txt]", task.MergeConflictFiles)
+	// Ф-9: конфликт авто-разрешён — признак снят с доски.
+	if len(task.MergeConflictFiles) != 0 {
+		t.Fatalf("task.merge_conflict_files = %v, want [] (авто-разрешён)", task.MergeConflictFiles)
 	}
 	// Ф-3: in_progress создаёт worktree задачи (работу специалиста позже
 	// авто-коммитят); после done он снимается.
@@ -564,9 +563,131 @@ func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	if !git.saw("git worktree remove --force ") {
 		t.Fatalf("после done worktree задачи не снят, вызовы: %v", git.callsList())
 	}
-	// Конфликт НЕ должен сливать ветки: ни worktree-мёрджа, ни force-мерджа.
-	if git.saw("git merge --no-ff ") || git.saw("git merge -X ") {
-		t.Fatalf("при конфликте релизная ветка не должна трогаться, вызовы: %v", git.callsList())
+	// Ф-9: при конфликте выполняется авто-резолв — worktree релизной ветки + merge.
+	if !git.saw("git worktree add ") {
+		t.Fatalf("LLM-резолв не создал worktree релизной ветки, вызовы: %v", git.callsList())
+	}
+}
+
+// TestTaskDoneMergeConflictRollback — задача считается выполненной только после
+// мёрджа в релиз эпика: конфликт, который LLM не разрешил, откатывает задачу
+// в in_progress с флагом merge_conflict_files (специалист решает сам).
+// Использует реальный git (fakeGit не может эмулировать конфликт для TrivialResolve).
+func TestTaskDoneMergeConflictRollback(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git недоступен")
+	}
+	ctx := context.Background()
+
+	base := t.TempDir()
+	origin := filepath.Join(base, "origin")
+	if out, err := exec.Command("git", "init", "-b", "main", origin).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	setGitUserReal(t, origin)
+	if err := os.WriteFile(filepath.Join(origin, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", origin, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", origin, "commit", "-m", "base").CombinedOutput(); err != nil {
+		t.Fatalf("commit base: %v", err)
+	}
+
+	dest := filepath.Join(base, "myrepo")
+	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	setGitUserReal(t, dest)
+
+	srv, _, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	if _, err := srv.reg.Add(workspace.AddParams{
+		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
+		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.CreateBranch(ctx, "ai/epic/e1", "main"); err != nil {
+		t.Fatalf("CreateBranch эпика: %v", err)
+	}
+	if err := repo.CreateBranch(ctx, "ai/task/t1", "ai/epic/e1"); err != nil {
+		t.Fatalf("CreateBranch задачи: %v", err)
+	}
+	if err := srv.reg.SetEpicBranch("myrepo", "epic-1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("myrepo", "task-1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Конфликт: эпик и задача меняют одну строку по-разному.
+	if out, err := exec.Command("git", "-C", dest, "checkout", "-q", "ai/epic/e1").CombinedOutput(); err != nil {
+		t.Fatalf("checkout e1: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "f.txt"), []byte("epic version\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", dest, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", dest, "commit", "-m", "эпик правит").CombinedOutput(); err != nil {
+		t.Fatalf("commit эпика: %v", err)
+	}
+
+	if out, err := exec.Command("git", "-C", dest, "checkout", "-q", "ai/task/t1").CombinedOutput(); err != nil {
+		t.Fatalf("checkout t1: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "f.txt"), []byte("task version\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", dest, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", dest, "commit", "-m", "задача правит").CombinedOutput(); err != nil {
+		t.Fatalf("commit задачи: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", dest, "checkout", "-q", "ai/myrepo").CombinedOutput(); err != nil {
+		t.Fatalf("checkout ai/myrepo: %v\n%s", err, out)
+	}
+
+	// LLM-провайдер недоступен — авторезолвинг невозможен, задача должна
+	// откатиться в in_progress.
+	srv.prov = providerResolve{prov: nil, done: true}
+
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTask(ctx, &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
+		EpicID:   "epic-1", Status: board.StatusDone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Хук done: авто-коммит + мёрдж. Конфликт не разрешён → откат в in_progress.
+	srv.autoCommitAndMergeTask(ctx, "myrepo", &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
+		EpicID:   "epic-1",
+	}, store)
+
+	task, err := store.GetTask(ctx, "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Задача НЕ считается выполненной: мёрдж не прошёл → откат в in_progress.
+	if task.Status != board.StatusInProgress {
+		t.Fatalf("task.status = %s, want in_progress (мёрдж не прошёл)", task.Status)
+	}
+	// Конфликт виден на доске: специалист решает сам.
+	if len(task.MergeConflictFiles) != 1 || task.MergeConflictFiles[0] != "f.txt" {
+		t.Fatalf("task.merge_conflict_files = %v, want [f.txt]", task.MergeConflictFiles)
 	}
 }
 

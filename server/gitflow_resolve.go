@@ -391,6 +391,7 @@ func (s *Server) handleEpicResolve(w http.ResponseWriter, r *http.Request) {
 		epicID, res.Message, res.AlreadyMerged)
 	// Резолв завершён — снимаем признак конфликта с эпика на доске (если был).
 	s.clearEpicMergeConflict(r.Context(), project, epicID)
+	s.setEpicMergedIntoMain(r.Context(), project, epicID, true)
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
 			fmt.Sprintf("Эпик %s: конфликты разрешены, релизная ветка %s влита в main и запушена. Приёмка: %s",

@@ -29,6 +29,8 @@ export function Dashboard({
   onEpicMR,
   onTaskMR,
   onShowDiff,
+  onTaskAutoResolve,
+  onEpicAutoResolve,
   collapsed = false,
   onToggleCollapse,
 }: {
@@ -47,6 +49,9 @@ export function Dashboard({
   onEpicMR?: (e: EpicRow) => Promise<void>;
   onTaskMR?: (t: TaskRow) => Promise<void>;
   onShowDiff?: (context: BranchDiffContext) => void;
+  // Ф-9: авторезолвинг конфликтов мёрджа через LLM. Кнопка в блоке конфликта.
+  onTaskAutoResolve?: (t: TaskRow) => Promise<void>;
+  onEpicAutoResolve?: (e: EpicRow) => Promise<void>;
   // Свёрнутый режим: тонкая вертикальная полоска справа с кнопкой разворота
   // и метриками (эпики/задачи/баги + разбивка по статусам).
   collapsed?: boolean;
@@ -293,6 +298,7 @@ export function Dashboard({
           onCreateBranch={onEpicBranch}
           onCreateMR={onEpicMR}
           onShowDiff={onShowDiff}
+          onAutoResolve={onEpicAutoResolve}
           onPause={onEpicPause}
           onResume={onEpicResume}
           onCancel={onEpicCancel}
@@ -306,6 +312,7 @@ export function Dashboard({
           onCreateBranch={onTaskBranch}
           onCreateMR={onTaskMR}
           onShowDiff={onShowDiff}
+          onAutoResolve={onTaskAutoResolve}
           onTaskUpdate={onTaskUpdate}
           onClose={() => setTaskId(null)}
         />

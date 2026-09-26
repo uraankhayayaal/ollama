@@ -1616,13 +1616,14 @@ func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
 // специализации (frontend/backend) идёт по роли задачи (маркеры фронтенда)
 // либо по умолчанию — backend.
 func (k *KanbanRunner) specialistFor(t *board.Task) (agents.Agent, error) {
-	return specialistForRole(k.store.Project(), t.AssignedRole, k.taskPrompt(t)), nil
+	return SpecialistForRole(k.store.Project(), t.AssignedRole, k.taskPrompt(t)), nil
 }
 
-// specialistForRole создаёт агента-специалиста по роли задачи: QA/DevOps или
+// SpecialistForRole создаёт агента-специалиста по роли задачи: QA/DevOps или
 // разработчик (backend/frontend). Общий для Kanban- и plan-исполнителей:
 // выбор специализации (QA/DevOps/frontend/backend) идёт по роли задачи.
-func specialistForRole(project, role, prompt string) agents.Agent {
+// Экспортирован для server (авторезолвинг конфликтов мёрджа через разработчика).
+func SpecialistForRole(project, role, prompt string) agents.Agent {
 	switch {
 	case isRole(role, "qa", "тест", "testing"):
 		return qaengineer.NewQAEngineer(project, prompt)

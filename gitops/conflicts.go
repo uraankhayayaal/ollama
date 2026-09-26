@@ -213,12 +213,37 @@ func HasConflictMarkers(dir string, paths []string) ([]string, error) {
 //	resolved — файлы, где все блоки разрешены (переписаны на диск, маркеров нет);
 //	hard     — файлы со сложными/битыми маркерами или отсутствующие на диске
 //	           (уходят модели для ручного резолва).
+// lockFileNames — lock-файлы менеджеров пакетов, которые НЕ резолвятся
+// вручную: конфликт в них решается через манифест (go.mod, composer.json,
+// package.json) и пересборку зависимостей.
+var lockFileNames = map[string]bool{
+	"go.sum":              true,
+	"composer.lock":       true,
+	"package-lock.json":   true,
+	"yarn.lock":           true,
+	"pnpm-lock.yaml":      true,
+	"pnpm-lock.yml":       true,
+	"npm-shrinkwrap.json": true,
+	"cargo.lock":          true,
+	"gemfile.lock":        true,
+	"poetry.lock":         true,
+	"pipfile.lock":        true,
+	"packages.lock.json":  true,
+	"project.assets.json": true,
+}
+
 func TrivialResolve(dir string, paths []string) (resolved, hard []string, err error) {
 	if len(paths) == 0 {
 		return nil, nil, nil
 	}
 	for _, p := range paths {
 		if !safePathRel(p) {
+			hard = append(hard, p)
+			continue
+		}
+		// Lock-файлы не резолвим вручную — они пересоздаются после правки
+		// манифеста и пересборки зависимостей.
+		if lockFileNames[strings.ToLower(filepath.Base(p))] {
 			hard = append(hard, p)
 			continue
 		}
@@ -364,4 +389,57 @@ func (r *Repo) RemoveWorktree(ctx context.Context, worktreePath string) error {
 	}
 	_ = os.RemoveAll(worktreePath)
 	return nil
+}
+
+// Checkout переключает основной клон на указанную ветку.
+func (r *Repo) Checkout(ctx context.Context, branch string) error {
+	if r == nil || r.Root == "" {
+		return fmt.Errorf("gitops: пустой Repo")
+	}
+	if strings.TrimSpace(branch) == "" {
+		return fmt.Errorf("gitops: пустая ветка")
+	}
+	if _, err := r.ex.Exec(ctx, r.Root, "git", "checkout", "-q", branch); err != nil {
+		return fmt.Errorf("gitops: git checkout %s: %w", branch, err)
+	}
+	return nil
+}
+
+// WorktreeInfo — информация о worktree репозитория.
+type WorktreeInfo struct {
+	Path   string
+	Branch string
+}
+
+// WorktreeList возвращает список worktree репозитория (включая основной).
+// Используется для поиска worktree по ветке перед rebase.
+func (r *Repo) WorktreeList(ctx context.Context) ([]WorktreeInfo, error) {
+	if r == nil || r.Root == "" {
+		return nil, fmt.Errorf("gitops: пустой Repo")
+	}
+	out, err := r.ex.Exec(ctx, r.Root, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, fmt.Errorf("gitops: git worktree list: %w", err)
+	}
+	var result []WorktreeInfo
+	var current WorktreeInfo
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if current.Path != "" {
+				result = append(result, current)
+				current = WorktreeInfo{}
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "worktree ") {
+			current.Path = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "branch ") {
+			current.Branch = strings.TrimPrefix(line, "branch ")
+		}
+	}
+	if current.Path != "" {
+		result = append(result, current)
+	}
+	return result, nil
 }

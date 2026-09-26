@@ -335,6 +335,34 @@ export async function releaseEpic(
   );
 }
 
+// Авторезолвинг конфликта задачи через LLM (Ф-9): сервер собирает контекст
+// эпика + задач, передаёт конфликтующие файлы LLM, прогоняет приёмку.
+export async function taskLLMResolve(
+  base: string,
+  project: string,
+  taskID: string,
+): Promise<{ status: string; resolved: boolean }> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/resolve`,
+    {},
+  );
+}
+
+// Авторезолвинг конфликта эпика через LLM (Ф-9): worktree + merge main +
+// TrivialResolve + LLM + приёмка. Кнопка «Авто-резолв» в модалке эпика.
+export async function epicLLMResolve(
+  base: string,
+  project: string,
+  epicID: string,
+): Promise<{ status: string; resolved: boolean }> {
+  return req(
+    "POST",
+    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/auto-resolve`,
+    {},
+  );
+}
+
 // Создание релизной ветки эпика ai/epic/<id> от базовой ветки проекта
 // (git-workflow, Ф-5). Идемпотентно. Кнопка «Создать ветку эпика» в модалке.
 export async function createEpicBranch(

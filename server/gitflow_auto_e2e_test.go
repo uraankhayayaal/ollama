@@ -298,3 +298,202 @@ func TestAutoCommitAndMergeTaskRealGit(t *testing.T) {
 		t.Fatal("без токена форджа авто-MR не должен создаваться")
 	}
 }
+
+// TestTaskStartSyncsEpicAndRebases — перед стартом задачи (in_progress):
+// релизная ветка эпика синхронизируется с main, ветка задачи ребейзится на
+// релизную ветку эпика. Задача всегда стартует от свежего кода.
+func TestTaskStartSyncsEpicAndRebases(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git недоступен")
+	}
+	ctx := context.Background()
+
+	base := t.TempDir()
+	origin := filepath.Join(base, "origin")
+	if out, err := exec.Command("git", "init", "-b", "main", origin).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	setGitUserReal(t, origin)
+	if err := os.WriteFile(filepath.Join(origin, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", origin, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", origin, "commit", "-m", "base").CombinedOutput(); err != nil {
+		t.Fatalf("commit base: %v", err)
+	}
+
+	dest := filepath.Join(base, "myrepo")
+	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	setGitUserReal(t, dest)
+
+	srv, _, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	if _, err := srv.reg.Add(workspace.AddParams{
+		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
+		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ветки эпика и задачи.
+	if err := repo.CreateBranch(ctx, "ai/epic/e1", "main"); err != nil {
+		t.Fatalf("CreateBranch эпика: %v", err)
+	}
+	if err := repo.CreateBranch(ctx, "ai/task/t1", "ai/epic/e1"); err != nil {
+		t.Fatalf("CreateBranch задачи: %v", err)
+	}
+	if err := srv.reg.SetEpicBranch("myrepo", "epic-1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("myrepo", "task-1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// main уходит вперёд: новая строка в f.txt.
+	if out, err := exec.Command("git", "-C", dest, "checkout", "-q", "main").CombinedOutput(); err != nil {
+		t.Fatalf("checkout main: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "f.txt"), []byte("base\nmain update\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", dest, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", dest, "commit", "-m", "main update").CombinedOutput(); err != nil {
+		t.Fatalf("commit main: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", dest, "checkout", "-q", "ai/myrepo").CombinedOutput(); err != nil {
+		t.Fatalf("checkout ai/myrepo: %v\n%s", err, out)
+	}
+
+	// Доска: эпик + задача.
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTask(ctx, &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
+		EpicID:   "epic-1", Status: board.StatusReady,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Хук in_progress: синхронизация эпика с main + rebase задачи.
+	srv.taskWorktree(ctx, "myrepo", &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
+		EpicID:   "epic-1",
+	}, store)
+
+	// Релизная ветка эпика синхронизирована с main.
+	if ok, _ := repo.MergedInto(ctx, "ai/epic/e1", "main"); !ok {
+		t.Fatal("ai/epic/e1 не синхронизирована с main перед стартом задачи")
+	}
+
+	// Ветка задачи ребейзирована на релизную ветку эпика (fast-forward).
+	if ok, _ := repo.MergedInto(ctx, "ai/epic/e1", "ai/task/t1"); !ok {
+		t.Fatal("ai/task/t1 не ребейзирована на ai/epic/e1")
+	}
+
+	// Worktree задачи создан.
+	worktree := filepath.Join(filepath.Dir(dest), ".wt-task-myrepo-task-1")
+	if _, err := os.Stat(worktree); err != nil {
+		t.Fatal("worktree задачи не создан")
+	}
+}
+
+// TestTaskNoCommitsMergedWithoutBlock — задача без коммитов в ветке (например,
+// QA-проверка) считается смердженной без блокировки процесса: мердж не делается,
+// задача остаётся done, worktree снимается.
+func TestTaskNoCommitsMergedWithoutBlock(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git недоступен")
+	}
+	ctx := context.Background()
+
+	base := t.TempDir()
+	origin := filepath.Join(base, "origin")
+	if out, err := exec.Command("git", "init", "-b", "main", origin).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	setGitUserReal(t, origin)
+	if err := os.WriteFile(filepath.Join(origin, "f.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", origin, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", origin, "commit", "-m", "base").CombinedOutput(); err != nil {
+		t.Fatalf("commit base: %v", err)
+	}
+
+	dest := filepath.Join(base, "myrepo")
+	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	setGitUserReal(t, dest)
+
+	srv, _, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	if _, err := srv.reg.Add(workspace.AddParams{
+		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
+		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ветки эпика и задачи. Задача НЕ имеет коммитов — её ветка совпадает
+	// с релизной веткой эпика (fast-forward).
+	if err := repo.CreateBranch(ctx, "ai/epic/e1", "main"); err != nil {
+		t.Fatalf("CreateBranch эпика: %v", err)
+	}
+	if err := repo.CreateBranch(ctx, "ai/task/t1", "ai/epic/e1"); err != nil {
+		t.Fatalf("CreateBranch задачи: %v", err)
+	}
+	if err := srv.reg.SetEpicBranch("myrepo", "epic-1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("myrepo", "task-1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Доска: эпик + задача (done, но без коммитов в ветке).
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer store.Close()
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTask(ctx, &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "QA проверка"},
+		EpicID:   "epic-1", Status: board.StatusDone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Хук done: задача без коммитов — считаем смердженной, не блокируя процесс.
+	srv.autoCommitAndMergeTask(ctx, "myrepo", &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "QA проверка"},
+		EpicID:   "epic-1",
+	}, store)
+
+	// Задача остаётся done.
+	task, err := store.GetTask(ctx, "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != board.StatusDone {
+		t.Fatalf("task.status = %s, want done (задача без коммитов — смерджена)", task.Status)
+	}
+	// Конфликта нет.
+	if len(task.MergeConflictFiles) != 0 {
+		t.Fatalf("task.merge_conflict_files = %v, want []", task.MergeConflictFiles)
+	}
+}

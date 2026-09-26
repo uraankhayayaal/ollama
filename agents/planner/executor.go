@@ -788,7 +788,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	}
 
 	for _, ts := range tasks {
-		spec := specialistForRole(projectName, ts.AssignedRole, leadTaskPrompt(projectName, ts))
+		spec := SpecialistForRole(projectName, ts.AssignedRole, leadTaskPrompt(projectName, ts))
 		// Специалисты, в отличие от лида, пишут код: ограничиваем их корневой
 		// директорией шага (leadStepScope), а не точечным scope из плана —
 		// планировщик указывает конкретные новые файлы (например,

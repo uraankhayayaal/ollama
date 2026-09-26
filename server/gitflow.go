@@ -305,9 +305,10 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 	logging.For(project).Infof("gitflow: эпик %s → main: релизная ветка %s влита (already=%v)",
 		epicID, source, res.AlreadyMerged)
 	s.clearEpicMergeConflict(r.Context(), project, epicID)
+	s.setEpicMergedIntoMain(r.Context(), project, epicID, true)
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
-			fmt.Sprintf("Эпик %s: релизная ветка %s влита в main (%s)", epicID, source, main),
+			fmt.Sprintf("Эпик %s: релизная ветку %s влита в main (%s)", epicID, source, main),
 			"", "", nil)
 	}
 	s.srvEmitBoard(project, "gitflow: релиз эпика в main")

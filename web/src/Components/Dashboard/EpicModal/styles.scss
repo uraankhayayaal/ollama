@@ -30,6 +30,11 @@
   .status.ready { color: var(--st-ready, #0891b2); }
   .status.in_progress { color: var(--st-in-progress, #2563eb); }
   .status.done { color: var(--st-done, #15803d); }
+
+  .merged-into-main {
+    color: #15803d;
+    font-weight: 600;
+  }
   .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
   .status.paused { color: var(--st-paused, #b45309); }
 
@@ -37,6 +42,27 @@
   .merge-conflict {
     color: #b91c1c;
     font-weight: 600;
+  }
+
+  // Ф-9: кнопка авторезолвина конфликта через LLM.
+  .merge-resolve-btn {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    background: #2563eb;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    &:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    &:hover:not(:disabled) {
+      background: #1d4ed8;
+    }
   }
 }
 

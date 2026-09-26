@@ -2,6 +2,7 @@
 // доски). Переходы статуса — рядом с эпиком в заголовке: минус/плюс.
 // Ф-5: блок «ветка + MR» — ветка/MR, кнопки «Создать ветку задачи» (от ветки
 // эпика) и «Создать MR» (push → MR в ветку эпика).
+import { useState } from "react";
 import type { BranchDiffContext, GitView, TaskRow } from "@/Types";
 import { MOVES, STATUS_LABEL } from "../board";
 import { fmtTokens, tokenTitle } from "../tokens";
@@ -15,6 +16,7 @@ export function TaskModal({
   onCreateBranch,
   onCreateMR,
   onShowDiff,
+  onAutoResolve,
   onTaskUpdate,
   onClose,
 }: {
@@ -23,11 +25,14 @@ export function TaskModal({
   onCreateBranch?: (t: TaskRow) => Promise<void>;
   onCreateMR?: (t: TaskRow) => Promise<void>;
   onShowDiff?: (context: BranchDiffContext) => void;
+  onAutoResolve?: (t: TaskRow) => Promise<void>;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onClose: () => void;
 }) {
   const m = MOVES[task.status] ?? { prev: null, next: null };
   const taskBranch = git?.tasks?.[task.task_id]?.branch;
+  const [resolving, setResolving] = useState(false);
+  const [resolveErr, setResolveErr] = useState("");
 
   return (
     <Modal title={"Задача · " + task.task_id} onClose={onClose}>
@@ -50,6 +55,30 @@ export function TaskModal({
             <dd className="merge-conflict">
               Ветка не влилась в релиз эпика: {(task.merge_conflict_files ?? []).join(", ")}.
               <br />Нужен резолв (ResolveGitConflicts / ручной rebase), затем повторить мёрдж.
+              {onAutoResolve && (
+                <>
+                  <br />
+                  <button
+                    className="merge-resolve-btn"
+                    disabled={resolving}
+                    onClick={() => {
+                      setResolving(true);
+                      setResolveErr("");
+                      onAutoResolve(task)
+                        .then(() => {
+                          onClose();
+                        })
+                        .catch((e) => {
+                          setResolveErr(e instanceof Error && e.message ? e.message : String(e));
+                        })
+                        .finally(() => setResolving(false));
+                    }}
+                  >
+                    {resolving ? "Решаю…" : "Авто-резолв (LLM)"}
+                  </button>
+                  {resolveErr && <span className="merge-resolve-err">{resolveErr}</span>}
+                </>
+              )}
             </dd>
           </div>
         )}

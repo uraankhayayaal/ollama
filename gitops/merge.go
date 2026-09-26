@@ -140,6 +140,21 @@ func (r *Repo) BranchExists(ctx context.Context, branch string) (bool, error) {
 	return true, nil
 }
 
+// Rebase перемещает ветку branch на вершину ветки onto (git rebase onto).
+// Возвращает ошибку при конфликте (рабочая копия и ветка не трогаются).
+func (r *Repo) Rebase(ctx context.Context, branch, onto string) error {
+	if r == nil || r.Root == "" {
+		return fmt.Errorf("gitops: пустой Repo")
+	}
+	if strings.TrimSpace(branch) == "" || strings.TrimSpace(onto) == "" {
+		return fmt.Errorf("gitops: требуются ветка и точка отхода")
+	}
+	if _, err := r.ex.Exec(ctx, r.Root, "git", "rebase", onto, branch); err != nil {
+		return fmt.Errorf("gitops: git rebase %s %s: %w", onto, branch, err)
+	}
+	return nil
+}
+
 // SanitizeBranchName приводит произвольный ID (эпика/задачи из LLM-схем) к
 // допустимому имени git-ветки: буквы/цифры (в т.ч. юникод) сохраняются,
 // остальное (пробелы, ~^:?*[\\ и пр.) заменяется на '_'; добиваются точки,

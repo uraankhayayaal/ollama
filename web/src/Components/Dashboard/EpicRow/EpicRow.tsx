@@ -82,6 +82,9 @@ export function EpicRow({
           <>
             <span className="id">{epic.task_id}</span>
             <span className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</span>
+            {epic.merged_into_main && (
+              <span className="merged-into-main-badge" title="Релизная ветка эпика влита в main">Слит в main</span>
+            )}
             <EpicActionBar
               epic={epic}
               tasks={tasks}

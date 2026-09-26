@@ -17,6 +17,7 @@ export function EpicModal({
   onCreateBranch,
   onCreateMR,
   onShowDiff,
+  onAutoResolve,
   onPause,
   onResume,
   onCancel,
@@ -27,6 +28,7 @@ export function EpicModal({
   onCreateBranch?: (e: EpicRow) => Promise<void>;
   onCreateMR?: (e: EpicRow) => Promise<void>;
   onShowDiff?: (context: BranchDiffContext) => void;
+  onAutoResolve?: (e: EpicRow) => Promise<void>;
   onPause?: (e: EpicRow) => Promise<void>;
   onResume?: (e: EpicRow) => Promise<void>;
   onCancel?: (e: EpicRow) => Promise<void>;
@@ -71,12 +73,33 @@ export function EpicModal({
           <dt>Статус</dt>
           <dd className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</dd>
         </div>
+        {epic.merged_into_main && (
+          <div>
+            <dt>Слит в main</dt>
+            <dd className="merged-into-main" title="Релизная ветка эпика влита в main (успешный релиз или резолв)">Да</dd>
+          </div>
+        )}
         {(epic.merge_conflict_files ?? []).length > 0 && (
           <div className="merge-conflict-row">
             <dt>Конфликт мёрджа</dt>
             <dd className="merge-conflict">
               Релизная ветка не влилась в main: {(epic.merge_conflict_files ?? []).join(", ")}.
               <br />Нужен резолв (ResolveGitConflicts / ручной rebase), затем «Залить в main».
+              {onAutoResolve && (
+                <>
+                  <br />
+                  <button
+                    className="merge-resolve-btn"
+                    disabled={busy !== ""}
+                    onClick={() => void run("resolve", async () => {
+                      await onAutoResolve!(epic);
+                      onClose();
+                    })}
+                  >
+                    {busy === "resolve" ? "Решаю…" : "Авто-резолв (LLM)"}
+                  </button>
+                </>
+              )}
             </dd>
           </div>
         )}

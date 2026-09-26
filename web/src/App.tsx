@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, updateTask } from "./Api";
+import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -448,6 +448,21 @@ export function App() {
     await releaseEpic(BASE, project.project_name, epic.task_id);
   };
 
+  // Ф-9: авторезолвинг конфликтов мёрджа через LLM.
+  const onTaskAutoResolve = async (t: TaskRow) => {
+    if (!project) {
+      return;
+    }
+    await taskLLMResolve(BASE, project.project_name, t.task_id);
+  };
+
+  const onEpicAutoResolve = async (e: EpicRow) => {
+    if (!project) {
+      return;
+    }
+    await epicLLMResolve(BASE, project.project_name, e.task_id);
+  };
+
   // Перевод эпика в новый статус (кнопки «Пауза»/«Продолжить»/«Отменить»,
   // Ф-6): эпики изолированы в своих git-ветках, поэтому пауза/отмена НЕ
   // откатывают код — ветка остаётся, работа просто приостанавливается.
@@ -793,6 +808,8 @@ export function App() {
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
                 onShowDiff={setDiffContext}
+                onTaskAutoResolve={onTaskAutoResolve}
+                onEpicAutoResolve={onEpicAutoResolve}
                 collapsed
                 onToggleCollapse={() => toggleCollapse("dash")}
               />
@@ -812,6 +829,8 @@ export function App() {
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
                 onShowDiff={setDiffContext}
+                onTaskAutoResolve={onTaskAutoResolve}
+                onEpicAutoResolve={onEpicAutoResolve}
                 collapsed={false}
                 onToggleCollapse={() => toggleCollapse("dash")}
               />

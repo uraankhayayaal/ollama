@@ -229,6 +229,9 @@ type Epic struct {
 	// список = «ветка не влилась, ждёт резолва». Очищается успешным релизом/
 	// резолвом. Пусто — конфликта нет (поле не сериализуется).
 	MergeConflictFiles []string `json:"merge_conflict_files,omitempty"`
+	// MergedIntoMain — релизная ветка эпика влита в main (успешный релиз или
+	// резолв). Показывается в карточке/модалке эпика как статус «Слит в main».
+	MergedIntoMain bool `json:"merged_into_main,omitempty"`
 	// Summary — сводка архитектурного решения из бэклога Системного
 	// архитектора (architecture_summary); передаётся лиду направления для
 	// декомпозиции эпика.

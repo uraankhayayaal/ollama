@@ -101,6 +101,17 @@
     &.paused { color: var(--st-paused, #b45309); }
   }
 
+  .merged-into-main-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    background: #15803d;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+
   &.collapsed {
     flex-direction: row;
     align-items: center;
