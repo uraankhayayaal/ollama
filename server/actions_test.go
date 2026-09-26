@@ -22,14 +22,27 @@ import (
 type fakeActions struct {
 	confirmed bool
 	started   bool
+	startTask string
 	merged    string
 	released  string
 	rejected  bool
 	indexBg   bool
 	indexErr  error
+	// Ф-4b: резолв конфликтов.
+	conflictReq  ConflictRequest
+	conflictOut  map[string]any
+	conflictErr  error
+	conflictRuns int
+	finishEpic   string
+	finishOut    map[string]any
+	finishErr    error
 }
 
-func (f *fakeActions) KanbanStart(context.Context) error { f.started = true; return nil }
+func (f *fakeActions) KanbanStart(_ context.Context, task string) error {
+	f.started = true
+	f.startTask = task
+	return nil
+}
 func (f *fakeActions) TaskMerge(_ context.Context, taskID string) (string, error) {
 	f.merged = taskID
 	return "задача влита", nil
@@ -44,6 +57,23 @@ func (f *fakeActions) IndexBackground(context.Context) error {
 	return f.indexErr
 }
 func (f *fakeActions) ActionConfirmed(context.Context) bool { return f.confirmed }
+
+func (f *fakeActions) ConflictResolve(_ context.Context, req ConflictRequest) (map[string]any, error) {
+	f.conflictReq = req
+	f.conflictRuns++
+	if f.conflictOut == nil {
+		f.conflictOut = map[string]any{}
+	}
+	return f.conflictOut, f.conflictErr
+}
+
+func (f *fakeActions) ConflictFinish(_ context.Context, epicID string) (map[string]any, error) {
+	f.finishEpic = epicID
+	if f.finishOut == nil {
+		f.finishOut = map[string]any{}
+	}
+	return f.finishOut, f.finishErr
+}
 
 // harnessStubProvider — LLM-провайдер оркестрации, немедленно останавливающий
 // цикл ошибкой (без сети). В отличие от qaStubProvider безопасен для
@@ -177,6 +207,33 @@ func TestActionToolConfirmGate(t *testing.T) {
 	}
 	if !b.started {
 		t.Fatal("KanbanStart должен запускать оркестрацию без подтверждения")
+	}
+	if b.startTask != "" {
+		t.Fatalf("KanbanStart без аргумента task должен работать по доске, task=%q", b.startTask)
+	}
+}
+
+// TestKanbanStartTaskSelectsPipeline — Ф-4: аргумент task различает режимы.
+// С текстом задачи KanbanStart запускает полный конвейер (архитектор спланирует
+// работу) и текст доходит до backend; без текста — только работа по доске.
+func TestKanbanStartTaskSelectsPipeline(t *testing.T) {
+	b := &fakeActions{}
+	tools := byName(t, actionTools(b))
+
+	out, err := tools[actionKanbanStart].Execute(map[string]any{"task": "Сделать API заказов"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	m := decodeToolResult(t, out)
+	if m["status"] != "success" {
+		t.Fatalf("status = %v, want success (body: %s)", m["status"], out)
+	}
+	if b.startTask != "Сделать API заказов" {
+		t.Fatalf("task не дошёл до backend: %q", b.startTask)
+	}
+	msg, _ := m["message"].(string)
+	if !strings.Contains(msg, "архитектор") {
+		t.Fatalf("ответ с текстом задачи должен упоминать планирование архитектором: %q", msg)
 	}
 }
 
@@ -316,62 +373,57 @@ func TestChatAssistantMergeTaskAfterConfirm(t *testing.T) {
 	}
 }
 
-// TestChatAssistantDeleteTaskAfterConfirm — «удали задачу #12»: ассистент
-// сначала спрашивает подтверждение, по «да» вызывает BoardDeleteTask и задача
-// исчезает с доски.
-func TestChatAssistantDeleteTaskAfterConfirm(t *testing.T) {
+// TestChatAssistantDeleteEpicAfterConfirm — «удали эпик»: ассистент сначала
+// спрашивает подтверждение, по «да» вызывает BoardDeleteEpic и эпик исчезает с
+// доски. BoardDeleteTask ассистенту недоступен с Ф-8 (задачи создают/удаляют
+// лиды направлений), поэтому деструктивный сценарий проверяется на эпике.
+func TestChatAssistantDeleteEpicAfterConfirm(t *testing.T) {
 	srv, _, mr := newTestServer(t)
 	ctx := context.Background()
-	registerTestDir(t, srv, "proj-del-task")
+	registerTestDir(t, srv, "proj-del-epic")
 
-	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-del-task"})
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-del-epic"})
 	defer store.Close()
-	if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CreateTask(ctx, &board.Task{
-		TaskSpec: board.TaskSpec{TaskID: "task-12", Title: "Лишняя задача"},
-		EpicID:   "epic-1",
-	}); err != nil {
+	if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Лишний эпик"}}); err != nil {
 		t.Fatal(err)
 	}
 
-	sess, _, err := srv.getOrCreate("proj-del-task")
+	sess, _, err := srv.getOrCreate("proj-del-epic")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Раунд 1: модель следует правилу промпта и спрашивает подтверждение
-	// (BoardDeleteTask — инструмент доски без жёсткого гейта, защита — промпт).
-	m1 := runScriptedChatAssistant(t, sess, "удали задачу task-12",
-		&runner.ModelReply{Content: "Подтвердите удаление задачи task-12? (да/нет)", FinishReason: "stop"},
+	// (BoardDeleteEpic — инструмент доски без жёсткого гейта, защита — промпт).
+	m1 := runScriptedChatAssistant(t, sess, "удали эпик epic-1",
+		&runner.ModelReply{Content: "Подтвердите удаление эпика epic-1? (да/нет)", FinishReason: "stop"},
 	)
 	if !strings.Contains(m1.Content, "Подтвердите") {
 		t.Fatalf("ассистент не запросил подтверждение: %q", m1.Content)
 	}
 
-	// Задача до «да» ещё на доске.
-	if _, err := sess.board.GetTask(ctx, "task-12"); err != nil {
-		t.Fatalf("до подтверждения задача не должна быть удалена: %v", err)
+	// Эпик до «да» ещё на доске.
+	if _, err := sess.board.GetEpic(ctx, "epic-1"); err != nil {
+		t.Fatalf("до подтверждения эпик не должен быть удалён: %v", err)
 	}
 
-	// Пользователь подтверждает → модель удаляет задачу инструментом доски.
+	// Пользователь подтверждает → модель удаляет эпик инструментом доски.
 	sess.append(chat.RoleUser, "да", "user", "", nil)
 	sess.runChatAssistant(context.Background(), "да", &scriptedGenerateProvider{chat: &scriptedChatProvider{
 		replies: []*runner.ModelReply{
 			{ToolCalls: []tools.ToolCall{{
-				Name:      tools.BoardDeleteTask,
-				Arguments: `{"task_id":"task-12"}`,
+				Name:      tools.BoardDeleteEpic,
+				Arguments: `{"epic_id":"epic-1"}`,
 			}}, FinishReason: "tool_calls"},
-			{Content: "Задача task-12 удалена.", FinishReason: "stop"},
+			{Content: "Эпик epic-1 удалён.", FinishReason: "stop"},
 		},
 	}})
-	m2 := waitChatAssistantContains(t, sess, 3*time.Second, "удалена")
-	if !strings.Contains(m2.Content, "удалена") {
+	m2 := waitChatAssistantContains(t, sess, 3*time.Second, "удалён")
+	if !strings.Contains(m2.Content, "удалён") {
 		t.Fatalf("финал = %q", m2.Content)
 	}
-	if _, err := sess.board.GetTask(ctx, "task-12"); err == nil {
-		t.Fatal("задача не удалена с доски после подтверждения")
+	if _, err := sess.board.GetEpic(ctx, "epic-1"); err == nil {
+		t.Fatal("эпик не удалён с доски после подтверждения")
 	}
 }
 

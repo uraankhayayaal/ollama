@@ -59,6 +59,17 @@ type ActionsBackend interface {
 	// прогон идемпотентен (IndexProject сперва очищает точки проекта), не
 	// блокирует агентский цикл — вернуться должна сразу.
 	IndexBackground(ctx context.Context) error
+	// ConflictResolve — безопасная часть резолва конфликта main ↔ релизная
+	// ветка эпика (Ф-4b, actions_resolve.go): status/start — состояние и
+	// открытие процесса резолва, apply — запись выбранного содержимого в
+	// конфликтный worktree. main и remote не трогает, поэтому подтверждения
+	// не требует. Наружу отдаёт содержимое конфликтных файлов: файловые
+	// инструменты ассистента смотрят в каталог проекта, а worktree лежит вне
+	// его.
+	ConflictResolve(ctx context.Context, req ConflictRequest) (map[string]any, error)
+	// ConflictFinish финализирует резолв (обязательная приёмка worktree,
+	// коммит резолва, merge main ← релизной ветки, push). Деструктивно.
+	ConflictFinish(ctx context.Context, epicID string) (map[string]any, error)
 	// ActionConfirmed сообщает, подтвердил ли пользователь действие в чате
 	// (последнее user-сообщение содержит явное согласие, Р-3). Деструктивные
 	// мосты вызывают её ПЕРЕД выполнением и возвращают status=confirm иначе.
@@ -211,6 +222,10 @@ func newIndexBackgroundTool(b ActionsBackend) *actionTool {
 func (sess *Session) serverActionTools() []tools.Tool {
 	ts := actionTools(sess)
 	ts = append(ts, &askTool{b: sess})
+	// Ф-4b: резолв конфликтов эпика — мосты поверх REST-ядра rebase/resolve
+	// (файловые инструменты ассистента привязаны к каталогу проекта, а
+	// конфликтный worktree лежит вне его).
+	ts = append(ts, newConflictResolveTools(sess)...)
 	return ts
 }
 
@@ -269,7 +284,7 @@ func (sess *Session) TaskMerge(ctx context.Context, taskID string) (string, erro
 				sess.log.Warnf("gitflow: TaskMerge %s: запись конфликта: %v", taskID, serr)
 			}
 			sess.emitBoard("ассистент: мёрдж задачи — конфликт")
-			return "", fmt.Errorf("конфликт при вливании ветки задачи %s: файлы [%s]. Ветки не тронуты — нужен резолв: правьте файлы инструментом ResolveGitConflicts или сделайте ручной rebase, затем повторите мёрдж",
+			return "", fmt.Errorf("конфликт при вливании ветки задачи %s: файлы [%s]. Ветки не тронуты — автоматического резолва для конфликта ветки задачи с релизной веткой нет: сообщите пользователю конфликтующие файлы и предложите путь (пересоздать ветку задачи, ручной rebase) либо спросите, как действовать",
 				taskID, strings.Join(ce.Files, ", "))
 		}
 		return "", err

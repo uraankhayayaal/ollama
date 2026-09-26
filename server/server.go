@@ -660,7 +660,9 @@ func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := sess.start(ctx, taskText, prov); err != nil {
+	// Кнопка «Продолжить» — работа только с доской: новые эпики не создаются,
+	// текст задачи лишь описывает контекст для раннера.
+	if err := sess.start(ctx, taskText, prov, true); err != nil {
 		sess.log.Warnf("[continue] запуск оркестрации отклонён: %v", err)
 		writeErr(w, http.StatusConflict, err.Error())
 		return

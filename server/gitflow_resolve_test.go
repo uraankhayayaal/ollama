@@ -534,7 +534,13 @@ func TestRebaseEpicNonGitRejected(t *testing.T) {
 // резолв модели → resolve (приёмка + merge + push main). Проверяем: main
 // продвинут и запушен в origin, конфликтный worktree снят, процесс закрыт,
 // HEAD агента не тронут.
-func TestEpicRebaseResolveEndToEndRealGit(t *testing.T) {
+// setupRealGitEpicConflict готовит реальный git-проект (origin + клон) с
+// эпиком в статусе done, у которого релизная ветка (main.go = v1) и main
+// (main.go = v2) конфликтуют, и возвращает сервер, сессию чат-ассистента,
+// клон и origin. Общая основа E2E Ф-4: REST-путь (release → rebase →
+// resolve) и путь ассистента (мосты ResolveGitConflicts/EpicResolve).
+func setupRealGitEpicConflict(t *testing.T) (*Server, http.Handler, *Session, string, string) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git недоступен")
 	}
@@ -580,6 +586,7 @@ func TestEpicRebaseResolveEndToEndRealGit(t *testing.T) {
 
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
 	defer store.Close()
+	_ = mr
 	if err := store.CreateEpic(ctx, &board.Epic{
 		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"},
 		Status:   board.StatusDone,
@@ -630,8 +637,17 @@ func TestEpicRebaseResolveEndToEndRealGit(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	sess, _, err := srv.getOrCreate("myrepo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, srv.routes(), sess, dest, origin
+}
+
+func TestEpicRebaseResolveEndToEndRealGit(t *testing.T) {
+	srv, handler, _, dest, origin := setupRealGitEpicConflict(t)
 	// «Залить в main» → конфликт (409), вход Ф-4.
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
 		"POST", "/api/projects/myrepo/epics/epic-1/release", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusConflict {

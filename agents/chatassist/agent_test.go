@@ -229,6 +229,29 @@ func TestAssistantPromptHasCreationChecklist(t *testing.T) {
 	}
 }
 
+// TestAssistantPromptHasConflictResolveFlow — промпт ассистента описывает
+// Ф-4b: полный автономный цикл резолва конфликта эпика через мосты
+// ResolveGitConflicts (status → start → apply) и EpicResolve (деструктивный),
+// отдельно — что для конфликта задачи автоматики нет; ассистент не обещает
+// инструмент резолва задачи и не обещает фиктивный BoardCreateTask.
+func TestAssistantPromptHasConflictResolveFlow(t *testing.T) {
+	a := newTestAssistant(t, "залей в main")
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"ResolveGitConflicts", "action=status", "action=start", "action=apply",
+		"EpicResolve", "edits: file + old", "КОНФЛИКТ ЗАДАЧИ",
+		"автоматического резолва нет",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		}
+	}
+	// Ассистент не должен обещать резолв конфликта задачи мостом эпика.
+	if strings.Contains(p, "TaskMerge вернул ошибку конфликта") {
+		t.Errorf("промпт не должен содержать устаревшее правило про TaskMerge:\n%s", p)
+	}
+}
+
 // TestAssistantRAGBlockSearchParams — блок ищет по проекту, scope пуст (весь
 // проект); ошибка поиска деградирует в пустую строку.
 func TestAssistantRAGBlockSearchParams(t *testing.T) {

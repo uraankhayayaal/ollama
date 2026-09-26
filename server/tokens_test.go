@@ -129,7 +129,7 @@ func TestReporterWiredIntoSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := sess.start(ctx, "задача", &wiredReporterProvider{t: t}); err != nil {
+	if err := sess.start(ctx, "задача", &wiredReporterProvider{t: t}, true); err != nil {
 		t.Fatal(err)
 	}
 
