@@ -140,3 +140,61 @@ func TestOnTokens(t *testing.T) {
 		t.Fatalf("agent = %q, want backendlead", ev.Agent)
 	}
 }
+
+// TestOnTokensWithScope проверяет атрибуцию расхода токенов единице работы
+// (Ф-2): scope из WithScope попадает в событие, исходный Router остаётся
+// без scope (счётчик проекта).
+func TestOnTokensWithScope(t *testing.T) {
+	ch, sink := collect(t, 2)
+	r := NewRouter(sink).WithAgent("developer")
+
+	scoped := r.WithScope("task:T-1")
+	scoped.OnTokens(10, 2, 0)
+	ev := <-ch
+	if ev.Scope != "task:T-1" {
+		t.Fatalf("scope = %q, want task:T-1", ev.Scope)
+	}
+	if ev.Agent != "developer" {
+		t.Fatalf("agent = %q, want developer (WithScope сохраняет имя агента)", ev.Agent)
+	}
+
+	r.OnTokens(5, 1, 0)
+	if ev = <-ch; ev.Scope != "" {
+		t.Fatalf("scope исходного Router = %q, want пусто", ev.Scope)
+	}
+}
+
+// TestWithScopeInContext проверяет проброс scope'а через контекст вызова
+// Generate: с репортёром в контексте рождается клон с атрибуцией, без
+// репортёра (консольный режим) контекст меняется без паники.
+func TestWithScopeInContext(t *testing.T) {
+	ch, sink := collect(t, 2)
+	ctx := WithReporter(context.Background(), NewRouter(sink))
+	scopedCtx := WithScope(ctx, "epic:ARC-01")
+	if scopedCtx == ctx {
+		t.Fatal("WithScope должен вернуть новый контекст")
+	}
+	if ReporterFromContext(scopedCtx) == ReporterFromContext(ctx) {
+		t.Fatal("WithScope должен вернуть клон репортёра")
+	}
+	if ReporterFromContext(ctx) == nil {
+		t.Fatal("исходный контекст потерял репортёра")
+	}
+
+	ReporterFromContext(scopedCtx).OnTokens(3, 1, 0)
+	if ev := <-ch; ev.Scope != "epic:ARC-01" {
+		t.Fatalf("scope = %q, want epic:ARC-01", ev.Scope)
+	}
+
+	// Без репортёра в контексте — тот же контекст, без scope.
+	bare := context.Background()
+	if got := WithScope(bare, "task:T-1"); got != bare {
+		t.Fatalf("без репортёра WithScope = %v, want исходный контекст", got)
+	}
+	// Вложенный scope перекрывает внешний.
+	nested := WithScope(WithScope(ctx, "architecture"), "bugs")
+	ReporterFromContext(nested).OnTokens(1, 1, 0)
+	if ev := <-ch; ev.Scope != "bugs" {
+		t.Fatalf("вложенный scope = %q, want bugs", ev.Scope)
+	}
+}

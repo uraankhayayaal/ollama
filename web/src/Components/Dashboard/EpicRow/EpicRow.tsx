@@ -4,6 +4,7 @@
 // счётчиков даёт пересчёт из пропсов при каждом апдейте доски.
 import type { EpicRow as Epic, BugRow, TaskRow } from "@/Types";
 import { STATUS_LABEL, STATUS_ORDER } from "../board";
+import { tokenLabel, tokenTitle } from "../tokens";
 import { Cell } from "../Cell";
 import { EpicActionBar } from "../EpicActionBar";
 import { BugCard } from "../BugCard";
@@ -69,6 +70,14 @@ export function EpicRow({
         <strong className="title">
           {epic ? epic.title : "Без эпика" + (epicId ? " · " + epicId : "")}
         </strong>
+        {/* Ф-4: расход токенов эпика — прогноз «≈N», факт «N» и (для
+            завершённых) ошибка прогноза. Подпись компактная, полные числа —
+            в title. */}
+        {epic && tokenLabel(epic, epic.status === "done") && (
+          <span className="tokens" title={tokenTitle(epic)}>
+            {tokenLabel(epic, epic.status === "done")}
+          </span>
+        )}
         {!collapsed && epic && (
           <>
             <span className="id">{epic.task_id}</span>

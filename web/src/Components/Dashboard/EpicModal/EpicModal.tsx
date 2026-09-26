@@ -6,6 +6,7 @@
 import { useState } from "react";
 import type { BranchDiffContext, EpicRow, GitView } from "@/Types";
 import { STATUS_LABEL } from "../board";
+import { fmtTokens, tokenTitle } from "../tokens";
 import { Modal } from "../Modal";
 import { GitBlock } from "../GitBlock";
 import "./styles.scss";
@@ -76,6 +77,16 @@ export function EpicModal({
             <dd className="merge-conflict">
               Релизная ветка не влилась в main: {(epic.merge_conflict_files ?? []).join(", ")}.
               <br />Нужен резолв (ResolveGitConflicts / ручной rebase), затем «Залить в main».
+            </dd>
+          </div>
+        )}
+        {/* Ф-4: расход токенов эпика — прогноз и (после выполнения) факт. */}
+        {(epic.tokens_total || epic.token_estimate) && (
+          <div>
+            <dt>Токены</dt>
+            <dd title={tokenTitle(epic)}>
+              {fmtTokens(epic.tokens_total ?? 0)} факт
+              {epic.token_estimate ? ` · ≈${fmtTokens(epic.token_estimate)} прогноз` : ""}
             </dd>
           </div>
         )}

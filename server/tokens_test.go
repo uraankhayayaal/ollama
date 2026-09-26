@@ -11,8 +11,9 @@ import (
 
 	"ai/agents"
 	"ai/board"
-	"ai/runner"
 	"ai/runevents"
+	"ai/runner"
+	"ai/tokens"
 )
 
 // TestGetTokensStartsAtZero проверяет REST-эндпоинт счётчика токенов:
@@ -50,8 +51,8 @@ func TestTokensAccumulatePerProject(t *testing.T) {
 		t.Fatalf("getOrCreate tok-b: %v", err)
 	}
 
-	sess.addTokens(100, 40, 12.5)
-	sess.addTokens(50, 60, 0)
+	sess.addTokens(100, 40, 12.5, "")
+	sess.addTokens(50, 60, 0, "")
 
 	// tok-a накопил 150/100.
 	rec := httptest.NewRecorder()
@@ -84,6 +85,62 @@ func TestTokensAccumulatePerProject(t *testing.T) {
 	}
 	if ev.Input != 0 || ev.Output != 0 {
 		t.Fatalf("tok-b tokens = %d/%d, want 0/0", ev.Input, ev.Output)
+	}
+}
+
+// TestTokensAccumulateByScope проверяет атрибуцию расхода по единицам работы
+// (Ф-2): порция со scope'ом попадает и в общий счётчик проекта, и в счётчик
+// scope'а (tokens:<project>:scoped:<scope>), откуда оркестратор берёт факт для
+// задачи/эпика. Порция без scope остаётся только в счётчике проекта.
+func TestTokensAccumulateByScope(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	sess, _, err := srv.getOrCreate("tok-scope")
+	if err != nil {
+		t.Fatalf("getOrCreate tok-scope: %v", err)
+	}
+	ctx := context.Background()
+
+	sess.addTokens(100, 10, 0, tokens.ScopeTask("T-1"))
+	sess.addTokens(40, 5, 0, tokens.ScopeTask("T-1"))
+	sess.addTokens(7, 1, 0, tokens.ScopeEpic("epic-1"))
+	// Неизвестный scope — тихо игнорируем (без мусора в Redis).
+	sess.addTokens(3, 3, 0, "мусор")
+	// Без scope — только проект.
+	sess.addTokens(1, 1, 0, "")
+
+	in, out, err := sess.tok.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in != 151 || out != 20 {
+		t.Fatalf("счётчик проекта = %d/%d, want 151/20", in, out)
+	}
+
+	in, out, err = sess.tok.GetScoped(ctx, tokens.ScopeTask("T-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in != 140 || out != 15 {
+		t.Fatalf("scope task:T-1 = %d/%d, want 140/15", in, out)
+	}
+
+	in, out, err = sess.tok.GetScoped(ctx, tokens.ScopeEpic("epic-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in != 7 || out != 1 {
+		t.Fatalf("scope epic:epic-1 = %d/%d, want 7/1", in, out)
+	}
+
+	// Сброс после фиксации итога в доске.
+	if err := sess.tok.ResetScoped(ctx, tokens.ScopeTask("T-1")); err != nil {
+		t.Fatal(err)
+	}
+	if in, out, err = sess.tok.GetScoped(ctx, tokens.ScopeTask("T-1")); err != nil {
+		t.Fatal(err)
+	}
+	if in != 0 || out != 0 {
+		t.Fatalf("scope task:T-1 после ResetScoped = %d/%d, want 0/0", in, out)
 	}
 }
 

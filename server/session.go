@@ -137,6 +137,11 @@ func (s *Server) newSession(project string) (*Session, error) {
 		log:     logging.For(project),
 	}
 	sess.router = runevents.NewRouter(sess.routeRunEvent)
+	// Ф-5: прогноз расхода токенов для новых единиц доски (эпиков/задач) —
+	// считается по истории завершённых единиц этой же доски. Источник внедряется
+	// в хранилище, поэтому оценка появляется при любом создании записи
+	// (архитектор, лид, чат-ассистент), а не только в агентском цикле.
+	sess.board.TokenEstimate = sess.tokenEstimate()
 	// Ф-2: событийная связь «доска ↔ чат» на слушателях шины проекта.
 	// Сессия подписывает своих внутренних потребителей; другие компоненты
 	// (будущие аналитики, эпики/задачи) добавляются как новые Listen-подписки
@@ -259,6 +264,11 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// Ф-5/Р-2: рядом — безопасный мост фоновой индексации RAG (предложить
 	// пользователю построить индекс, не прерывая проектирование).
 	runner.SetArchitectExtras(&askTool{b: sess}, newIndexBackgroundTool(sess))
+	// Ф-2/Ф-3: учёт расхода токенов по задачам и эпикам. Оркестратор помечает
+	// раунды scope'ом единицы работы, а по завершении записывает факт в доску
+	// (board.TokenUsage). В консольном CLI (main.go) счётчика нет — вызовы
+	// идут без атрибуции, поведение прежнее.
+	runner.SetTokens(sess.tok)
 	// Режим запуска: boardOnly — работа только с доской (кнопка «Продолжить»
 	// и KanbanStart без текста задачи); иначе полный конвейер с проектированием
 	// архитектором (KanbanStart с текстом задачи).
@@ -433,8 +443,10 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 	case runevents.TypeTokenCount:
 		// Потребление токенов раунда: накапливаем в Redis (за время жизни
 		// проекта) и транслируем новые тоталы в шину — фронт обновляет
-		// счётчик рядом с кнопкой «Продолжить» в реальном времени.
-		sess.addTokens(ev.In, ev.Out, ev.TPS)
+		// счётчик рядом с кнопкой «Продолжить» в реальном времени. Scope
+		// раунда (Ф-2) дополнительно копит расход по задаче/эпику — по нему
+		// оркестратор запишет факт в сущность доски при завершении.
+		sess.addTokens(ev.In, ev.Out, ev.TPS, ev.Scope)
 	}
 }
 
@@ -469,12 +481,19 @@ func (sess *Session) toolTrace(ev runevents.Event) {
 
 // addTokens прибавляет порцию токенов раунда к счётчику проекта, запоминает
 // последнюю реальную скорость генерации и публикует новые итоговые суммы (+
-// скорость) в шину (type=tokens).
-func (sess *Session) addTokens(in, out int64, tps float64) {
+// скорость) в шину (type=tokens). Непустой scope (Ф-2) — порция дополнительно
+// копится в счётчике единицы работы (tokens:<project>:scoped:<scope>), откуда
+// оркестратор возьмёт факт при фиксации итогов задачи/эпика.
+func (sess *Session) addTokens(in, out int64, tps float64, scope string) {
 	totIn, totOut, err := sess.tok.Add(context.Background(), in, out)
 	if err != nil {
 		sess.log.Warnf("server: счётчик токенов %s: %v", sess.project, err)
 		return
+	}
+	if scope != "" {
+		if err := sess.tok.AddScoped(context.Background(), scope, in, out); err != nil {
+			sess.log.Warnf("server: счётчик токенов %s (%s): %v", sess.project, scope, err)
+		}
 	}
 	sess.mu.Lock()
 	if tps > 0 {

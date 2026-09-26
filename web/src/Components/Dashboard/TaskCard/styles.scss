@@ -29,6 +29,15 @@
     overflow-wrap: anywhere;
   }
 
+  // Ф-4: подпись расхода токенов задачи (прогноз «≈N» / факт «N»).
+  .tokens {
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted, #8a94a6);
+    white-space: nowrap;
+    cursor: help;
+  }
+
   .controls {
     display: flex;
     justify-content: flex-end;

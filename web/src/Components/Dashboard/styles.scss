@@ -26,6 +26,17 @@
       margin-left: auto;
       font-variant-numeric: tabular-nums;
     }
+
+    // Ф-4: сводка расхода токенов доски (факт/прогноз/ошибка).
+    .tokens {
+      padding: 2px 7px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 999px;
+      background: var(--btn, #f1f5f9);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      cursor: help;
+    }
   }
 
   .board-tools {
@@ -247,6 +258,13 @@
           font-weight: 700;
           font-variant-numeric: tabular-nums;
           line-height: 1;
+        }
+
+        // Ф-4: расход токенов в свёрнутой статусной полосе.
+        &.tokens {
+          color: var(--st-in-progress, #2563eb);
+
+          b { font-size: 8px; }
         }
 
         &.epic {

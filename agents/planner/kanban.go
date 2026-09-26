@@ -13,6 +13,7 @@ import (
 	"ai/board"
 	"ai/logging"
 	"ai/models"
+	"ai/tokens"
 	"ai/tools"
 	"context"
 	"errors"
@@ -74,6 +75,11 @@ type KanbanRunner struct {
 	// например AskUser для уточняющего вопроса до публикации бэклога.
 	// nil/пустой — автономный режим (консоль), архитектор работает без них.
 	architectExtras []tools.Tool
+	// tokens — счётчик токенов проекта (Ф-2/Ф-3): по scope единицы работы
+	// оркестратор снимает накопленный расход и записывает факт в доску при
+	// фиксации итогов задачи/эпика. nil — учёта нет (консольный режим):
+	// вызовы Generate идут без атрибуции, счётчики не трогаются.
+	tokens *tokens.Store
 }
 
 // standbyPoll — период опроса доски в режиме ожидания: раз в 5 с runner
@@ -120,6 +126,15 @@ func (k *KanbanRunner) SetStandbyNotifier(fn func(bool)) { k.onStandby = fn }
 // (project, taskID) (Ф-3): worktree ветки задачи для git, temp/<проект> —
 // стандартно. nil возвращает поведение по умолчанию.
 func (k *KanbanRunner) SetOutputDir(fn func(project, taskID string) string) { k.outputDir = fn }
+
+// SetTokens подключает счётчик токенов проекта (Ф-2/Ф-3): раунды Generate
+// начинают атрибутироваться единицей работы (scope), а по завершении задачи или
+// эпика накопленный расход записывается фактом в доску. nil возвращает
+// автономный режим без учёта (консоль).
+func (k *KanbanRunner) SetTokens(t *tokens.Store) *KanbanRunner {
+	k.tokens = t
+	return k
+}
 
 // SetRAG подключает клиент векторной памяти к фазам архитектора (Ф-1/Ф-6):
 // CodeSearch/RagIndexStatus и блок «релевантный код» в промпте начинают
@@ -427,6 +442,14 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
+	// Ф-3: проход по доске, фиксирующий факт расхода токенов по всем
+	// терминальным единицам. Основные точки фиксации — конец phaseExecute и
+	// phaseComplete; проход закрывает переходы, сделанные помимо оркестратора
+	// (специалист, чат-ассистент, человек в Web UI). Идемпотентен, ошибки учёта
+	// не роняют цикл.
+	k.finalizeTokens(ctx)
+
 	return progress || p, nil
 }
 
@@ -648,7 +671,7 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 
 	arch := architect.NewArchitectWithStore(k.store.Project(), meta.Task, k.store)
 	arch = k.prepareArchitect(arch)
-	resp, err := k.provider.Generate(ctx, arch)
+	resp, err := k.generate(ctx, tokens.ScopeArchitecture, arch)
 	if err != nil {
 		return false, fmt.Errorf("фаза архитектора: %w", err)
 	}
@@ -695,7 +718,7 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 
 	reviewer := architect.NewArchitectWithStore(k.store.Project(), k.epicReviewPrompt(k.store.Project(), drafts), k.store).AsReviewer()
 	reviewer = k.prepareArchitect(reviewer)
-	resp, err := k.provider.Generate(ctx, reviewer)
+	resp, err := k.generate(ctx, tokens.ScopeArchitecture, reviewer)
 	if err != nil {
 		return false, fmt.Errorf("фаза ревизии эпиков: %w", err)
 	}
@@ -805,7 +828,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 	k.log.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
 		leadName(epic), epic.TaskID, truncateText(epic.Title, 60), needResync)
 
-	resp, err := k.provider.Generate(ctx, lead)
+	resp, err := k.generate(ctx, tokens.ScopeEpic(epic.TaskID), lead)
 	if err != nil {
 		return false, fmt.Errorf("декомпозиция эпика %s: %w", epic.TaskID, err)
 	}
@@ -1189,7 +1212,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 
 		k.log.Infof("[задача %s] специалист %s выполняет: %s",
 			t.TaskID, t.Assignee, truncateText(t.Title, 60))
-		resp, err := k.provider.Generate(ctx, specialist)
+		resp, err := k.generate(ctx, tokens.ScopeTask(t.TaskID), specialist)
 		if err != nil {
 			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
 		}
@@ -1212,6 +1235,10 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				return false, fmt.Errorf("задача %s: в работе -> выполнена: %w", t.TaskID, err)
 			}
 			k.log.Infof("[задача %s] в работе → выполнена (fallback: агент не сменил статус)", t.TaskID)
+		}
+		// Ф-3: факт расхода токенов задачи фиксируется сразу после выполнения.
+		if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
+			k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
 		}
 		progress = true
 	}
@@ -1252,7 +1279,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if tp, ok := any(qa).(interface{ SetTaskPublishing(bool) }); ok {
 			tp.SetTaskPublishing(false)
 		}
-		resp, err := k.provider.Generate(ctx, qa)
+		resp, err := k.generate(ctx, tokens.ScopeBugs, qa)
 		if err != nil {
 			return false, fmt.Errorf("фаза триажа багрепортов: %w", err)
 		}
@@ -1268,7 +1295,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		arch := architect.NewArchitectWithStore(k.store.Project(),
 			k.bugExpertPrompt(k.store.Project(), confirmedBugs), k.store).AsBugExpert()
 		arch = k.prepareArchitect(arch)
-		resp, err := k.provider.Generate(ctx, arch)
+		resp, err := k.generate(ctx, tokens.ScopeBugs, arch)
 		if err != nil {
 			return false, fmt.Errorf("фаза экспертизы багрепортов: %w", err)
 		}
@@ -1328,6 +1355,11 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 			if advanced {
 				k.log.Infof("[эпик %s] выполнен: %s", epic.TaskID, truncateText(epic.Title, 60))
 				progress = true
+				// Ф-3: факт расхода токенов эпика (задачи + лид + доля
+				// архитектора) фиксируется сразу после выполнения.
+				if err := k.finalizeEpicTokens(ctx, epic.TaskID); err != nil {
+					k.log.Warnf("[учёт токенов] эпик %s: %v", epic.TaskID, err)
+				}
 				// Багрепорты, направленные на эпик исправления, закрываются
 				// (fix -> fixed): исправление поставлено и проверено.
 				if n, err := k.store.MarkBugsFixedForEpic(ctx, epic.TaskID); err != nil {

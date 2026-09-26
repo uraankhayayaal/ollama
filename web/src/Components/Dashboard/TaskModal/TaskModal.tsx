@@ -4,6 +4,7 @@
 // эпика) и «Создать MR» (push → MR в ветку эпика).
 import type { BranchDiffContext, GitView, TaskRow } from "@/Types";
 import { MOVES, STATUS_LABEL } from "../board";
+import { fmtTokens, tokenTitle } from "../tokens";
 import { Modal } from "../Modal";
 import { GitBlock } from "../GitBlock";
 import "./styles.scss";
@@ -49,6 +50,16 @@ export function TaskModal({
             <dd className="merge-conflict">
               Ветка не влилась в релиз эпика: {(task.merge_conflict_files ?? []).join(", ")}.
               <br />Нужен резолв (ResolveGitConflicts / ручной rebase), затем повторить мёрдж.
+            </dd>
+          </div>
+        )}
+        {/* Ф-4: расход токенов задачи — прогноз и (после выполнения) факт. */}
+        {(task.tokens_total || task.token_estimate) && (
+          <div>
+            <dt>Токены</dt>
+            <dd title={tokenTitle(task)}>
+              {fmtTokens(task.tokens_total ?? 0)} факт
+              {task.token_estimate ? ` · ≈${fmtTokens(task.token_estimate)} прогноз` : ""}
             </dd>
           </div>
         )}

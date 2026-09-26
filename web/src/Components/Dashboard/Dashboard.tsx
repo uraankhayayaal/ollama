@@ -6,6 +6,7 @@
 import { useState } from "react";
 import type { BoardView, BranchDiffContext, BugRow, EpicRow, TaskRow } from "@/Types";
 import { STATUS_LABEL, STATUS_ORDER } from "./board";
+import { fmtTokens, tokensSummary } from "./tokens";
 import { EpicRow as EpicRowView } from "./EpicRow";
 import { EpicModal } from "./EpicModal";
 import { TaskModal } from "./TaskModal";
@@ -82,12 +83,26 @@ export function Dashboard({
       status: s,
       count: board.tasks.filter((t) => t.status === s).length,
     }));
+    // Ф-4: расход токенов доски (факт и ошибка прогноза) — одной строкой.
+    const tokens = tokensSummary([...board.epics, ...board.tasks]);
     return (
       <div className="dashboard collapsed">
         <button className="expand" onClick={onToggleCollapse} title="Развернуть доску">
           «
         </button>
         <div className="dstrip">
+          {tokens.spent > 0 && (
+            <div
+              className="st tokens"
+              title={
+                tokens.errorPct != null
+                  ? `Токены доски: факт ${fmtTokens(tokens.spent)} · ошибка прогноза ${tokens.errorPct}% по ${tokens.measured} ед.`
+                  : `Токены доски: факт ${fmtTokens(tokens.spent)}`
+              }
+            >
+              <b>{fmtTokens(tokens.spent)}</b>
+            </div>
+          )}
           <div className="st epic" title={`Эпиков: ${board.epics.length}`}>
             <IconEpic />
             <b>{board.epics.length}</b>
@@ -166,6 +181,11 @@ export function Dashboard({
     count: visibleTasks.filter((t) => t.status === s).length,
   }));
 
+  // Ф-4: сводка расхода токенов по всей доске: факт, сумма прогнозов и ошибка
+  // прогноза по измеренным единицам. Считается по всем эпикам и задачам, а не
+  // по видимым строкам: фильтры доски не должны «прятать» расход.
+  const tokens = tokensSummary([...board.epics, ...board.tasks]);
+
   // Эпик активен, если у него есть незавершённые задачи (new → in_progress);
   // только такие по умолчанию развёрнуты полностью. Пауза/отмена/done — не активны.
   const isActive = (tasks: TaskRow[]) =>
@@ -195,6 +215,21 @@ export function Dashboard({
     <div className="dashboard" onDragOver={(e) => e.preventDefault()}>
       <div className="banner">
         <span className="project">{board.meta?.project_name ?? "—"}</span>
+        {(tokens.spent > 0 || tokens.estimated > 0) && (
+          <span
+            className="tokens"
+            title={
+              tokens.errorPct != null
+                ? `Факт ${fmtTokens(tokens.spent)} токенов · прогноз ${fmtTokens(tokens.estimated)} · ошибка ${tokens.errorPct}% по ${tokens.measured} ед. с записанным прогнозом`
+                : `Факт ${fmtTokens(tokens.spent)} токенов · прогноз ${fmtTokens(tokens.estimated)} · ошибка прогноза пока не измерялась`
+            }
+          >
+            токены: {fmtTokens(tokens.spent)}
+            {tokens.estimated > 0 && ` (прогноз ${fmtTokens(tokens.estimated)}`}
+            {tokens.estimated > 0 && tokens.errorPct != null && `, ошибка ${tokens.errorPct}%`}
+            {tokens.estimated > 0 && ")"}
+          </span>
+        )}
         <span className="counts">
           эпиков {board.epics.length} · задач {board.tasks.length} · багов {board.bugs.length}
           {board.total && board.total.tasks > board.tasks.length && (

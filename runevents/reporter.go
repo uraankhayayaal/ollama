@@ -6,6 +6,11 @@
 // Имя агента в событие проставляет не runner (в интерфейсе agents.Agent нет
 // метода имени), а обёртка WithAgent, которую оркестратор применяет при
 // запуске конкретной фазы и кладёт результат в контекст вызова.
+//
+// Тот же приём используется для атрибуции токенов: WithScope помечает расход
+// токенов scope'ом единицы работы (task:<id>, epic:<id>, architecture, bugs),
+// чтобы сервер мог копить факт по задачам и эпикам, а не только по проекту
+// (Ф-2 PLAN-2026-09-19-done-epic-task-token.md).
 package runevents
 
 import (
@@ -30,6 +35,8 @@ const (
 	TypeToolResult EventType = "tool_result"
 	// TypeTokenCount — потребление токенов раунда (вход/выход). Сервер
 	// накапливает счётчик в Redis и транслирует тоталы в WS как type=tokens.
+	// Scope события (Event.Scope, задаётся WithScope) определяет, в счётчик
+	// какой единицы (проект/эпик/задача) попадёт расход раунда.
 	TypeTokenCount EventType = "tokens"
 )
 
@@ -48,7 +55,11 @@ type Event struct {
 	In        int64     `json:"in,omitempty"`        // входные токены раунда (для TypeTokenCount)
 	Out       int64     `json:"out,omitempty"`       // выходные токены раунда (для TypeTokenCount)
 	TPS       float64   `json:"tps,omitempty"`       // скорость генерации (вых. ток/с) — реальный eval провайдера
-	Time      time.Time `json:"time"`                // момент события (UTC)
+	// Scope — единица работы, на которую потрачены токены раунда (для
+	// TypeTokenCount): task:<id>, epic:<id>, architecture, bugs. Проставляет
+	// WithScope; пусто — расход относится к проекту в целом.
+	Scope string    `json:"scope,omitempty"`
+	Time  time.Time `json:"time"` // момент события (UTC)
 }
 
 // Reporter — назначение событий от runner.Generate. Небезопасен для вызовов
@@ -77,6 +88,7 @@ type Sink func(Event)
 type Router struct {
 	mu    sync.Mutex
 	agent string
+	scope string
 	sink  Sink
 }
 
@@ -90,6 +102,16 @@ func (r *Router) WithAgent(name string) *Router {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return &Router{agent: name, sink: r.sink}
+}
+
+// WithScope возвращает клон с установленным scope'ом единицы работы
+// (Ф-2 PLAN-2026-09-19-done-epic-task-token.md): имя агента и sink сохраняются,
+// токены раундов помечаются этим scope. Пустой scope — расход без атрибуции
+// (счётчик проекта).
+func (r *Router) WithScope(scope string) *Router {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return &Router{agent: r.agent, scope: scope, sink: r.sink}
 }
 
 // OnMessage сообщает текст модели в диалоге.
@@ -127,9 +149,10 @@ func (r *Router) OnTokens(in, out int64, tps float64) {
 
 func (r *Router) emit(ev Event) {
 	r.mu.Lock()
-	agent, sink := r.agent, r.sink
+	agent, scope, sink := r.agent, r.scope, r.sink
 	r.mu.Unlock()
 	ev.Agent = agent
+	ev.Scope = scope
 	ev.Time = time.Now().UTC().Truncate(time.Millisecond)
 	if sink != nil {
 		sink(ev)
@@ -150,4 +173,14 @@ func ReporterFromContext(ctx context.Context) *Router {
 		return r
 	}
 	return nil
+}
+
+// WithScope помечает атрибуцию токенов в контексте вызова Generate: вложенный
+// контекст несёт клон репортёра с заданным scope. Если репортёра в контексте
+// нет (консольный режим), контекст возвращается без изменений.
+func WithScope(ctx context.Context, scope string) context.Context {
+	if r := ReporterFromContext(ctx); r != nil {
+		return WithReporter(ctx, r.WithScope(scope))
+	}
+	return ctx
 }

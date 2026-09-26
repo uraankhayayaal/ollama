@@ -3,6 +3,7 @@
 // событие, чтобы клик не всплывал.
 import type { TaskRow } from "@/Types";
 import { MOVES } from "../board";
+import { tokenLabel, tokenTitle } from "../tokens";
 import { setDragID } from "../dnd";
 import "./styles.scss";
 
@@ -25,6 +26,12 @@ export function TaskCard({
       onClick={onOpen}
     >
       <div className="title">{task.title}</div>
+      {/* Ф-4: расход токенов задачи — тот же формат, что у эпика. */}
+      {tokenLabel(task, task.status === "done") && (
+        <div className="tokens" title={tokenTitle(task)}>
+          {tokenLabel(task, task.status === "done")}
+        </div>
+      )}
       <div className="controls">
         {m.prev && (
           <button
