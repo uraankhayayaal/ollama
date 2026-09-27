@@ -357,6 +357,44 @@ func (k Kind) analyzeCommand(dir string) (cmd, tool string) {
 	}
 }
 
+// testCommand возвращает команду запуска автотестов проекта и название
+// инструмента. Пустая команда — запускать нечем (манифеста зависимостей нет,
+// тестов в проекте не предполагается, например для каталога только с
+// K8s-манифестами).
+//
+// Приоритет Makefile (цель test) и env ACCEPT_TEST_CMD разруливает вызывающая
+// сторона (VerifyPlanFor) — здесь только автодетект по типу проекта.
+func (k Kind) testCommand(dir string) (cmd, tool string) {
+	switch k {
+	case KindGo:
+		return "go test ./...", "go test"
+	case KindPhp:
+		// phpunit живёт в vendor/bin (composer require --dev); без него
+		// тестов у проекта нет.
+		if hasFile(dir, "vendor/bin/phpunit") {
+			return "vendor/bin/phpunit", "phpunit"
+		}
+		return "", ""
+	case KindNode:
+		// Скрипт test в package.json — единственный источник правды о тестах
+		// Node-проекта: jest/vitest/mocha выбираются скриптом, а не нами.
+		if nodeHasScript(dir, "test") {
+			return "npm test", "npm test"
+		}
+		return "", ""
+	case KindPython:
+		if hasFile(dir, "requirements.txt") || hasFile(dir, "pyproject.toml") {
+			if cmdAvailable("pytest") {
+				return "pytest -q", "pytest"
+			}
+			return pythonCmd() + " -m unittest discover", "unittest"
+		}
+		return "", ""
+	default:
+		return "", ""
+	}
+}
+
 // installCommand возвращает команду установки зависимостей и название
 // инструмента. Пустая команда — устанавливать нечего (стандартная библиотека,
 // нет манифеста зависимостей и т.п.).

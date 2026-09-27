@@ -92,14 +92,45 @@
       остановка долгого процесса, хвост, деграды, детект запуска),
       `runner/applog_test.go`, `server/applog_test.go` (буфер, шина, REST).
 
-### Ф-3 — Роли DevOps/QA вглубь
-- [ ] `agents/qaengineer`: настоящие тесты (по ТЗ — unit + интеграционные;
+### Ф-3 — Роли DevOps/QA вглубь — СДЕЛАНО
+- [x] `agents/qaengineer`: настоящие тесты (по ТЗ — unit + интеграционные;
       web — Playwright/E2E), команда запуска как у приёмки (`agents/acceptor`)
-- [ ] `agents/devops`: генерация CI/CD (GitHub Actions/GitLab CI), сложные
+      → раздел «СОСТАВ АВТОТЕСТОВ»: unit (падает на текущем коде / проходит
+      после правки), интеграционные (реальный HTTP + БД в compose, свои
+      моки запрещены), E2E веба на Playwright с `playwright.config.ts`,
+      детерминированная синхронизация (динамические порты, опрос health, без
+      sleep). Команды проверки больше не перечислены прозой: блок
+      «КОМАНДЫ ПРОВЕРКИ» вычисляется `acceptor.VerifyPlanFor` — тем же кодом,
+      что и приёмка (env ACCEPT_* → Makefile → автодетект), поэтому тесты QA
+      запускаются ровно так же, как их потом проверит acceptor.
+- [x] `agents/devops`: генерация CI/CD (GitHub Actions/GitLab CI), сложные
       Dockerfile, K8s-манифесты; проверка «командами» (`Run`) уже есть
-- [ ] Промпты/наборы инструментов QA/DevOps: `tools/registry.go:79` + добавление
+      → п.7 CI/CD (`.github/workflows/ci.yml` / `.gitlab-ci.yml`: кэш
+      зависимостей, build/lint/test по целям Makefile, teardown сервисов в
+      finally, без dev-серверов и без ручного дублирования команд), п.8
+      многостадийный Dockerfile (non-root, без дев-зависимостей в финале,
+      `.dockerignore`, версии из манифеста, не `latest`), п.9 K8s
+      (Deployment + Service, ConfigMap/Secret ссылками, `readinessProbe`/
+      `livenessProbe`, requests/limits, реплики).
+- [x] Промпты/наборы инструментов QA/DevOps: `tools/registry.go:79` + добавление
       в `devToolNames`; degrade-правила, как в LSP
-- [ ] Тесты промптов: инструменты в наборе совпадают с упомянутыми в промпте
+      → п.10 DevOps «ПРОВЕРЯЙ, А НЕ ПРЕДПОЛАГАЙ»: недоступный инструмент
+      (docker/kubectl, Error 127 / command not found) — это degrade с явным
+      «не проверено» в отчёте и проверкой максимум доступного; «манифест
+      валиден» допустимо только после успешного `docker compose config` /
+      `kubectl apply --dry-run=client`. У QA — свой degrade для окружения без
+      Playwright/БД. `DetectStack` добавлен в `devopsToolNames` (базовый образ
+      и рантайм выводятся из стека, а не выдумываются), `ReadAppLogs` — в
+      оба набора.
+- [x] Тесты промптов: инструменты в наборе совпадают с упомянутыми в промпте
+      → `agents/promptcheck` (промпт называет отсутствующий инструмент или
+      содержит опечатку в имени) + `TestPromptMentionsOnlyAvailableTools` в
+      ролях developer/qaengineer/devops, `TestDevopsPromptCICDAndContainers`,
+      `TestDevopsPromptDegradeRules`, `TestQAPromptTestPortfolio`,
+      `TestQAPromptUsesAcceptorVerifyPlan`.
+      Тесты приёмки: `TestVerifyPlanMatchesAcceptCommands` (план не расходится
+      с `acceptOne`), `TestVerifyPlanWithoutTests`, `TestVerifyPlanTestHint`,
+      `TestVerifyPlanLintPrefersMakeTarget`.
 
 ### Ф-4 — Песочница выполнения
 - [ ] `tools/sandbox.go`: конфиг запуска `Run` в контейнере (образ по стеку,

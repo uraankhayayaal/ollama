@@ -57,6 +57,13 @@ type Config struct {
 	// проекта. Задаётся ACCEPT_ANALYZE_CMD.
 	AnalyzeCmd string
 
+	// TestCmd — команда запуска автотестов. Пустая — автодетект по типу
+	// проекта (make test → go test ./... / npm test / pytest / phpunit).
+	// Задаётся ACCEPT_TEST_CMD. Приёмкой стадия тестов не выполняется:
+	// конфиг нужен QA-инженеру, чтобы запускать тесты той же командой
+	// (см. VerifyPlanFor).
+	TestCmd string
+
 	// InstallDeps — устанавливать ли зависимости проекта перед сборкой
 	// (go mod download / npm ci / pip install). Недоступный инструмент
 	// установки — не ошибка, шаг пропускается. По умолчанию true.
@@ -107,6 +114,9 @@ func LoadConfig() Config {
 	}
 	if v := os.Getenv("ACCEPT_ANALYZE_CMD"); v != "" {
 		cfg.AnalyzeCmd = v
+	}
+	if v := os.Getenv("ACCEPT_TEST_CMD"); v != "" {
+		cfg.TestCmd = v
 	}
 	if v := os.Getenv("ACCEPT_INSTALL_CMD"); v != "" {
 		cfg.InstallCmd = v

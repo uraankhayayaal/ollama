@@ -63,19 +63,48 @@ func TestQAConstrainScopePreventsWriteOutsideScope(t *testing.T) {
 	}
 }
 
-// TestQAPromptMentionsMakefile — Ф-2/Ф-4 PLAN-2026-09-24-todo-makefile.md:
-// единая команда автотестов — из корневого Makefile (make test / make e2e),
-// приёмка через make build/make lint; запрет дев-процессов сохраняется.
-func TestQAPromptMentionsMakefile(t *testing.T) {
-	q := newTestQA(t)
-	p := q.GetSystemMessages(nil)[0].Message
-	for _, want := range []string{"Makefile", "make test", "make e2e", "make build", "make lint"} {
-		if !strings.Contains(p, want) {
-			t.Errorf("промпт QA-инженера не содержит %q:\n%s", want, p)
+// TestQAPromptUsesAcceptorVerifyPlan — Ф-3: команды проверки в промпте QA
+// приходят из приёмки (agents/acceptor.VerifyPlanFor), а не из прозы промпта.
+// Проверяется на настоящем Makefile-проекте: если план перестанет вычисляться
+// или Makefile перестанет иметь приоритет, в промпте появятся «(не определена)».
+func TestQAPromptUsesAcceptorVerifyPlan(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mk := "build:\n\tgo build ./...\ntest:\n\tgo test ./...\ne2e:\n\tgo run . & p=$$!; sleep 1; kill $$p\nlint:\n\tgofmt -l .\n"
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(mk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q := newQAEngineer(dir, "", Config{})
+	prompt := q.GetSystemMessages(nil)[0].Message
+
+	for _, want := range []string{"КОМАНДЫ ПРОВЕРКИ", "make test", "make build", "make e2e"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("промпт QA-инженера не содержит %q:\n%s", want, prompt)
 		}
 	}
-	if !strings.Contains(p, "НЕ запускай приложение через Run") {
-		t.Errorf("промпт должен сохранять запрет дев-процессов:\n%s", p)
+	// Сборка и тесты для Makefile-проекта определены — «не определена» здесь
+	// была бы провалом автодетекта. А вот «запуск сервиса» без цели run и без
+	// узнаваемого стека не определён честно, и это допустимо.
+	for _, unresolved := range []string{"сборка: (не определена", "автотесты: (не определена", "анализ/линт: (не определена", "стиль: (не определена"} {
+		if strings.Contains(prompt, unresolved) {
+			t.Errorf("команда проверки не определилась (%q) для Makefile-проекта:\n%s", unresolved, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "НЕ запускай приложение через Run") {
+		t.Errorf("промпт должен сохранять запрет дев-процессов:\n%s", prompt)
+	}
+}
+
+// TestQAPromptWithoutProjectSaysTestsUnknown — обратный случай: пустой каталог
+// (или каталог только с манифестами) не должен приводить к выдуманной команде
+// и к молчаливому пропуску тестов — промпт требует указать это в отчёте.
+func TestQAPromptWithoutProjectSaysTestsUnknown(t *testing.T) {
+	q := newTestQA(t)
+	prompt := q.GetSystemMessages(nil)[0].Message
+	if !strings.Contains(prompt, "автоопределение не сработало") {
+		t.Errorf("при неопределённой команде тестов промпт должен требовать указать это в отчёте:\n%s", prompt)
 	}
 }
 
@@ -102,5 +131,23 @@ func TestPromptMentionsOnlyAvailableTools(t *testing.T) {
 	}
 	if !promptcheck.MentionsWord(prompt, "ReadAppLogs") {
 		t.Error("qa: промпт не упоминает ReadAppLogs")
+	}
+}
+
+// TestQAPromptTestPortfolio — Ф-3: три уровня тестов (unit / интеграционные /
+// E2E веба на Playwright), детерминированная синхронизация и degrade-правило
+// для недоступного окружения. Каждый пункт здесь — то, что агент реально
+// забывал: «зелёный» отчёт без запуска тестов проходил как успех.
+func TestQAPromptTestPortfolio(t *testing.T) {
+	q := newTestQA(t)
+	p := q.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"unit-тесты", "интеграционные", "Playwright", "playwright.config.ts",
+		"health", "ПАДАЕТ на текущем коде", "ПРОХОДИТ после исправления",
+		"degrade", "Отсутствие запуска — не", "Не мокай собственную логику",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт QA-инженера не содержит %q", want)
+		}
 	}
 }

@@ -104,3 +104,43 @@ func TestPromptMentionsOnlyAvailableTools(t *testing.T) {
 		t.Error("devops: промпт не упоминает ReadAppLogs")
 	}
 }
+
+// TestDevopsPromptCICDAndContainers — Ф-3: обязательные артефакты CI/CD,
+// многостадийный Dockerfile и K8s-манифесты. Без этого теста промпт можно
+// сократить до «пиши инфраструктуру» и потерять всё сразу, не упав ни в одном
+// тесте.
+func TestDevopsPromptCICDAndContainers(t *testing.T) {
+	d := newTestDevops(t)
+	p := d.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		".github/workflows/ci.yml", ".gitlab-ci.yml",
+		"многостадийный", "non-root", ".dockerignore",
+		"readinessProbe", "livenessProbe", "resource requests/limits",
+		"DetectStack",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт DevOps не содержит %q", want)
+		}
+	}
+}
+
+// TestDevopsPromptDegradeRules — Ф-3: проверка должна отличаться от
+// предположения. Агент писал «манифест валиден», не имея docker/kubectl в
+// окружении, и это доходило до приёмки как подтверждённый факт.
+func TestDevopsPromptDegradeRules(t *testing.T) {
+	d := newTestDevops(t)
+	p := d.GetSystemMessages(nil)[0].Message
+	// Регистр не важен: требование смысловое, а не строчное совпадение.
+	low := strings.ToLower(p)
+	for _, want := range []string{
+		"degrade", "command not found", "error 127",
+		"не проверено", "допустима только после успешного",
+	} {
+		if !strings.Contains(low, want) {
+			t.Errorf("промпт DevOps не содержит degrade-требование %q", want)
+		}
+	}
+	if !strings.Contains(p, "не успех") {
+		t.Error("промпт DevOps должен называть отсутствие проверки провалом, а не успехом")
+	}
+}
