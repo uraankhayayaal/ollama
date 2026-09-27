@@ -1,7 +1,7 @@
 package tools
 
-// Обработчики инструментов-патчей в *FileOps: PatchGoFunction (семантическая
-// замена одной Go-функции через go/ast) и SearchReplace (универсальный
+// Обработчики инструментов-патчей в *FileOps: PatchFunction (семантическая
+// замена ОДНОЙ функции в Go/TS/Python) и SearchReplace (универсальный
 // текстовый SEARCH/REPLACE). Оба работают ТОЛЬКО с существующими файлами и
 // применяют правку атомарно: файл не записывается, если хоть один фрагмент
 // не найден (SEARCH) или функция/файл невалидны — модель не может скрытно
@@ -16,26 +16,37 @@ import (
 	"strings"
 )
 
-// PatchGoFunction применяет семантический патч к Go-файлу: заменяет узел
-// ОДНОЙ функции (известной по function_name/receiver) на код из body и
-// форматирует файл через go/format. Остальные функции, импорты и структура
-// файла остаются нетронутыми (см. PatchGoFuncSource).
-// Read-modify-write сериализуется пер-проектной блокировкой: параллельные
-// шаги волны не должны одновременно читать устаревшие версии одного файла
-// и взаимно затирать патчи.
-func (ops *FileOps) PatchGoFunction(args map[string]any) ([]byte, error) {
+// PatchFunction заменяет узел ОДНОЙ функции в файле на Go/TS/JS/Python
+// (см. PatchFunctionSource). Read-modify-write сериализуется пер-проектной
+// блокировкой: параллельные шаги волны не должны одновременно читать
+// устаревшие версии одного файла и взаимно затирать патчи.
+func (ops *FileOps) PatchFunction(args map[string]any) ([]byte, error) {
 	var resp []byte
 	err := withProjectLock(ops.OutputDir, func() error {
 		var rerr error
-		resp, rerr = ops.patchGoFunctionLocked(args)
+		resp, rerr = ops.patchFunctionLocked(args, "")
 		return rerr
 	})
 	return resp, err
 }
 
-// patchGoFunctionLocked — тело PatchGoFunction без пер-проектной блокировки.
-func (ops *FileOps) patchGoFunctionLocked(args map[string]any) ([]byte, error) {
-	var params GoFuncPatchParams
+// PatchGoFunction — обратный совместимый алиас PatchFunction, ограниченный
+// .go-файлами. Историческое имя оставлено, потому что на него ссылаются промпты
+// и наборы инструментов прошлых сессий.
+func (ops *FileOps) PatchGoFunction(args map[string]any) ([]byte, error) {
+	var resp []byte
+	err := withProjectLock(ops.OutputDir, func() error {
+		var rerr error
+		resp, rerr = ops.patchFunctionLocked(args, langGo)
+		return rerr
+	})
+	return resp, err
+}
+
+// patchFunctionLocked — общее тело обоих инструментов без блокировки.
+// only ограничивает язык (langGo — только .go, "" — любой поддерживаемый).
+func (ops *FileOps) patchFunctionLocked(args map[string]any, only string) ([]byte, error) {
+	var params PatchFunctionParams
 	raw, err := json.Marshal(args)
 	if err == nil {
 		_ = json.Unmarshal(raw, &params)
@@ -48,9 +59,9 @@ func (ops *FileOps) patchGoFunctionLocked(args map[string]any) ([]byte, error) {
 	}
 
 	if params.TargetFile == "" || params.FunctionName == "" || params.Body == "" {
-		return patchStatusError("target_file, function_name и body обязательны. Возвращай ПОЛНЫЙ исходник заменяющей функции в body (начиная с \"func\")")
+		return patchStatusError("target_file, function_name и body обязательны. Возвращай ПОЛНЫЙ исходник заменяющей функции в body (вместе с сигнатурой)")
 	}
-	if !strings.HasSuffix(params.TargetFile, ".go") {
+	if only == langGo && !strings.HasSuffix(params.TargetFile, ".go") {
 		return patchStatusError(fmt.Sprintf("target_file %q — не Go-файл: PatchGoFunction работает только с .go", params.TargetFile))
 	}
 
@@ -71,14 +82,14 @@ func (ops *FileOps) patchGoFunctionLocked(args map[string]any) ([]byte, error) {
 		return patchStatusError(fmt.Sprintf("файл %q не существует или недоступен: %v", params.TargetFile, err))
 	}
 	if info.IsDir() {
-		return patchStatusError(fmt.Sprintf("%q — директория, а нужен Go-файл", params.TargetFile))
+		return patchStatusError(fmt.Sprintf("%q — директория, а нужен файл", params.TargetFile))
 	}
 	src, err := os.ReadFile(full)
 	if err != nil {
 		return patchStatusError(fmt.Sprintf("не удалось прочитать %q: %v", params.TargetFile, err))
 	}
 
-	out, err := PatchGoFuncSource(filepath.Base(params.TargetFile), src, params)
+	out, err := PatchFunctionSource(filepath.Base(params.TargetFile), src, params)
 	if err != nil {
 		return patchStatusError(err.Error())
 	}
@@ -87,14 +98,26 @@ func (ops *FileOps) patchGoFunctionLocked(args map[string]any) ([]byte, error) {
 		return patchStatusError(fmt.Sprintf("не удалось записать %q: %v", params.TargetFile, err))
 	}
 	ops.recordTouched(full)
-	logging.Detailf("[PatchGoFunction] функция %q в %q заменена (receiver %q)",
-		params.FunctionName, params.TargetFile, params.Receiver)
+	lang := langOfFile(params.TargetFile)
+	logging.Detailf("[PatchFunction] функция %q в %q заменена (receiver %q, язык %s)",
+		params.FunctionName, params.TargetFile, params.Receiver, lang)
 	return json.Marshal(map[string]string{
 		"status":        "success",
 		"filename":      params.TargetFile,
 		"function_name": params.FunctionName,
-		"message":       fmt.Sprintf("функция %q заменена, файл отформатирован через go/format", params.FunctionName),
+		"language":      lang,
+		"message":       patchSuccessMessage(params.FunctionName, lang),
 	})
+}
+
+// patchSuccessMessage — сообщение о том, что именно изменилось и что
+// форматирование не пострадало. Для TS/Python важно сказать явно: соседний код
+// сохранён побайтно, модель не должна ожидать переформатирования файла.
+func patchSuccessMessage(name, lang string) string {
+	if lang == langGo {
+		return fmt.Sprintf("функция %q заменена, файл отформатирован через go/format", name)
+	}
+	return fmt.Sprintf("функция %q заменена, остальной код файла сохранён без изменений", name)
 }
 
 // SearchReplace применяет к существующим файлам блоки SEARCH/REPLACE.

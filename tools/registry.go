@@ -115,6 +115,8 @@ func newTool(name string, deps Deps) Tool {
 		return &appendFileTool{ops: deps.FileOps}
 	case "PatchGoFunction":
 		return &patchGoFunctionTool{ops: deps.FileOps}
+	case "PatchFunction":
+		return &patchFunctionTool{ops: deps.FileOps}
 	case "SearchReplace":
 		return &searchReplaceTool{ops: deps.FileOps}
 	case ResolveGitConflicts:

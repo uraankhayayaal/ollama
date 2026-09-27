@@ -206,6 +206,39 @@ func (t *patchGoFunctionTool) Execute(args map[string]any) ([]byte, error) {
 	return t.ops.PatchGoFunction(args)
 }
 
+// patchFunctionTool — мультиязычная версия PatchGoFunction (Ф-5): тот же
+// семантический патч одной функции для .go/.ts/.tsx/.js/.jsx/.py. Язык
+// определяется расширением target_file, поэтому инструмент работает и в
+// проектах, где основной стек не Go.
+type patchFunctionTool struct{ ops *FileOps }
+
+func (t *patchFunctionTool) Name() string { return "PatchFunction" }
+func (t *patchFunctionTool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name:        "PatchFunction",
+		Description: "Заменяет ТОЛЬКО одну функцию в существующем файле Go, TypeScript/TSX/JavaScript или Python: находит функцию function_name (методы — по receiver) и заменяет её на код из body, остальное в файле не трогается. Для Go — семантически через go/ast с форматированием файла; для TS/Python соседний код сохраняется побайтно. Используй для ТОЧЕЧНЫХ правок вместо перезаписи файла целиком.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"target_file":   map[string]any{"type": "string", "description": "Относительный путь к файлу внутри OutputDir, например 'server/internal/user/service.go', 'src/api/users.ts' или 'app/services/user.py'. Расширение (.go/.ts/.tsx/.js/.jsx/.py) определяет язык обработки."},
+				"function_name": map[string]any{"type": "string", "description": "Имя заменяемой функции/метода, например 'CreateUser' или 'create_user'"},
+				"receiver":      map[string]any{"type": "string", "description": "Имя владельца метода: тип для Go, класс для TS/JS/Python (например 'Service' или 'UserService'). Обязательно, если в файле несколько функций с одинаковым именем. Для функций верхнего уровня не указывай."},
+				"body":          map[string]any{"type": "string", "description": "ПОЛНЫЙ исходник заменяющей функции вместе с сигнатурой: 'func (s *Service) CreateUser(...) error { ... }' / 'export async function getUser(id: string): Promise<User> { ... }' / 'def get_user(self, id: str) -> User: ...'. Имя функции в body обязано совпадать с function_name; тело без сигнатуры — ошибка."},
+				"imports": map[string]any{
+					"type":        "array",
+					"description": "Опционально, только для Go: импорт-пути, которые нужно ДОБАВИТЬ в файл, если их ещё нет ('errors', 'fmt', 'alias \"path\"'). Существующие импорты не трогаются. Для TS/Python не применяется.",
+					"items":       map[string]any{"type": "string"},
+				},
+			},
+			"required":             []string{"target_file", "function_name", "body"},
+			"additionalProperties": false,
+		},
+	}
+}
+func (t *patchFunctionTool) Execute(args map[string]any) ([]byte, error) {
+	return t.ops.PatchFunction(args)
+}
+
 type searchReplaceTool struct{ ops *FileOps }
 
 func (t *searchReplaceTool) Name() string { return "SearchReplace" }
