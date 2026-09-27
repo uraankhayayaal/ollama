@@ -132,16 +132,62 @@
       с `acceptOne`), `TestVerifyPlanWithoutTests`, `TestVerifyPlanTestHint`,
       `TestVerifyPlanLintPrefersMakeTarget`.
 
-### Ф-4 — Песочница выполнения
-- [ ] `tools/sandbox.go`: конфиг запуска `Run` в контейнере (образ по стеку,
+### Ф-4 — Песочница выполнения — СДЕЛАНО (реальный прогон контейнера — ручной E2E)
+- [x] `tools/sandbox.go`: конфиг запуска `Run` в контейнере (образ по стеку,
       mount рабочего каталога, `--read-only` где можно, без host-network);
       фолбэк на хост при `CODEGEN_SANDBOX=0`
-- [ ] Интеграция в `runCommand` (`tools/fileops.go`) — выбор исполнителя
+      → `sandboxSpecFor`/`dockerArgs`: `--rm --init`, `--network` (не host),
+      `--memory`/`--cpus`, `--cap-drop ALL`, `--security-opt
+      no-new-privileges`, `--user UID:GID` хоста (иначе файлы в /workspace
+      получают чужого владельца), кэши в tmpfs, `GOPROXY=off` при
+      `--network none` + подсказка модели про офлайн. Образ по стеку:
+      `golang:1.24` / `node:22` / `python:3.12` / `php:8.3-cli`, иначе
+      `ai-sandbox:latest`. Фолбэк ВИДЕН в результате: поля `sandbox` и
+      `sandbox_note` — иначе «изоляция» осталась бы только в коде.
+      Активация явная: `CODEGEN_SANDBOX=container|auto|local` (по умолчанию
+      хост — см. «Два решения» ниже).
+- [x] Интеграция в `runCommand` (`tools/fileops.go`) — выбор исполнителя
       (local/container) без изменения контракта инструмента
-- [ ] Безопасность: таймауты, работа как non-root, запрет опасных путей;
+      → `runCommand` → `runCommandSandbox(command, workdir, cfg)`; контракт Run
+      сохранён (`command/workdir/stdout/stderr/status/exit_error`),
+      добавлены необязательные `sandbox`, `sandbox_note`, `hint`. Исполнитель
+      хоста внедряется полем `LocalCommand` — это и есть seam для hermetic-тестов.
+- [x] Безопасность: таймауты, работа как non-root, запрет опасных путей;
       конфиг `compose.yaml` — dev-образ песочницы
-- [ ] Hermetic-тесты: фолбэк, изоляция, запрет деструктивных команд
-      (обязан быстрее, чем печатать в контекст)
+      → таймаут и убийство ГРУППЫ процессов уже были в `runCommand` и
+      сохранились; non-root через `--user`; опасные команды
+      (`tools/destructive.go`) отбрасываются ДО запуска — таблица запретов
+      (корень ФС, `~/.ssh`, mkfs, dd в блочные устройства, chmod/chown
+      системных каталогов, shutdown/reboot) с объяснением для модели.
+      `sandbox/compose.yaml` + `sandbox/Dockerfile` — dev-образ
+      `ai-sandbox:latest` (go+node+python+php, make/git/jq/ripgrep, кэши в
+      /tmp, non-root), с теми же cap_drop/no-new-privileges/лимитами, что и
+      `dockerArgs`. Отдельный файл, а не корень `compose.yaml`: там стек
+      платформы (qdrant, redis), и `docker compose down` не должен ронять
+      инфраструктуру вместе с разовым запуском песочницы.
+- [x] Hermetic-тесты: фолбэк, изоляция, запрет деструктивных команд
+      (обязан быстрее, чем печатать в контейст)
+      → `tools/sandbox_test.go` + `tools/destructive_test.go`: hermetic-тесты без
+      docker и без shell-побочек (чистые функции + подменённый
+      `LocalCommand`) — режимы и фолбэк, обязательные флаги изоляции,
+      read-only/tmpfs, режим без сети, блокировка ДО exec (нет ни exit-кода, ни
+      вывода, и файл-след не создаётся), обе стороны списка запретов
+      (блокируется и НЕ блокируется: `rm -rf node_modules` обязан проходить),
+      синхронизация кода/теста/compose. `TestSandboxRealContainer` — условный,
+      пропускается без собранного образа.
+
+**Два решения, принятых по ходу (важно не переоткрывать):**
+1. Песочница выключена по умолчанию (`CODEGEN_SANDBOX` пусто → хост). Пробный
+   запуск с `auto`-по-умолчанию уронил ЛСП-чекер: он вызывает тот же
+   `runCommand`, образ выбирается по манифесту, которого у чекера нет. Молчаливый
+   перенос ВСЕГО исполнения (сборка, тесты, LSP) в контейнер — поведенческое
+   изменение, ломающее проекты по неочевидной причине.
+2. Песочница не даёт полноценной изоляции файловой системы на хосте: том
+   `/workspace` — это файлы проекта, которые агент правит по заданию, поэтому
+   защита здесь — отбраковка разрушителей до exec + ревью диффа, а не «стена».
+   Сеть по умолчанию ЕСТЬ (`go mod download`/`npm ci` иначе не работают);
+   отключается `CODEGEN_SANDBOX_NETWORK=none`.
+
 
 ### Ф-5 — Мультиязычная точечная правка (tree-sitter)
 - [ ] Оценка: подключить `tree-sitter` (Go-биндинги `alecthomas/go_tree_sitter_tsx`/

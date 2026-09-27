@@ -900,11 +900,81 @@ func runTimeout() time.Duration {
 // Команда ограничена по времени runTimeout: если она не завершается (например,
 // агент запустил дев-сервер), процесс и его группа убиваются, а в результате
 // появляется понятное сообщение о таймауте — шаг продолжается, а не виснет.
+//
+// Исполнитель выбирает песочница (Ф-4): контейнер с рабочим каталогом,
+// non-root, без host-сети по умолчанию, либо хост при CODEGEN_SANDBOX=local или
+// если Docker недоступен — тогда в результате появляется sandbox-метка, чтобы
+// «изоляция» не осталась только в документации. Контракт инструмента Run не
+// меняется: {command, workdir, stdout, stderr, status, exit_error} + новые
+// необязательные поля sandbox/hint.
 func runCommand(command, workdir string) (map[string]string, error) {
+	return runCommandSandbox(command, workdir, loadSandboxConfig())
+}
+
+// runCommandSandbox — реализация запуска с явной конфигурацией песочницы.
+// LocalCommand подменяется в hermetic-тестах, поэтому тесты не запускают
+// shell, docker и тем более проекты агентов.
+func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]string, error) {
+	// Отбраковка разрушительных команд ДО любого запуска: в контейнере
+	// `rm -rf /workspace` уничтожит файлы проекта на хосте (том смонтирован
+	// без копии), а на хосте тем более.
+	if reason, unsafe := destructiveCommandReason(command); unsafe {
+		return map[string]string{
+			"command":    command,
+			"workdir":    workdir,
+			"exit_error": "заблокировано политикой безопасности",
+			"status":     "error",
+			"message":    reason,
+		}, nil
+	}
+
+	mode := sb.Mode
+	if mode == SandboxModeUnset {
+		// Конфигурация не определилась (сбой env-разбора) — сознательно
+		// возвращаемся к хосту, но помечаем это в результате.
+		mode = SandboxModeLocal
+	}
+	sandboxed := mode == SandboxModeContainer
+	if sandboxed {
+		// Образ/каталог проверяем ДО запуска: нечитаемый путь или неизвестный
+		// стек — это ошибка конфигурации, а не падение команды.
+		if _, err := sandboxSpecFor(command, workdir, sb); err != nil {
+			return map[string]string{
+				"command":    command,
+				"workdir":    workdir,
+				"exit_error": "песочница не настроена",
+				"status":     "error",
+				"sandbox":    "container",
+				"message":    err.Error(),
+			}, nil
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout())
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	var cmd *exec.Cmd
+	if sandboxed {
+		path, args, err := sandboxCommand(command, workdir, sb)
+		if err != nil {
+			return nil, err
+		}
+		cmd = exec.CommandContext(ctx, path, args...)
+		// Docker-демон живёт по сокету, а переменные вроде DOCKER_HOST нужно
+		// передать дочернему процессу иначе, чем основному окружению агента.
+		cmd.Env = dockerEnv()
+	} else {
+		var err error
+		if sb.LocalCommand != nil {
+			cmd, err = sb.LocalCommand(command, workdir)
+		} else {
+			cmd = exec.CommandContext(ctx, "sh", "-c", command)
+		}
+		if err != nil {
+			return nil, err
+		}
+		cmd.Env = os.Environ()
+	}
 	cmd.Dir = workdir
 	// День: команда может порождать детей (серверы, npm). Отдельная группа
 	// процессов позволяет при таймауте убить их всех, а не только шелл.
@@ -948,6 +1018,15 @@ func runCommand(command, workdir string) (map[string]string, error) {
 		"exit_error": "",
 		"stdout":     stdout.String(),
 		"stderr":     stderr.String(),
+		// Явно сообщаем модели, где выполнялась команда. Без этого «песочница»
+		// существует только в коде, а агент (и человек в логе) считает все
+		// запуски изолированными — включая те, что ушли на хост по фолбэку.
+		"sandbox": string(mode),
+	}
+	if !sandboxed {
+		result["sandbox_note"] = sandboxFallbackReason
+	} else if sb.Network == "none" {
+		result["hint"] = sandboxNetworkHelp()
 	}
 	if timedOut {
 		result["exit_error"] = "signal: killed (timeout)"

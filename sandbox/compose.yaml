@@ -1,0 +1,65 @@
+# Песочница выполнения команд агентов (Ф-4, tools/sandbox.go).
+#
+# Это НЕ сервис, который постоянно работает: compose нужен, чтобы собирать и
+# вручную прогонять тот же образ, который использует sandboxCommand, и чтобы
+# параметры изоляции (non-root, лимиты, tmpfs) были записаны в файле, а не
+# только в коде Go.
+#
+# Сборка образа:
+#   docker compose -f sandbox/compose.yaml build
+#
+# Ручной запуск команды в песочнице (то же, что делает CODEGEN_SANDBOX=container):
+#   PROJECT_DIR=$PWD docker compose -f sandbox/compose.yaml run --rm sandbox make test
+#
+# Постоянно запущенный стек платформы (qdrant, redis) — в корневом compose.yaml;
+# смешивать его с образом песочницы нельзя: у них разные образы и жизненные
+# циклы, а объединение заставило бы `docker compose down` останавливать инфраструктуру
+# вместе с разовым запуском песочницы.
+
+services:
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Владелец файлов в /workspace должен совпадать с владельцем на хосте,
+        # иначе артефакты сборки потом не удалятся обычным rm.
+        TARGET_UID: "${SANDBOX_UID:-1000}"
+        TARGET_GID: "${SANDBOX_GID:-1000}"
+        # Браузеры для Playwright тяжёлые и нужны не всем проектам.
+        CODEGEN_SANDBOX_PLAYWRIGHT: "${CODEGEN_SANDBOX_PLAYWRIGHT:-0}"
+    image: ai-sandbox:latest
+    # Не publish: образ для локальных запусков, в реестр ему не надо.
+    pull_policy: never
+    init: true
+    # Те же гарантии, что и в dockerArgs: без cap-дропов и no-new-privileges
+    # «песочница» держится только на том, что агент не догадался сделать
+    # setuid-куда-нибудь.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Ресурсы ограничены теми же значениями, что подставляет песочница по
+    # умолчанию (CODEGEN_SANDBOX_MEMORY / CODEGEN_SANDBOX_CPUS).
+    mem_limit: "${CODEGEN_SANDBOX_MEMORY:-2g}"
+    cpus: "${CODEGEN_SANDBOX_CPUS:-2}"
+    network_mode: "${CODEGEN_SANDBOX_NETWORK:-default}"
+    # Рабочий каталог проекта: точка монтирования совпадает с /workspace из
+    # sandbox.go, иначе «тот же образ» окажется в другом каталоге.
+    volumes:
+      - "${PROJECT_DIR:-..}:/workspace:rw"
+    # HOME и кэши — в tmpfs: файлы не должны попадать в образ и в хостовую ФС.
+    tmpfs:
+      - /tmp:exec,mode=1777
+    working_dir: /workspace
+    environment:
+      HOME: /tmp/home
+      GOCACHE: /tmp/.cache/go-build
+      GOMODCACHE: /tmp/go/pkg/mod
+      GOPATH: /tmp/go
+      XDG_CACHE_HOME: /tmp/.cache
+      npm_config_cache: /tmp/.npm
+      PIP_CACHE_DIR: /tmp/.cache/pip
+      CI: "true"
+    # Никакого command/entrypoint: иначе аргументы после `run` подставлялись бы
+    # внутрь и вторая обёртка shell ломала бы команды вида `make && npm test`.
