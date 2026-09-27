@@ -279,5 +279,11 @@ func TestPromptMentionsOnlyAvailableTools(t *testing.T) {
 		if !promptcheck.MentionsWord(prompt, "ReadAppLogs") {
 			t.Errorf("developer/%s: промпт не упоминает ReadAppLogs", spec.label)
 		}
+		if !promptcheck.Contains(spec.names, "PatchFunction") {
+			t.Errorf("developer/%s: в наборе нет PatchFunction", spec.label)
+		}
+		if !promptcheck.MentionsWord(prompt, "PatchFunction") {
+			t.Errorf("developer/%s: промпт не упоминает PatchFunction", spec.label)
+		}
 	}
 }

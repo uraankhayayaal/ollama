@@ -173,6 +173,23 @@ func scanTS(src string) ([]funcSpan, error) {
 			continue
 		}
 		owner := enclosingClass(classes, nameStart)
+		// Объектный литерал: const api = { ... } — собираем методы объекта
+		// (owner пустой), само объявление как span не нужно.
+		saveEq := s.i
+		s.skipSpace()
+		if s.peek() == '=' {
+			s.i++
+			s.skipSpace()
+			if s.peek() == '{' {
+				objSpans, end, err := s.readObjectMethods()
+				if err == nil && len(objSpans) > 0 {
+					spans = append(spans, objSpans...)
+					s.i = end
+					continue
+				}
+			}
+		}
+		s.i = saveEq
 		sp, ok := s.readSignatureBody(name, nameStart, owner)
 		if ok {
 			spans = append(spans, sp)
@@ -180,6 +197,41 @@ func scanTS(src string) ([]funcSpan, error) {
 		}
 	}
 	return spans, nil
+}
+
+// readObjectMethods — содержимое объектного литерала: s.i обязан указывать на
+// '{'. Собирает методы (name(...) {...} и name = ... => ...) с пустым owner,
+// поля и геттеры без сигнатуры пропускает. Возвращает spans и позицию за
+// закрывающей '}' литерала; s.i остаётся на '{' (как у readClass).
+func (s *tsScanner) readObjectMethods() ([]funcSpan, int, error) {
+	save := s.i
+	end, err := s.matchBraceBlock()
+	if err != nil {
+		return nil, 0, err
+	}
+	s.i = save + 1
+	var objSpans []funcSpan
+	for !s.eof() {
+		s.skipSpace()
+		if s.eof() || s.peek() == '}' {
+			break
+		}
+		if !isIdentStart(s.peek()) {
+			s.i++
+			continue
+		}
+		nameStart := s.i
+		name := s.readIdent()
+		if tsNotFunction[name] {
+			continue
+		}
+		sp, ok := s.readSignatureBody(name, nameStart, "")
+		if ok {
+			objSpans = append(objSpans, sp)
+			s.i = sp.End
+		}
+	}
+	return objSpans, end, nil
 }
 
 // enclosingClass — ближайший класс, тело которого ещё не закончилось на позиции
@@ -208,6 +260,20 @@ func (s *tsScanner) readSignatureBody(name string, nameStart int, owner string) 
 		for _, kw := range []string{"async", "function"} {
 			if s.peekIs(kw) && !isIdentPart(s.peekAt(len(kw))) {
 				s.i += len(kw)
+				s.skipSpace()
+			}
+		}
+		// Стрелка с сигнатурой: const f = (params): RetType =>
+		if s.peek() == '(' {
+			if _, _, err := s.matchPair('(', ')'); err != nil {
+				s.i = save
+				return funcSpan{}, false
+			}
+			s.skipSpace()
+			if s.peek() == ':' {
+				for !s.eof() && s.peek() != '{' && !s.peekIs("=>") && s.peek() != ';' {
+					s.i++
+				}
 				s.skipSpace()
 			}
 		}
@@ -293,7 +359,10 @@ func (s *tsScanner) readBody(name string, nameStart int, owner string) (funcSpan
 	return funcSpan{}, false
 }
 
-// readClass — читает `class Name ... {` и возвращает имя и позицию за `}`.
+// readClass — читает заголовок `class Name ... {` и возвращает имя и позицию
+// за закрывающей `}` класса. s.i возвращается на '{': тело класса дальше
+// обрабатывается обычным циклом scanTS, поэтому методы собираются как spans
+// с owner=класс (enclosingClass ограничивает их closer класса).
 func (s *tsScanner) readClass() (string, int, error) {
 	s.i += len("class")
 	s.skipSpace()
@@ -307,16 +376,18 @@ func (s *tsScanner) readClass() (string, int, error) {
 	if s.eof() {
 		return "", 0, fmt.Errorf("не найдено тело класса %q", name)
 	}
+	save := s.i
 	end, err := s.matchBraceBlock()
 	if err != nil {
 		return "", 0, err
 	}
+	s.i = save
 	return name, end, nil
 }
 
-// spanOf — границы объявления с поправкой на декораторы над ним.
+// spanOf — границы объявления с поправкой на префиксы и декораторы над ним.
 func (s *tsScanner) spanOf(name string, nameStart, end int, owner string) funcSpan {
-	start := s.decoratorStart(nameStart)
+	start := s.declPrefixStart(nameStart)
 	return funcSpan{
 		Name:  name,
 		Start: start,
@@ -326,21 +397,48 @@ func (s *tsScanner) spanOf(name string, nameStart, end int, owner string) funcSp
 	}
 }
 
-// decoratorStart — расширяет начало объявления вверх на строки-декораторы
-// (@Component({...}), @Override): иначе декоратор остался бы над чужой функцией.
-func (s *tsScanner) decoratorStart(nameStart int) int {
+// declPrefixStart — расширяет начало объявления вверх, включая префиксы
+// (export, export default, async, function, const/let/var) и строки-декораторы
+// (@Component({...}), @Override): иначе префикс остался бы над чужой функцией
+// или отрезал бы часть объявления при замене.
+func (s *tsScanner) declPrefixStart(nameStart int) int {
+	best := nameStart
 	for nameStart > 0 {
 		lineStart := strings.LastIndex(s.src[:nameStart], "\n") + 1
-		if lineStart == 0 {
-			return nameStart
+		if lineStart == nameStart {
+			nameStart--
+			continue
 		}
-		line := strings.TrimSpace(s.src[lineStart:nameStart])
-		if !strings.HasPrefix(line, "@") {
-			return nameStart
+		prefix := strings.TrimSpace(s.src[lineStart:nameStart])
+		if !isDeclPrefix(prefix) {
+			break
 		}
+		best = lineStart
 		nameStart = lineStart
 	}
-	return nameStart
+	return best
+}
+
+// isDeclPrefix — строка является префиксом объявления функции: модификаторы
+// (export, default, async, function), объявление переменной (const/let/var)
+// или декоратор (@...). Пустая строка тоже префикс: объявление может быть
+// многострочным (export\nfunction f() {}).
+func isDeclPrefix(line string) bool {
+	if line == "" {
+		return true
+	}
+	if strings.HasPrefix(line, "@") {
+		return true
+	}
+	switch line {
+	case "export", "export default", "export async", "export function",
+		"export default async", "export default function",
+		"export async function", "export default async function",
+		"async", "async function", "function",
+		"const", "let", "var":
+		return true
+	}
+	return false
 }
 
 func (s *tsScanner) trimTrailingSpace(i int) int {
@@ -442,7 +540,8 @@ func (s *tsScanner) matchPair(open, close byte) (int, int, error) {
 		case c == close:
 			depth--
 			if depth == 0 {
-				return start, s.i + 1, nil
+				s.i++
+				return start, s.i, nil
 			}
 		}
 		s.i++

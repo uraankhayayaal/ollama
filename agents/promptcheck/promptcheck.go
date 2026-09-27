@@ -22,7 +22,7 @@ import "strings"
 // срабатывания).
 var KnownTools = []string{
 	"WriteFiles", "ReadFiles", "ReadMap", "DeleteFiles", "Run", "List", "AppendFile",
-	"SearchReplace", "PatchGoFunction", "DetectStack", "ReadAppLogs",
+	"SearchReplace", "PatchFunction", "PatchGoFunction", "DetectStack", "ReadAppLogs",
 	"LspCheck", "LspDefinition", "LspReferences", "LspHover", "CodeSearch",
 	"RagIndexStatus", "ResolveGitConflicts",
 }

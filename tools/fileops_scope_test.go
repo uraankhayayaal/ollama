@@ -105,6 +105,43 @@ func TestWriteFilesAcceptsFileMap(t *testing.T) {
 	}
 }
 
+// TestSetOutputDirResetsTouched проверяет, что смена рабочей директории
+// сбрасывает список touched-файлов: после переключения ветки worktree
+// файлы из предыдущей ветки могут отсутствовать, и переиндексация
+// несуществующих файлов — ошибка.
+func TestSetOutputDirResetsTouched(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	ops := &FileOps{OutputDir: dirA}
+
+	if err := ops.Write("a.go", "package a"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	ops.TakeTouched()
+
+	ops.SetOutputDir(dirB)
+
+	touched := ops.TakeTouched()
+	if len(touched) != 0 {
+		t.Fatalf("после SetOutputDir touched должен быть пуст, получено: %v", touched)
+	}
+}
+
+// TestReadResultNotExistMessage проверяет, что чтение несуществующего файла
+// возвращает понятное сообщение о возможной смене ветки.
+func TestReadResultNotExistMessage(t *testing.T) {
+	dir := t.TempDir()
+	ops := &FileOps{OutputDir: dir}
+
+	res := ops.ReadResult("internal/sync/sync_test.go")
+	if res["status"] != "error" {
+		t.Fatalf("ожидался error, получено: %#v", res)
+	}
+	if !strings.Contains(res["message"], "текущей ветке") {
+		t.Fatalf("сообщение должно упоминать текущую ветку, получено: %s", res["message"])
+	}
+}
+
 // TestWriteFilesAcceptsSingleObject проверяет форму вызова без обёртки "files":
 // {"filename": "путь", "content": "код"}.
 func TestWriteFilesAcceptsSingleObject(t *testing.T) {

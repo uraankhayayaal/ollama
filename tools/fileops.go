@@ -64,8 +64,13 @@ func (ops *FileOps) SetScope(scope []string) {
 // ветки задачи, а не в общей проектной копии. Раннер зовёт метод через интерфейс
 // { SetOutputDir(string) } у агента (developer/devops/qaengineer встраивают
 // *FileOps), поэтому сигнатура — часть публичного контракта.
+// При смене директории сбрасывает touched: файлы из предыдущей ветки могут
+// отсутствовать в новой, а переиндексация несуществующих файлов — ошибка.
 func (ops *FileOps) SetOutputDir(dir string) {
 	ops.OutputDir = dir
+	ops.touchedMu.Lock()
+	ops.touched = nil
+	ops.touchedMu.Unlock()
 }
 
 // allowed проверяет, разрешён ли файл (относительный slash-путь) областью
@@ -269,6 +274,9 @@ func (ops *FileOps) ReadResult(name string) map[string]string {
 	}
 	content, err := os.ReadFile(full)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{"filename": name, "status": "error", "message": "файл не существует в текущей ветке (возможно, он был в предыдущей ветке или ещё не создан)"}
+		}
 		return map[string]string{"filename": name, "status": "error", "message": err.Error()}
 	}
 	return map[string]string{"filename": name, "status": "success", "content": string(content)}

@@ -91,17 +91,42 @@ func patchFuncBySpan(filePath, lang, src string, p PatchFunctionParams) ([]byte,
 		return nil, fmt.Errorf("файл %s, %s: %w", filePath, describeSpan(sp), err)
 	}
 
+	body := p.Body
+	if lang == langPy {
+		body = pyIndentedBody(src, sp.Start, body)
+	}
+
 	// Хвостовой перевод строки тела не входит в границы (одно-выражное тело
 	// стрелки), поэтому сохраняем его после splice.
-	out := make([]byte, 0, len(src)+len(p.Body))
+	out := make([]byte, 0, len(src)+len(body))
 	out = append(out, src[:sp.Start]...)
-	out = append(out, p.Body...)
+	out = append(out, body...)
 	out = append(out, src[sp.End:]...)
 
 	if err := verifyReplaced(lang, string(out), p.FunctionName, p.Receiver); err != nil {
 		return nil, fmt.Errorf("файл %s, %s: результат патча не проходит проверку: %w", filePath, describeSpan(sp), err)
 	}
 	return out, nil
+}
+
+// pyIndentedBody — границы Python-функции включают отступ строки (ln.start), а
+// body от модели приходит без него. Без добавления отступа splice заменит
+// «    def method(self)» на «def method(self)» — метод класса молча станет
+// функцией верхнего уровня. Отступ добавляется только к первой строке:
+// остальные строки body модель возвращает уже с отступами тела.
+func pyIndentedBody(src string, start int, body string) string {
+	indent := ""
+	for i := start; i < len(src); i++ {
+		if src[i] == ' ' || src[i] == '\t' {
+			indent += string(src[i])
+		} else {
+			break
+		}
+	}
+	if indent == "" || strings.HasPrefix(body, " ") || strings.HasPrefix(body, "\t") {
+		return body
+	}
+	return indent + body
 }
 
 // checkBodyMatches — body должен объявлять именно ту функцию, что адресована.

@@ -43,9 +43,19 @@ export function Runtimes(props: RuntimesProps) {
   // перезапрашивал бы REST.
   const streamRef = useRef(props.appLogLines);
   streamRef.current = props.appLogLines;
-  // Отрисованные строки: снапшот + хвост потока.
-  const [lines, setLines] = useState<AppLogLine[]>([]);
+  // Отрисованные строки: снапшот + хвост потока. id — стабильный ключ:
+  // при срезе хвоста (slice(-MAX_LINES)) индексы сдвигались бы, React
+  // пересоздавал DOM-узлы и выделение текста сбрасывалось.
+  const [lines, setLines] = useState<{ line: AppLogLine; id: number }[]>([]);
   const [streamCount, setStreamCount] = useState(0);
+  const nextLineId = useRef(0);
+
+  // Выделение внутри лога — признак того, что пользователю не нужен
+  // автоскролл: любой принудительный скролл сбрасывает/дёргает выделение.
+  const hasSelectionInside = (el: HTMLElement): boolean => {
+    const sel = document.getSelection();
+    return !!sel && !sel.isCollapsed && el.contains(sel.anchorNode);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,7 +66,7 @@ export function Runtimes(props: RuntimesProps) {
       // Строки, пришедшие по WS до снапшота, уже входят в его хвост —
       // помечаем их потреблёнными, иначе стрим-эффект продублирует их.
       consumed.current = streamRef.current.length;
-      setLines(v.lines ?? []);
+      setLines((v.lines ?? []).map((line) => ({ line, id: nextLineId.current++ })));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -67,9 +77,25 @@ export function Runtimes(props: RuntimesProps) {
   // Смена проекта: поток от предыдущего обнулён, поэтому и счётчик, и строки.
   useEffect(() => {
     consumed.current = 0;
+    nextLineId.current = 0;
     setLines([]);
     setStreamCount(0);
   }, [props.project]);
+
+  // Выделение текста в логе отключает follow-режим: иначе каждое новое
+  // событие стрима дёргало бы видимую область и мешало копированию. Возврат —
+  // кнопкой «Вниз».
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const el = bodyRef.current;
+      if (el && hasSelectionInside(el)) {
+        followingRef.current = false;
+        setFollowing(false);
+      }
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -93,18 +119,29 @@ export function Runtimes(props: RuntimesProps) {
     const fresh = stream.slice(consumed.current);
     consumed.current = stream.length;
     setStreamCount(stream.length);
-    setLines((prev) => [...prev, ...fresh].slice(-MAX_LINES));
+    setLines((prev) =>
+      [...prev, ...fresh.map((line) => ({ line, id: nextLineId.current++ }))].slice(-MAX_LINES),
+    );
   }, [props.appLogLines]);
 
   const scrollToBottom = useCallback(() => {
     const el = bodyRef.current;
-    if (el && followingRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
-    }
+    if (!el || !followingRef.current) return;
+    if (hasSelectionInside(el)) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
   }, []);
 
+  // Повторный скролл через двойной rAF и через 350мс добивает случай первого
+  // появления строк: лейаут панели и анимация строк ещё не завершены, и
+  // первый scrollHeight был неполным — окно открывалось не в самом низу.
   useLayoutEffect(() => {
     scrollToBottom();
+    const raf = requestAnimationFrame(() => requestAnimationFrame(scrollToBottom));
+    const t = window.setTimeout(scrollToBottom, 350);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t);
+    };
   }, [lines, scrollToBottom]);
 
   const onScroll = () => {
@@ -123,7 +160,7 @@ export function Runtimes(props: RuntimesProps) {
   };
 
   const needle = query.trim().toLocaleLowerCase();
-  const visible = lines.filter((l) => !needle || l.line.toLocaleLowerCase().includes(needle));
+  const visible = lines.filter(({ line }) => !needle || line.line.toLocaleLowerCase().includes(needle));
 
   const empty = !loading && !error && (view?.status === "skipped" || lines.length === 0);
 
@@ -176,11 +213,11 @@ export function Runtimes(props: RuntimesProps) {
       )}
 
       <div className="runtimes-body" ref={bodyRef} onScroll={onScroll}>
-        {visible.map((l, i) => (
-          <div key={`${l.time}-${i}`} className={lineCls(l.line)}>
-            <span className="t">{fmtTime(l.time)}</span>
-            {l.source && <span className="src">{l.source}</span>}
-            <span className="txt">{l.line}</span>
+        {visible.map(({ line, id }) => (
+          <div key={id} className={lineCls(line.line)}>
+            <span className="t">{fmtTime(line.time)}</span>
+            {line.source && <span className="src">{line.source}</span>}
+            <span className="txt">{line.line}</span>
           </div>
         ))}
       </div>

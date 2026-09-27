@@ -52,14 +52,28 @@ export function Logboard(props: LogboardProps) {
   const logLinesRef = useRef(props.logLines);
   logLinesRef.current = props.logLines;
 
-  // Текущие отрендеренные строки (HTTP-снапшот + поток).
-  const [lines, setLines] = useState<string[]>([]);
+  // Текущие отрендеренные строки (HTTP-снапшот + поток). id — стабильный
+  // ключ строки в исходном потоке (не в отфильтрованном списке): React не
+  // пересоздаёт DOM-узлы при добавлении хвоста и при поиске/фильтре,
+  // поэтому выделение текста не сбрасывается перерендером.
+  const [lines, setLines] = useState<{ text: string; id: number }[]>([]);
+  const nextLineId = useRef(0);
+  // Содержимое последнего применённого снапшота: поллинг каждые 3с не должен
+  // перезаписывать lines, если файл на диске не менялся.
+  const lastSnapshot = useRef("");
+
+  // Выделение внутри лога — признак того, что пользователю не нужен
+  // автоскролл: любой принудительный скролл сбрасывает/дёргает выделение.
+  const hasSelectionInside = (el: HTMLElement): boolean => {
+    const sel = document.getSelection();
+    return !!sel && !sel.isCollapsed && el.contains(sel.anchorNode);
+  };
 
   const scrollToBottom = useCallback(() => {
     const el = bodyRef.current;
-    if (el && followingRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
-    }
+    if (!el || !followingRef.current) return;
+    if (hasSelectionInside(el)) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
   }, []);
 
   const jumpToBottom = () => {
@@ -96,8 +110,25 @@ export function Logboard(props: LogboardProps) {
   // добавление строк нового проекта.
   useEffect(() => {
     consumed.current.clear();
+    lastSnapshot.current = "";
+    nextLineId.current = 0;
     setLines([]);
   }, [props.project]);
+
+  // Выделение текста в логе отключает follow-режим: иначе каждое новое
+  // событие стрима дёргало бы видимую область и мешало копированию. Возврат —
+  // кнопкой «К новым строкам».
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const el = bodyRef.current;
+      if (el && hasSelectionInside(el)) {
+        followingRef.current = false;
+        setFollowing(false);
+      }
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -122,12 +153,17 @@ export function Logboard(props: LogboardProps) {
     if (!logs || !selected) return;
     const entry = logs.files.find((f) => f.name === selected);
     if (!entry) return;
+    // Поллинг дёргает эффект каждые 3с, но перезаписывать lines нужно только
+    // реально изменившийся файл — иначе лишний перерендер сбивает скролл и
+    // выделение.
+    if (entry.content === lastSnapshot.current) return;
+    lastSnapshot.current = entry.content;
     // Снапшот уже содержит строки, пришедшие по WS до него, — помечаем их
     // потреблёнными, иначе стрим-эффект ниже продублирует их в хвост.
     consumed.current.set(selected, logLinesRef.current.get(selected)?.length ?? 0);
     followingRef.current = true;
     setFollowing(true);
-    setLines(entry.content.split("\n"));
+    setLines(entry.content.split("\n").map((text) => ({ text, id: nextLineId.current++ })));
   }, [logs, selected]);
 
   // Свежий REST-снапшот включает все потоковые строки, известные на его момент:
@@ -150,19 +186,26 @@ export function Logboard(props: LogboardProps) {
     const done = consumed.current.get(selected) ?? 0;
     if (stream.length <= done) return;
     consumed.current.set(selected, stream.length);
-    setLines((prev) => [...prev, ...stream.slice(done)]);
+    setLines((prev) => [...prev, ...stream.slice(done).map((text) => ({ text, id: nextLineId.current++ }))]);
   }, [selected, props.logLines]);
 
   // Авто-скролл вниз при появлении/смене строк. useLayoutEffect: DOM уже
   // содержит новые строки, но браузер ещё не рисовал — scrollHeight
-  // вычисляется синхронно, поэтому CSS-анимация шторки не мешает.
+  // вычисляется синхронно. Повторный скролл через двойной rAF и через 350мс
+  // добивает случай первого открытия: лейаут шторки и анимация строк
+  // (logline-in 140мс) ещё не завершены, и первый scrollHeight был неполным.
   useLayoutEffect(() => {
     scrollToBottom();
+    const raf = requestAnimationFrame(() => requestAnimationFrame(scrollToBottom));
+    const t = window.setTimeout(scrollToBottom, 350);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t);
+    };
   }, [lines, scrollToBottom]);
 
   const hasLogs = !!logs && logs.files.length > 0;
   const visibleLines = lines
-    .map((text, index) => ({ text, index }))
     .filter(({ text }) => {
       const cls = lineCls(text);
       return (level === "all" || cls.includes(level)) &&
@@ -176,7 +219,7 @@ export function Logboard(props: LogboardProps) {
     const entry = logs.files.find((f) => f.name === name);
     if (!entry) return "";
     if (name === selected) {
-      return lines.join("\n");
+      return lines.map((l) => l.text).join("\n");
     }
     const snap = entry.content.split("\n");
     const stream = props.logLines.get(name) ?? [];
@@ -300,8 +343,8 @@ export function Logboard(props: LogboardProps) {
           </div>
 
           <div className="logbody" ref={bodyRef} onScroll={handleLogScroll}>
-            {visibleLines.map(({ text, index }) => (
-              <div key={index} className={lineCls(text)}>
+            {visibleLines.map(({ text, id }) => (
+              <div key={id} className={lineCls(text)}>
                 {text || "\u00a0"}
               </div>
             ))}

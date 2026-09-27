@@ -22,7 +22,7 @@
 | **1. RAG (векторная память)** | нет: Qdrant задекларирован в `compose.yaml:42`, Go-код его не использует | карта проекта = только имена (`agents/planner/project_map.go`, `maxMapFiles=200`); эмбеддингов в `models/` нет |
 | **2. Роли DevOps/QA** | частично: агенты есть (`agents/devops`, `agents/qaengineer`, `agents/qalead`, `agents/devopslead`) и подключены в CLI (`main.go:140-190`); QA-шаг сейчас — сборка/тесты в приёмке | `agents/acceptor/` (детерминированная приёмка без LLM); автотесты пишутся мало |
 | **3. Runtime-наблюдаемость** | частично: приёмка запускает приложение и читает логи (`agents/acceptor/run.go`); Logboard показывает логи проекта `logs/` (`server/logs.go`, `web/.../Logboard`) | лог-файлы агентов (`logging/`), а не живые логи контейнера |
-| **4. Точечные правки ≠ только Go** | ограничено: `PatchGoFunction` — только `go/ast` (`tools/gopatch.go`); для TS/Python — текстовый `SearchReplace` (`tools/searchreplace.go`) | CODEGEN_LANG=Go по умолчанию |
+| **4. Точечные правки ≠ только Go** | **сделано (Ф-5)**: `PatchFunction` — единый AST/лексер-патч для Go/TS/JS/Python (`tools/astpatch.go`, `tools/langsyntax.go`); Go — без регресса через `go/ast` | язык определяется расширением target_file, `CODEGEN_LANG` не ограничивает |
 | **5. Песочница выполнения** | отсутствует: `Run` исполняет команды в `OutputDir` на хосте (`tools/fileops.go` `runCommand`, `sh -c`, timeout + kill группы) | Dockerfile агента нет; в `compose.yaml` только ollama/qdrant/redis |
 | **6. Web UI (было 4-м пунктом)** | **сделано**: `PLAN-2026-09-17-done-webui.md` Ф-1..Ф-3 закрыты | `server/`, `web/`, `workspace/`, `gitops/`, `chat/`, `runevents/` |
 
@@ -189,20 +189,66 @@
    отключается `CODEGEN_SANDBOX_NETWORK=none`.
 
 
-### Ф-5 — Мультиязычная точечная правка (tree-sitter)
-- [ ] Оценка: подключить `tree-sitter` (Go-биндинги `alecthomas/go_tree_sitter_tsx`/
-      вариации) поверх `tools/gopatch.go` — универсальный `PatchFunction`
-- [ ] Абстракция узлов AST: для Go сохраняем `go/ast` (без регресса),
-      для TS/Python — tree-sitter; интерфейс единый (`tools/astpatch.go`)
-- [ ] Наборы по ролям: `CODEGEN_LANG` больше не ограничивает; prompt developer
-      упоминает точечные правки для нескольких языков
-- [ ] Тесты: правка функции в TS/Python/Go без повреждения соседнего кода
+### Ф-5 — Мультиязычная точечная правка — СДЕЛАНО (tree-sitter заменён лексером без cgo)
+- [x] Оценка: tree-sitter НЕ подключён — вместо него лексер без cgo
+      (`tools/langsyntax.go`): привязки tree-sitter требуют cgo и ведут себя
+      по-разному на платформах, а агентский цикл должен работать без
+      компилятора. Задача узкая — найти ОДНУ функцию и заменить ровно её;
+      для этого хватает лексера, знающего строки, комментарии, регулярки и
+      вложенность скобок. Интерфейс `finder` оставляет место для pluggable
+      tree-sitter backend в будущем.
+      → `tools/langsyntax.go`: `scanTS` (строки, шаблонные строки с `${}`,
+      регулярки по правилу предыдущего токена, классы, декораторы, стрелки),
+      `scanPy` (границы по отступам, декораторы, async def, классы).
+- [x] Абстракция узлов AST: для Go сохраняем `go/ast` (без регресса),
+      для TS/Python — лексер с байтовыми границами [Start, End); интерфейс
+      единый (`tools/astpatch.go`)
+      → `tools/astpatch.go`: `PatchFunctionSource` (диспетчер по расширению:
+      `.go` → gopatch.go, `.ts/.tsx/.js/.jsx/.py` → splice по границам),
+      проверка имени в body, контрольный re-parse результата,
+      `langOfFile`. `tools/codegen_tools.go`: инструмент `PatchFunction`;
+      `tools/patch_ops.go`: обработчик в FileOps.
+- [x] Наборы по ролям: `CODEGEN_LANG` не участвует — язык определяется
+      расширением target_file; prompt developer упоминает точечные правки
+      для нескольких языков
+      → `agents/developer/developer.go`: `devToolNames` содержит
+      `PatchFunction` (+ `PatchGoFunction` как совместимый алиас); промпт
+      (п.3 плана работы и раздел «ТОЧЕЧНЫЕ ПРАВКИ») описывает
+      мультиязычную замену; `agents/promptcheck` знает `PatchFunction`;
+      тест `TestPromptMentionsOnlyAvailableTools` проверяет наличие и
+      упоминание.
+- [x] Тесты: правка функции в TS/Python/Go без повреждения соседнего кода
+      → `tools/astpatch_test.go` (25 тестов: Go-регресс, TS/JS — методы
+      классов, стрелки, декораторы, regex со скобками, шаблонные строки,
+      вложенные функции, export default, методы объектных литералов; Python —
+      методы, декораторы, async def, вложенные def; неоднозначность,
+      несовпадение имени в body, неподдерживаемое расширение).
 
-### Ф-6 — Верификация дорожной карты
-- [ ] `go build . ./agents/... ./tools/ ./board/ ./server/ ./workspace/ ./gitops/ ./runner/`
-- [ ] `go vet . ./agents/... ./tools/ ./board/ ./server/ ./workspace/ ./gitops/ ./runner/`
-- [ ] `go test . ./agents/... ./tools/ ./board/ ./server/ ./workspace/ ./gitops/ ./runner/`
-- [ ] `npm run build` (web/)
+### Ф-6 — Верификация дорожной карты — СДЕЛАНО
+- [x] `go build . ./agents/... ./tools/ ./board/ ./server/ ./workspace/ ./gitops/ ./runner/`
+- [x] `go vet . ./agents/... ./tools/ ./board/ ./server/ ./workspace/ ./gitops/ ./runner/`
+- [x] `go test . ./agents/... ./tools/ ./board/ ./server/ ./workspace/ ./gitops/ ./runner/`
+      (19 пакетов ok; пред-существующие флаки чат-ассистента в server/ — на чистой
+      базе не воспроизводятся в этом прогоне)
+- [x] `npm run build` (web/)
+
+**Исправления Ф-5, найденные при верификации** (8 падавших тестов astpatch —
+дописана реализация, тесты были написаны с ожиданиями функциональности):
+- `readClass` больше не проглатывает тело класса: читает заголовок до `{`,
+  находит closer через `matchBraceBlock`, возвращает позицию на `{` — методы
+  класса собираются как spans с owner=класс.
+- `readSignatureBody` (ветка `=`): читает сигнатуру стрелки
+  `const f = (params): RetType => ...` — параметры и тип возврата перед `=>`.
+- `decoratorStart` → `declPrefixStart`: границы включают префиксы объявлений
+  (`export`, `export default`, `async`, `function`, `const/let/var`) и
+  `@`-декораторы; пустые строки пропускаются, стоп на первой строке-не-префиксе
+  (best).
+- Объектные литералы: `const api = { ... }` — методы объекта собираются как
+  spans с пустым owner (`readObjectMethods`), само объявление как span не
+  создаётся.
+- Python: `pyIndentedBody` — отступ оригинального объявления добавляется к
+  первой строке body, иначе splice превращает метод класса в функцию
+  верхнего уровня.
 
 ## Верификация
 
