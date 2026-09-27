@@ -347,6 +347,24 @@ body {
   background: var(--bg, #f6f8fb);
   border-top: 1px solid var(--line, #e2e8f0);
   box-shadow: 0 -8px 30px rgb(0 0 0 / 0.14);
+
+  .btn.close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted, #8a94a6);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover { background: var(--line, #e2e8f0); }
+  }
 }
 
 .metrics-drawer {
