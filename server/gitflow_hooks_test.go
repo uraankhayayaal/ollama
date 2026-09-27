@@ -148,7 +148,7 @@ func TestTaskInProgressCreatesWorktree(t *testing.T) {
 	if ref.Worktree != want {
 		t.Fatalf("Worktree = %q, want %q", ref.Worktree, want)
 	}
-	if !git.saw("git worktree add "+want) {
+	if !git.saw("git worktree add " + want) {
 		t.Fatalf("in_progress не создал worktree деревья, вызовы: %v", git.callsList())
 	}
 }

@@ -161,11 +161,11 @@ func setSessionCookie(w http.ResponseWriter, sid string, maxAge int) {
 // Все остальные /api/* при включённой аутентификации требуют валидной сессии;
 // мутации (POST/PUT/DELETE/PATCH) — ещё и X-CSRF-Token.
 type authHandler struct {
-	next      http.Handler
-	auth      *authManager
-	apiLim    *rateLimiter // общий лимит /api/*
-	loginLim  *rateLimiter // строгий лимит входа
-	chatLim   *rateLimiter // лимит чата (постинг запускает оркестрацию)
+	next     http.Handler
+	auth     *authManager
+	apiLim   *rateLimiter // общий лимит /api/*
+	loginLim *rateLimiter // строгий лимит входа
+	chatLim  *rateLimiter // лимит чата (постинг запускает оркестрацию)
 }
 
 // ServeHTTP ограничивает и защищает входящие запросы.
