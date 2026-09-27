@@ -658,6 +658,35 @@ func readLimit() (perFile, total int) {
 	return n, m
 }
 
+const runMaxOutputDefault = 20_000
+
+// runOutputLimit — предел объёма одного потока вывода (stdout или stderr) в
+// символах. Вывод длиннее лимита обрезается с маркером (см. truncateRunOutput),
+// чтобы один шумный прогон (go test -v на весь модуль, npm с логами) не
+// съедал контекст модели целиком. Экономия не зависит от послушания модели.
+func runOutputLimit() int {
+	n := runMaxOutputDefault
+	if v := os.Getenv("CODEGEN_RUN_MAX_OUTPUT"); v != "" {
+		if x, err := strconv.Atoi(v); err == nil && x > 0 {
+			n = x
+		}
+	}
+	return n
+}
+
+// truncateRunOutput обрезает поток вывода до лимита, добавляя маркер обрезки
+// (как в ReadFiles). Возвращает итог и признак обрезки: вызывающий ставит
+// флаг truncated в результат инструмента — модель видит, что хвост вывода
+// отброшен, и может перезапустить команду с фильтром (grep/tail), а не
+// искать ошибку в обрывке.
+func truncateRunOutput(s string, limit int) (string, bool) {
+	if len(s) <= limit {
+		return s, false
+	}
+	return s[:limit] + fmt.Sprintf("\n\n[... вывод обрезан, показаны первые %d символов из %d; повтори команду с фильтром (grep/tail), если нужен хвост ...]",
+		limit, len(s)), true
+}
+
 // ReadFiles читает содержимое указанных файлов и возвращает их контент ИИ-агенту.
 // Размер каждого файла и общий объём за вызов ограничены (см. readLimit),
 // чтобы инструмент не переполнил контекст модели на большом проекте.
@@ -1048,6 +1077,19 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 		}
 	} else {
 		result["status"] = "success"
+	}
+
+	// Обрезка потоков вывода до лимита (см. runOutputLimit): маркер в тексте
+	// и флаг truncated — модель понимает, что хвост отброшен. Статус и код
+	// выхода обрезка не трогает: гейты остаются честными.
+	limit := runOutputLimit()
+	if out, trunc := truncateRunOutput(result["stdout"], limit); trunc {
+		result["stdout"] = out
+		result["stdout_truncated"] = "true"
+	}
+	if out, trunc := truncateRunOutput(result["stderr"], limit); trunc {
+		result["stderr"] = out
+		result["stderr_truncated"] = "true"
 	}
 	return result, nil
 }
