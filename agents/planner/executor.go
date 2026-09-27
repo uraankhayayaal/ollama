@@ -55,6 +55,10 @@ type Executor struct {
 	store *checkpoint.Store
 	// resume — возобновлять ли выполнение с чекпоинта.
 	resume bool
+	// metrics — приёмник именованных метрик шага в единый реестр телеметрии
+	// (Ф-1 PLAN-2026-09-19-todo-owerview-for-prom.md). nil — метрики пишутся
+	// только в чекпоинт, как раньше (degrade, как у RAG/LSP).
+	metrics MetricSink
 	// mu сериализует разделяемое состояние исполнителя (completed/statuses,
 	// acceptReports, операции с чекпоинтом Store и запись PLAN.md). Нужен,
 	// чтобы при ПАРАЛЛЕЛЬНОМ выполнении шагов волны (runWave) обновления
@@ -98,6 +102,24 @@ func planProject(plan *Plan) string {
 func (e *Executor) SetCheckpoint(store *checkpoint.Store, resume bool) *Executor {
 	e.store = store
 	e.resume = resume
+	return e
+}
+
+// MetricSink — приёмник именованных метрик шага в единый реестр телеметрии
+// (runmetrics.Registry). Интерфейс, а не конкретный тип, чтобы исполнитель не
+// зависел от пакета телеметрии.
+type MetricSink interface {
+	// SetStepMetric записывает метрику шага. Повторная запись того же ключа
+	// перезаписывает значение, а не накапливает его.
+	SetStepMetric(scope, step, key string, value float64)
+}
+
+// SetMetrics подключает единый реестр телеметрии (Ф-1). Метрики шагов, которые
+// раньше оседали только в чекпоинте консольной оркестрации, начинают попадать
+// в общий реестр и становятся видны в /metrics и дашборде. nil — отключено.
+// Возвращает сам исполнитель для цепочек вызовов.
+func (e *Executor) SetMetrics(sink MetricSink) *Executor {
+	e.metrics = sink
 	return e
 }
 
@@ -344,10 +366,18 @@ func (e *Executor) persistStatus(ctx context.Context, stepID, status string) {
 	}
 }
 
-// trackStepMetrics обновляет метрики шага в чекпоинте (теляметрия стадий:
-// раунды, вердикт приёмки, изменения контракта, изменённые файлы). Работает
-// только при подключённом чекпоинте; на ход плана не влияет.
+// trackStepMetrics обновляет метрики шага (теляметрия стадий: раунды, вердикт
+// приёмки, изменения контракта, изменённые файлы) в чекпоинте И в едином
+// реестре телеметрии (Ф-1). Оба канала независимы: чекпоинт переживает resume,
+// реестр отдаёт метрики в /metrics и дашборд. На ход плана не влияет.
 func (e *Executor) trackStepMetrics(ctx context.Context, stepID string, values map[string]any) {
+	if reg := e.metrics; reg != nil {
+		for k, v := range values {
+			if f, ok := metricFloat(v); ok {
+				reg.SetStepMetric(e.metricScope(), stepID, k, f)
+			}
+		}
+	}
 	if e.store == nil {
 		return
 	}
@@ -358,6 +388,36 @@ func (e *Executor) trackStepMetrics(ctx context.Context, stepID string, values m
 			e.log.Detailf("[Checkpoint] ошибка сохранения метрик шага %s: %v", stepID, err)
 		}
 	}
+}
+
+// metricScope — scope для метрик шага в реестре: имя проекта плана, иначе
+// «plan». Плоский scope осознан: шаги консольного плана не относятся к задаче
+// или эпику доски, а выдумывать для них идентификатор единицы работы не нужно.
+func (e *Executor) metricScope() string {
+	if e.plan != nil && e.plan.ProjectName != "" {
+		return e.plan.ProjectName
+	}
+	return "plan"
+}
+
+// metricFloat приводит значение метрики к числу. Чекпоинт хранит map[string]any
+// (там значения приходят из разных мест), а реестр оперирует числами: нечисловые
+// значения молча пропускаются, а не превращаются в нули.
+func metricFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	case bool:
+		if n {
+			return 1, true
+		}
+		return 0, true
+	}
+	return 0, false
 }
 
 // rollbackEnabled — включает/выключает защитный откат упавших шагов

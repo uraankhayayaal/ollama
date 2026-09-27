@@ -44,25 +44,53 @@
 
 ## Этапы и чеклист
 
-### Ф-1 — Наблюдаемость и стоимость (инфраструктура)
-- [ ] Экспорт метрик шага: `runevents.Reporter` + счётчики времени/токенов на
+### Ф-1 — Наблюдаемость и стоимость (инфраструктура) — СДЕЛАНО
+- [x] Экспорт метрик шага: `runevents.Reporter` + счётчики времени/токенов на
       шаг (уже есть `TrackMetric` в чекпоинте — вынести в единый реестр)
-- [ ] HTTP-эндпоинт `/metrics` (Prometheus-формат) или экспорт в openmetrics;
+      → `runmetrics/registry.go` (+ `prom.go`): агрегаты по инструментам,
+      единицам работы и ролям, гистограммы длительностей, dedup несвязанных
+      событий, потолок кардинальности (`LLM_PRICE_IN/OUT`, `LLM_CURRENCY`).
+      Мост из чекпоинта — `agents/planner/executor.go` (`SetMetrics`).
+- [x] HTTP-эндпоинт `/metrics` (Prometheus-формат) или экспорт в openmetrics;
       в Web UI — суммарная стоимость запуска (вход/выход токены уже есть:
       `server/tokens.go` + `TokensCounter`)
-- [ ] Дашборд: список проектов/запусков с метриками (в расширение `Logboard`
+      → `GET /api/metrics` (Prometheus, под `authHandler` — имена проектов не
+      утекают), `GET /api/projects/{id}/metrics` (JSON),
+      `POST /api/projects/{id}/metrics/reset`; цены — `tokens/pricing.go`.
+- [x] Дашборд: список проектов/запусков с метриками (в расширение `Logboard`
       или отдельная вьюха)
-- [ ] Тесты: агрегация метрик, формат `/metrics`, дедуп
+      → отдельная вьюха `web/src/Components/Metricsboard` (шторка + FAB).
+- [x] Тесты: агрегация метрик, формат `/metrics`, дедуп
+      → `runmetrics/registry_test.go`, `runmetrics/prom_test.go`,
+      `server/metrics_test.go`.
 
-### Ф-2 — Runtime-наблюдаемость (закрывает TODO `readme.md:282`)
-- [ ] Инструмент `ReadAppLogs`: детект способа запуска проекта (локальный
+### Ф-2 — Runtime-наблюдаемость (закрывает TODO `readme.md:282`) — СДЕЛАНО
+- [x] Инструмент `ReadAppLogs`: детект способа запуска проекта (локальный
       процесс / docker-compose), запуск окружения, стрим логов рантайма модели
       (переиспользуем шаблон запуска и таймауты из `agents/acceptor/run.go`)
-- [ ] Real-time: лог-строки в `runevents` (по образцу `TypeMessageDelta`) →
+      → `tools/applogs.go`: детект (Makefile run/dev/start/serve → npm/pnpm/
+      yarn dev/start/serve → типовой по стеку), `os.Pipe` на stdout+stderr,
+      остановка ГРУППЫ процессов (SIGTERM→SIGKILL), `source=docker` читает
+      `docker compose logs` безопасно (только чтение), все деграды — `skipped`
+      с подсказкой.
+- [x] Real-time: лог-строки в `runevents` (по образцу `TypeMessageDelta`) →
       Logboard показывает живые строки рантайма, не только `logs/` агентов
-- [ ] В цикл самокоррекции: падение в рантайме → модели отдаются последние
+      → `runevents.TypeAppLog` + `Event.Source` + `OnAppLog`; кольцевой буфер и
+      подписка по каталогу проекта — `server/applog.go`; `GET
+      /api/projects/{id}/applog`; WS `applog`; отдельная вьюха
+      `web/src/Components/Runtimes` (шторка «Рантайм»).
+- [x] В цикл самокоррекции: падение в рантайме → модели отдаются последние
       N строк `ReadAppLogs` (по образцу ЛСП-хука `runner/autofix.go`)
-- [ ] Hermetic-тесты: fake-процесс пишет логи → инструмент возвращает строки
+      → `runner/applog.go`: интерфейс `RuntimeLogger` (реализует `FileOps`
+      через внедрённый указатель), скрытый user-промпт, `APP_LOG_AUTO_FEED` +
+      `APP_LOG_MAX_FEED_ROUNDS`, подавление повторов. Промпты ролей
+      (`developer` п.6, `qaengineer` п.6, `devops` п.7) и наборы инструментов
+      дополнены; согласованность промпт↔инструменты проверяет
+      `agents/promptcheck` + тесты ролей.
+- [x] Hermetic-тесты: fake-процесс пишет логи → инструмент возвращает строки
+      → `tools/applogs_test.go` (16 тестов: stdout+stderr, код выхода,
+      остановка долгого процесса, хвост, деграды, детект запуска),
+      `runner/applog_test.go`, `server/applog_test.go` (буфер, шина, REST).
 
 ### Ф-3 — Роли DevOps/QA вглубь
 - [ ] `agents/qaengineer`: настоящие тесты (по ТЗ — unit + интеграционные;

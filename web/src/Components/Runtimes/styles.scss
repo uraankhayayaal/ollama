@@ -1,0 +1,51 @@
+// Runtimes — панель «Рантайм». Поверхности и типографика — как у
+// Logboard/Metricsboard (плоский стиль), но строки лога моноширинные и
+// с временем/источником, как в консоли.
+.runtimes {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  color: var(--ink, #1b2330);
+
+  // Тело со скроллом: строки лога должны мочь расти, а панель — оставаться
+  // в границах шторки.
+  .runtimes-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 6px 8px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: var(--bg, #fff);
+  }
+
+  .line {
+    display: grid;
+    grid-template-columns: 74px 46px 1fr;
+    gap: 8px;
+    align-items: baseline;
+    padding: 1px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+
+    .t { color: var(--muted, #8a94a6); }
+    .src { color: var(--muted, #8a94a6); text-align: right; }
+    .txt { color: var(--ink, #1b2330); }
+  }
+
+  // Тревожные строки: стектрейс/паника — красным, ошибка/отказ — янтарным.
+  // Это те самые строки, ради которых панель и открывают.
+  .line.warn {
+    .txt { color: var(--warn, #b45309); }
+  }
+
+  .line.err {
+    .txt { color: var(--err, #dc2626); font-weight: 600; }
+  }
+}

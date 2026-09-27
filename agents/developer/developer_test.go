@@ -1,6 +1,7 @@
 package developer
 
 import (
+	"ai/agents/promptcheck"
 	"ai/board"
 	"ai/projects"
 	"ai/tools"
@@ -246,4 +247,37 @@ func dirExists(path string) bool {
 
 func bytesContains(b []byte, s string) bool {
 	return strings.Contains(string(b), s)
+}
+
+// TestPromptMentionsOnlyAvailableTools — согласованность промпта и набора
+// инструментов (Ф-2): промпт не должен называть инструмент, которого у агента
+// нет, иначе инструкция «проверь то-то» неисполнима (модель получит
+// «not in tool set» и пропустит проверку).
+//
+// ReadAppLogs проверяется отдельно и строже: без него у разработчика нет
+// СПОСОБА проверить поведение в рантайме, а «тесты зелёные» — единственное,
+// что он почувствует вместо этого.
+func TestPromptMentionsOnlyAvailableTools(t *testing.T) {
+	for _, spec := range []struct {
+		label string
+		names []string
+		mk    func(string, string) *base
+	}{
+		{"backend", devToolNames, func(p, d string) *base { return newBackendDeveloperInDir(p, d).base }},
+		{"frontend", devToolNames, func(p, d string) *base { return newFrontendDeveloperInDir(p, d).base }},
+	} {
+		prompt := spec.mk("задание", t.TempDir()).GetSystemMessages(nil)[0].Message
+		for _, p := range promptcheck.CheckToolSet("developer/"+spec.label, prompt, spec.names) {
+			t.Error(p)
+		}
+		for _, p := range promptcheck.CheckTypos("developer/"+spec.label, prompt) {
+			t.Error(p)
+		}
+		if !promptcheck.Contains(spec.names, "ReadAppLogs") {
+			t.Errorf("developer/%s: в наборе нет ReadAppLogs", spec.label)
+		}
+		if !promptcheck.MentionsWord(prompt, "ReadAppLogs") {
+			t.Errorf("developer/%s: промпт не упоминает ReadAppLogs", spec.label)
+		}
+	}
 }

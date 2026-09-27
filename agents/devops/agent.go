@@ -15,7 +15,7 @@ import (
 // tools. Агент пишет инфраструктурный код (Docker Compose, Kubernetes,
 // конфигурации CI/CD, Dockerfile) и проверяет его запуском команд.
 var devopsToolNames = []string{
-	"WriteFiles", "ReadFiles", "DeleteFiles", "AppendFile", "List", "Run",
+	"WriteFiles", "ReadFiles", "DeleteFiles", "AppendFile", "List", "Run", tools.ReadAppLogs,
 }
 
 // devopsBoardToolNames — инструменты общей Kanban-доски, добавляемые
@@ -144,6 +144,7 @@ func (d *Devops) GetSystemMessages(_ []agents.Message) []agents.Message {
    - предоставь цели DevOps-блока: 'up' (= docker compose up -d), 'down' (= docker compose down), 'logs' (= docker compose logs -f --tail=100), 'ps' (= docker compose ps);
    - самозавершающуюся цель 'e2e': up → проверки (health/тесты) → down → выходной код 0, чтобы она пригодна для приёмки и CI.
 6. Проверь, что изменения Makefile не конфликтуют с прикладными целями 'build'/'run'/'test'/'lint': infra-цели — надстройка, а не замена.
+7. Проверь, что сервисы ПОДНИМАЮТСЯ и отвечают, а не только что compose-файл валиден: после 'up' прочитай логи сервиса инструментом ReadAppLogs с {"source": "docker", "service": "<имя>"} (инструмент только ЧИТАЕТ логи — поднимать и останавливать окружение не он, это твоя зона). Пустой хвост со status skipped означает, что сервис не поднят или пишет в файл, а не «ошибок нет». Если сервис не стартует — чини compose/Dockerfile/healthcheck, а не оставляй это приёмке.
 
 Правила:
 - Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты.

@@ -5,13 +5,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
+import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
 import { TokensCounter } from "./Components/TokensCounter";
 import { Diffboard } from "./Components/Diffboard";
 import { Logboard } from "./Components/Logboard";
+import { Metricsboard } from "./Components/Metricsboard";
+import { Runtimes } from "./Components/Runtimes";
 import { Login } from "./Components/Login";
 import { WorkspacePicker } from "./Components/WorkspacePicker";
 import { Badge } from "./Components/Badge";
@@ -50,6 +52,11 @@ export function App() {
   // Потоковые строки логов: «имя файла → актуальный список строк».
   // Обновляется событиями WS type="log"; Logboard объединяет с HTTP-данными.
   const [logLines, setLogLines] = useState<Map<string, string[]>>(new Map());
+  // Строки логов рантайма приложения (Ф-2): события WS type="applog". Это НЕ
+  // журнал агентов (logLines), а вывод самого приложения — там видно падение
+  // сервера, которого в журнале агентов быть не может.
+  const [appLogLines, setAppLogLines] = useState<AppLogLine[]>([]);
+  const [showRuntimes, setShowRuntimes] = useState(false);
   const [project, setProject] = useState<ProjectMeta | null>(null);
   const [board, setBoard] = useState<BoardView | null>(null);
   const [chat, setChat] = useState<ChatMsg[]>([]);
@@ -82,6 +89,9 @@ export function App() {
   // Logboard остаётся доступен отдельной плавающей кнопкой.
   const [diffContext, setDiffContext] = useState<BranchDiffContext | null>(null);
   const [showLogboard, setShowLogboard] = useState(false);
+  // Панель «Метрики» (Ф-1): метрики и стоимость агентского цикла. Живёт
+  // отдельно от панели логов и диффа, чтобы переключение не теряло открытый дифф.
+  const [showMetrics, setShowMetrics] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // thinking — пользователь отправил сообщение, ассистент ещё не начал печатать:
@@ -136,6 +146,18 @@ export function App() {
   };
 
   // Обработчик событий «log» — каждая новая строкаappend к списку файла.
+  // Строки рантайма: буфер ограничен, чтобы приложение с подробным логом не
+  // съело память вкладки за долгую сессию.
+  const APP_LOG_MAX = 2000;
+  const handleAppLog = useCallback((ev: { time?: string; source?: string; content?: string; line?: string }) => {
+    const line = ev.line ?? ev.content ?? "";
+    if (!line) return;
+    setAppLogLines((prev) => {
+      const next = [...prev, { time: ev.time ?? new Date().toISOString(), source: ev.source, line }];
+      return next.length > APP_LOG_MAX ? next.slice(next.length - APP_LOG_MAX) : next;
+    });
+  }, []);
+
   const handleLog = useCallback((ev: LogMessage) => {
     setLogLines((prev) => {
       const entry = prev.get(ev.file) || [];
@@ -275,6 +297,13 @@ export function App() {
     l.on("log", (ev) => {
       try {
         handleLog(ev.payload as LogMessage);
+      } catch {}
+    });
+    // Логи рантайма приложения: в отличие от type="log" их нет в файлах
+    // logs/, они живут только в кольцевом буфере сессии.
+    l.on("applog", (ev) => {
+      try {
+        handleAppLog(ev.payload as { time?: string; source?: string; content?: string });
       } catch {}
     });
     // «Кофе-брейк»: диалог стёрт на сервере (у другого клиента или в этой
@@ -843,10 +872,38 @@ export function App() {
         </div>
       )}
 
-      {project && !showLogboard && (
+      {project && !showLogboard && !showMetrics && !showRuntimes && (
         <div className="fabs">
           <button className="fab" onClick={() => setShowLogboard(true)} title="Показать логи проекта">
             Логи
+          </button>
+          <button
+            className="fab"
+            onClick={() => setShowRuntimes(true)}
+            title="Показать логи запущенного приложения"
+          >
+            Рантайм
+          </button>
+          <button className="fab" onClick={() => setShowMetrics(true)} title="Показать метрики и стоимость запуска">
+            Метрики
+          </button>
+        </div>
+      )}
+
+      {project && showRuntimes && (
+        <div className="runtimes-drawer open">
+          <Runtimes project={project.project_name} appLogLines={appLogLines} />
+          <button className="btn close" onClick={() => setShowRuntimes(false)} title="Скрыть логи рантайма">
+            ×
+          </button>
+        </div>
+      )}
+
+      {project && showMetrics && (
+        <div className="metrics-drawer open">
+          <Metricsboard project={project.project_name} />
+          <button className="btn close" onClick={() => setShowMetrics(false)} title="Скрыть метрики">
+            ×
           </button>
         </div>
       )}

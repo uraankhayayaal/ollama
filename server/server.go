@@ -8,6 +8,7 @@ import (
 	"ai/gitops"
 	"ai/logging"
 	"ai/models"
+	"ai/runmetrics"
 	"ai/tools"
 	"ai/workspace"
 	"context"
@@ -65,6 +66,15 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 
+	// metrics — реестры телеметрии агентского цикла по проектам (Ф-1). Живут
+	// отдельно от сессий: пересоздание сессии (переподключение WebSocket,
+	// рестарт доски) не должно обнулять длительности и счётчики вызовов.
+	//
+	// Свой мьютекс, а не mu: сессия создаётся под mu (getOrCreate), и она же
+	// берёт реестр — общий мьютекс дал бы взаимоблокировку.
+	metricsMu sync.Mutex
+	metrics   map[string]*runmetrics.Registry
+
 	// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
 	// (baselines) и кэш разобраных диффов git-проектов (diffs, Ф-3).
 	diffMu    sync.Mutex
@@ -97,6 +107,7 @@ func NewServer(cfg Config) (*Server, error) {
 		reg:       reg,
 		hub:       h,
 		sessions:  make(map[string]*Session),
+		metrics:   make(map[string]*runmetrics.Registry),
 		baselines: make(map[string]*tools.Snap),
 		diffs:     make(map[string]*cachedDiff),
 		auth:      newAuth(cfg.Password),
@@ -175,6 +186,13 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/continue", s.handleContinue)
 	mux.HandleFunc("POST /api/projects/{id}/index", s.handleProjectIndex)
 	mux.HandleFunc("GET /api/projects/{id}/tokens", s.handleGetTokens)
+	// Метрики и стоимость запуска (Ф-1): снимок для дашборда и экспорт Prometheus.
+	mux.HandleFunc("GET /api/projects/{id}/metrics", s.handleGetMetrics)
+	mux.HandleFunc("POST /api/projects/{id}/metrics/reset", s.handleResetMetrics)
+	mux.HandleFunc("GET /api/metrics", s.handleGetPrometheus)
+	// Ф-2: хвост логов рантайма приложения (пустой буфер — status skipped,
+	// а не 404: рантайм могли ещё не запускать).
+	mux.HandleFunc("GET /api/projects/{id}/applog", s.handleAppLog)
 	mux.HandleFunc("POST /api/projects/{id}/{gate}/decide", s.handleGateDecide)
 	mux.HandleFunc("POST /api/projects/{id}/session/stop", s.handleStop)
 	// REST — структурированный вопрос ассистента (AskUser, Ф-1 «спроси

@@ -24,8 +24,10 @@ import (
 	"ai/projects"
 	"ai/rag"
 	"ai/runctx"
+	"ai/runmetrics"
 	"ai/server"
 	"ai/services/mrlistener"
+	"ai/tokens"
 	"context"
 	"fmt"
 	"os"
@@ -638,6 +640,10 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, 
 
 	exec := planner.NewExecutor(provider, plan)
 	exec.SetCheckpoint(store, resume)
+	// Ф-1: именованные метрики шагов — в единый реестр телеметрии, откуда их
+	// видно в /metrics. Реестр в памяти процесса: без внешних сервисов, поэтому
+	// подключается всегда и не может завалить запуск.
+	exec.SetMetrics(runmetrics.New(plan.ProjectName, tokens.PricingFromEnv()))
 	// Контекст RAG по шагам (Ф-4): промпты кодирующих шагов обогащаются
 	// релевантным кодом из векторной памяти с фильтром по scope шага.
 	// Клиент ленивый: при недоступном Qdrant/эмбеддингах — nil/деградация

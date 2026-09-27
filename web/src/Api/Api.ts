@@ -5,6 +5,7 @@
 // server/session.go и board/entity.go.
 
 import type {
+  AppLogView,
   AskAnswerBody,
   AskAnswerResult,
   BoardView,
@@ -15,6 +16,7 @@ import type {
   EpicRow,
   LogsView,
   ProjectMeta,
+  ProjectMetrics,
   ProjectTokens,
   TaskRow,
 } from "@/Types";
@@ -222,6 +224,37 @@ export async function projectTokens(
   return req<ProjectTokens>(
     "GET",
     `${base}/api/projects/${enc(project)}/tokens`,
+  );
+}
+
+// Метрики агентского цикла проекта (Ф-1): снимок для дашборда «Метрики».
+/** Хвост логов рантайма приложения (Ф-2). Пустой буфер приходит как
+ *  status:"skipped" — это не ошибка, а «рантайм ещё не запускали». */
+export async function projectAppLogs(base: string, project: string, lines = 300): Promise<AppLogView> {
+  const res = await fetch(`${base}/api/projects/${encodeURIComponent(project)}/applog?lines=${lines}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as AppLogView;
+}
+
+export async function projectMetrics(
+  base: string,
+  project: string,
+): Promise<ProjectMetrics> {
+  return req<ProjectMetrics>(
+    "GET",
+    `${base}/api/projects/${enc(project)}/metrics`,
+  );
+}
+
+// Сброс телеметрии текущего запуска (накопленные токены не затрагиваются).
+export async function resetProjectMetrics(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/metrics/reset`,
+    {},
   );
 }
 

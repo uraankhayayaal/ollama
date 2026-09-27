@@ -144,6 +144,39 @@ func (t *appendFileTool) Definition() ToolDefinition {
 }
 func (t *appendFileTool) Execute(args map[string]any) ([]byte, error) { return t.ops.AppendFile(args) }
 
+type readAppLogsTool struct{ ops *FileOps }
+
+func (t *readAppLogsTool) Name() string { return ReadAppLogs }
+func (t *readAppLogsTool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name: ReadAppLogs,
+		Description: "Прочитать логи РАНТИЙМА приложения: запустить его, собрать stdout+stderr построчно и остановить. " +
+			"Способ запуска определяется автоматически (цель run/dev/start/serve в Makefile → npm-скрипт dev/start/serve → типовой по стеку), " +
+			"либо задаётся явно через command. Для source=docker читает хвост работающего сервиса docker compose. " +
+			"Используй, когда «тесты зелёные», но поведение не проверено: сервер не поднялся, упал с panic, " +
+			"не отдаёт ожидаемый ответ, в логах ошибка миграции или внешнего сервиса. Возвращает строки логов, код завершения и подсказку.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"source": map[string]any{
+					"type":        "string",
+					"enum":        []string{appLogSourceAuto, appLogSourceLocal, appLogSourceDocker},
+					"description": "Откуда читать логи: auto (по умолчанию), local (запустить процесс самому) или docker (логи сервиса compose)",
+				},
+				"command": map[string]any{"type": "string", "description": "Команда запуска приложения, например 'npm run dev', 'go run .', 'php artisan serve'. Пусто — определить автоматически"},
+				"service": map[string]any{"type": "string", "description": "Имя сервиса docker compose (только source=docker). Пусто — все сервисы"},
+				"lines":   map[string]any{"type": "integer", "description": "Сколько последних строк вернуть (по умолчанию 200, максимум 2000)"},
+				"wait_ms": map[string]any{"type": "integer", "description": "Сколько миллисекунд ждать вывода процесса, затем остановить его (по умолчанию 3000, максимум 30000). Увеличь, если приложение долго стартует"},
+			},
+			"required":             []string{},
+			"additionalProperties": false,
+		},
+	}
+}
+func (t *readAppLogsTool) Execute(args map[string]any) ([]byte, error) {
+	return t.ops.ReadAppLogs(args)
+}
+
 type patchGoFunctionTool struct{ ops *FileOps }
 
 func (t *patchGoFunctionTool) Name() string { return "PatchGoFunction" }

@@ -17,6 +17,7 @@ import (
 	"ai/rag"
 	"ai/runctx"
 	"ai/runevents"
+	"ai/runmetrics"
 	"ai/tokens"
 	"ai/tools"
 	"ai/workspace"
@@ -61,7 +62,15 @@ type Session struct {
 	// один на сессию, блокирует агентский цикл до ответа на все вопросы.
 	pendingAsk *pendingAsk
 
-	router  *runevents.Router
+	router *runevents.Router
+	// metrics — реестр телеметрии агентского цикла проекта (Ф-1). Подписан на
+	// тот же поток событий, что и роутер, поэтому метрики видят и агента, и
+	// scope единицы работы, и точные моменты начала/конца вызова инструмента.
+	metrics *runmetrics.Registry
+	// appLog — кольцевой буфер логов рантайма приложения (Ф-2). Отдельный от
+	// logs/<проект>.log: там журнал работы агентов, а здесь то, что вывело
+	// само приложение. Читает REST-хвост и «рантайм»-вкладка Web UI.
+	appLog  *appLogBuffer
 	chat    *chat.Store
 	board   *board.Store
 	tok     *tokens.Store
@@ -137,6 +146,12 @@ func (s *Server) newSession(project string) (*Session, error) {
 		log:     logging.For(project),
 	}
 	sess.router = runevents.NewRouter(sess.routeRunEvent)
+	// Реестр метрик — общий на проект и живущий дольше сессии (server.metricsFor).
+	sess.metrics = s.metricsFor(project)
+	// Буфер логов рантайма и подписка на них инструмента ReadAppLogs: строки
+	// идут и в кольцевой буфер (UI/REST), и в шину (живая трансляция).
+	sess.appLog = &appLogBuffer{}
+	sess.registerAppLogSink(context.Background())
 	// Ф-5: прогноз расхода токенов для новых единиц доски (эпиков/задач) —
 	// считается по истории завершённых единиц этой же доски. Источник внедряется
 	// в хранилище, поэтому оценка появляется при любом создании записи
@@ -158,9 +173,15 @@ func (s *Server) newSession(project string) (*Session, error) {
 // публиковался и созданный чатом эпик/баг не появлялся в Web UI до ручного
 // обновления страницы.
 func (sess *Session) routeRunEvent(ev runevents.Event) {
+	// Реестр метрик — первый потребитель события: он считает длительности
+	// вызовов по моментам начала/конца, поэтому должен увидеть событие раньше
+	// любых медленных потребителей (чат, трансляция).
+	sess.metrics.Record(ev)
 	sess.chatEvent(ev)
 	// Потоковые фрагменты не меняют доску — не дёргаем флашера на каждый токен.
-	if ev.Type == runevents.TypeMessageDelta {
+	// Логи рантайма — тоже поток: приложение может писать сотни строк в
+	// секунду, и каждая из них не должна проходить через emit чата.
+	if ev.Type == runevents.TypeMessageDelta || ev.Type == runevents.TypeAppLog {
 		return
 	}
 	// Инструменты доски (Board*: создание/правка эпиков, задач, багов)
@@ -253,6 +274,12 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// Флашер доски: раз в 500 мс публикует снимок доски, если были изменения.
 	sess.wg.Add(1)
 	go sess.boardFlusher(cctx)
+
+	// Ф-2: сброс накопленных строк логов рантайма в лог проекта. Поштучная
+	// запись на каждую строку запускала бы в лог тысячи строк в минуту от
+	// одного «go build».
+	sess.wg.Add(1)
+	go sess.appLogFlusherLoop(cctx)
 
 	runner := planner.NewKanbanRunner(provider, sess.board)
 	runner.SetGate(sess)
@@ -440,6 +467,10 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 		ok := ev.OK
 		sess.append(chat.RoleTool, ev.Result, ev.Agent, ev.Tool, &ok)
 		sess.srv.hub.publish(sess.project, "tool", ev)
+	case runevents.TypeAppLog:
+		// Строка лога рантайма из репортёра цикла: тот же буфер и та же
+		// трансляция, что у прямой подписки инструмента (Ф-2).
+		sess.onRunAppLog(ev)
 	case runevents.TypeTokenCount:
 		// Потребление токенов раунда: накапливаем в Redis (за время жизни
 		// проекта) и транслируем новые тоталы в шину — фронт обновляет

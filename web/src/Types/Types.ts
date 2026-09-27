@@ -299,3 +299,103 @@ export interface ProjectTokens {
   out: number;
   tps?: number;
 }
+
+// Метрики агентского цикла проекта (GET /api/projects/:id/metrics, Ф-1
+// PLAN-2026-09-19-todo-owerview-for-prom.md). Снимок реестра runmetrics:
+// длительности и исходы вызовов инструментов по именам инструментов, единицам
+// работы (scope) и агентам, плюс именованные метрики шагов.
+export interface MetricsTool {
+  tool: string;
+  calls: number;
+  errors: number;
+  count: number;
+  sum_sec: number;
+  mean_sec: number;
+  max_sec: number;
+  error_count: number;
+  error_sum_sec: number;
+  // Корзины гистограммы длительности: buckets[i] — вызовов не длиннее
+  // duration_buckets[i] секунд (значения совпадают с экспортом Prometheus).
+  buckets: number[];
+  error_buckets: number[];
+}
+
+export interface MetricsScope {
+  scope: string;
+  calls: number;
+  errors: number;
+  rounds: number;
+  tokens_in: number;
+  tokens_out: number;
+  total_sec: number;
+  mean_sec: number;
+}
+
+export interface MetricsAgent {
+  agent: string;
+  calls: number;
+  errors: number;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+export interface MetricsStep {
+  scope: string;
+  step: string;
+  key: string;
+  value: number;
+}
+
+export interface ProjectMetrics {
+  project: string;
+  run_id: number;
+  since: string;
+  uptime_sec: number;
+  rounds: number;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_total: number;
+  // Цены и стоимость: без заданных LLM_PRICE_IN/OUT price_* и cost равны 0,
+  // а cost_known == false — тогда интерфейс не показывает денежную оценку.
+  price_in: number;
+  price_out: number;
+  cost: number;
+  cost_known: boolean;
+  cost_in?: number;
+  cost_out?: number;
+  tps: number;
+  tool_calls: number;
+  tool_errors: number;
+  app_log_lines: number;
+  unpaired: number;
+  overflow: number;
+  tools: MetricsTool[];
+  scopes: MetricsScope[];
+  agents: MetricsAgent[];
+  steps: MetricsStep[];
+  // Итоги за всё время жизни проекта (Redis-счётчик tokens) в отличие от
+  // tokens_in/tokens_out, которые относятся к текущему запуску.
+  total_tokens_in: number;
+  total_tokens_out: number;
+  total_cost: number;
+  total_cost_known: boolean;
+  currency: string;
+  duration_buckets: number[];
+}
+
+/** Строка лога рантайма приложения (Ф-2): приходит по WS type="applog"
+ *  и списком через GET /api/projects/{id}/applog. */
+export interface AppLogLine {
+  time: string;
+  source?: string;
+  line: string;
+}
+
+/** Хвост логов рантайма. Пустой буфер — status "skipped" с подсказкой,
+ *  а не ошибка: рантайм могли ещё не запускать. */
+export interface AppLogView {
+  status: "ok" | "skipped";
+  lines: AppLogLine[];
+  count?: number;
+  hint?: string;
+}

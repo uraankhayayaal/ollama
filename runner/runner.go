@@ -589,6 +589,11 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// sentDiags — диагностики, уже показанные модели в этом эпизоде: повторные
 	// строки не дублируются (токен-бюджет, Ф-4). Сбрасывается на чистом раунде.
 	sentDiags := make(map[string]bool)
+	// appLogFeedOn/appLogFeedUsed/sentAppLogs — то же для логов рантайма (Ф-2):
+	// подмешивания ограничены, уже показанные строки не дублируются.
+	appLogFeedOn := appLogFeedEnabled()
+	appLogFeedUsed := 0
+	sentAppLogs := make(map[string]bool)
 	// progressNudges — сколько раз за цикл модели уже напомнили о невыполненном
 	// обязательном действии (подсказки по раундам, см. requiredProgressAfter).
 	progressNudges := 0
@@ -911,6 +916,33 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 					}
 					Debugf("RUNNER: раунд %d: авто-лечение: подмешиваю подсказку с %d диагностиками (%d/%d)", round+1, len(fresh), autoFixUsed, autoFixMaxRounds())
 					messages = append(messages, Message{Role: "user", Content: autoFixMessage(fresh, autoFixUsed, autoFixMaxRounds())})
+				}
+			}
+		}
+
+		// Ф-2: логи рантайма в цикл самокоррекции. Хук НЕ зависит от того,
+		// менялись ли файлы: приложение могло упасть и без мутаций в этом
+		// раунде (например, разработчик только что прочитал логи и теперь
+		// должен на них отреагировать).
+		if appLogFeedOn {
+			if rl, ok := agent.(RuntimeLogger); ok {
+				source, rawLines := rl.TakeAppLogTail()
+				fresh := filterNewDiags(trimAppLogLines(rawLines), sentAppLogs)
+				switch {
+				case len(rawLines) == 0:
+					// Логов в этом раунде не было — нечего подмешивать.
+				case len(fresh) == 0:
+					// Те же строки уже показаны: повтор только жёг бы раунд.
+					Debugf("RUNNER: раунд %d: логи рантайма уже отправлены (%d строк), повтор пропущен", round+1, len(rawLines))
+				case appLogFeedUsed >= appLogMaxFeedRounds():
+					Debugf("RUNNER: раунд %d: лимит подмешиваний логов рантайма (%d) исчерпан", round+1, appLogFeedUsed)
+				default:
+					appLogFeedUsed++
+					for _, l := range fresh {
+						sentAppLogs[l] = true
+					}
+					Debugf("RUNNER: раунд %d: подмешиваю %d строк логов рантайма (%d/%d)", round+1, len(fresh), appLogFeedUsed, appLogMaxFeedRounds())
+					messages = append(messages, Message{Role: "user", Content: appLogFeedMessage(source, fresh, appLogFeedUsed, appLogMaxFeedRounds())})
 				}
 			}
 		}

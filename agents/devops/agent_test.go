@@ -1,6 +1,7 @@
 package devops
 
 import (
+	"ai/agents/promptcheck"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,5 +76,31 @@ func TestDevopsPromptMentionsMakefile(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("промпт DevOps-инженера не содержит %q:\n%s", want, p)
 		}
+	}
+}
+
+// TestPromptMentionsOnlyAvailableTools — согласованность промпта DevOps и его
+// набора инструментов (Ф-2).
+//
+// Отдельно проверяем ReadAppLogs: валидный compose-файл ещё не значит, что
+// сервисы поднимаются, и единственный способ это увидеть — прочитать логи
+// сервиса.
+func TestPromptMentionsOnlyAvailableTools(t *testing.T) {
+	d, err := NewDevopsInDir("задание", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := d.GetSystemMessages(nil)[0].Message
+	for _, p := range promptcheck.CheckToolSet("devops", prompt, devopsToolNames) {
+		t.Error(p)
+	}
+	for _, p := range promptcheck.CheckTypos("devops", prompt) {
+		t.Error(p)
+	}
+	if !promptcheck.Contains(devopsToolNames, "ReadAppLogs") {
+		t.Error("devops: в наборе нет ReadAppLogs — состояние сервисов не проверить")
+	}
+	if !promptcheck.MentionsWord(prompt, "ReadAppLogs") {
+		t.Error("devops: промпт не упоминает ReadAppLogs")
 	}
 }

@@ -107,6 +107,8 @@ func newTool(name string, deps Deps) Tool {
 		return &deleteFilesTool{ops: deps.FileOps}
 	case "Run":
 		return &runTool{ops: deps.FileOps}
+	case ReadAppLogs:
+		return &readAppLogsTool{ops: deps.FileOps}
 	case "List":
 		return &listTool{ops: deps.FileOps}
 	case "AppendFile":

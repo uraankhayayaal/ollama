@@ -1,0 +1,141 @@
+// Metricsboard — панель «Метрики». Поверхности и типографика — как у
+// Logboard/Chatboard (единый плоский стиль без «стеклянных» эффектов), но
+// раскладка ближе к дашборду: карточки-плитки и плотные таблицы.
+.mb {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  color: var(--ink, #1b2330);
+
+  .mb-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line, #e2e8f0);
+
+    .mb-title { flex: 1; font-size: 14px; font-weight: 650; }
+
+    .mb-actions { display: flex; gap: 6px; }
+
+    .btn.small {
+      padding: 3px 9px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted, #8a94a6);
+      font-size: 12px;
+      cursor: pointer;
+      transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+
+      &:hover:not(:disabled) { color: var(--ink, #1b2330); border-color: var(--muted, #8a94a6); }
+      &:disabled { opacity: .5; cursor: default; }
+      &.on { color: var(--ok, #16a34a); border-color: var(--ok, #16a34a); }
+    }
+  }
+
+  .mb-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-right: 2px;
+  }
+
+  .mb-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
+  }
+
+  .mb-card {
+    padding: 8px 10px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 9px;
+
+    .mb-card-title { font-size: 11px; color: var(--muted, #8a94a6); }
+    .mb-card-value {
+      font-size: 18px;
+      font-weight: 650;
+      line-height: 1.25;
+      font-variant-numeric: tabular-nums;
+    }
+    .mb-card-hint { font-size: 11px; color: var(--muted, #8a94a6); }
+  }
+
+  .mb-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .mb-section-title {
+      font-size: 12px;
+      font-weight: 650;
+      color: var(--muted, #8a94a6);
+      text-transform: lowercase;
+    }
+  }
+
+  .mb-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+
+    th {
+      text-align: left;
+      font-weight: 500;
+      color: var(--muted, #8a94a6);
+      border-bottom: 1px solid var(--line, #e2e8f0);
+      padding: 3px 6px 3px 0;
+      white-space: nowrap;
+    }
+    td { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--line, #eef2f7); }
+  }
+
+  .mb-scope {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 11px;
+    word-break: break-all;
+  }
+
+  .mb-bad { color: var(--err, #dc2626); }
+  .mb-dim { color: var(--muted, #8a94a6); }
+
+  .mb-hist { width: 34%; }
+
+  .mb-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 1px;
+    height: 8px;
+    min-width: 60px;
+    margin-bottom: 2px;
+
+    .mb-seg {
+      display: block;
+      min-width: 1px;
+      background: var(--line, #cbd5e1);
+      border-radius: 2px;
+
+      &.best { background: var(--accent, #2563eb); }
+    }
+  }
+
+  .mb-note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted, #8a94a6);
+
+    code { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+  }
+
+  .mb-err { margin: 0; color: var(--err, #dc2626); font-size: 13px; }
+}

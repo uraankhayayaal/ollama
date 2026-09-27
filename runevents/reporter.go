@@ -38,6 +38,12 @@ const (
 	// Scope события (Event.Scope, задаётся WithScope) определяет, в счётчик
 	// какой единицы (проект/эпик/задача) попадёт расход раунда.
 	TypeTokenCount EventType = "tokens"
+	// TypeAppLog — строка лога рантайма приложения, прочитанная инструментом
+	// ReadAppLogs (Ф-2 PLAN-2026-09-19-todo-owerview-for-prom.md). Событие
+	// «только живое»: строки идут в WS (type=applog) и в кольцевой буфер
+	// сессии, но не в историю чата — иначе чат разрастался бы на тысячи строк
+	// и модель получала бы шум вместо ответа.
+	TypeAppLog EventType = "app_log"
 )
 
 // Event — событие агентного цикла для трансляции в Web UI.
@@ -58,8 +64,10 @@ type Event struct {
 	// Scope — единица работы, на которую потрачены токены раунда (для
 	// TypeTokenCount): task:<id>, epic:<id>, architecture, bugs. Проставляет
 	// WithScope; пусто — расход относится к проекту в целом.
-	Scope string    `json:"scope,omitempty"`
-	Time  time.Time `json:"time"` // момент события (UTC)
+	Scope string `json:"scope,omitempty"`
+	// Source — источник строки рантайма (для TypeAppLog): local, docker.
+	Source string    `json:"source,omitempty"`
+	Time   time.Time `json:"time"` // момент события (UTC)
 }
 
 // Reporter — назначение событий от runner.Generate. Небезопасен для вызовов
@@ -77,6 +85,11 @@ type Reporter interface {
 	// tps — реальная скорость генерации выхода (ток/с), когда провайдер её
 	// сообщает (Ollama eval_count/eval_duration); 0, если неизвестна.
 	OnTokens(in, out int64, tps float64)
+	// OnAppLog — строка лога рантайма приложения (Ф-2): source — откуда
+	// прочитали (local/docker), content — сама строка. Может зваться из
+	// горутин инструмента ReadAppLogs, поэтому реализация обязана быть
+	// потокобезопасной.
+	OnAppLog(source, content string)
 }
 
 // Sink — получатель событий. Может вызываться из нескольких горутин.
@@ -145,6 +158,11 @@ func (r *Router) OnToolResult(tool, result string, ok bool) {
 // OnTokens сообщает потребление токенов одного раунда модели.
 func (r *Router) OnTokens(in, out int64, tps float64) {
 	r.emit(Event{Type: TypeTokenCount, In: in, Out: out, TPS: tps})
+}
+
+// OnAppLog сообщает строку лога рантайма приложения (Ф-2).
+func (r *Router) OnAppLog(source, content string) {
+	r.emit(Event{Type: TypeAppLog, Source: source, Content: content})
 }
 
 func (r *Router) emit(ev Event) {

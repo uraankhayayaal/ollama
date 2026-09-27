@@ -1,6 +1,7 @@
 package qaengineer
 
 import (
+	"ai/agents/promptcheck"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,5 +76,31 @@ func TestQAPromptMentionsMakefile(t *testing.T) {
 	}
 	if !strings.Contains(p, "НЕ запускай приложение через Run") {
 		t.Errorf("промпт должен сохранять запрет дев-процессов:\n%s", p)
+	}
+}
+
+// TestPromptMentionsOnlyAvailableTools — согласованность промпта QA и его
+// набора инструментов (Ф-2): инструкция «проверь то-то» неисполнима, если
+// инструмента в наборе нет (модель получит «not in tool set»).
+//
+// Для QA ReadAppLogs обязателен отдельно: без запуска приложения в рантайме
+// невозможно отличить «юнит-тесты зелёные» от «сервер не поднимается».
+func TestPromptMentionsOnlyAvailableTools(t *testing.T) {
+	qa, err := NewQAEngineerInDir("задание", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := qa.GetSystemMessages(nil)[0].Message
+	for _, p := range promptcheck.CheckToolSet("qa", prompt, qaToolNames) {
+		t.Error(p)
+	}
+	for _, p := range promptcheck.CheckTypos("qa", prompt) {
+		t.Error(p)
+	}
+	if !promptcheck.Contains(qaToolNames, "ReadAppLogs") {
+		t.Error("qa: в наборе нет ReadAppLogs — проверять рантайм нечем")
+	}
+	if !promptcheck.MentionsWord(prompt, "ReadAppLogs") {
+		t.Error("qa: промпт не упоминает ReadAppLogs")
 	}
 }

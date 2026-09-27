@@ -330,6 +330,79 @@ body {
   }
 }
 
+// Metricsboard-шторка (Ф-1): та же геометрия, что у дифф-шторки, но с
+// собственным классом — панель метрик и панель диффа открываются независимо,
+// и общая стилизация не должна тащить за собой лишние селекторы.
+// Рантайм (Ф-2) — шторка снизу, геометрия как у метрик/логов.
+.runtimes-drawer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 121;
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  background: var(--bg, #f6f8fb);
+  border-top: 1px solid var(--line, #e2e8f0);
+  box-shadow: 0 -8px 30px rgb(0 0 0 / 0.14);
+}
+
+.metrics-drawer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 121;
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  background: var(--bg, #f6f8fb);
+  border-top: 1px solid var(--line, #e2e8f0);
+  box-shadow: 0 -8px 30px rgb(0 0 0 / 0.14);
+  transform: translateY(100%);
+  visibility: hidden;
+  transition: transform 0.25s ease, visibility 0.25s;
+
+  &.open {
+    transform: translateY(0);
+    visibility: visible;
+  }
+
+  .mb {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .btn.close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted, #8a94a6);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover { background: var(--line, #e2e8f0); }
+  }
+}
+
+@media (max-width: 640px) {
+  .metrics-drawer,
+  .runtimes-drawer {
+    height: 95dvh;
+    padding: 10px;
+  }
+}
+
 .empty {
   flex: 1;
   display: flex;
