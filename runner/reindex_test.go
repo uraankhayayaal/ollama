@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"ai/rag"
 	"ai/tools"
 )
 
@@ -90,8 +91,9 @@ func TestReindexAndLspShareDrainedTouched(t *testing.T) {
 
 // fakeReindexClient — записывающий ReindexClient для helper ReindexFiles.
 type fakeReindexClient struct {
-	indexed []string // "project|rel|scope"
-	deleted []string // "project|rel"
+	indexed []string // "project|rel|scope|branch|commit"
+	deleted []string // "project|rel|branch|commit"
+	opts    []rag.IndexOptions
 	calls   int
 	failAt  int // номер обращения к индексу (1-based), которое вернёт ошибку; 0 — без сбоев
 }
@@ -104,16 +106,18 @@ func (f *fakeReindexClient) toc() error {
 	return nil
 }
 
-func (f *fakeReindexClient) IndexFile(_ context.Context, projectName, relPath, scope, _ string) (int, error) {
-	f.indexed = append(f.indexed, strings.Join([]string{projectName, relPath, scope}, "|"))
+func (f *fakeReindexClient) IndexFile(_ context.Context, projectName, relPath, scope, _ string, opts rag.IndexOptions) (int, error) {
+	f.indexed = append(f.indexed, strings.Join([]string{projectName, relPath, scope, opts.Branch, opts.CommitSHA}, "|"))
+	f.opts = append(f.opts, opts)
 	if err := f.toc(); err != nil {
 		return 0, err
 	}
 	return 1, nil
 }
 
-func (f *fakeReindexClient) DeleteFile(_ context.Context, projectName, relPath string) error {
-	f.deleted = append(f.deleted, projectName+"|"+relPath)
+func (f *fakeReindexClient) DeleteFile(_ context.Context, projectName, relPath string, opts rag.IndexOptions) error {
+	f.deleted = append(f.deleted, projectName+"|"+relPath+"|"+opts.Branch+"|"+opts.CommitSHA)
+	f.opts = append(f.opts, opts)
 	return f.toc()
 }
 
@@ -135,24 +139,36 @@ func TestReindexFiles(t *testing.T) {
 		}
 		return ""
 	}
-	n, err := ReindexFiles(context.Background(), cl, scopeOf, dir, "p", []string{"a.go", "b.txt", "gone.go"})
+	// Версия индексации задаётся вызывающей стороной (ветка worktree агента +
+	// коммит) и прокидывается в каждое обращение к индексу (Р-7).
+	opts := rag.IndexOptions{Branch: "ai/task/T-01", CommitSHA: "abc123"}
+	n, err := ReindexFiles(context.Background(), cl, scopeOf, dir, "p", []string{"a.go", "b.txt", "gone.go"}, opts)
 	if err != nil {
 		t.Fatalf("ReindexFiles: %v", err)
 	}
 	if n != 3 {
 		t.Fatalf("переиндексировано %d, ожидали 3", n)
 	}
-	if len(cl.indexed) != 2 || cl.indexed[0] != "p|a.go|server" || cl.indexed[1] != "p|b.txt|" {
+	if len(cl.indexed) != 2 || cl.indexed[0] != "p|a.go|server|ai/task/T-01|abc123" ||
+		cl.indexed[1] != "p|b.txt||ai/task/T-01|abc123" {
 		t.Fatalf("indexed = %#v", cl.indexed)
 	}
-	if len(cl.deleted) != 1 || cl.deleted[0] != "p|gone.go" {
+	if len(cl.deleted) != 1 || cl.deleted[0] != "p|gone.go|ai/task/T-01|abc123" {
 		t.Fatalf("deleted = %#v", cl.deleted)
 	}
+	if len(cl.opts) != 3 {
+		t.Fatalf("обращений к индексу: %d, ожидали 3", len(cl.opts))
+	}
+	for _, got := range cl.opts {
+		if got != opts {
+			t.Fatalf("опции индексации не прокинуты: %+v", got)
+		}
+	}
 
-	if n, _ := ReindexFiles(context.Background(), nil, scopeOf, dir, "p", []string{"a.go"}); n != 0 {
+	if n, _ := ReindexFiles(context.Background(), nil, scopeOf, dir, "p", []string{"a.go"}, opts); n != 0 {
 		t.Fatalf("nil-клиент должен давать 0, got %d", n)
 	}
-	if n, _ := ReindexFiles(context.Background(), cl, scopeOf, dir, "p", nil); n != 0 {
+	if n, _ := ReindexFiles(context.Background(), cl, scopeOf, dir, "p", nil, opts); n != 0 {
 		t.Fatalf("пустой список должен давать 0, got %d", n)
 	}
 }
@@ -168,7 +184,7 @@ func TestReindexFilesStopsOnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl := &fakeReindexClient{failAt: 2}
-	n, err := ReindexFiles(context.Background(), cl, nil, dir, "p", []string{"a.go", "b.go"})
+	n, err := ReindexFiles(context.Background(), cl, nil, dir, "p", []string{"a.go", "b.go"}, rag.IndexOptions{Branch: "main"})
 	if err == nil {
 		t.Fatalf("ожидали ошибку индексации, got nil (n=%d)", n)
 	}

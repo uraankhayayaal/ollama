@@ -35,7 +35,9 @@ func (c *Client) IndexEpisode(ctx context.Context, pseudoProject, source, text s
 	if len(chunks) == 0 {
 		return nil
 	}
-	if err := c.upsertChunks(ctx, pseudoProject, rel, "@episode", chunks); err != nil {
+	// Эпизоды — диалог, а не код: ветка MainBranch, без версии (точки
+	// эпизодов перезаписываются по детерминированному ID, см. index.go).
+	if _, err := c.upsertChunks(ctx, pseudoProject, rel, "@episode", IndexOptions{Branch: MainBranch}, chunks); err != nil {
 		return fmt.Errorf("rag: индексация эпизода %s: %w", source, err)
 	}
 	return nil

@@ -48,6 +48,9 @@ func (c *Client) ProjectInfo(ctx context.Context, projectName string) (ProjectIn
 		CollectionName: c.collection,
 		Filter: &qdrant.Filter{Must: []*qdrant.Condition{
 			qdrant.NewMatchKeyword(PayloadProject, projectName),
+			// Только актуальные версии чанков: устаревшие (replaced_by) в
+			// индексе остаются историей версий и индексом не считаются.
+			qdrant.NewIsEmpty(PayloadReplacedBy),
 		}},
 		// Точный подсчёт: коллекции проектов небольшие, approximate дал бы
 		// плавающий «индекс построен/нет» на границе нуля.

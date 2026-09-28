@@ -11,8 +11,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"hash/fnv"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +23,11 @@ type Chunk struct {
 	Content   string
 	StartLine int // 1-based, включительно
 	EndLine   int // 1-based, включительно
+	// Symbol — имя определения, которому принадлежит фрагмент (функция,
+	// метод, тип, класс); пусто, если определение не распознано (линейная
+	// нарезка, обычный текст). Используется для стабильного chunk_id чанка
+	// между коммитами (см. ChunkID и PLAN-2026-09-27-done-branch-aware-rag.md, Р-2).
+	Symbol string
 }
 
 // maxChunkLines — предельное число строк в одном чанке. Длинные функции/
@@ -60,7 +67,7 @@ func chunkGoFile(filename, content string) []Chunk {
 
 	lines := strings.Split(content, "\n")
 	var chunks []Chunk
-	add := func(startL, endL int) {
+	add := func(startL, endL int, symbol string) {
 		if startL < 1 {
 			startL = 1
 		}
@@ -74,7 +81,7 @@ func chunkGoFile(filename, content string) []Chunk {
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		chunks = append(chunks, splitChunk(text, startL)...)
+		chunks = append(chunks, splitChunk(text, startL, symbol)...)
 	}
 
 	for _, decl := range f.Decls {
@@ -84,7 +91,7 @@ func chunkGoFile(filename, content string) []Chunk {
 			if d.Doc != nil {
 				startL = fset.Position(d.Doc.Pos()).Line
 			}
-			add(startL, fset.Position(d.End()).Line)
+			add(startL, fset.Position(d.End()).Line, goFuncSymbol(d))
 		case *ast.GenDecl:
 			if d.Tok == token.IMPORT {
 				continue
@@ -93,10 +100,65 @@ func chunkGoFile(filename, content string) []Chunk {
 			if d.Doc != nil {
 				startL = fset.Position(d.Doc.Pos()).Line
 			}
-			add(startL, fset.Position(d.End()).Line)
+			add(startL, fset.Position(d.End()).Line, goDeclSymbol(d))
 		}
 	}
 	return chunks
+}
+
+// goFuncSymbol — имя функции/метода Go: "Sum" для функции, "(*Server).Handle"
+// для метода (тип receivers даёт уникальность имён методов). Функции-литералы
+// без имени вклада в символ не дают — пусто.
+func goFuncSymbol(d *ast.FuncDecl) string {
+	if d == nil || d.Name == nil {
+		return ""
+	}
+	name := d.Name.Name
+	if d.Recv != nil && len(d.Recv.List) > 0 {
+		recv := goRecvType(d.Recv.List[0].Type)
+		if recv != "" {
+			return recv + "." + name
+		}
+	}
+	return name
+}
+
+// goDeclSymbol — имя первого объявления в group-декларации (type/var/const).
+func goDeclSymbol(d *ast.GenDecl) string {
+	if d == nil {
+		return ""
+	}
+	for _, spec := range d.Specs {
+		switch s := spec.(type) {
+		case *ast.TypeSpec:
+			if s.Name != nil {
+				return s.Name.Name
+			}
+		case *ast.ValueSpec:
+			if len(s.Names) > 0 {
+				return s.Names[0].Name
+			}
+		}
+	}
+	return ""
+}
+
+// goRecvType — текстовый вид типа receivers метода ("Server" для значений,
+// "*Server" для указателей).
+func goRecvType(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		if inner := goRecvType(t.X); inner != "" {
+			return "*" + inner
+		}
+	case *ast.IndexExpr: // обобщённый получатель T[P]
+		return goRecvType(t.X)
+	case *ast.IndexListExpr:
+		return goRecvType(t.X)
+	}
+	return ""
 }
 
 // chunkBracedFile нарезает TS/JS/JSX-файл: границами служат определения
@@ -122,14 +184,15 @@ func chunkBracedFile(content string) []Chunk {
 		return chunkLines(content)
 	}
 
-	return segmentChunks(lines, starts, isTSCommentLine)
+	return segmentChunks(lines, starts, isTSCommentLine, func(i int) string { return tsSymbol(i, lines) })
 }
 
 // segmentChunks склеивает области между стартовыми строками в чанки:
 // границы расширяются вверх по комментариям/декораторам (comment), между
 // границами идёт линейная нарезка с лимитом maxChunkLines. Блок до первой
-// границы (шапка файла, импорты) становится отдельным чанком.
-func segmentChunks(lines []string, starts []int, comment func(string) bool) []Chunk {
+// границы (шапка файла, импорты) становится отдельным чанком. Символ чанка
+// берётся из строки-границы (symbol по индексу строки).
+func segmentChunks(lines []string, starts []int, comment func(string) bool, symbol func(int) string) []Chunk {
 	bounds := append([]int{0}, starts...)
 	bounds = append(bounds, len(lines))
 
@@ -147,7 +210,11 @@ func segmentChunks(lines []string, starts []int, comment func(string) bool) []Ch
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		chunks = append(chunks, splitChunk(text, s+1)...)
+		sym := ""
+		if symbol != nil {
+			sym = symbol(bounds[k])
+		}
+		chunks = append(chunks, splitChunk(text, s+1, sym)...)
 	}
 	return chunks
 }
@@ -188,7 +255,7 @@ func chunkPythonFile(content string) []Chunk {
 	if len(starts) == 0 {
 		return chunkLines(content)
 	}
-	return segmentChunks(lines, starts, isPyCommentLine)
+	return segmentChunks(lines, starts, isPyCommentLine, func(i int) string { return pySymbol(i, lines) })
 }
 
 // chunkLines нарезает произвольный текст на строки не длиннее maxChunkLines.
@@ -212,11 +279,13 @@ func chunkLines(content string) []Chunk {
 }
 
 // splitChunk режет чанк на куски по maxChunkLines строк (без разрыва строки).
-// Короткий текст возвращается одним чанком.
-func splitChunk(text string, startL int) []Chunk {
+// Короткий текст возвращается одним чанком. Если чанк длиннее лимита, символ
+// получают только части, кроме первой (у части есть собственный порядковый
+// номер) — иначе части одного определения получили бы одинаковый chunk_id.
+func splitChunk(text string, startL int, symbol string) []Chunk {
 	lines := strings.Split(text, "\n")
 	if len(lines) <= maxChunkLines {
-		return []Chunk{{Content: text, StartLine: startL, EndLine: startL + len(lines) - 1}}
+		return []Chunk{{Content: text, StartLine: startL, EndLine: startL + len(lines) - 1, Symbol: symbol}}
 	}
 	var out []Chunk
 	for s := 0; s < len(lines); s += maxChunkLines {
@@ -224,7 +293,16 @@ func splitChunk(text string, startL int) []Chunk {
 		if e > len(lines) {
 			e = len(lines)
 		}
-		out = append(out, Chunk{Content: strings.Join(lines[s:e], "\n"), StartLine: startL + s, EndLine: startL + e - 1})
+		sym := symbol
+		if n := s / maxChunkLines; n > 0 {
+			sym = symbol + "@" + strconv.Itoa(n)
+		}
+		out = append(out, Chunk{
+			Content:   strings.Join(lines[s:e], "\n"),
+			StartLine: startL + s,
+			EndLine:   startL + e - 1,
+			Symbol:    sym,
+		})
 	}
 	return out
 }
@@ -241,9 +319,79 @@ var (
 	tsMethodRe = regexp.MustCompile(`^(?:async\s+|get\s+|set\s+)*[A-Za-z_$][\w$]*\s*\(.*\)\s*\{`)
 	// tsControlRe — конструкции вида name(...) {, которые не являются методами.
 	tsControlRe = regexp.MustCompile(`^(?:if|for|while|switch|catch|try|return|typeof|instanceof)\b`)
+	// tsSymbolRe — имя определения TS/JS в любой из поддерживаемых форм:
+	// function/class/interface/type/enum, стрелочная константа, метод.
+	tsSymbolRe = regexp.MustCompile(
+		`^(?:export\s+|declare\s+|default\s+|abstract\s+)*(?:async\s+)?(?:function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)` +
+			`|^(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)` +
+			`|^(?:async\s+|get\s+|set\s+)*([A-Za-z_$][\w$]*)\s*\(`,
+	)
 	// pyDefRe — определение Python: def/class (в т.ч. async def).
 	pyDefRe = regexp.MustCompile(`^(?:async\s+)?(?:def|class)\s+\w`)
+	// pySymbolRe — имя определения Python: def/class + имя.
+	pySymbolRe = regexp.MustCompile(`^(?:async\s+)?(?:def|class)\s+([A-Za-z_][\w]*)`)
 )
+
+// tsSymbol — имя TS/JS-определения по строке-границе (пусто, если строка не
+// распознана как определение или метод). Имя получает ТОЛЬКО определение или
+// метод класса: вызов вида doWork() на верхнем уровне символом не становится —
+// иначе два таких вызова делили бы один chunk_id и один вытеснил бы другой из
+// индекса (чанк считается заменённым).
+func tsSymbol(line int, lines []string) string {
+	if line < 0 || line >= len(lines) {
+		return ""
+	}
+	t := strings.TrimSpace(lines[line])
+	if !tsDefRe.MatchString(t) && !(tsMethodRe.MatchString(t) && !tsControlRe.MatchString(t)) {
+		return ""
+	}
+	m := tsSymbolRe.FindStringSubmatch(t)
+	if m == nil {
+		return ""
+	}
+	for _, g := range m[1:] {
+		if g != "" {
+			return g
+		}
+	}
+	return ""
+}
+
+// pySymbol — имя Python-определения по строке-границе.
+func pySymbol(line int, lines []string) string {
+	if line < 0 || line >= len(lines) {
+		return ""
+	}
+	if m := pySymbolRe.FindStringSubmatch(strings.TrimSpace(lines[line])); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// ChunkID — детерминированный идентификатор чанка (PLAN-2026-09-27-
+// branch-aware-rag.md, Р-2): FNV-1a 64 по проекту, файлу и символу. Один и
+// тот же символ даёт один chunk_id во всех коммитах и ветках — по нему
+// индексатор помечает прежние версии чанка устаревшими (replaced_by), а поиск
+// по ветке исключает перекрытые чанки main. Без символа (линейная нарезка)
+// вызывающая сторона передаёт ключ по начальной строке (см. chunkKey).
+func ChunkID(project, relPath, symbol string) string {
+	h := fnv.New64a()
+	h.Write([]byte(project))
+	h.Write([]byte{0})
+	h.Write([]byte(relPath))
+	h.Write([]byte{0})
+	h.Write([]byte(symbol))
+	return strconv.FormatUint(h.Sum64(), 16)
+}
+
+// chunkKey — ключ идентичности чанка для ChunkID: символ определения, а без
+// него (линейная нарезка/текст) — начальная строка файла.
+func chunkKey(ch Chunk) string {
+	if sym := strings.TrimSpace(ch.Symbol); sym != "" {
+		return sym
+	}
+	return "L" + strconv.Itoa(ch.StartLine)
+}
 
 // braceDelta считает изменение глубины фигурных скобок в строке, игнорируя
 // скобки внутри строковых литералов, шаблонов и строковых комментариев.

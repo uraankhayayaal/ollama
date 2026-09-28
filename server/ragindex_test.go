@@ -40,6 +40,24 @@ func TestIndexBackgroundBridgeSafe(t *testing.T) {
 	}
 }
 
+// TestIndexBackgroundBridgeBranch — мост передаёт необязательную ветку
+// индексации в Session.IndexBackground и упоминает её в ответе (Р-2).
+func TestIndexBackgroundBridgeBranch(t *testing.T) {
+	b := &fakeActions{}
+	out, err := newIndexBackgroundTool(b).Execute(map[string]any{
+		"branch": "ai/epic/ARCH-01",
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if b.indexBranch != "ai/epic/ARCH-01" {
+		t.Fatalf("ветка не прокинута в IndexBackground: %q", b.indexBranch)
+	}
+	if !strings.Contains(string(out), "ai/epic/ARCH-01") {
+		t.Fatalf("ответ не упоминает ветку: %s", out)
+	}
+}
+
 // TestIndexBackgroundBridgeError — ошибка фоновой индексации возвращается
 // мостом как status=error (модель продолжить работу, не прерывая цикл).
 func TestIndexBackgroundBridgeError(t *testing.T) {
@@ -91,6 +109,7 @@ type fakeProjectIndexer struct {
 type fakeIndexCall struct {
 	project string
 	items   []rag.IndexItem
+	opts    rag.IndexOptions
 }
 
 func (f *fakeProjectIndexer) EnsureCollection(context.Context) (int, error) {
@@ -100,10 +119,10 @@ func (f *fakeProjectIndexer) EnsureCollection(context.Context) (int, error) {
 	return 8, nil
 }
 
-func (f *fakeProjectIndexer) IndexProject(_ context.Context, project string, items []rag.IndexItem) (*rag.IndexResult, error) {
+func (f *fakeProjectIndexer) IndexProject(_ context.Context, project string, items []rag.IndexItem, opts rag.IndexOptions) (*rag.IndexResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, fakeIndexCall{project: project, items: items})
+	f.calls = append(f.calls, fakeIndexCall{project: project, items: items, opts: opts})
 	return &rag.IndexResult{Files: len(items), Chunks: len(items) * 2}, nil
 }
 
@@ -119,7 +138,8 @@ func TestIndexProjectRAGHermetic(t *testing.T) {
 	writeTestFile(t, dir, "server/handler.go", "package server\n")
 
 	idx := &fakeProjectIndexer{}
-	res, err := indexProjectRAG(context.Background(), idx, "proj-lg", dir)
+	opts := rag.IndexOptions{Branch: rag.MainBranch, CommitSHA: "c0ffee"}
+	res, err := indexProjectRAG(context.Background(), idx, "proj-lg", dir, opts)
 	if err != nil {
 		t.Fatalf("первый прогон: %v", err)
 	}
@@ -131,7 +151,7 @@ func TestIndexProjectRAGHermetic(t *testing.T) {
 	}
 
 	// Повторный прогон: успешен и пишет те же данные (идемпотентность вызова).
-	res2, err := indexProjectRAG(context.Background(), idx, "proj-lg", dir)
+	res2, err := indexProjectRAG(context.Background(), idx, "proj-lg", dir, opts)
 	if err != nil || res2.Files != 2 {
 		t.Fatalf("повторный прогон: err=%v Files=%d", err, res2.Files)
 	}
@@ -146,6 +166,9 @@ func TestIndexProjectRAGHermetic(t *testing.T) {
 		}
 		if len(c.items) != 2 {
 			t.Fatalf("вызов %d: files %d, want 2", i, len(c.items))
+		}
+		if c.opts != opts {
+			t.Fatalf("вызов %d: опции индексации %+v, want %+v", i, c.opts, opts)
 		}
 	}
 	if idx.ensured != 2 {
@@ -177,7 +200,7 @@ func newBlockingIndexer() *blockingIndexer {
 
 func (i *blockingIndexer) EnsureCollection(context.Context) (int, error) { return 8, nil }
 
-func (i *blockingIndexer) IndexProject(_ context.Context, p string, _ []rag.IndexItem) (*rag.IndexResult, error) {
+func (i *blockingIndexer) IndexProject(_ context.Context, p string, _ []rag.IndexItem, _ rag.IndexOptions) (*rag.IndexResult, error) {
 	close(i.launched)
 	<-i.release
 	return &rag.IndexResult{Files: 0, Chunks: 0}, nil
@@ -206,7 +229,7 @@ func TestSessionIndexBackground(t *testing.T) {
 	buildProjectIndexer = func() (projectIndexerCloser, error) { return bi, nil }
 
 	start := time.Now()
-	if err := sess.IndexBackground(context.Background()); err != nil {
+	if err := sess.IndexBackground(context.Background(), "ai/epic/ARCH-01"); err != nil {
 		t.Fatalf("IndexBackground: %v", err)
 	}
 	// Возврат без блокировки: горутина доходит до IndexProject быстро.
@@ -220,14 +243,15 @@ func TestSessionIndexBackground(t *testing.T) {
 	}
 
 	// Повторный запуск при идущей индексации — ошибка.
-	if err := sess.IndexBackground(context.Background()); err == nil {
+	if err := sess.IndexBackground(context.Background(), "ai/epic/ARCH-01"); err == nil {
 		t.Error("повторный IndexBackground при идущей индексации должен отклоняться")
 	}
 
 	// Разрешаем завершить индексацию: ждём status-отчёт в чате.
 	close(bi.release)
-	if m := waitChatRole(t, sess, chat.RoleStatus, 3*time.Second); !containsCase(m.Content, "RAG-индекс") {
-		t.Fatalf("нет status-отчёта об индексации, последний: %q", m.Content)
+	m := waitChatStatusContains(t, sess, "RAG-индекс проекта обновлён", 3*time.Second)
+	if !containsCase(m.Content, "ai/epic/ARCH-01") {
+		t.Fatalf("отчёт не упоминает ветку индексации: %q", m.Content)
 	}
 	select {
 	case <-bi.closed:
@@ -256,17 +280,20 @@ func TestSessionIndexBackgroundCallerCtxIgnored(t *testing.T) {
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel() // контекст вызывающего уже мёртв (как r.Context() после ответа).
-	if err := sess.IndexBackground(canceled); err != nil {
+	if err := sess.IndexBackground(canceled, ""); err != nil {
 		t.Fatalf("IndexBackground с отменённым ctx вызывающего: %v", err)
 	}
 
-	if m := waitChatRole(t, sess, chat.RoleStatus, 3*time.Second); !containsCase(m.Content, "RAG-индекс") {
-		t.Fatalf("индексация не завершилась со status-отчётом, последний: %q", m.Content)
-	}
+	waitChatStatusContains(t, sess, "RAG-индекс проекта обновлён", 3*time.Second)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if len(idx.calls) != 1 {
 		t.Fatalf("IndexProject вызван %d раз(а), want 1 (ctx вызывающего отменён до запуска)", len(idx.calls))
+	}
+	// Без явной ветки индексируется текущая ветка рабочего каталога проекта;
+	// каталог теста вне git → main без коммита.
+	if got := idx.calls[0].opts; got.Branch != rag.MainBranch || got.CommitSHA != "" {
+		t.Fatalf("опции индексации без явной ветки: %+v, ожидались main без коммита", got)
 	}
 }
 
@@ -286,7 +313,7 @@ func TestRESTProjectIndex(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
-		"POST", "/api/projects/proj-rag-rest/index", strings.NewReader(`{}`)))
+		"POST", "/api/projects/proj-rag-rest/index?branch=ai%2Fepic%2FARCH-01", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST index: %d, body: %s", rec.Code, rec.Body.String())
 	}
@@ -303,13 +330,15 @@ func TestRESTProjectIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := waitChatRole(t, sess, chat.RoleStatus, 3*time.Second); !containsCase(m.Content, "RAG-индекс") {
-		t.Fatalf("нет status-отчёта об индексации, последний: %q", m.Content)
-	}
+	waitChatStatusContains(t, sess, "RAG-индекс проекта обновлён", 3*time.Second)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if len(idx.calls) != 1 || idx.calls[0].project != "proj-rag-rest" {
 		t.Fatalf("IndexProject вызван с %+v, want 1 вызов по proj-rag-rest", idx.calls)
+	}
+	// Ветка из query-параметра доходит до индексации (Р-7).
+	if got := idx.calls[0].opts.Branch; got != "ai/epic/ARCH-01" {
+		t.Fatalf("ветка индексации: %q, want ai/epic/ARCH-01", got)
 	}
 }
 
@@ -334,6 +363,29 @@ func TestRESTProjectIndexRAGUnavailable(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "QDRANT_ADDR") {
 		t.Fatalf("тело 503 не объясняет причину: %s", rec.Body.String())
 	}
+}
+
+// waitChatStatusContains — ждёт status-сообщение чата с подстрокой. Нужна для
+// фоновой индексации: IndexBackground сразу публикует «Запущена фоновая
+// индексация…», а ждать нужно ФИНАЛЬНЫЙ отчёт («RAG-индекс проекта
+// обновлён…») — только он означает, что IndexProject уже отработал.
+func waitChatStatusContains(t *testing.T, sess *Session, sub string, within time.Duration) chat.Message {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		hist, err := sess.chat.History(context.Background(), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range hist {
+			if m.Role == chat.RoleStatus && strings.Contains(m.Content, sub) {
+				return m
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("нет status-сообщения с %q за %v", sub, within)
+	return chat.Message{}
 }
 
 // containsCase — подстрока без учёта регистра.

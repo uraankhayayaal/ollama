@@ -28,6 +28,8 @@ type fakeActions struct {
 	rejected  bool
 	indexBg   bool
 	indexErr  error
+	// indexBranch — ветка, переданная мостом в IndexBackground (Р-2).
+	indexBranch string
 	// Ф-4b: резолв конфликтов.
 	conflictReq  ConflictRequest
 	conflictOut  map[string]any
@@ -52,8 +54,9 @@ func (f *fakeActions) EpicRelease(_ context.Context, epicID string) (string, err
 	return "эпик в main", nil
 }
 func (f *fakeActions) BranchReject(context.Context) error { f.rejected = true; return nil }
-func (f *fakeActions) IndexBackground(context.Context) error {
+func (f *fakeActions) IndexBackground(_ context.Context, branch string) error {
 	f.indexBg = true
+	f.indexBranch = branch
 	return f.indexErr
 }
 func (f *fakeActions) ActionConfirmed(context.Context) bool { return f.confirmed }

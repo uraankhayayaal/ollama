@@ -207,3 +207,83 @@ func TestCodeSearchLimitsFromEnv(t *testing.T) {
 		t.Fatalf("лимиты: got %d/%d, want 5/1000", fake.last.Limit, fake.last.MaxTotal)
 	}
 }
+
+// Ветка поиска: явный параметр агента пробрасывается в RAG-поиск (Р-5/Р-6).
+func TestCodeSearchExplicitBranch(t *testing.T) {
+	fake := &fakeSearcher{results: []rag.SearchResult{
+		{File: "server/api.go", StartLine: 3, EndLine: 9, Score: 0.9, Snippet: "func Handler()",
+			Branch: "ai/epic/ARCH-01", CommitSHA: "abcdef1234567890", ChunkID: "cid-1"},
+	}}
+	tool := newCodeSearchTool(fake)
+
+	out, err := tool.Execute(map[string]any{"query": "handler", "branch": "ai/epic/ARCH-01"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if fake.last.Branch != "ai/epic/ARCH-01" {
+		t.Fatalf("ветка поиска: got %q, want ai/epic/ARCH-01", fake.last.Branch)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("не JSON: %s", out)
+	}
+	if m["branch"] != "ai/epic/ARCH-01" {
+		t.Fatalf("ветка в ответе: got %v", m["branch"])
+	}
+	results, _ := m["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("results: %#v", m["results"])
+	}
+	r, _ := results[0].(map[string]any)
+	// Версионные маркеры доходят до модели...
+	if r["branch"] != "ai/epic/ARCH-01" || r["chunk_id"] != "cid-1" {
+		t.Fatalf("маркеры версии в результате: %#v", r)
+	}
+	// ...и печатаются шапкой над сниппетом (коммит укорочен).
+	snippet, _ := r["snippet"].(string)
+	if !strings.HasPrefix(snippet, "[Файл: server/api.go | Ветка: ai/epic/ARCH-01 | Коммит: abcdef12]\n") {
+		t.Fatalf("шапка происхождения: %q", snippet)
+	}
+	if !strings.Contains(snippet, "func Handler()") {
+		t.Fatalf("код под шапкой потерян: %q", snippet)
+	}
+}
+
+// Без параметра branch ветка берётся из рабочего каталога агента (в тесте —
+// вне git → main), а результат кэшируется (git не дёргается на каждый вызов).
+func TestCodeSearchBranchAutoDetected(t *testing.T) {
+	fake := &fakeSearcher{results: []rag.SearchResult{{File: "a.go", Snippet: "x", Branch: "main"}}}
+	tool := newCodeSearchTool(fake) // OutputDir /tmp/temp/demo — вне git
+	if _, err := tool.Execute(map[string]any{"query": "тест"}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if fake.last.Branch != rag.MainBranch {
+		t.Fatalf("ветка вне git: got %q, want %s", fake.last.Branch, rag.MainBranch)
+	}
+	if tool.branch != rag.MainBranch {
+		t.Fatalf("ветка не закэширована: %q", tool.branch)
+	}
+	if _, err := tool.Execute(map[string]any{"query": "ещё"}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if fake.last.Branch != rag.MainBranch {
+		t.Fatalf("повторный вызов: ветка %q", fake.last.Branch)
+	}
+}
+
+// Определение ветки инструмента — hermetic-тест через настоящий git-каталог не
+// требуется: достаточно проверить, что инструмент не падает без OutputDir.
+func TestCodeSearchBranchWithoutOutputDir(t *testing.T) {
+	tool := &codeSearchTool{searcher: &fakeSearcher{}}
+	if got := tool.detectBranch(); got != rag.MainBranch {
+		t.Fatalf("без OutputDir ожидалась main, got %q", got)
+	}
+}
+
+// Результат без коммита (проект вне git) печатает прочерк, а не пустую строку.
+func TestCodeSnippetHeaderNoCommit(t *testing.T) {
+	h := codeSnippetHeader(rag.SearchResult{File: "a.go", Branch: "main"})
+	if h != "[Файл: a.go | Ветка: main | Коммит: -]" {
+		t.Fatalf("шапка без коммита: %q", h)
+	}
+}

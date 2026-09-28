@@ -57,6 +57,12 @@ type QdrantStore interface {
 	CreateCollection(ctx context.Context, request *qdrant.CreateCollection) error
 	Upsert(ctx context.Context, request *qdrant.UpsertPoints) (*qdrant.UpdateResult, error)
 	Delete(ctx context.Context, request *qdrant.DeletePoints) (*qdrant.UpdateResult, error)
+	// Scroll — постраничное чтение точек по фильтру: нужно версионированию
+	// чанков, чтобы найти прежние версии в ветке (branch-aware RAG).
+	Scroll(ctx context.Context, request *qdrant.ScrollPoints) ([]*qdrant.RetrievedPoint, error)
+	// SetPayload — точечное обновление payload (проставляет replaced_by
+	// прежним версиям чанка).
+	SetPayload(ctx context.Context, request *qdrant.SetPayloadPoints) (*qdrant.UpdateResult, error)
 	Query(ctx context.Context, request *qdrant.QueryPoints) ([]*qdrant.ScoredPoint, error)
 	Count(ctx context.Context, request *qdrant.CountPoints) (uint64, error)
 	Close() error

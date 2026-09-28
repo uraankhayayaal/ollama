@@ -696,6 +696,8 @@ func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 // Р-2). Вызов не блокирует цикл: Session.IndexBackground запускает горутину;
 // результат (файлы/чанки) уходит в лог и chat.RoleStatus. Повтор при уже
 // идущей индексации — 409; недоступный клиент RAG (нет Qdrant/модели) — 503.
+// Необязательный query-параметр branch задаёт ветку индексации (пусто — текущая
+// ветка каталога проекта), см. PLAN-2026-09-27-done-branch-aware-rag.md.
 func (s *Server) handleProjectIndex(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	sess, _, err := s.getOrCreate(project)
@@ -703,7 +705,8 @@ func (s *Server) handleProjectIndex(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
 		return
 	}
-	if err := sess.IndexBackground(r.Context()); err != nil {
+	branch := strings.TrimSpace(r.URL.Query().Get("branch"))
+	if err := sess.IndexBackground(r.Context(), branch); err != nil {
 		sess.log.Warnf("[index] фоновая индексация %s: %v", project, err)
 		msg := err.Error()
 		if strings.Contains(msg, "уже запущена") {
@@ -715,7 +718,7 @@ func (s *Server) handleProjectIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
-		"message": "Индексация RAG-индекса запущена в фоне",
+		"message": "Индексация RAG-индекса запущена в фоне" + branchSuffix(branch),
 	})
 }
 

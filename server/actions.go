@@ -56,9 +56,11 @@ type ActionsBackend interface {
 	BranchReject(ctx context.Context) error
 	// IndexBackground запускает фоновую индексацию RAG-памяти проекта
 	// (walk + IndexProject, Ф-5, Р-2). Безопасно — подтверждения не требует:
-	// прогон идемпотентен (IndexProject сперва очищает точки проекта), не
-	// блокирует агентский цикл — вернуться должна сразу.
-	IndexBackground(ctx context.Context) error
+	// прогон идемпотентен (IndexProject помечает прежние версии чанков
+	// устаревшими и грузит их заново), не блокирует агентский цикл — вернуться
+	// должна сразу. branch — необязательная ветка индексации (пусто — текущая
+	// ветка каталога проекта, см. PLAN-2026-09-27-done-branch-aware-rag.md).
+	IndexBackground(ctx context.Context, branch string) error
 	// ConflictResolve — безопасная часть резолва конфликта main ↔ релизная
 	// ветка эпика (Ф-4b, actions_resolve.go): status/start — состояние и
 	// открытие процесса резолва, apply — запись выбранного содержимого в
@@ -198,20 +200,28 @@ func actionTools(b ActionsBackend) []tools.Tool {
 }
 
 // newIndexBackgroundTool — безопасный мост «построить RAG-индекс в фоне»
-// (Ф-5, Р-2). Без подтверждения: индексация идемпотентна (IndexProject сперва
-// удаляет точки проекта) и не блокирует цикл — executes сразу, работа идёт
-// параллельно в Session.IndexBackground, результат отчитывается в чат/лог.
+// (Ф-5, Р-2). Без подтверждения: индексация идемпотентна (IndexProject
+// версионирует чанки: прежние версии помечаются устаревшими) и не блокирует
+// цикл — executes сразу, работа идёт параллельно в Session.IndexBackground,
+// результат отчитывается в чат/лог. Необязательный аргумент branch задаёт
+// ветку индексации (по умолчанию — текущая ветка каталога проекта).
 func newIndexBackgroundTool(b ActionsBackend) *actionTool {
 	return &actionTool{
 		name: actionIndexBackground, b: b,
-		description: "Построить/обновить RAG-индекс проекта в фоне (семантическая память для CodeSearch). Вызов не блокирует проектирование: индексация идёт параллельно и идемпотентна. Пока индекс строится, работай ReadMap/ReadFiles/LSP; после завершения в чате появится статус-отчёт (файлы/чанки).",
-		run: func(ctx context.Context, _ map[string]any) (map[string]any, error) {
-			if err := b.IndexBackground(ctx); err != nil {
+		description: "Построить/обновить RAG-индекс проекта в фоне (семантическая память для CodeSearch). Вызов не блокирует проектирование: индексация идёт параллельно и идемпотентна. Пока индекс строится, работай ReadMap/ReadFiles/LSP; после завершения в чате появится статус-отчёт (файлы/чанки). Опционально передай branch — индекс ветко-осознанный, CodeSearch в ветке агента видит свою ветку и main, но не изменения соседних веток; без branch индексируется текущая ветка проекта.",
+		args: map[string]any{
+			"branch": map[string]any{"type": "string", "description": "Опционально: ветка для индексации (например ai/epic/ARCH-01). Пусто — текущая ветка рабочего каталога проекта."},
+		},
+		run: func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			branch := actionArg(args, "branch")
+			if err := b.IndexBackground(ctx, branch); err != nil {
 				return nil, err
 			}
-			return map[string]any{
-				"message": "Фоновая индексация RAG запущена: продолжай проектирование (ReadFiles/ReadMap/LSP), CodeSearch заработает после построения индекса.",
-			}, nil
+			msg := "Фоновая индексация RAG запущена: продолжай проектирование (ReadFiles/ReadMap/LSP), CodeSearch заработает после построения индекса."
+			if branch != "" {
+				msg += " Индексация ветки: " + branch + "."
+			}
+			return map[string]any{"message": msg}, nil
 		},
 	}
 }

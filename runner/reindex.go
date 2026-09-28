@@ -5,9 +5,10 @@ package runner
 // Агент-разработчик (через встроенный *tools.FileOps + поле RAG) реализует
 // интерфейс Reindexer. После раунда, в котором были мутации файлов, раннер
 // (в том же хуке, что и LSP-авто-лечение, runner/autofix.go) переиндексирует
-// затронутые файлы в векторную память Qdrant: старые чанки файла удаляются,
-// новые — загружаются (IndexFile идемпотентен, дублей не плодит), удалённые
-// мутацией файлы — чистятся из индекса.
+// затронутые файлы в векторную память Qdrant: прежние версии чанков помечаются
+// устаревшими (replaced_by = коммит), новые — загружаются с chunk_id/
+// commit_sha (см. PLAN-2026-09-27-done-branch-aware-rag.md, Р-3/Р-7). Повтор с тем
+// же коммитом идемпотентен, удалённые мутацией файлы помечаются устаревшими.
 //
 // Очередь затронутых файлов жёстко одна (FileOps.touched): и LSP-хук, и
 // reindex получают её из ОДНОГО дрена (TakeTouched) в runner.go, чтобы не
@@ -27,6 +28,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ai/rag"
 )
 
 // reindexOnEnv — env-флаг авто-обновления RAG-индекса после мутаций (Ф-5).
@@ -46,20 +49,24 @@ type Reindexer interface {
 // ReindexClient — узкий интерфейс векторной памяти, необходимый для
 // переиндексации (Ф-5). Реализуется *rag.Client.
 type ReindexClient interface {
-	// IndexFile заменяет векторы файла в индексе: старые чанки удаляются,
-	// новые грузятся. Идемпотентна — повторный прогон не плодит дубли.
-	IndexFile(ctx context.Context, projectName, relPath, scope, content string) (int, error)
-	// DeleteFile чистит все чанки файла из индекса.
-	DeleteFile(ctx context.Context, projectName, relPath string) error
+	// IndexFile заменяет векторы файла в ветке: прежние версии чанков
+	// помечаются устаревшими, новые грузятся с chunk_id/commit_sha.
+	// Идемпотентна — повторный прогон с тем же коммитом не плодит дубли.
+	IndexFile(ctx context.Context, projectName, relPath, scope, content string, opts rag.IndexOptions) (int, error)
+	// DeleteFile помечает устаревшими все чанки файла в ветке.
+	DeleteFile(ctx context.Context, projectName, relPath string, opts rag.IndexOptions) error
 }
 
 // ReindexFiles переиндексирует список относительных путей проекта: для каждого
 // файла читается текущее содержимое из contentDir и заново грузится в индекс
-// (scope — через scopeOf, обычно rag.ScopeForPath); отсутствующие на диске
-// файлы (удалены мутацией) чистятся из индекса. Возвращает число успешно
+// ветки opts (scope — через scopeOf, обычно rag.ScopeForPath); отсутствующие на
+// диске файлы (удалены мутацией) помечаются устаревшими. Версия индексации
+// (branch/commit_sha) определяется вызывающей стороной через
+// rag.DetectIndexOptions(contentDir) — так поиск CodeSearch в ветке агента
+// видит только её код и актуальный main (Р-7). Возвращает число успешно
 // обработанных файлов; первая же ошибка останавливает переиндексацию —
 // вызывающий логирует и продолжает генерацию (degrade).
-func ReindexFiles(ctx context.Context, cl ReindexClient, scopeOf func(rel string) string, contentDir, project string, files []string) (int, error) {
+func ReindexFiles(ctx context.Context, cl ReindexClient, scopeOf func(rel string) string, contentDir, project string, files []string, opts rag.IndexOptions) (int, error) {
 	if cl == nil || len(files) == 0 {
 		return 0, nil
 	}
@@ -72,8 +79,9 @@ func ReindexFiles(ctx context.Context, cl ReindexClient, scopeOf func(rel string
 		content, err := os.ReadFile(filepath.Join(contentDir, filepath.FromSlash(rel)))
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Файл удалён мутацией — висящих векторов в памяти не оставляем.
-				if derr := cl.DeleteFile(ctx, project, rel); derr != nil {
+				// Файл удалён мутацией — его версии в ветке устаревают, висящих
+				// «актуальных» векторов в памяти не остаётся.
+				if derr := cl.DeleteFile(ctx, project, rel, opts); derr != nil {
 					return reindexed, fmt.Errorf("delete %s из индекса: %w", rel, derr)
 				}
 				reindexed++
@@ -85,7 +93,7 @@ func ReindexFiles(ctx context.Context, cl ReindexClient, scopeOf func(rel string
 		if scopeOf != nil {
 			scope = scopeOf(rel)
 		}
-		if _, ierr := cl.IndexFile(ctx, project, rel, scope, string(content)); ierr != nil {
+		if _, ierr := cl.IndexFile(ctx, project, rel, scope, string(content), opts); ierr != nil {
 			return reindexed, fmt.Errorf("index %s: %w", rel, ierr)
 		}
 		reindexed++

@@ -16,6 +16,8 @@ type fakeStore struct {
 	existsErr error
 	createErr error
 	deleteErr error
+	scrollErr error
+	setErr    error
 
 	created     *qdrant.CreateCollection
 	upsertCalls int
@@ -25,6 +27,11 @@ type fakeStore struct {
 	countResult uint64
 	countErr    error
 	closed      bool
+
+	// scrolled — ответы Scroll (обычно пусто: активных точек нет).
+	scrolled []*qdrant.RetrievedPoint
+	// setPayload — зафиксированные вызовы SetPayload (payload для точек).
+	setPayload []map[string]*qdrant.Value
 }
 
 func (f *fakeStore) CollectionExists(ctx context.Context, collectionName string) (bool, error) {
@@ -61,6 +68,21 @@ func (f *fakeStore) Delete(ctx context.Context, request *qdrant.DeletePoints) (*
 func (f *fakeStore) Query(ctx context.Context, request *qdrant.QueryPoints) ([]*qdrant.ScoredPoint, error) {
 	f.queryCalls++
 	return nil, nil
+}
+
+func (f *fakeStore) Scroll(ctx context.Context, request *qdrant.ScrollPoints) ([]*qdrant.RetrievedPoint, error) {
+	if f.scrollErr != nil {
+		return nil, f.scrollErr
+	}
+	return f.scrolled, nil
+}
+
+func (f *fakeStore) SetPayload(ctx context.Context, request *qdrant.SetPayloadPoints) (*qdrant.UpdateResult, error) {
+	if f.setErr != nil {
+		return nil, f.setErr
+	}
+	f.setPayload = append(f.setPayload, request.GetPayload())
+	return &qdrant.UpdateResult{}, nil
 }
 
 func (f *fakeStore) Count(ctx context.Context, request *qdrant.CountPoints) (uint64, error) {

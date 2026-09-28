@@ -276,3 +276,138 @@ func TestChunkEmptyFile(t *testing.T) {
 		t.Fatalf("пустой файл дал чанки: %v", got)
 	}
 }
+
+// Символ чанка (Р-1): у каждого чанка с определением есть Symbol — по нему
+// строится стабильный chunk_id, одинаковый для одной функции на разных
+// коммитах.
+func TestChunkSymbolGoTSPython(t *testing.T) {
+	goChunks := ChunkFile("calc.go", `package example
+
+func Sum(a, b int) int { return a + b }
+
+func (s *Server) Handle(w int) {}
+
+type User struct{ Name string }
+
+var Registry = map[string]int{}
+`)
+	want := map[string]bool{"Sum": true, "*Server.Handle": true, "User": true, "Registry": true}
+	for _, ch := range goChunks {
+		if !want[ch.Symbol] {
+			t.Fatalf("неожиданный символ %q (чанок %d-%d)", ch.Symbol, ch.StartLine, ch.EndLine)
+		}
+		want[ch.Symbol] = false
+	}
+	for sym, left := range want {
+		if left {
+			t.Fatalf("символ %q не извлечён", sym)
+		}
+	}
+
+	tsChunks := ChunkFile("app.ts", `export function render() {
+  return 1
+}
+
+class Widget {
+  mount() {
+    return 2
+  }
+}
+`)
+	var symbols []string
+	for _, ch := range tsChunks {
+		if strings.TrimSpace(ch.Symbol) == "" {
+			t.Fatalf("ts чанк %d-%d без символа", ch.StartLine, ch.EndLine)
+		}
+		symbols = append(symbols, ch.Symbol)
+	}
+	if symbols[0] != "render" || symbols[1] != "Widget" || symbols[2] != "mount" {
+		t.Fatalf("символы ts: %v", symbols)
+	}
+
+	pyChunks := ChunkFile("app.py", `def run():
+    pass
+
+class Service:
+    pass
+`)
+	if len(pyChunks) != 2 {
+		t.Fatalf("py чанков: got %d, want 2", len(pyChunks))
+	}
+	if pyChunks[0].Symbol != "run" || pyChunks[1].Symbol != "Service" {
+		t.Fatalf("символы py: %q / %q", pyChunks[0].Symbol, pyChunks[1].Symbol)
+	}
+}
+
+// Вызов верхнего уровня не получает символ: два одинаковых вызова в разных
+// местах файла иначе делили бы chunk_id и один вытеснил бы другой из индекса.
+func TestChunkSymbolNoSymbolForCall(t *testing.T) {
+	chunks := ChunkFile("main.ts", `import { run } from "./run";
+
+function boot() {
+  run();
+}
+
+run();
+`)
+	if len(chunks) < 2 {
+		t.Fatalf("чанков: got %d, want >= 2 (%+v)", len(chunks), chunks)
+	}
+	for _, ch := range chunks {
+		if ch.Symbol == "run" {
+			t.Fatalf("вызов run() получил символ (%d-%d)", ch.StartLine, ch.EndLine)
+		}
+	}
+	var found bool
+	for _, ch := range chunks {
+		if ch.Symbol == "boot" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("символ определения boot не найден среди %+v", chunks)
+	}
+}
+
+// chunk_id стабилен между коммитами: одна и та же функция на разных версиях
+// файла делит chunk_id, разные функции/файлы/проекты — нет.
+func TestChunkIDStableAcrossCommits(t *testing.T) {
+	v1 := `package example
+
+// Sum складывает.
+func Sum(a, b int) int {
+	return a + b
+}
+`
+	v2 := `package example
+
+// Sum складывает (и умножает на два).
+func Sum(a, b int) int {
+	return a + b
+}
+
+func Mul(a, b int) int { return a * b }
+`
+	first, last := ChunkFile("calc.go", v1)[0], ChunkFile("calc.go", v2)[0]
+	if first.Symbol != "Sum" || last.Symbol != "Sum" {
+		t.Fatalf("символы: %q / %q", first.Symbol, last.Symbol)
+	}
+	id1, id2 := ChunkID("demo", "calc.go", chunkKey(first)), ChunkID("demo", "calc.go", chunkKey(last))
+	if id1 != id2 {
+		t.Fatalf("chunk_id разъехался между коммитами: %s != %s", id1, id2)
+	}
+	mul := ChunkFile("calc.go", v2)[1]
+	if mul.Symbol != "Mul" {
+		t.Fatalf("символ второй функции: %q", mul.Symbol)
+	}
+	if ChunkID("demo", "calc.go", chunkKey(mul)) == id1 {
+		t.Fatal("у другой функции тот же chunk_id")
+	}
+	if ChunkID("other", "calc.go", chunkKey(mul)) == ChunkID("demo", "calc.go", chunkKey(mul)) {
+		t.Fatal("у другого проекта тот же chunk_id")
+	}
+	// Линейная нарезка (без символа) ключуется начальной строкой.
+	if chunkKey(Chunk{StartLine: 42}) != "L42" {
+		t.Fatalf("фолбэк-ключ: %q, want L42", chunkKey(Chunk{StartLine: 42}))
+	}
+}

@@ -1,4 +1,5 @@
-// Фоновая индексация RAG проекта (см. PLAN-2026-09-24-done-architect-intelligence.md, Ф-5, Р-2).
+// Фоновая индексация RAG проекта (см. PLAN-2026-09-24-done-architect-intelligence.md, Ф-5, Р-2;
+// версия по веткам — PLAN-2026-09-27-done-branch-aware-rag.md).
 //
 // Архитектор видит через RagIndexStatus, что проект не проиндексирован, и по
 // промпту предлагает пользователю (AskUser) построить индекс в фоне. Мост
@@ -6,8 +7,11 @@
 // индексация уходит в горутину и НЕ блокирует агентский цикл: архитектор
 // продолжает проектирование через ReadFiles/ReadMap/LSP, а результат
 // (файлы/чанки) отчитывается в лог проекта и chat.RoleStatus. Повторный
-// запуск идемпотентен (IndexProject сперва удаляет точки проекта) и защищён
-// флагом сессии (повтор при уже идущей индексации отклоняется).
+// запуск идемпотентен (IndexProject помечает прежние версии чанков устаревшими
+// и грузит новые с тем же chunk_id) и защищён флагом сессии (повтор при уже
+// идущей индексации отклоняется). Индексация ветко-осознанная: чанки получают
+// branch/commit_sha, поэтому CodeSearch в ветке агента видит свою ветку и
+// актуальный main, но не изменения соседних эпиков.
 
 package server
 
@@ -17,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"ai/chat"
 	"ai/projects"
@@ -27,7 +32,7 @@ import (
 // проекта (реализует *rag.Client; выделен для hermetic-тестов без сети).
 type projectIndexer interface {
 	EnsureCollection(ctx context.Context) (int, error)
-	IndexProject(ctx context.Context, projectName string, files []rag.IndexItem) (*rag.IndexResult, error)
+	IndexProject(ctx context.Context, projectName string, files []rag.IndexItem, opts rag.IndexOptions) (*rag.IndexResult, error)
 }
 
 // projectIndexerCloser — индексатор, который нужно закрыть после работы.
@@ -51,7 +56,9 @@ var buildProjectIndexer = func() (projectIndexerCloser, error) {
 // IndexBackground запускает фоновую индексацию RAG-памяти проекта (Ф-5, Р-2).
 // Возвращается сразу (в отдельной горутине): агентский цикл не блокируется.
 // Повторный вызов при уже идущей индексации — ошибка (один прогон на сессию).
-func (sess *Session) IndexBackground(ctx context.Context) error {
+// branch — необязательная ветка: пусто берётся текущая ветка рабочего каталога
+// проекта (см. rag.DetectIndexOptions), см. PLAN-2026-09-27-done-branch-aware-rag.md.
+func (sess *Session) IndexBackground(ctx context.Context, branch string) error {
 	cl, err := buildProjectIndexer()
 	if err != nil {
 		return err
@@ -84,25 +91,38 @@ func (sess *Session) IndexBackground(ctx context.Context) error {
 		// жизненного цикла процесса: индексация сама себя завершает.
 		bgctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		sess.runBackgroundIndex(bgctx, cl)
+		sess.runBackgroundIndex(bgctx, cl, branch)
 	}()
 
 	sess.append(chat.RoleStatus,
-		fmt.Sprintf("Запущена фоновая индексация RAG-индекса проекта %s.", sess.project), "", "", nil)
+		fmt.Sprintf("Запущена фоновая индексация RAG-индекса проекта %s%s.", sess.project, branchSuffix(branch)), "", "", nil)
 	return nil
+}
+
+// branchSuffix — « (ветка X)» для сообщений о фоновой индексации.
+func branchSuffix(branch string) string {
+	if b := strings.TrimSpace(branch); b != "" {
+		return " (ветка " + b + ")"
+	}
+	return ""
 }
 
 // runBackgroundIndex выполняет полную индексацию проекта в векторную память и
 // отчитывается в лог и чат (RoleStatus). Любая ошибка — только отчёт:
 // генерация/цикл не деградируют.
-func (sess *Session) runBackgroundIndex(ctx context.Context, indexer projectIndexer) {
+func (sess *Session) runBackgroundIndex(ctx context.Context, indexer projectIndexer, branch string) {
 	dir := projects.ProjectDir(sess.project)
 	if inf, err := sess.srv.reg.Get(sess.project); err == nil {
 		dir = inf.Root
 	}
 
-	sess.log.Infof("rag: фоновая индексация %s: начинаю обход %s", sess.project, dir)
-	res, err := indexProjectRAG(ctx, indexer, sess.project, dir)
+	opts := rag.DetectIndexOptions(dir)
+	if b := strings.TrimSpace(branch); b != "" {
+		opts.Branch = b
+	}
+	sess.log.Infof("rag: фоновая индексация %s: начинаю обход %s (ветка %s, коммит %s)",
+		sess.project, dir, opts.Branch, orEmpty(opts.CommitSHA))
+	res, err := indexProjectRAG(ctx, indexer, sess.project, dir, opts)
 	if err != nil {
 		sess.log.Warnf("rag: фоновая индексация %s: %v", sess.project, err)
 		sess.append(chat.RoleStatus, "Фоновая индексация RAG не удалась: "+err.Error(), "", "", nil)
@@ -114,14 +134,23 @@ func (sess *Session) runBackgroundIndex(ctx context.Context, indexer projectInde
 		sess.log.Warnf("rag: фоновая индексация %s: %s", sess.project, e)
 	}
 	sess.append(chat.RoleStatus,
-		fmt.Sprintf("RAG-индекс проекта обновлён: файлов %d, чанков %d, ошибок %d",
-			res.Files, res.Chunks, len(res.Errors)), "", "", nil)
+		fmt.Sprintf("RAG-индекс проекта обновлён: файлов %d, чанков %d, ошибок %d (ветка %s)",
+			res.Files, res.Chunks, len(res.Errors), opts.Branch), "", "", nil)
+}
+
+// orEmpty — замена пустого значения (для логов).
+func orEmpty(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
 
 // indexProjectRAG индексирует проект целиком: сначала коллекция (create-if-
-// not-exists), затем сбор файлов и IndexProject (полная переиндексация —
-// старые точки проекта удаляются до загрузки, прогон идемпотентен).
-func indexProjectRAG(ctx context.Context, indexer projectIndexer, project, dir string) (*rag.IndexResult, error) {
+// not-exists), затем сбор файлов и IndexProject с веткой/коммитом (полная
+// переиндексация ветки — прежние версии чанков помечаются устаревшими,
+// прогон идемпотентен).
+func indexProjectRAG(ctx context.Context, indexer projectIndexer, project, dir string, opts rag.IndexOptions) (*rag.IndexResult, error) {
 	if _, err := indexer.EnsureCollection(ctx); err != nil {
 		return nil, fmt.Errorf("подготовка коллекции: %w", err)
 	}
@@ -129,7 +158,7 @@ func indexProjectRAG(ctx context.Context, indexer projectIndexer, project, dir s
 	if err != nil {
 		return nil, fmt.Errorf("обход %s: %w", dir, err)
 	}
-	return indexer.IndexProject(ctx, project, items)
+	return indexer.IndexProject(ctx, project, items, opts)
 }
 
 // walkerFn — функция обхода проекта (обычно rag.WalkProject; инъекция для

@@ -82,6 +82,50 @@ LSP/структурированных инструментах они дубл�
 `npm test -- --silent`), git-контекст через `Run`, точечный `grep` через `Run`
 только при `status skipped` у LSP/`CodeSearch`.
 
+Состояние последней сессии (PLAN-2026-09-27-done-branch-aware-rag, Ф-1..Ф-7
+готовы, остался ручной E2E): версионированный RAG по веткам Git. Агент в
+worktree `ai/task/<id>` через CodeSearch видит свою ветку + актуальный main и
+НЕ видит изменений соседних эпиков. Ключевое: `rag/chunk.go` — `Chunk.Symbol`
++ `ChunkID(project, file, chunkKey)` (фолбэк `L<start_line>`; TS-символ только у
+определений/методов, вызов `run()` символом не становится — иначе два вызова
+делили бы chunk_id); `rag/index.go` — payload `branch`/`commit_sha`/`chunk_id`/
+`content_hash`/`replaced_by`, `IndexOptions{Branch, CommitSHA}`,
+`upsertChunks` (Scroll активных версий → `SetPayload(replaced_by, Wait: true)` →
+Upsert; `pruneSuperseded` держит одно предыдущее поколение; пустой commit =
+проект без Git, прежние точки удаляются по ID), `pointID` включает ветку,
+коммит и content_hash — иначе незакоммиченная правка агента (главный сценарий
+`runner.ReindexFiles` после мутации) терялась бы; `rag/branch.go` (новый) —
+`MainBranch`, `DetectBranch`/`DetectCommit`/`DetectIndexOptions`, git-вызовы
+через инъектируемый `rag.gitRunner`; `rag/search.go` — `SearchParams.Branch`,
+`SearchResult.Branch/CommitSHA/ChunkID`, фильтр `should(активные ветка, активные
+main)` + второй проход `dropOverriddenByBranch` (Scroll активных точек ветки ПО
+ФАЙЛАМ результатов, отсечение перекрытых версий main по chunk_id — список
+исключений в фильтр не вносим: `NewHasID` это ID точек, не chunk_id),
+overfetch ×3 (мин. 12), порядок сборки выдачи: перекрытие → лимит → `maxTotal`;
+`rag/client.go` — `QdrantStore` += `Scroll`/`SetPayload`; `rag/status.go` —
+`ProjectInfo` считает только активные версии; `tools/codesearch.go` —
+`CodeSearchParams.Branch`, `detectBranch` с кэшем, шапка
+`[Файл: … | Ветка: … | Коммит: …]`, `ragLimits`/`ragSearchTimeout`;
+`runner/reindex.go` — `ReindexFiles(..., rag.IndexOptions)`;
+`agents/developer/developer.go` — `ReindexTouched` с
+`rag.DetectIndexOptions(OutputDir)` + правило «поиск ветко-осознанный» в промпте;
+`server/ragindex.go`/`actions.go`/`server.go` — `IndexBackground(ctx, branch)` и
+`POST /api/projects/{id}/index?branch=`; `main.go` — CLI печатает ветку/коммит.
+Тесты: `rag/memstore_test.go` (новый) — in-memory QdrantStore с семантикой
+фильтров (must/must_not/should, match, is_null, is_empty, has_id) и
+`textEmbedder`; на нём проверены версионирование, изоляция веток, идемпотентность
+и выдача поиска. Тесты поймали 4 реальных дефекта: `IndexProject` искал
+исчезнувшие файлы по ключам карты chunk_id вместо значений (файлы не устаревали),
+`activeBranchCond` для main строил взаимоисключающие `Must: branch=main` +
+`Should: is_null(branch)` (поиск из main не возвращал НИЧЕГО), `SetPayload` без
+`Wait` (гонка с prune/поиском), идемпотентность по одному `commit_sha` теряла
+незакоммиченные правки. Плюс флак тест-хелпера: `chunk_id` делится версиями
+одной функции МЕЖДУ ветками, поэтому искать активную точку надо по
+`(branch, chunk_id)` — `codeOf` без ветки зависел от порядка обхода map. Верификация зелёная: `go build`/`go vet`/`go test` по
+перечню выше (в т.ч. `./rag/`, `./runner/`, `./server/`) + `npm run build` (web/).
+Остался ручной E2E на живом Qdrant (шаги — в плане, раздел «Что осталось
+пользователю»).
+
 Состояние последней сессии (PLAN-2026-09-24-done-architect-intelligence, Ф-1..Ф-8, остался ручной E2E):
 Ф-4 «Корректность задачи, паттерны, AskUser» — архитектор получил
 `KanbanRunner.SetRAG` (Р-6) и `KanbanRunner.SetArchitectExtras` (Р-5),

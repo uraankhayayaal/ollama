@@ -464,16 +464,27 @@ func runIndexCommand(projectName string) {
 		items = append(items, rag.IndexItem{Path: rel, Scope: rag.ScopeForPath(rel), Content: string(content)})
 	}
 
-	res, err := client.IndexProject(ctx, projectName, items)
+	opts := rag.DetectIndexOptions(dir)
+	logging.Infof("index: ветка %s, коммит %s", opts.Branch, orDash(opts.CommitSHA))
+
+	res, err := client.IndexProject(ctx, projectName, items, opts)
 	if err != nil {
 		logging.Fatalf("index: %v", err)
 	}
 
-	logging.Infof("Индексация %q завершена: файлов %d, чанков %d, размерность %d, коллекция %s",
-		projectName, res.Files, res.Chunks, dim, client.Collection())
+	logging.Infof("Индексация %q завершена: файлов %d, чанков %d, размерность %d, ветка %s, коллекция %s",
+		projectName, res.Files, res.Chunks, dim, opts.Branch, client.Collection())
 	for _, e := range res.Errors {
 		logging.Warnf("index: %s", e)
 	}
+}
+
+// orDash — печать пустого значения коммита как «-».
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
 
 // runAcceptCommand выполняет приёмку собранного приложения в temp/<projectName>:
