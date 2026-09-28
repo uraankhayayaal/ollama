@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
-import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, ProjectTokens, Status } from "@/Types";
+import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, LogStream, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
 import { Chatboard } from "./Components/Chatboard";
 import { RunButton } from "./Components/RunButton";
@@ -49,9 +49,11 @@ export function App() {
   const [auth, setAuth] = useState<AuthPhase>("checking");
   const [protectedMode, setProtectedMode] = useState(false);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
-  // Потоковые строки логов: «имя файла → актуальный список строк».
-  // Обновляется событиями WS type="log"; Logboard объединяет с HTTP-данными.
-  const [logLines, setLogLines] = useState<Map<string, string[]>>(new Map());
+  // Потоковые строки логов: «имя файла → накопленный хвост». Обновляется
+  // событиями WS type="log"; Logboard объединяет с HTTP-данными. Буфер
+  // ограничен (LOG_MAX) — иначе за часы работы проект накапливает десятки
+  // тысяч строк, и отрисовка лога начинает заметно подтормаживать.
+  const [logLines, setLogLines] = useState<Map<string, LogStream>>(new Map());
   // Строки логов рантайма приложения (Ф-2): события WS type="applog". Это НЕ
   // журнал агентов (logLines), а вывод самого приложения — там видно падение
   // сервера, которого в журнале агентов быть не может.
@@ -145,7 +147,6 @@ export function App() {
     setError(fmtErr(e));
   };
 
-  // Обработчик событий «log» — каждая новая строкаappend к списку файла.
   // Строки рантайма: буфер ограничен, чтобы приложение с подробным логом не
   // съело память вкладки за долгую сессию.
   const APP_LOG_MAX = 2000;
@@ -158,10 +159,20 @@ export function App() {
     });
   }, []);
 
+  // Обработчик событий «log» — новая строка дописывается в хвост файла.
+  // Буфер ограничен: из начала отбрасывается всё, что не помещается, а
+  // dropped растёт, чтобы Logboard считал позицию по абсолютному индексу и
+  // не принял отброшенные строки за ещё не отрисованные.
+  const LOG_MAX = 4000;
   const handleLog = useCallback((ev: LogMessage) => {
     setLogLines((prev) => {
-      const entry = prev.get(ev.file) || [];
-      return new Map(prev).set(ev.file, [...entry, ev.line]);
+      const cur = prev.get(ev.file);
+      const kept = cur && cur.lines.length >= LOG_MAX ? cur.lines.slice(cur.lines.length - LOG_MAX + 1) : cur?.lines;
+      const next: LogStream = {
+        lines: [...(kept ?? []), ev.line],
+        dropped: (cur?.dropped ?? 0) + (cur?.lines.length ?? 0) - (kept?.length ?? 0),
+      };
+      return new Map(prev).set(ev.file, next);
     });
   }, []);
 

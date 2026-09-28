@@ -126,6 +126,11 @@
     line-height: 1.65;
     counter-reset: logline;
     scrollbar-gutter: stable;
+    // Прижатие к хвосту делает компонент (useLayoutEffect). Штатный
+    // scroll-браузера (scroll anchoring) с ним конфликтует: он подкручивает
+    // scrollTop сам и уводит выделение текста. Отключаем — иначе каждая
+    // новая строка дёргала бы лог дважды.
+    overflow-anchor: none;
 
     .lg {
       position: relative;
@@ -134,14 +139,17 @@
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       counter-increment: logline;
-      animation: logline-in 140ms ease-out both;
       &::before { content: counter(logline); position: absolute; left: 0; width: 42px; padding-right: 10px; color: #a0a8b4; text-align: right; user-select: none; }
       &:hover { background: rgb(15 23 42 / .035); }
       &.ts { color: #778190; }
       &.warn { color: #8a5a10; background: rgb(245 158 11 / .055); }
       &.err { color: #a83b42; background: rgb(220 38 38 / .06); }
+      // Анимация появления — только для пришедших строк: перерисовка всей
+      // пачки (снапшот на 1 МБ) иначе запускала бы тысячи анимаций разом.
+      &.fresh { animation: logline-in 140ms ease-out both; }
     }
     .log-empty { padding: 18px 56px; color: var(--muted, #8a94a6); font: 12px system-ui, sans-serif; }
+    .log-empty.err { color: var(--err, #dc2626); }
   }
 
   .log-follow {
@@ -164,7 +172,12 @@
   }
 }
 
-@keyframes logline-in { from { opacity: 0; } to { opacity: 1; } }
+// Появление новой строки снизу: transform не влияет на лейаут, поэтому
+// прижатый к хвосту скролл от анимации не «прыгает».
+@keyframes logline-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
 
 @media (max-width: 620px) {
   .logboard .log-tools { flex-wrap: wrap; }

@@ -2,8 +2,16 @@
 // (GET /api/projects/<name>/logs). Выдвигается снизу по плавающей кнопке
 // «Логи» (как Diffboard), внутри — заголовок и кнопка «×» сверху справа.
 // При нескольких файлах лога доступен переключатель (tabs). Строки с
-// уровнями WARN/ERROR/FATAL подсвечиваются. При открытии лог показывается
-// с последней записи (прокрутка к концу), скролл вверх ведёт к ранним.
+// уровнями WARN/ERROR/FATAL подсвечиваются.
+//
+// Скролл: панель по умолчанию ПРИЖАТА к хвосту — новые строки всегда
+// появляются снизу и вид остаётся на последней записи. Уйти вверх можно
+// только осознанно (скролл пользователем) — тогда появляется кнопка
+// «К новым строкам». Скролл-контейнер .logbody не размонтируется никогда:
+// переустановка сбрасывала scrollTop в 0, и любое фоновое обновление
+// возвращало лог наверх. Обновление файла накладывается на буфер по общему
+// префиксу, поэтому неизменившиеся строки сохраняют DOM-узлы — выделение
+// текста и позиция скролла переживают и добавление хвоста, и фильтры.
 //
 // Real-time: строки из live-через WebSocket-_connection_ актуализируются
 // мгновенно. Потоковые строки приходят через props.logLines.
@@ -12,9 +20,9 @@
 // скачивание всех логов файлом (содержимое файлов из REST-снапшота, с учётом
 // ещё не вошедших в снапшот потоковых строк).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectLogs } from "@/Api";
-import type { LogsView } from "@/Types";
+import type { LogStream, LogsView } from "@/Types";
 import { downloadText, safeName, stampedName } from "@/download";
 import "./styles.scss";
 
@@ -22,209 +30,300 @@ export interface LogboardProps {
   project: string;
   showLogboard?: boolean;
   toggleLogboard?: () => void;
-  // Потоковые строки (из App.tsx): «имя файла → массив новых строк».
-  logLines: Map<string, string[]>;
+  // Потоковые строки (из App.tsx): «имя файла → накопленный хвост».
+  logLines: Map<string, LogStream>;
 }
 
 const BASE = "";
 
+// Граница буфера отрисовки. Хвост прижат — держим последние строки; если
+// пользователь ушёл вверх и читает историю, верх срезается мягче, чтобы не
+// выкидывать текст, который он как раз читает. Без границы DOM лога растёт
+// весь сеанс (поток + снапшот до 1 МБ) и скролл начинает заметно подтормаживать.
+const MAX_LINES = 5000;
+const MAX_LINES_SOFT = 20000;
+// Порог, ниже которого считаем, что пользователь у хвоста (px).
+const NEAR_BOTTOM_PX = 48;
+
+// Строка буфера отрисовки. id стабилен в пределах жизни строки: React не
+// пересоздаёт DOM-узел, поэтому выделение текста переживает и добавление
+// хвоста, и смену фильтра. fresh — «только что пришла», по нему один раз
+// проигрывается анимация появления.
+interface Row {
+  text: string;
+  id: number;
+  fresh: boolean;
+}
+
 export function Logboard(props: LogboardProps) {
   const [logs, setLogs] = useState<LogsView | null>(null);
   const [selected, setSelected] = useState("");
-  const [loading, setLoading] = useState(false);
+  // true с самого рендера: первый кадр панели должен показывать «Загружаю
+  // логи…», а не мигнуть «Лог-файлов пока нет».
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   // Признак «только что скопировали логи» — для краткой фидбеков надписи.
   const [copied, setCopied] = useState(false);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<"all" | "warn" | "err">("all");
+  // followingRef — намерение «держим хвост», following — его отражение в UI.
+  // Включено с самого открытия: лог всегда показывает последнюю строку.
+  const followingRef = useRef(true);
   const [following, setFollowing] = useState(true);
+  // deferred — прижатие к хвосту отложено из-за выделения текста: строки
+  // копятся снизу, но дёргать выделение нельзя. Кнопка «К новым строкам»
+  // при этом остаётся доступной.
+  const [deferred, setDeferred] = useState(false);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const followingRef = useRef(true);
 
-  // props.logLines — НАКОПИТЕЛЬНЫЙ массив всех строк, присланных по WS с
-  // момента открытия проекта (App.tsx только добавляет). consumed[file] —
-  // сколько из них уже отрисовано. Это разные системы отсчёта, поэтому
-  // сравнивать их длины напрямую нельзя (HTTP-снапшот — весь файл).
+  // props.logLines — НАКОПИТЕЛЬНЫЙ хвост строк, присланных по WS с момента
+  // открытия проекта (App.tsx только добавляет, из начала отбрасывает).
+  // consumed[file] — АБСОЛУТНЫЙ индекс первой ещё не отрисованной строки
+  // потока. Сравнивать consumed с lines.length нельзя: это разные системы
+  // отсчёта (HTTP-снапшот — весь файл), а нумерация сдвинута на dropped.
   const consumed = useRef<Map<string, number>>(new Map());
+  // Граница потока на момент чтения последнего снапшота каждого файла: строки
+  // после неё ещё не попали в файл на диске. Нужна копированию/экспорту.
+  const snapAt = useRef<Map<string, number>>(new Map());
   // Свежее значение props для эффекта снапшота: не кладём logLines в deps,
-  // иначе каждая строка стрима переставляла бы lines из устаревшего HTTP.
+  // иначе каждая строка стрима переставляла бы строки из устаревшего HTTP.
   const logLinesRef = useRef(props.logLines);
   logLinesRef.current = props.logLines;
 
-  // Текущие отрендеренные строки (HTTP-снапшот + поток). id — стабильный
-  // ключ строки в исходном потоке (не в отфильтрованном списке): React не
-  // пересоздаёт DOM-узлы при добавлении хвоста и при поиске/фильтре,
-  // поэтому выделение текста не сбрасывается перерендером.
-  const [lines, setLines] = useState<{ text: string; id: number }[]>([]);
+  // Текущие отрендеренные строки (HTTP-снапшот + поток).
+  const [rows, setRows] = useState<Row[]>([]);
   const nextLineId = useRef(0);
-  // Содержимое последнего применённого снапшота: поллинг каждые 3с не должен
-  // перезаписывать lines, если файл на диске не менялся.
-  const lastSnapshot = useRef("");
+  // Содержимое последнего применённого снапшота по каждому файлу: поллинг
+  // каждые 3с не должен пересобирать буфер, если файл на диске не менялся.
+  const applied = useRef<Map<string, string>>(new Map());
+  // Файл, чьи строки сейчас лежат в буфере. Отличие от applied[file]
+  // отличает «открытие файла» (пересобрать и прижать к хвосту) от «файл
+  // обновился» (уважаем текущий скролл пользователя).
+  const rendered = useRef("");
 
-  // Выделение внутри лога — признак того, что пользователю не нужен
-  // автоскролл: любой принудительный скролл сбрасывает/дёргает выделение.
-  const hasSelectionInside = (el: HTMLElement): boolean => {
-    const sel = document.getSelection();
-    return !!sel && !sel.isCollapsed && el.contains(sel.anchorNode);
-  };
-
-  const scrollToBottom = useCallback(() => {
+  // scrollEnd — прижать контейнер к последней строке (безусловно).
+  const scrollEnd = useCallback(() => {
     const el = bodyRef.current;
-    if (!el || !followingRef.current) return;
-    if (hasSelectionInside(el)) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+    if (!el) return;
+    const bottom = el.scrollHeight - el.clientHeight;
+    if (el.scrollTop !== bottom) el.scrollTop = bottom;
   }, []);
 
+  // pin — прижать к хвосту, но только если пользователь этого хочет и это не
+  // сломает выделение. Выделение ОТКЛАДЫВАЕТ прижатие, а не выключает follow:
+  // стоит снять выделение, и хвост снова догоняется сам.
+  const pin = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el || !followingRef.current) return;
+    if (hasSelectionIn(el)) {
+      setDeferred(true);
+      return;
+    }
+    setDeferred(false);
+    scrollEnd();
+  }, [scrollEnd]);
+
   const jumpToBottom = () => {
+    // Явное «показать хвост»: снимаем выделение, иначе прижатие не сработает.
+    const sel = document.getSelection();
+    if (sel && !sel.isCollapsed) sel.removeAllRanges();
     followingRef.current = true;
     setFollowing(true);
-    const el = bodyRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    setDeferred(false);
+    scrollEnd();
   };
 
   const handleLogScroll = () => {
     const el = bodyRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    // Собственный прижим тоже вызывает scroll, но приводит к nearBottom —
+    // выключить follow он не может. Поэтому ручной скролл вверх — единственное,
+    // что гасит слежение за хвостом.
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
     followingRef.current = nearBottom;
     setFollowing(nearBottom);
   };
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  // Можно ли подрезать буфер сверху: хвост прижат и пользователь ничего не
+  // выделил (иначе обрезка порвала бы выделение).
+  const canTrim = useCallback(() => {
+    const el = bodyRef.current;
+    return !!el && followingRef.current && !hasSelectionIn(el);
+  }, []);
+
+  const newRow = useCallback((text: string, fresh: boolean): Row => ({ text, id: nextLineId.current++, fresh }), []);
+
+  // silent — фоновое обновление: не мигаем «Загружаю логи…» и не стираем уже
+  // показанный лог из-за одной неудачи.
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const v = await projectLogs(BASE, props.project);
       setLogs(v);
-      setSelected(v.selected);
+      // Файл, выбранный пользователем, сохраняем, пока он есть в ответе:
+      // иначе поллинг каждые 3с возвращал бы панель на серверный выбор.
+      setSelected((prev) => (prev && v.files.some((f) => f.name === prev) ? prev : v.selected));
+      setError("");
     } catch (e) {
-      setError(fmtErr(e));
+      if (!silent) setError(fmtErr(e));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [props.project]);
 
   // Смена проекта: накопитель строк App.tsx обнуляется, поэтому счётчики
-  // потреблённого надо сбросить — иначе stream.length <= done заблокирует
-  // добавление строк нового проекта.
+  // потреблённого и применённых снапшотов надо сбросить — иначе
+  // stream.length <= done заблокирует добавление строк нового проекта.
   useEffect(() => {
     consumed.current.clear();
-    lastSnapshot.current = "";
+    snapAt.current.clear();
+    applied.current.clear();
+    rendered.current = "";
     nextLineId.current = 0;
-    setLines([]);
+    followingRef.current = true;
+    setFollowing(true);
+    setRows([]);
   }, [props.project]);
-
-  // Выделение текста в логе отключает follow-режим: иначе каждое новое
-  // событие стрима дёргало бы видимую область и мешало копированию. Возврат —
-  // кнопкой «К новым строкам».
-  useEffect(() => {
-    const onSelectionChange = () => {
-      const el = bodyRef.current;
-      if (el && hasSelectionInside(el)) {
-        followingRef.current = false;
-        setFollowing(false);
-      }
-    };
-    document.addEventListener("selectionchange", onSelectionChange);
-    return () => document.removeEventListener("selectionchange", onSelectionChange);
-  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // Лог-файл может появиться позже открытия панели (проект только стартовал),
-  // а список файлов приходит лишь из REST. Добираем его редким поллингом, но
-  // только когда это правда нужно — иначе каждую строку стрима пересобирали
-  // бы весь снапшот.
+  // Список лог-файлов приходит только из REST: файл может появиться позже
+  // открытия панели (проект только стартовал). Добираем его редким поллингом,
+  // но только когда это правда нужно — иначе каждые 3с пересобирали бы
+  // снапшот впустую. В deps — только факт появления НОВОГО файла в потоке,
+  // а не каждая строка: иначе таймер всё время пересоздавался бы заново.
+  const streamFiles = props.logLines.size;
   useEffect(() => {
     if (props.showLogboard === false) return;
     const known = new Set((logs?.files ?? []).map((f) => f.name));
-    const stale =
-      known.size === 0 || [...props.logLines.keys()].some((f) => !known.has(f));
+    const stale = known.size === 0 || [...logLinesRef.current.keys()].some((f) => !known.has(f));
     if (!stale) return;
-    const t = window.setInterval(() => void load(), 3000);
+    const t = window.setInterval(() => void load(true), 3000);
     return () => window.clearInterval(t);
-  }, [props.showLogboard, logs, props.logLines, load]);
+  }, [props.showLogboard, logs, load, streamFiles]);
 
-  // Синхронизируем `lines` при открытии/смене файла (HTTP-снапшот).
+  // Накладываем содержимое файла на буфер по общему префиксу. Неизменившаяся
+  // часть сохраняет id, а значит и DOM-узлы: выделение текста и позиция
+  // скролла переживают обновление. Разошедшийся хвост (ротация файла, обрезка
+  // снапшота) заменяется целиком.
   useEffect(() => {
     if (!logs || !selected) return;
     const entry = logs.files.find((f) => f.name === selected);
-    if (!entry) return;
-    // Поллинг дёргает эффект каждые 3с, но перезаписывать lines нужно только
-    // реально изменившийся файл — иначе лишний перерендер сбивает скролл и
-    // выделение.
-    if (entry.content === lastSnapshot.current) return;
-    lastSnapshot.current = entry.content;
+    // Файл исчез (ротация/удаление) — в буфере не должно остаться его строк.
+    if (!entry) {
+      rendered.current = "";
+      setRows([]);
+      return;
+    }
+    // Пересобирать имеет смысл только когда в буфере другой файл или файл на
+    // диске реально изменился: иначе поллинг каждые 3с дёргал бы буфер впустую
+    // (и, что важнее, ронял бы скролл при возврате к прежнему файлу).
+    if (rendered.current === selected && applied.current.get(selected) === entry.content) return;
+    applied.current.set(selected, entry.content);
+    // Смена файла (или проекта) — открытие: всегда с последней строки и без
+    // общих строк с прежним файлом.
+    const opening = rendered.current !== selected;
+    rendered.current = selected;
+    if (opening) {
+      followingRef.current = true;
+      setFollowing(true);
+      setDeferred(false);
+      setRows([]);
+    }
     // Снапшот уже содержит строки, пришедшие по WS до него, — помечаем их
     // потреблёнными, иначе стрим-эффект ниже продублирует их в хвост.
-    consumed.current.set(selected, logLinesRef.current.get(selected)?.length ?? 0);
-    followingRef.current = true;
-    setFollowing(true);
-    setLines(entry.content.split("\n").map((text) => ({ text, id: nextLineId.current++ })));
-  }, [logs, selected]);
+    consumed.current.set(selected, streamEnd(logLinesRef.current.get(selected)));
+    const trim = canTrim();
+    setRows((prev) =>
+      mergeRows(prev, entry.content.split("\n"), !opening, trim ? MAX_LINES : MAX_LINES_SOFT, newRow),
+    );
+  }, [logs, selected, canTrim, newRow]);
 
   // Свежий REST-снапшот включает все потоковые строки, известные на его момент:
-  // помечаем их потреблёнными для КАЖДОГО файла, чтобы экспорт/копирование
-  // не задвоили уже вошедшие в снапшот строки неоткрытых файлов. Эффект
-  // зависит только от `logs` (приход снапшота), поэтому счётчики растут
-  // синхронно с фактическим содержанием файлов на диске.
+  // помечаем их потреблёнными для КАЖДОГО файла, чтобы стрим-эффект ниже их не
+  // продублировал в хвост. Эффект зависит только от `logs` (приход снапшота),
+  // поэтому счётчики растут синхронно с фактическим содержанием файлов.
+  // snapAt — та же граница, но для копирования/экспорта: буфер отрисовки
+  // ограничен, а снапшот файла — полный, и строки, пришедшие по WS после его
+  // чтения, в копирование должны попасть.
   useEffect(() => {
     if (!logs) return;
     for (const f of logs.files) {
-      consumed.current.set(f.name, logLinesRef.current.get(f.name)?.length ?? 0);
+      const end = streamEnd(logLinesRef.current.get(f.name));
+      consumed.current.set(f.name, end);
+      snapAt.current.set(f.name, end);
     }
   }, [logs]);
 
-  // Новые строки из потока — дописываем только невиданный хвост.
+  // Новые строки из потока — дописываем только невиданный хвост. Позиция
+  // считается по абсолютному индексу (consumed), потому что App.tsx отбрасывает
+  // старые строки из буфера и сдвигает нумерацию на dropped.
   useEffect(() => {
     if (!selected) return;
     const stream = props.logLines.get(selected);
     if (!stream) return;
+    const end = streamEnd(stream);
     const done = consumed.current.get(selected) ?? 0;
-    if (stream.length <= done) return;
-    consumed.current.set(selected, stream.length);
-    setLines((prev) => [...prev, ...stream.slice(done).map((text) => ({ text, id: nextLineId.current++ }))]);
-  }, [selected, props.logLines]);
+    if (end <= done) return;
+    consumed.current.set(selected, end);
+    const tail = stream.lines.slice(Math.max(0, done - stream.dropped));
+    const trim = canTrim();
+    setRows((prev) => appendRows(prev, tail, trim ? MAX_LINES : MAX_LINES_SOFT, newRow));
+  }, [selected, props.logLines, canTrim, newRow]);
 
-  // Авто-скролл вниз при появлении/смене строк. useLayoutEffect: DOM уже
-  // содержит новые строки, но браузер ещё не рисовал — scrollHeight
-  // вычисляется синхронно. Повторный скролл через двойной rAF и через 350мс
-  // добивает случай первого открытия: лейаут шторки и анимация строк
-  // (logline-in 140мс) ещё не завершены, и первый scrollHeight был неполным.
+  // Прижимаем к хвосту в useLayoutEffect: DOM уже содержит новые строки, но
+  // ещё не отрисован, поэтому scrollHeight актуален и подвижки не видно.
+  // Повтор на следующем кадре — на случай, если высоты строк уточнились
+  // после лейаута. Своего scroll это не ломает: он приводит к nearBottom.
   useLayoutEffect(() => {
-    scrollToBottom();
-    const raf = requestAnimationFrame(() => requestAnimationFrame(scrollToBottom));
-    const t = window.setTimeout(scrollToBottom, 350);
+    pin();
+    const raf = requestAnimationFrame(() => pin());
+    return () => cancelAnimationFrame(raf);
+  }, [rows, pin]);
+
+  // Шторка выезжает снизу: высота контейнера меняется после анимации, поэтому
+  // первый кадр открытой панели измеряет ещё неверную геометрию. Открытие —
+  // осознанное действие, поэтому здесь прижимаем к хвосту безусловно.
+  useLayoutEffect(() => {
+    if (props.showLogboard === false) return;
+    followingRef.current = true;
+    setFollowing(true);
+    setDeferred(false);
+    scrollEnd();
+    const raf = requestAnimationFrame(() => scrollEnd());
+    const t = window.setTimeout(() => scrollEnd(), 320);
     return () => {
       cancelAnimationFrame(raf);
       window.clearTimeout(t);
     };
-  }, [lines, scrollToBottom]);
+  }, [props.showLogboard, scrollEnd]);
 
   const hasLogs = !!logs && logs.files.length > 0;
-  const visibleLines = lines
-    .filter(({ text }) => {
-      const cls = lineCls(text);
-      return (level === "all" || cls.includes(level)) &&
-        (!query.trim() || text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-    });
+  const active = hasLogs ? logs!.files.find((f) => f.name === selected) : undefined;
 
-  // Текущее содержимое файла лога: для выбранного — уже слитый живой буфер
-  // (`lines`), для остальных — REST-снапшот + хвост, не вошедший в снапшот.
+  const visibleRows = useMemo(() => {
+    const q = query.trim().toLocaleLowerCase();
+    return rows.filter((row) => {
+      const kind = lineKind(row.text);
+      if (level !== "all" && kind !== level) return false;
+      return !q || row.text.toLocaleLowerCase().includes(q);
+    });
+  }, [rows, level, query]);
+
+  // Содержимое файла лога для копирования/экспорта: снапшот файла целиком
+  // плюс хвост потока, который в снапшот ещё не вошёл. Буфер отрисовки для
+  // этого не годится — он ограничен по размеру.
   const fileLogText = (name: string): string => {
     if (!logs) return "";
     const entry = logs.files.find((f) => f.name === name);
     if (!entry) return "";
-    if (name === selected) {
-      return lines.map((l) => l.text).join("\n");
-    }
     const snap = entry.content.split("\n");
-    const stream = props.logLines.get(name) ?? [];
-    const done = consumed.current.get(name) ?? 0;
-    return [...snap, ...stream.slice(done)].join("\n");
+    const stream = props.logLines.get(name);
+    const tail = stream ? stream.lines.slice(Math.max(0, (snapAt.current.get(name) ?? 0) - stream.dropped)) : [];
+    return [...snap, ...tail].join("\n");
   };
 
   // Полный дайджест «все логи»: каждый файл со своим заголовком.
@@ -250,6 +349,16 @@ export function Logboard(props: LogboardProps) {
     if (!text) return;
     downloadText(stampedName("logs", `${safeName(props.project)}.txt`), text);
   };
+
+  // Чем занят пустой контейнер: ошибка, первая загрузка, пустой каталог логов
+  // или отсутствие совпадений фильтра.
+  const emptyText = error
+    ? "Не удалось загрузить логи: " + error
+    : loading && !logs
+      ? "Загружаю логи…"
+      : !hasLogs
+        ? "Лог-файлов в каталоге logs/ пока нет."
+        : "Совпадений нет";
 
   return (
     <div className={"logboard" + (props.showLogboard === false ? " hidden" : "")}>
@@ -281,95 +390,144 @@ export function Logboard(props: LogboardProps) {
         </p>
       )}
 
-      {loading && <p className="hint">Загружаю логи…</p>}
-
-      {error && <p className="err">{error}</p>}
-
-      {!loading && !error && logs && logs.files.length === 0 && (
-        <p className="hint">Лог-файлов в каталоге logs/ пока нет.</p>
+      {hasLogs && logs!.files.length > 1 && (
+        <div className="lgtabs">
+          {logs!.files.map((f) => (
+            <button
+              key={f.name}
+              className={"lgtab" + (f.name === selected ? " active" : "")}
+              onClick={() => setSelected(f.name)}
+              title={f.name + " · " + f.size + " байт · " + f.modified}
+            >
+              {f.name}
+            </button>
+          ))}
+        </div>
       )}
 
-      {!loading && !error && logs && logs.files.length > 0 && (
-        <>
-          {logs.files.length > 1 && (
-            <div className="lgtabs">
-              {logs.files.map((f) => (
-                <button
-                  key={f.name}
-                  className={"lgtab" + (f.name === selected ? " active" : "")}
-                  onClick={() => setSelected(f.name)}
-                  title={f.name + " · " + f.size + " байт · " + f.modified}
-                >
-                  {f.name}
-                </button>
-              ))}
-            </div>
-          )}
+      {active && (
+        <div className="lgmeta">
+          <span>
+            файл: <code>{active.name}</code>
+          </span>
+          <span>{fmtSize(active.size)}</span>
+          <span>изменён: {active.modified}</span>
+        </div>
+      )}
 
-          {selected && (() => {
-            const active = logs.files.find((f) => f.name === selected);
-            if (!active) return null;
-            return (
-              <div className="lgmeta">
-                <span>
-                  файл: <code>{active.name}</code>
-                </span>
-                <span>{fmtSize(active.size)}</span>
-                <span>изменён: {active.modified}</span>
-              </div>
-            );
-          })()}
+      {/* Ошибка действия (например, отказ копирования) — над логом: строки
+          на месте, и прятать их под сообщение нельзя. Ошибку загрузки при
+          пустом логе показывает сам контейнер ниже. */}
+      {error && hasLogs && <p className="err">{error}</p>}
 
-          <div className="log-tools">
-            <label className="log-search">
-              <IconSearch />
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Найти в логах"
-                aria-label="Найти в логах"
-              />
-              {!!query && <button type="button" onClick={() => setQuery("")} title="Очистить поиск">×</button>}
-            </label>
-            <div className="level-filters" aria-label="Фильтр уровня логов">
-              {([ ["all", "Все"], ["warn", "Warn"], ["err", "Error"] ] as const).map(([value, label]) => (
-                <button key={value} className={level === value ? "active" : ""} onClick={() => setLevel(value)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <span className="line-count">{visibleLines.length}{visibleLines.length !== lines.length ? ` / ${lines.length}` : " строк"}</span>
-          </div>
-
-          <div className="logbody" ref={bodyRef} onScroll={handleLogScroll}>
-            {visibleLines.map(({ text, id }) => (
-              <div key={id} className={lineCls(text)}>
-                {text || "\u00a0"}
-              </div>
+      {hasLogs && (
+        <div className="log-tools">
+          <label className="log-search">
+            <IconSearch />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Найти в логах"
+              aria-label="Найти в логах"
+            />
+            {!!query && <button type="button" onClick={() => setQuery("")} title="Очистить поиск">×</button>}
+          </label>
+          <div className="level-filters" aria-label="Фильтр уровня логов">
+            {([ ["all", "Все"], ["warn", "Warn"], ["err", "Error"] ] as const).map(([value, label]) => (
+              <button key={value} className={level === value ? "active" : ""} onClick={() => setLevel(value)}>
+                {label}
+              </button>
             ))}
-            {visibleLines.length === 0 && <div className="log-empty">{query || level !== "all" ? "Совпадений нет" : "Лог пуст"}</div>}
           </div>
-          {!following && <button className="log-follow" onClick={jumpToBottom}><IconDown /> К новым строкам</button>}
-        </>
+          <span className="line-count">
+            {visibleRows.length}
+            {visibleRows.length !== rows.length ? ` / ${rows.length}` : " строк"}
+          </span>
+        </div>
+      )}
+
+      {/* Контейнер лога НИКОГДА не размонтируется: переустановка обнуляла
+          scrollTop, из-за чего любое фоновое обновление возвращало лог наверх. */}
+      <div className="logbody" ref={bodyRef} onScroll={handleLogScroll}>
+        {visibleRows.map((row) => {
+          const kind = lineKind(row.text);
+          return (
+            <div
+              key={row.id}
+              className={"lg" + (kind ? " " + kind : "") + (row.fresh ? " fresh" : "")}
+            >
+              {row.text || "\u00a0"}
+            </div>
+          );
+        })}
+        {visibleRows.length === 0 && <div className={"log-empty" + (error ? " err" : "")}>{emptyText}</div>}
+      </div>
+
+      {hasLogs && (deferred || !following) && (
+        <button className="log-follow" onClick={jumpToBottom}>
+          <IconDown /> К новым строкам
+        </button>
       )}
     </div>
   );
 }
 
-// lineCls — класс строки лога по уровню: WARN/ERROR/FATAL подсвечиваются.
-function lineCls(line: string): string {
+// hasSelectionIn — внутри контейнера есть непустое выделение текста.
+function hasSelectionIn(el: HTMLElement): boolean {
+  const sel = document.getSelection();
+  return !!sel && !sel.isCollapsed && el.contains(sel.anchorNode);
+}
+
+// streamEnd — абсолютный индекс следующей строки потока за файлом.
+function streamEnd(stream: LogStream | undefined): number {
+  return stream ? stream.dropped + stream.lines.length : 0;
+}
+
+// appendRows — дописать строки в хвост буфера, при необходимости срезав верх
+// до limit. Срез сверху безопасен только у прижатого хвоста, поэтому limit
+// выбирает вызывающий (см. canTrim).
+function appendRows(prev: Row[], texts: string[], limit: number, newRow: (t: string, fresh: boolean) => Row): Row[] {
+  if (!texts.length) return prev;
+  const add = texts.slice(Math.max(0, texts.length - limit)).map((t) => newRow(t, true));
+  const room = Math.max(0, limit - add.length);
+  return [...(prev.length > room ? prev.slice(prev.length - room) : prev), ...add];
+}
+
+// mergeRows — наложение ПОЛНОГО содержимого файла на буфер по общему префиксу
+// (в отличие от appendRows, texts — весь файл, а не его хвост). Общий префикс
+// сохраняет id и DOM-узлы; всё после первого расхождения (ротация файла,
+// обрезка снапшота) заменяется целиком.
+function mergeRows(
+  prev: Row[],
+  texts: string[],
+  fresh: boolean,
+  limit: number,
+  newRow: (t: string, fresh: boolean) => Row,
+): Row[] {
+  const n = Math.min(prev.length, texts.length);
+  let k = 0;
+  while (k < n && prev[k]?.text === texts[k]) k++;
+  const head = prev.slice(0, k);
+  const add = texts.slice(Math.max(k, texts.length - limit)).map((t) => newRow(t, fresh));
+  const room = Math.max(0, limit - add.length);
+  return [...(head.length > room ? head.slice(head.length - room) : head), ...add];
+}
+
+// lineKind — суффикс класса строки лога по уровню: WARN/ERROR/FATAL
+// подсвечиваются, строки с таймстампом приглушаются.
+function lineKind(line: string): string {
   const t = line.trim();
   if (/^(?:ERROR|FATAL)\b/.test(t) || t.includes(" ERROR ") || t.includes(" FATAL ")) {
-    return "lg err";
+    return "err";
   }
   if (/^WARN\b/.test(t) || t.includes(" WARN ")) {
-    return "lg warn";
+    return "warn";
   }
   if (/^\d{4}-\d{2}-\d{2}/.test(t)) {
-    return "lg ts";
+    return "ts";
   }
-  return "lg";
+  return "";
 }
 
 function fmtSize(n: number): string {
