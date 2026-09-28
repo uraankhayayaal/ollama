@@ -199,6 +199,90 @@ func TestChatAssistHistoryInjected(t *testing.T) {
 	}
 }
 
+// TestChatActionAnchorBreaksConfirmLoop — якорь действия гасит зацикливание
+// «ассистент спрашивает → пользователь отвечает „да“ → ассистент спрашивает
+// снова». Разбирает ровно сценарий из жалобы: ассистент показал сводку и
+// спросил подтверждение, пользователь согласился — якорь требует ВЫПОЛНИТЬ.
+func TestChatActionAnchorBreaksConfirmLoop(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-anchor")
+	sess, _, err := srv.getOrCreate("proj-anchor")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ассистент показал сводку и спросил подтверждение.
+	sess.append(chat.RoleUser, "давай удалим rust", "user", "", nil)
+	sess.append(chat.RoleAssistant, "Удалить Rust полностью? (да/нет)", "assistant", "", nil)
+	// Пользователь ответил «да» — это последняя запись стрима (текущий ход).
+	sess.append(chat.RoleUser, "да", "user", "", nil)
+
+	anchor := chatActionAnchor(sess.chat, "да")
+	if anchor == "" {
+		t.Fatal("якорь пуст: после подтверждения модель снова переспросит")
+	}
+	if !strings.Contains(anchor, "ВЫПОЛНЯЙ") {
+		t.Fatalf("якорь требует действия, а не переспроса:\n%s", anchor)
+	}
+
+	// Якорь должен попадать в промпт ассистента.
+	prompt := sess.chatAssistantPrompt("да")
+	if !strings.Contains(prompt, "ВЫПОЛНЯЙ") {
+		t.Fatalf("якорь не попал в промпт ассистента:\n%s", prompt)
+	}
+}
+
+// TestChatActionAnchorShortAffirmative — короткое согласие («lf», опечатка) без
+// явного слова «да» тоже считается согласием: в жалобе пользователь именно так
+// и отвечал, и ассистент переспрашивал по кругу.
+func TestChatActionAnchorShortAffirmative(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-anchor-lf")
+	sess, _, err := srv.getOrCreate("proj-anchor-lf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.append(chat.RoleUser, "давай удалим rust", "user", "", nil)
+	sess.append(chat.RoleAssistant, "Удалить Rust полностью? (да/нет)", "assistant", "", nil)
+	sess.append(chat.RoleUser, "lf", "user", "", nil)
+
+	if anchor := chatActionAnchor(sess.chat, "lf"); !strings.Contains(anchor, "ВЫПОЛНЯЙ") {
+		t.Fatalf("короткое «lf» не распознано как согласие, якорь=%q", anchor)
+	}
+}
+
+// TestChatActionAnchorNoLoopBreakerForNewTopic — якорь-лимитер не должен
+// срабатывать, когда пользователь честно сменил тему (длинная новая реплика).
+func TestChatActionAnchorNoLoopBreakerForNewTopic(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-anchor-topic")
+	sess, _, err := srv.getOrCreate("proj-anchor-topic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.append(chat.RoleUser, "а", "user", "", nil)
+	sess.append(chat.RoleAssistant, "Какой эпик создать, про RAG или про билд?", "assistant", "", nil)
+	sess.append(chat.RoleAssistant, "Уточните, о каком модуле речь?", "assistant", "", nil)
+	sess.append(chat.RoleUser, "вообще-то давай посмотрим, что там по безопасности проекта", "user", "", nil)
+
+	if anchor := chatActionAnchor(sess.chat, "вообще-то давай посмотрим, что там по безопасности проекта"); anchor != "" {
+		t.Fatalf("якорь-лимитер сработал на новой теме:\n%s", anchor)
+	}
+}
+
+// TestChatActionAnchorEmptyChat — без истории якорь пуст (деградация).
+func TestChatActionAnchorEmptyChat(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-anchor-empty")
+	sess, _, err := srv.getOrCreate("proj-anchor-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anchor := chatActionAnchor(sess.chat, "привет"); anchor != "" {
+		t.Fatalf("якорь для пустого чата не пуст:\n%s", anchor)
+	}
+}
+
 func TestChatAssistEmptyAnswerFallback(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	registerTestDir(t, srv, "proj-qa-empty")

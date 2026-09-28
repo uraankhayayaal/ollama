@@ -382,6 +382,10 @@ var confirmTokens = map[string]bool{
 	"согласен": true, "согласна": true, "разрешаю": true,
 	"давай": true, "конечно": true, "вали": true,
 	"yes": true, "yep": true,
+	// «lf» — русское «да», набранное при не переключённой раскладке
+	// (д→l, а→f). Без него подтверждение «да/нет» терялось и ассистент
+	// спрашивал по кругу.
+	"lf": true,
 }
 
 // confirmAffirmative сообщает, содержит ли строка явное согласие на действие.
@@ -392,4 +396,16 @@ func confirmAffirmative(s string) bool {
 		}
 	}
 	return false
+}
+
+// bareConfirm — согласие ЧИСТОЙ репликой («да», «давай», «lf»), а не словом
+// внутри длинной фразы. Нужен там, где фраза трактуется как ответ на
+// вопрос да/нет: «давай посмотрим, что там по безопасности» согласием на
+// удаление не является, хотя confirmAffirmative её поймает.
+func bareConfirm(s string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(s)))
+	if len(fields) == 0 || len(fields) > 3 {
+		return false
+	}
+	return confirmAffirmative(s)
 }

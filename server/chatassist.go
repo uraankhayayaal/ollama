@@ -176,6 +176,110 @@ func askSummary(a *chat.Ask) string {
 	return strings.Join(parts, "; ")
 }
 
+// --- Якорь действия (антизацикливание) ---
+//
+// Проблема, которую он снимает: ассистент на каждом ходе заново решает, что
+// делать, и не помнит, что уже спрашивал. Пользователь отвечает «да», а модель
+// снова спрашивает то же самое («Создать такой эпик? → да → Запустить? → да →
+// Запустить Kanban? → да → …»), и ни одного инструмента не вызывается. История
+// диалога тут не спасает: она обрезана и в общем случае не разбирается.
+//
+// Поэтому сервер, у которого есть полный стрим чата, вычисляет ситуацию и
+// кладёт в промпт ОДНУЗНАЧНУЮ инструкцию: подтверждение получено — выполняй,
+// либо вопрос задан второй раз подряд — прекрати переспрашивать. Инструкция
+// не запрещает ничего, чего нет в системном промпте, и не является новым
+// источником правды: она лишь однозначно маркирует состояние диалога.
+
+// chatActionAnchor вычисляет ситуативную подсказку для промпта ассистента по
+// последним репликам чата. question — текущая реплика пользователя (она уже
+// добавлена в стрим последней записью, поэтому из истории исключается).
+func chatActionAnchor(store *chat.Store, question string) string {
+	hist, err := store.History(context.Background(), 20)
+	if err != nil || len(hist) == 0 {
+		return ""
+	}
+	// Текущая реплика пользователя — последняя запись; предыдущие собираем
+	// в обратном порядке (свежие → старые).
+	if last := hist[len(hist)-1]; last.Role == chat.RoleUser {
+		hist = hist[:len(hist)-1]
+	}
+
+	// Ищем две последние содержательные реплики ассистента.
+	var assistants []chat.Message
+	for i := len(hist) - 1; i >= 0 && len(assistants) < 2; i-- {
+		switch hist[i].Role {
+		case chat.RoleAssistant:
+			if strings.TrimSpace(hist[i].Content) != "" {
+				assistants = append(assistants, hist[i])
+			}
+		case chat.RoleAsk:
+			if t := askSummary(hist[i].Ask); t != "" {
+				assistants = append(assistants, chat.Message{Content: t})
+			}
+		}
+	}
+	if len(assistants) == 0 {
+		return ""
+	}
+	asked := asksSomething(assistants[0].Content)
+
+	// Согласие: только ЧИСТАЯ короткая реплика («да», «давай», «lf»). Слово
+	// согласия внутри длинной фразы («давай посмотрим, что там по
+	// безопасности») согласием на действие не является.
+	switch {
+	case bareConfirm(question):
+		if asked {
+			return "СИТУАЦИЯ: пользователь ответил «да» на твой предыдущий вопрос — " +
+				"согласие получено. ВЫПОЛНЯЙ действие в этом ходе (вызови нужный инструмент). " +
+				"Не переспрашивай, не пересказывай сводку и не предлагай следующий шаг — выполняй."
+		}
+		return "СИТУАЦИЯ: пользователь дал согласие. ВЫПОЛНЯЙ согласованное действие в этом ходе. " +
+			"Не переспрашивай подтверждение — оно уже получено."
+
+	case len(assistants) >= 2 && asked && asksSomething(assistants[1].Content) && !prevUserDiffers(assistants[1].Content, question):
+		// Два соседних вопроса ассистента подряд, пользователь отвечает — но не
+		// согласием и не отказом (ответ не даёт явного сигнала): риск третьего
+		// вопроса. Ограничиваем явно.
+		return "ВНИМАНИЕ: ты уже задал вопрос во второй раз подряд и пользователь ответил, " +
+			"но не подтвердил и не отказал. Третий вопрос недопустим: либо прими ответ как есть " +
+			"и ВЫПОЛНИ действие, либо скажи одним предложением, чего конкретно не хватает."
+	}
+	return ""
+}
+
+// asksSomething — выглядит ли реплика ассистента как вопрос пользователю
+// (заканчивается «?» либо содержит просьбу подтвердить/выбрать).
+func asksSomething(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" {
+		return false
+	}
+	if strings.HasSuffix(t, "?") {
+		return true
+	}
+	for _, m := range []string{"подтвердите", "(да/нет)", "да/нет", "уточните", "выберите"} {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// prevUserDiffers грубая эвристика «пользователь сменил тему»: ответ резко
+// отличается от последнего вопроса ассистента. Нужна, чтобы не ругать модель
+// на вопрос, когда пользователь честно переформулировал задачу.
+func prevUserDiffers(asked, answer string) bool {
+	a, b := strings.ToLower(strings.TrimSpace(asked)), strings.ToLower(strings.TrimSpace(answer))
+	if a == "" || b == "" {
+		return false
+	}
+	// Ответ из 1–2 слов — это явно не новая тема, а реакция на вопрос.
+	if len([]rune(b)) <= 24 {
+		return false
+	}
+	return !strings.Contains(a, strings.SplitN(b, " ", 2)[0])
+}
+
 // chatAssistantPrompt собирает контекст для ассистента: сообщение пользователя,
 // состояние оркестрации и компактную сводку Kanban-доски (эпики, задачи, баги).
 // Доска также доступна ассистенту напрямую через Board* инструменты чтения,
@@ -183,6 +287,14 @@ func askSummary(a *chat.Ask) string {
 func (sess *Session) chatAssistantPrompt(question string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Вопрос пользователя:\n%s\n", question)
+
+	// Якорь действия: ситуативная подсказка, однозначно говорящая модели, что
+	// делать в этом ходе. Без неё ассистент на каждом ходе заново решает, что
+	// делать, и зацикливается на переспрашивании (см. chatActionAnchor).
+	if a := chatActionAnchor(sess.chat, question); a != "" {
+		b.WriteString("\n")
+		b.WriteString(a)
+	}
 
 	sess.mu.Lock()
 	running, gating := sess.running, sess.gating
