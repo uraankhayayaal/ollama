@@ -118,10 +118,95 @@ func TestAssistantWithoutBoardSkipsBoardTools(t *testing.T) {
 	}
 }
 
+// TestAssistantCallFunctionRejectsWrite — попытка позвать инструмент правки
+// файлов отбивается явным status=skipped с маршрутом «завести эпик», а не
+// безликой ошибкой «not in tool set». Модель всё равно пыталась звать
+// WriteFiles, объявляя «правлю всё», и без явного маршрута зацикливалась.
 func TestAssistantCallFunctionRejectsWrite(t *testing.T) {
-	a := newTestAssistant(t, "вопрос")
-	if _, err := a.CallFunction("WriteFiles", nil); err == nil {
-		t.Fatal("попытка вызвать записывающий файл инструмент должна завершиться ошибкой (not in tool set)")
+	a := newTestAssistant(t, "удали упоминания rust и пофикси инфра файлы")
+	for _, tool := range []string{"WriteFiles", "AppendFile", "DeleteFiles", "SearchReplace", "Run"} {
+		out, err := a.CallFunction(tool, map[string]any{"files": []any{}})
+		if err != nil {
+			t.Fatalf("%s: не должно быть ошибки, got %v", tool, err)
+		}
+		body := string(out)
+		if !strings.Contains(body, `"status":"skipped"`) {
+			t.Errorf("%s: ожидался status=skipped, got %s", tool, body)
+		}
+		// Отказ обязан содержать рабочий маршрут, иначе модель не знает, что делать.
+		if !strings.Contains(body, "BoardCreateEpic") {
+			t.Errorf("%s: в отказе нет маршрута BoardCreateEpic:\n%s", tool, body)
+		}
+	}
+}
+
+// TestAssistantRepeatsIdenticalCallBlocked — тот же вызов того же инструмента с
+// теми же аргументами допускается limitedToolRepeats раз, дальше не
+// выполняется (status=skipped). Это антизацикливание: на просьбу «удали rust»
+// ассистент перечитывал один и тот же ci.yml 6 раз подряд, пока сессия не
+// умерла по таймауту.
+func TestAssistantRepeatsIdenticalCallBlocked(t *testing.T) {
+	a := newTestAssistant(t, "удали упоминания rust")
+	args := map[string]any{"filenames": []string{".github/workflows/ci.yml"}}
+
+	for i := 1; i <= limitedToolRepeats; i++ {
+		out, err := a.CallFunction("ReadFiles", args)
+		if err != nil {
+			t.Fatalf("вызов %d: %v", i, err)
+		}
+		if strings.Contains(string(out), "уже вызван") {
+			t.Fatalf("вызов %d не должен блокироваться (лимит %d)", i, limitedToolRepeats)
+		}
+	}
+	out, err := a.CallFunction("ReadFiles", args)
+	if err != nil {
+		t.Fatalf("вызов %d: %v", limitedToolRepeats+1, err)
+	}
+	body := string(out)
+	if !strings.Contains(body, `"status":"skipped"`) {
+		t.Fatalf("повторный вызов должен быть заблокирован, got %s", body)
+	}
+	if !strings.Contains(body, "уже вызван") {
+		t.Errorf("в ответе должно быть объяснение о повторе:\n%s", body)
+	}
+	// Разные аргументы — законный сценарий (дорез другого диапазона строк) и
+	// блокироваться не должен.
+	out, err = a.CallFunction("ReadFiles", map[string]any{"filenames": []string{"README.md"}})
+	if err != nil {
+		t.Fatalf("другой файл: %v", err)
+	}
+	if strings.Contains(string(out), "уже вызван") {
+		t.Errorf("вызов с другими аргументами не должен блокироваться:\n%s", out)
+	}
+}
+
+// TestAssistantToolCallSignatureIgnoresKeyOrder — порядок ключей в аргументах
+// не должен обходить антизацикливание: модель может переставлять поля, но
+// вызов по смыслу тот же.
+func TestAssistantToolCallSignatureIgnoresKeyOrder(t *testing.T) {
+	sig := func(args map[string]any) string { return toolCallSignature("ReadFiles", args) }
+	a1 := map[string]any{"filenames": []string{"a.go"}, "lines": "1-10"}
+	a2 := map[string]any{"lines": "1-10", "filenames": []string{"a.go"}}
+	if sig(a1) != sig(a2) {
+		t.Fatalf("подписи различаются при перестановке ключей:\n%s\n%s", sig(a1), sig(a2))
+	}
+}
+
+// TestAssistantPromptForbidsFileEditsAndLoops — промпт запрещает и правку
+// файлов, и циклическое перечитывание, и требует маршрут через доску.
+func TestAssistantPromptForbidsFileEditsAndLoops(t *testing.T) {
+	a := newTestAssistant(t, "удали упоминания rust и пофикси инфра файлы")
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"НЕ ПРАВЬ ФАЙЛЫ ПРОЕКТА",
+		"правлю всё",
+		"НЕ ПОВТОРЯЙ ОДИН И ТОТ ЖЕ ВЫЗОВ",
+		"BoardCreateEpic",
+		"KanbanStart",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q", want)
+		}
 	}
 }
 

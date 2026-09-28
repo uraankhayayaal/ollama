@@ -1,11 +1,2 @@
-FROM qwen3-coder:30b
-
-# Задаем стабильный и глубокий контекст
-PARAMETER num_ctx 32768
-
-# Отключаем лишний троттлинг потоков (M3 сам распределит нагрузку)
-PARAMETER num_predict -1
-
-# Слегка снижаем температуру для точного кодинга
-PARAMETER temperature 0.2
-
+FROM qwen3.6:35b-a3b-q4_K_M
+PARAMETER num_ctx 131072

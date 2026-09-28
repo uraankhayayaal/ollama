@@ -65,6 +65,13 @@ func (s *Set) Get(name string) (Tool, bool) {
 	return t, ok
 }
 
+// Has сообщает, выдан ли инструмент агенту в этом наборе. В отличие от Get не
+// отдаёт сам инструмент — достаточно факта наличия (проверка прав до вызова).
+func (s *Set) Has(name string) bool {
+	_, ok := s.byName[name]
+	return ok
+}
+
 // Execute диспетчеризует вызов модели к инструменту по имени.
 func (s *Set) Execute(name string, args map[string]any) ([]byte, error) {
 	t, ok := s.byName[name]
