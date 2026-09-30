@@ -116,7 +116,7 @@ func TestTaskLLMResolveE2E(t *testing.T) {
 		{ToolCalls: []tools.ToolCall{{Name: "WriteFiles", Arguments: writeFilesArgs}}, FinishReason: "tool_calls"},
 		{Content: "готово", FinishReason: "stop"},
 	}}}
-	srv.prov = providerResolve{prov: mockLLM, done: true}
+	srv.prov = stubProviderResolve(mockLLM)
 
 	// 6. Доска: эпик + задача (AssignedRole: backend → BackendDeveloper).
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})

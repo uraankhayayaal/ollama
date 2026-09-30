@@ -71,11 +71,12 @@ make
 `Modelfile` описывает модель по умолчанию для локального сервера:
 `FROM qwen3.6:35b-a3b-q4_K_M`, `PARAMETER num_ctx 131072`.
 
-> **Внимание, расхождение:** модель по умолчанию указана в трёх местах и они
-> не согласованы — `.env.example` (`OLLAMA_MODEL=qwen3-coder:30b`),
-> `Modelfile` (`qwen3.6:35b-a3b-q4_K_M`), `Makefile` (`qwen3:8b`,
-> `qwen3-coder:30b`). Код берёт `OLLAMA_MODEL` из `.env`; при пустом значении
-> подставляется `llama3` (`models/resolve.go:33-35`). Указывайте модель явно.
+> **Внимание, расхождение:** набор скачиваемых моделей и модель по
+> умолчанию заданы в разных местах — `Makefile` (`qwen3:8b`, `qwen3-coder:30b`),
+> `Modelfile` (`qwen3.6:35b-a3b-q4_K_M`), `providers.json` (`default_model`).
+> Код берёт модель из `providers.json` → `default_model`, а `MODEL` в `.env`
+> перекрывает её. Скачанная модель не равна выбранной: сверяйтесь с
+> `ollama list` и переключайте модель в Web UI (без перезапуска).
 
 ### Облачно: YandexGPT или Trim
 

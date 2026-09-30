@@ -23,12 +23,11 @@ type OllamaProvider struct {
 	client *api.Client
 	model  string
 	// settings — ключевые лимиты модели: входящий контекст (num_ctx), выход
-	// (num_predict) и бюджет thinking. Вход задаётся OLLAMA_INPUT_TOKENS/
-	// OLLAMA_NUM_CTX (по умолчанию 32000: Ollama использует 4096 токенов, а
-	// история nudge-цикла может раздуваться до десятков тысяч, из-за чего
-	// модель возвращает 400 exceeded_context_size), выход —
-	// OLLAMA_OUTPUT_TOKENS/OLLAMA_MAX_TOKENS, thinking — OLLAMA_THINK_TOKENS.
-	// См. ModelSettings.
+	// (num_predict) и бюджет thinking. Задаются секцией settings провайдера в
+	// providers.json (см. ModelSettings), НЕ переменными окружения. Вход
+	// разумно держать 32000: Ollama использует 4096 токенов, а история
+	// nudge-цикла может раздуваться до десятков тысяч, из-за чего модель
+	// возвращает 400 exceeded_context_size.
 	settings ModelSettings
 }
 
@@ -208,12 +207,13 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 	// Reasoning-модели (например qwen3 с включённым thinking) перед ответом
 	// генерируют цепочку рассуждения — это удваивает время и токены на каждом
 	// раунде инструментов при той же точности вызовов. Управление рассуждением:
-	//   - OLLAMA_THINK_TOKENS — числовой бюджет thinking: включаем рассуждение
-	//     с уровнем, соответствующим бюджету (см. thinkLevelFromTokens);
-	//   - legacy OLLAMA_THINK — boolean-переключатель ("0"/"false"/"off" —
-	//     выключить, "1" — принудительно включить). По умолчанию параметр не
-	//     задаётся — модель работает как настроена. Приоритет у числового
-	//     бюджета.
+	//   - settings.ThinkTokens из providers.json — числовой бюджет thinking:
+	//     включаем рассуждение с уровнем, соответствующим бюджету
+	//     (см. thinkLevelFromTokens);
+	//   - OLLAMA_THINK — boolean-переключатель поверх конфига ("0"/"false"/
+	//     "off" — выключить, "1" — принудительно включить). По умолчанию
+	//     параметр не задаётся — модель работает как настроена. Приоритет у
+	//     числового бюджета.
 	if level := thinkLevelFromTokens(o.settings.ThinkTokens); level != "" {
 		req.Think = &api.ThinkValue{Value: level}
 		runner.Debugf("OLLAMA: thinking для модели %q: уровень %q (бюджет %d токенов)", o.model, level, o.settings.ThinkTokens)

@@ -561,7 +561,7 @@ func TestContinueEmptyBoardStartsInStandby(t *testing.T) {
 
 	// Stub-провайдер: на пустой доске генерации не будет (оркестрация сразу
 	// уходит в режим ожидания работы), но handleContinue его резолвит.
-	srv.prov = providerResolve{prov: harnessStubProvider{}, done: true}
+	srv.prov = stubProviderResolve(harnessStubProvider{})
 
 	sess, _, err := srv.getOrCreate("proj-empty")
 	if err != nil {

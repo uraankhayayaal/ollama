@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,9 +56,6 @@ type Server struct {
 
 	gitExec      gitops.Executor
 	forgeFactory func(remoteURL, token string) (forges.Forge, error)
-
-	activeProvider string
-	activeModel    string
 
 	// auth — аутентификация Web UI (nil/отключена, если пароль не задан).
 	auth *authManager
@@ -138,6 +136,15 @@ func (s *Server) Run(ctx context.Context) error {
 	httpSrv := &http.Server{Addr: s.cfg.Addr, Handler: s.routes()}
 
 	log.Printf("server: слушаю http://%s", s.cfg.Addr)
+
+	// Какая модель работает — видно сразу при старте, а не только после
+	// первого запроса. Провайдер создаётся лениво, но здесь резолвим принудительно:
+	// сама строка `server: LLM: <провайдер>/<модель> (large=…)` пишется в
+	// logs/server.log в resolveLocked. При непригодном выборе сервер всё равно
+	// поднимается (доска и чат работают без LLM) — предупреждаем отдельно.
+	if _, err := s.prov.resolved(); err != nil {
+		logging.Warnf("server: LLM пока не настроен — чат и оркестрация будут недоступны до выбора модели: %v", err)
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -280,10 +287,16 @@ func (s *Server) session(project string) *Session {
 	return s.sessions[project]
 }
 
+// handleGetProviders отдаёт список провайдеров из providers.json и ТЕКУЩИЙ
+// выбор (провайдер + основная и большая модели), чтобы переключатель в UI
+// показывал реально работающую модель, а не первую попавшуюся.
+//
+// Список провайдеров отсортирован: обход map в Go неупорядочен, и без сортировки
+// UI прыгал бы между провайдерами при каждом обновлении страницы.
 func (s *Server) handleGetProviders(w http.ResponseWriter, r *http.Request) {
 	cfg, err := models.LoadProvidersConfig()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "providers.json недоступен: "+err.Error())
 		return
 	}
 
@@ -291,72 +304,168 @@ func (s *Server) handleGetProviders(w http.ResponseWriter, r *http.Request) {
 		Name         string   `json:"name"`
 		Models       []string `json:"models"`
 		DefaultModel string   `json:"default_model"`
+		LargeModel   string   `json:"large_model"`
 	}
 
-	providers := make([]providerInfo, 0, len(cfg.Providers))
-	for name, p := range cfg.Providers {
+	names := make([]string, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	providers := make([]providerInfo, 0, len(names))
+	for _, name := range names {
 		providers = append(providers, providerInfo{
 			Name:         name,
-			Models:       p.Models,
-			DefaultModel: p.DefaultModel,
+			Models:       selectableModels(cfg.Providers[name]),
+			DefaultModel: cfg.Providers[name].DefaultModel,
+			LargeModel:   cfg.Providers[name].LargeModel,
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"providers": providers,
-		"current":   s.activeProvider,
-		"model":     s.activeModel,
-	})
+	sel := s.prov.selection()
+	out := map[string]any{
+		"providers":           providers,
+		"current_provider":    string(sel.Provider),
+		"current_model":       sel.Model,
+		"current_large_model": sel.LargeModel,
+		"override":            s.prov.isOverride(),
+	}
+	// Фактические модели (после дефолтов providers.json) и ошибка текущего
+	// выбора: без них UI не может показать «large=qwen3.6:35b» или «провайдер
+	// не настроен».
+	if res, rerr := s.prov.resolved(); res != nil {
+		out["current_model"] = res.Model
+		out["current_large_model"] = res.LargeModel
+		if rerr != nil {
+			out["error"] = rerr.Error()
+		}
+	} else if rerr != nil {
+		out["error"] = rerr.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
+// selectableModels — модели, доступные для выбора: объединение models,
+// default_model и large_model. Последние два могут отсутствовать в models
+// (особенно large_model), и без объединения действующую модель нельзя было бы
+// выбрать в UI.
+func selectableModels(cfg models.ProviderConfig) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(cfg.Models)+2)
+	for _, m := range append(append([]string{}, cfg.Models...), cfg.DefaultModel, cfg.LargeModel) {
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
+}
+
+// handleSelectProvider переключает провайдера/модели на лету. Провайдер
+// создаётся сразу — если он непригоден (битый base_url, пустая модель), клиент
+// получает ошибку сейчас, а не на первом запросе к модели. Уже идущая
+// оркестрация продолжает на прежней модели (провайдер переиспользуется до
+// конца запуска) — об этом сказано в ответе и в логе.
 func (s *Server) handleSelectProvider(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Provider string `json:"provider"`
 		Model    string `json:"model"`
+		// LargeModel — необязательная большая модель для «тяжёлых» агентов
+		// (лиды, архитектор, ревьюер); "" — слой не включается.
+		LargeModel string `json:"large_model"`
+		// Reset=true — вернуть выбор из окружения (кнопка «сбросить»).
+		Reset bool `json:"reset"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if body.Reset {
+		res, err := s.prov.clearOverride()
+		s.writeSelectionResult(w, res, err)
 		return
 	}
 
 	cfg, err := models.LoadProvidersConfig()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, "providers.json недоступен: "+err.Error())
 		return
 	}
 
-	providerCfg, ok := cfg.Providers[body.Provider]
+	providerCfg, ok := cfg.Providers[strings.TrimSpace(body.Provider)]
 	if !ok {
-		http.Error(w, "provider not found", http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("провайдер %q не найден в providers.json", body.Provider))
 		return
 	}
 
-	model := body.Model
+	allowed := selectableModels(providerCfg)
+	model := strings.TrimSpace(body.Model)
 	if model == "" {
-		model = providerCfg.DefaultModel
+		model = providerCfg.ResolveModel("")
+	}
+	if !contains(allowed, model) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("модель %q недоступна у провайдера %s (доступны: %s)",
+			model, body.Provider, strings.Join(allowed, ", ")))
+		return
+	}
+	large := strings.TrimSpace(body.LargeModel)
+	if large != "" && !contains(allowed, large) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("модель %q недоступна у провайдера %s (доступны: %s)",
+			large, body.Provider, strings.Join(allowed, ", ")))
+		return
 	}
 
-	found := false
-	for _, m := range providerCfg.Models {
-		if m == model {
-			found = true
-			break
+	res, err := s.prov.setOverride(models.Selection{
+		Provider:   models.ProviderName(strings.TrimSpace(body.Provider)),
+		Model:      model,
+		LargeModel: large,
+	})
+	s.writeSelectionResult(w, res, err)
+}
+
+// writeSelectionResult отвечает на смену выбора: 200 с фактическими моделями
+// либо 502 с причиной (провайдер не собрался — выбор уже применён, но не
+// работает; UI покажет текст ошибки из лога/ответа).
+func (s *Server) writeSelectionResult(w http.ResponseWriter, res *models.Resolved, err error) {
+	if err != nil {
+		msg := err.Error()
+		// Ошибка конфигурации (providers.json, base_url, модель) — это ответ
+		// на запрос «сделай так», а не отказ сервера: 400 информативнее 502.
+		code := http.StatusBadGateway
+		if res == nil || strings.Contains(msg, "providers.json") {
+			code = http.StatusBadRequest
+		}
+		writeErr(w, code, "не удалось применить выбор модели: "+msg)
+		return
+	}
+	// Идущая оркестрация держит старый провайдер до конца запуска — честно
+	// предупреждаем, чтобы смена модели не выглядела «не сработавшей».
+	inFlight := s.anySessionRunning()
+
+	out := map[string]any{
+		"ok":                 true,
+		"provider":           string(res.Name),
+		"model":              res.Model,
+		"large_model":        res.LargeModel,
+		"describe":           res.Describe(),
+		"applies_to_running": inFlight,
+	}
+	if inFlight {
+		out["message"] = "текущий запуск продолжится на прежней модели; выбор применится со следующего"
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func contains(list []string, v string) bool {
+	for _, item := range list {
+		if item == v {
+			return true
 		}
 	}
-	if !found {
-		http.Error(w, "model not found", http.StatusBadRequest)
-		return
-	}
-
-	s.activeProvider = body.Provider
-	s.activeModel = model
-	s.prov.setActive(body.Provider, model)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"ok": true,
-	})
+	return false
 }
 
 // --- утилиты ---
@@ -460,6 +569,22 @@ func (s *Server) sessionFlags(project string) (running, gating, standby bool) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	return sess.running, sess.gating, sess.standby
+}
+
+// anySessionRunning сообщает, идёт ли где-нибудь оркестрация. Порядок
+// блокировок тот же, что в sessionFlags (s.mu → sess.mu).
+func (s *Server) anySessionRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sess := range s.sessions {
+		sess.mu.Lock()
+		run := sess.running
+		sess.mu.Unlock()
+		if run {
+			return true
+		}
+	}
+	return false
 }
 
 // writeJSON записывает JSON-ответ.
@@ -732,6 +857,7 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.log.Infof("[чат] маршрут: единый ассистент (действия по смыслу, без сплита)")
+	sess.log.Infof("[llm] модель: %s", s.prov.describe())
 	sess.runChatAssistant(context.Background(), body.Message, prov)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

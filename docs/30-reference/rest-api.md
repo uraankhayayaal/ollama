@@ -28,6 +28,69 @@ GET  /api/auth          → {"protected": true, "authenticated": false}
 POST /api/logout
 ```
 
+## Модель и провайдеры
+
+Выбор модели — общее для всего процесса (не на проект), поэтому эндпоинты не
+вложены в `/api/projects/{id}`.
+
+| Метод | Путь | Что делает |
+|---|---|---|
+| `GET` | `/api/providers` | Провайдеры из `providers.json` + текущий выбор |
+| `POST` | `/api/providers/select` | Сменить провайдера/модели (или сбросить к окружению) |
+
+`GET /api/providers`:
+
+```json
+{
+  "providers": [
+    {"name": "ollama", "models": ["qwen3-coder:30b", "llama3.2"], "default_model": "qwen3-coder:30b", "large_model": ""}
+  ],
+  "current_provider": "ollama",
+  "current_model": "qwen3-coder:30b",
+  "current_large_model": "",
+  "override": false,
+  "error": ""
+}
+```
+
+- провайдеры отсортированы по имени (детерминированный порядок в UI);
+- `current_*` — фактически работающие модели после применения дефолтов
+  `providers.json`, а не только запрошенные;
+- `override: false` — выбор из `LLM_PROVIDER`/`MODEL`/`MODEL_LARGE`,
+  `true` — сделан через `POST` (в UI появляется кнопка «сброс»);
+- `error` непусто, если текущий выбор не удалось создать (провайдер недоступен).
+
+`POST /api/providers/select`:
+
+```http
+POST /api/providers/select
+Content-Type: application/json
+
+{"provider": "ollama", "model": "qwen3-coder:30b", "large_model": "qwen3.6:35b-a3b"}
+```
+
+| Поле | Обяз. | Смысл |
+|---|---|---|
+| `provider` | да* | Имя провайдера из `providers.json` |
+| `model` | да* | Модель из `models`/`default_model`/`large_model` этого провайдера |
+| `large_model` | нет | Крупная модель для тяжёлых агентов; пусто — `large_model` из конфига |
+| `reset` | нет | `true` — вернуть выбор из переменных окружения (поля `*` игнорируются) |
+
+Ответ `200`:
+
+```json
+{"ok": true, "provider": "ollama", "model": "qwen3-coder:30b", "large_model": "qwen3.6:35b-a3b",
+ "describe": "ollama/qwen3-coder:30b (large=qwen3.6:35b-a3b)", "applies_to_running": false}
+```
+
+Провайдер создаётся сразу, поэтому битый `base_url` или пустая модель дают
+`400`/`502` с текстом причины, а не тихо ломают первый запрос к модели.
+`applies_to_running: true` — оркестрация уже идёт и доработает на прежней
+модели; в ответе есть `message` с тем же предупреждением.
+
+Права: `POST` — обычная мутация под middleware `authHandler` (сессия + CSRF,
+если задан `AI_WEB_PASSWORD`).
+
 ## Проекты
 
 | Метод | Путь | Что делает |
@@ -172,11 +235,13 @@ GET /api/projects/{id}/ws
 | `404` | Проект / файл не найден |
 | `409` | Конфликт состояния (индексация идёт, вопрос уже активен) |
 | `429` | Превышен rate-limit |
+| `502` | Провайдер LLM не собрался (например, битый `base_url`) |
 | `503` | Внешний сервис недоступен (RAG) |
 
 ## Связанное
 
 - [Web UI](../20-features/web-ui.md)
+- [Провайдеры и выбор модели](../10-getting-started/providers.md)
 - [Контекстные диффы](../20-features/contextual-diff.md)
 - [Git-flow](../20-features/gitops-workflow.md)
 - [Токены и метрики](../20-features/tokens-and-metrics.md)

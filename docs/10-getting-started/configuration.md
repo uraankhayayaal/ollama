@@ -48,12 +48,13 @@ ACCEPT_*_CMD  →  make-цель из Makefile проекта  →  автоде
 # Обязательно
 LLM_PROVIDER=ollama          # ollama | yandex | trim | reg
 
-# Модели (Ollama)
-OLLAMA_MODEL=qwen3-coder:30b # рядовые шаги
-OLLAMA_MODEL_LARGE=...       # лиды, архитектор, ревьюер (опционально)
+# Модели (ключи, base_url и лимиты — в providers.json)
+MODEL=qwen3-coder:30b        # рядовые шаги
+MODEL_LARGE=...              # лиды, архитектор, ревьюер (опционально)
 ```
 
-Всё остальное имеет рабочие умолчания.
+Всё остальное имеет рабочие умолчания. Модель можно переключить и в Web UI
+(`GET/POST /api/providers`) — без перезапуска процесса.
 
 ## Часто настраиваемые группы
 
@@ -68,7 +69,7 @@ LSP_AUTO_FIX=1               # авто-починка по диагностик
 Слабое железо (8B на 16 ГБ) — уменьшайте:
 
 ```bash
-OLLAMA_INPUT_TOKENS=8192     # окно контекста модели
+# окно контекста модели — в providers.json → settings.input_tokens
 REVIEW_CHUNK_SIZE=6000       # размер части диффа для ревью
 REVIEW_MAX_COMMENTS=5
 REVIEW_TIMEOUT=10m
@@ -112,8 +113,8 @@ CODEGEN_SANDBOX_RO=1         # read-only корень контейнера
 | Симптом | Причина | Решение |
 |---|---|---|
 | `unknown provider` при старте | Не задан `LLM_PROVIDER` | Задать `LLM_PROVIDER=ollama` |
-| `400 exceeded_context_size` | Окно модели меньше разросшейся истории | Поднять `OLLAMA_INPUT_TOKENS` или включить `CODEGEN_HISTORY_*` |
-| Пустые ответы модели, `finish_reason=length` | Мал `num_predict` — Qwen3 обрезает JSON tool-вызовов | Поднять `OLLAMA_OUTPUT_TOKENS` (рекомендуется 16384) |
+| `400 exceeded_context_size` | Окно модели меньше разросшейся истории | Поднять `settings.input_tokens` в `providers.json` или включить `CODEGEN_HISTORY_*` |
+| Пустые ответы модели, `finish_reason=length` | Мал `num_predict` — Qwen3 обрезает JSON tool-вызовов | Поднять `settings.output_tokens` (рекомендуется 16384) |
 | `CodeSearch` всегда `skipped` | Нет Qdrant или не построен индекс | `docker compose up -d` + `go run . index <проект>` |
 | `LspCheck` всегда `skipped` | Не установлен LSP-сервер | Поставить сервер, проверить `LSP_BIN_PATH` |
 | `plan` не восстанавливается | Не задан `REDIS_ADDR` или нет `--resume` | Проверить Redis и `PLAN_RESUME=1` |

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -34,33 +35,56 @@ type ProvidersConfig struct {
 }
 
 var (
+	configMu    sync.Mutex
 	configCache *ProvidersConfig
-	configOnce  sync.Once
-	configErr   error
+	configPath  string
+	configStamp string
 )
 
 // LoadProvidersConfig загружает providers.json из корня проекта.
-// Кэширует результат — повторные вызовы возвращают тот же указатель.
+//
+// Результат кэшируется по пути файла и его отпечатку (mtime + размер): повторные
+// вызовы не читают файл заново, но правка providers.json (добавили модель в
+// Web UI без перезапуска) подхватывается сразу. Путь можно задать явно через
+// PROVIDERS_CONFIG — иначе файл ищется в текущем каталоге и выше.
 func LoadProvidersConfig() (*ProvidersConfig, error) {
-	configOnce.Do(func() {
-		configCache, configErr = loadProvidersConfig()
-	})
-	return configCache, configErr
+	path, err := providersConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("providers.json (%s) недоступен: %w", path, err)
+	}
+	stamp := fmt.Sprintf("%d:%d", st.ModTime().UnixNano(), st.Size())
+
+	configMu.Lock()
+	defer configMu.Unlock()
+	if configCache != nil && configPath == path && configStamp == stamp {
+		return configCache, nil
+	}
+	cfg, err := loadProvidersConfigFile(path)
+	if err != nil {
+		return nil, err
+	}
+	configCache, configPath, configStamp = cfg, path, stamp
+	return cfg, nil
 }
 
-func loadProvidersConfig() (*ProvidersConfig, error) {
-	// Ищем providers.json в текущей директории и выше (до корня)
+// providersConfigPath определяет путь к providers.json: PROVIDERS_CONFIG,
+// затем поиск в текущем каталоге и выше (до корня).
+func providersConfigPath() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("PROVIDERS_CONFIG")); p != "" {
+		return p, nil
+	}
 	dir, err := os.Getwd()
 	if err != nil {
-		return nil, fmt.Errorf("определение рабочей директории: %w", err)
+		return "", fmt.Errorf("определение рабочей директории: %w", err)
 	}
-
-	var path string
 	for {
 		candidate := filepath.Join(dir, "providers.json")
 		if _, err := os.Stat(candidate); err == nil {
-			path = candidate
-			break
+			return candidate, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -68,23 +92,22 @@ func loadProvidersConfig() (*ProvidersConfig, error) {
 		}
 		dir = parent
 	}
+	return "", fmt.Errorf("providers.json не найден. Создайте его из providers.json.example")
+}
 
-	if path == "" {
-		return nil, fmt.Errorf("providers.json не найден. Создайте его из providers.json.example")
-	}
-
+func loadProvidersConfigFile(path string) (*ProvidersConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("чтение providers.json: %w", err)
+		return nil, fmt.Errorf("чтение %s: %w", path, err)
 	}
 
 	var cfg ProvidersConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("разбор providers.json: %w", err)
+		return nil, fmt.Errorf("разбор %s: %w", path, err)
 	}
 
 	if len(cfg.Providers) == 0 {
-		return nil, fmt.Errorf("providers.json не содержит провайдеров")
+		return nil, fmt.Errorf("%s не содержит провайдеров", path)
 	}
 
 	return &cfg, nil

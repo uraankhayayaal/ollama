@@ -655,7 +655,7 @@ func TestTaskDoneMergeConflictRollback(t *testing.T) {
 
 	// LLM-провайдер недоступен — авторезолвинг невозможен, задача должна
 	// откатиться в in_progress.
-	srv.prov = providerResolve{prov: nil, done: true}
+	srv.prov = stubProviderResolve(nil)
 
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
 	defer store.Close()

@@ -51,16 +51,17 @@ ollama pull qwen3:8b          # быстрые запросы
 cp .env.example .env
 ```
 
-Минимально обязательное:
+Провайдер, ключи, base URL и модели описаны в `providers.json` (создайте из
+`providers.json.example`). Минимально обязательное в `.env`:
 
 ```bash
-LLM_PROVIDER=ollama
-OLLAMA_MODEL=qwen3-coder:30b
-# OLLAMA_MODEL_LARGE=...   # для лидов, архитектора, ревьюера
+LLM_PROVIDER=ollama    # без неё запуск падает с «unknown provider»
+MODEL=qwen3-coder:30b  # пусто → default_model из providers.json
+# MODEL_LARGE=...      # для лидов, архитектора, ревьюера
 ```
 
-`LLM_PROVIDER` — единственная по-настоящему обязательная переменная: без неё
-запуск падает с «unknown provider» (`models/resolve.go:24,57`).
+Лимиты модели (окно контекста, выход, thinking) — в `providers.json` →
+`settings`. В Web UI модель переключается без перезапуска процесса.
 
 Подробнее — [Конфигурация](configuration.md).
 

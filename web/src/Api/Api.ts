@@ -137,12 +137,36 @@ export interface ProviderInfo {
   name: string;
   models: string[];
   default_model: string;
+  large_model: string;
 }
 
 export interface ProvidersResponse {
   providers: ProviderInfo[];
-  current: string;
+  current_provider: string;
+  current_model: string;
+  current_large_model: string;
+  // override=true — выбор сделан в UI, false — взят из переменных окружения.
+  override: boolean;
+  // error — непусто, если текущий выбор не удалось создать (провайдер недоступен).
+  error?: string;
+}
+
+export interface SelectProviderBody {
+  provider: string;
   model: string;
+  large_model?: string;
+  reset?: boolean;
+}
+
+export interface SelectProviderResult {
+  ok: boolean;
+  provider: string;
+  model: string;
+  large_model: string;
+  describe: string;
+  // applies_to_running=true — оркестрация уже идёт на прежней модели.
+  applies_to_running: boolean;
+  message?: string;
 }
 
 export async function getProviders(base: string): Promise<ProvidersResponse> {
@@ -151,9 +175,9 @@ export async function getProviders(base: string): Promise<ProvidersResponse> {
 
 export async function selectProvider(
   base: string,
-  body: { provider: string; model: string },
-): Promise<{ ok: boolean }> {
-  return req<{ ok: boolean }>("POST", `${base}/api/providers/select`, body);
+  body: SelectProviderBody,
+): Promise<SelectProviderResult> {
+  return req<SelectProviderResult>("POST", `${base}/api/providers/select`, body);
 }
 
 // --- проекты ---

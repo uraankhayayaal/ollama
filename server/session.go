@@ -248,6 +248,10 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	}
 	sess.running = true
 	sess.stopped = false
+	// Модель, на которой реально пойдёт этот запуск: в лог проекта. Без этой
+	// строки в логах не видно, какая модель отвечает (и тем более — что она
+	// сменилась в Web UI).
+	sess.log.Infof("[llm] модель запуска: %s", sess.srv.prov.describe())
 	cctx, cancel := context.WithCancel(ctx)
 	// Репортёр в контексте оркестрации: runner.Generate по нему транслирует
 	// текст модели, вызовы инструментов и потребление токенов в живую шину

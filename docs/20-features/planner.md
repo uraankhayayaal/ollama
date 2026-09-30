@@ -154,7 +154,7 @@ PLAN_RESUME=1 go run . plan storageService "..."
 выполняется без кода».
 
 Исправление — увеличить лимит выходных токенов (`YANDEX_MAX_TOKENS`,
-`OLLAMA_OUTPUT_TOKENS`) и повторить через `--resume`.
+`settings.output_tokens` в `providers.json`) и повторить через `--resume`.
 
 ## Монорепозитории
 

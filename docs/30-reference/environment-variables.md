@@ -47,8 +47,7 @@
 
 `LLM_PRICE_IN`, `LLM_PRICE_OUT`, `LLM_CURRENCY`, `LLM_ALWAYS_HEAVY`,
 `LOG_DIR`, `AI_WORKSPACES`, `PORT`, `PARALLEL_TOOL_CALLS`,
-`WEB_SEARCH_TIMEOUT`, `WEB_SEARCH_MAX_RESULTS`, `OLLAMA_NUM_CTX`,
-`OLLAMA_STREAM_IDLE`, `YANDEX_OUTPUT_TOKENS`, `TRIM_OUTPUT_TOKENS`.
+`WEB_SEARCH_TIMEOUT`, `WEB_SEARCH_MAX_RESULTS`, `OLLAMA_STREAM_IDLE`.
 
 > **Рекомендация:** добавить эти переменные в `.env.example` с
 > комментарием-значением по умолчанию — иначе «убрать из `.env`» нельзя,
@@ -56,93 +55,70 @@
 
 ---
 
-## LLM: выбор провайдера
+## LLM: выбор провайдера и модели
+
+Ключи, base URL, список моделей и лимиты — в `providers.json`. Переменные ниже
+задают только выбор по умолчанию; в Web UI модель переключается без перезапуска
+(см. [Провайдеры](../10-getting-started/providers.md#выбор-модели-в-web-ui)).
 
 | Переменная | Дефолт | Смысл |
 |---|---|---|
-| `LLM_PROVIDER` | авто | `ollama` / `yandex` / `trim` / `reg` / `layered` |
+| `LLM_PROVIDER` | авто | `ollama` / `yandex` / `trim` / `reg` |
+| `MODEL` | `default_model` из providers.json | Основная модель выбранного провайдера |
+| `MODEL_LARGE` | `large_model` из providers.json | Крупная модель для «тяжёлых» агентов |
+| `PROVIDERS_CONFIG` | поиск вверх от cwd | Путь к providers.json |
 | `LLM_DEBUG` | выкл | Лог запросов и ответов провайдера |
-| `LLM_ALWAYS_HEAVY` | выкл | Всегда слать в модель «heavy» (для тестов маршрутизации) |
+| `LLM_ALWAYS_HEAVY` | выкл | Всегда слать в крупную модель (для тестов маршрутизации) |
 | `PARALLEL_TOOL_CALLS` | **вкл** | Параллельное выполнение read-only инструментов в раунде |
 | `PARALLEL_TOOL_MAX` | 8 | Ширина параллельной волны (0 = без лимита) |
 
-Двухуровневая маршрутизация (`LLM_ALWAYS_HEAVY`): обычные запросы идут в
-лёгкую модель, тяжёлые задачи (архитектура, ревью) — в тяжёлую.
-
-Подробнее — [Провайдеры](../10-getting-started/providers.md).
+Двухуровневая маршрутизация: обычные запросы идут в основную модель, тяжёлые
+задачи (архитектура, ревью) — в крупную. Рабочая модель всегда видна в логах:
+`server: LLM <провайдер>/<модель> (large=<модель>)` в `logs/server.log` и
+`[llm] модель запуска: …` в `logs/<проект>.log`.
 
 ## Ollama
 
 | Переменная | Дефолт | Смысл |
 |---|---|---|
-| `OLLAMA_MODEL` | зависит от режима | Лёгкая модель |
-| `OLLAMA_MODEL_LARGE` | — | Тяжёлая модель для сложных задач |
-| `OLLAMA_HOST` | — | Адрес Ollama (только для `.env`/клиента) |
-| `OLLAMA_NUM_CTX` | 32000 | Размер контекстного окна (`OLLAMA_INPUT_TOKENS` важнее) |
-| `OLLAMA_OUTPUT_TOKENS` | — | Лимит выходных токенов (0 — по умолчанию модели) |
-| `OLLAMA_THINK_TOKENS` | — | Бюджет thinking-токенов |
-| `OLLAMA_THINK` | — | Включить thinking |
+| `OLLAMA_THINK` | из `settings.think_tokens` | 0/1 — принудительное выключение/включение thinking |
 | `OLLAMA_STREAM_IDLE` | — | Таймаут простоя стрима |
 | `OLLAMA_TOOL_RETRIES` | 2 | Ретраи оборванного JSON tool-вызова |
 | `OLLAMA_TOOL_RETRY_DELAY` | 1000 мс | Пауза между ретраями |
 
-> Токены у всех провайдеров читаются общим резолвером
-> `models/ModelSettings.go:47-65`: `<PREFIX>_OUTPUT_TOKENS` важнее legacy
-> `<PREFIX>_MAX_TOKENS`, `<PREFIX>_INPUT_TOKENS` важнее `<PREFIX>_NUM_CTX`.
-> Дефолты входа задаёт провайдер: Ollama — `32000` (`models/OllamaModel.go:45`),
-> Yandex/Trim — не заданы (0 = окно провайдера), Reg — `262144`
-> (`models/RegProvider.go:47`).
-> `OLLAMA_KEEP_ALIVE` — параметр самого Ollama, не приложения.
+> Модель, контекстное окно, лимит выхода и бюджет thinking задаются в
+> `providers.json` → `models.<провайдер>`: `default_model`, `large_model`,
+> `settings.input_tokens`, `settings.output_tokens`, `settings.think_tokens`.
+> Переменные вида `OLLAMA_MODEL` / `*_INPUT_TOKENS` / `*_THINK_TOKENS` больше не
+> читаются — после перехода на providers.json они молча игнорировались.
+> `OLLAMA_HOST` / `OLLAMA_KEEP_ALIVE` — параметры самого Ollama, не приложения.
+> `OLLAMA_NUM_CTX` / `OLLAMA_MAX_TOKENS` больше не читаются.
 
-## YandexGPT
+## YandexGPT, Trim, Reg Cloud
 
-| Переменная | Дефолт | Смысл |
+У всех трёх провайдеров настройки живут в `providers.json` (`base_url`,
+`api_key`, `models`, `default_model`, `settings`), а переменные окружения
+`YANDEX_API_KEY` / `YANDEX_FOLDER_ID` / `YANDEX_MODEL` / `TRIM_*` / `REG_*`
+больше **не читаются** — они остались от конфигурации до providers.json и
+молча ничего не делают.
+
+| Провайдер | Обязательное в конфиге | Типичные лимиты |
 |---|---|---|
-| `YANDEX_API_KEY` | — | Ключ (обязателен) |
-| `YANDEX_FOLDER_ID` | — | ID каталога (обязателен) |
-| `YANDEX_MODEL` | — | Имя модели |
-| `YANDEX_OUTPUT_TOKENS` | 8000 | Лимит выхода |
-| `YANDEX_MAX_TOKENS` | — | Legacy-имя выхода (fallback) |
-| `YANDEX_INPUT_TOKENS` | — | Лимит входа (провайдер не применяет) |
-| `YANDEX_THINK_TOKENS` | — | Бюджет thinking |
+| `yandex` | `base_url`, `api_key`, `folder_id`, `model_prefix` | вход 16000, выход 8000 |
+| `trim` | `base_url`, `api_key` | вход 16000, выход 4000 |
+| `reg` | `base_url`, `api_key` | вход 262144, выход 32768 |
 
-Дефолт выхода `8000` — из `models/AlisaDefinition.go:51`; вход провайдер
-игнорирует (`models/AlisaDefinition.go:30`), так что `YANDEX_INPUT_TOKENS=16000`
-из `.env.example` ни на что не влияет.
+Лимиты — в `settings` (`input_tokens`, `output_tokens`, `think_tokens`).
+Бюджет thinking переводится в `reasoning_effort`: ≤2k → `low`, ≤8k → `medium`,
+≤12k → `high`, больше → `max`.
 
-Предупреждение выдаётся, если заданы **оба** `YANDEX_MAX_TOKENS` и
-`YANDEX_OUTPUT_TOKENS` (`models/AlisaDefinition.go:146`).
+Нюансы реализации:
 
-## Trim
-
-| Переменная | Дефолт | Смысл |
-|---|---|---|
-| `TRIM_API_KEY` | — | Ключ |
-| `TRIM_HOST` | — | Адрес |
-| `TRIM_MODEL` | — | Модель |
-| `TRIM_OUTPUT_TOKENS` | 4000 | Лимит выхода |
-| `TRIM_MAX_TOKENS` | — | Legacy-имя выхода (fallback) |
-| `TRIM_INPUT_TOKENS` | — | Лимит входа (0 = окно провайдера) |
-| `TRIM_THINK_TOKENS` | — | Бюджет thinking |
-
-Дефолт выхода `4000` — из `models/TrimProvider.go:95`.
-
-> **Trim не поддерживает разбиение диффа на части** (`noChunk`) — держите
-> `REVIEW_MAX_DIFF_SIZE` небольшим.
-
-## Reg Cloud
-
-| Переменная | Дефолт | Смысл |
-|---|---|---|
-| `REG_API_KEY` | — | Ключ |
-| `REG_HOST` | `https://ai.reg.cloud/v1` | Адрес |
-| `REG_MODEL` | `qwen-3.8-27b` | Модель |
-| `REG_OUTPUT_TOKENS` | 32768 | Лимит выхода |
-| `REG_MAX_TOKENS` | — | Legacy-имя выхода (fallback) |
-| `REG_INPUT_TOKENS` | 262144 | Лимит входа (провайдер не применяет) |
-| `REG_THINK_TOKENS` | — | Бюджет thinking |
-
-Дефолты выхода/входа — из `models/RegProvider.go:46-49`.
+- **Yandex** — на первом раунде с `WriteFiles` бюджет выхода автоматически
+  повышается до 16000 токенов (иначе обрезается JSON со всеми файлами);
+- **Trim** — не поддерживает разбиение диффа на части (`noChunk`), держите
+  `REVIEW_MAX_DIFF_SIZE` небольшим;
+- **Reg** — модель по умолчанию `qwen-3.8-27b`.
 
 ## Цены токенов
 
@@ -381,11 +357,10 @@
 ## Минимальный рабочий набор
 
 ```bash
-# Провайдер
+# Провайдер и модель (ключи/base_url/лимиты — в providers.json)
 LLM_PROVIDER=ollama
-OLLAMA_MODEL=qwen2.5-coder:14b
-OLLAMA_MODEL_LARGE=qwen2.5-coder:32b
-OLLAMA_NUM_CTX=32768
+MODEL=qwen2.5-coder:14b
+MODEL_LARGE=qwen2.5-coder:32b
 
 # Инфраструктура
 QDRANT_ADDR=localhost:56334

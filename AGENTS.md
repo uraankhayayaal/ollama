@@ -231,3 +231,70 @@ f.txt), `TestMergeTaskConflict409` (409+поле), `TestMergeTaskConflictIdempot
 `TestMergeTaskClearsConflictField`, `TestMergeConflictFilesJSON` (board),
 `TestChatAssistPromptShowsMergeConflict`; `go build/vet` по перечню AGENTS.md
 зелёные, `go test` зелёные кроме 3 пред-существующих флаков чат-ассистента.
+Состояние после 84ec174 (fix выбора модели в Web UI, остался ручной E2E):
+дефекты переключателя исправлены. Главный — `providerResolve.setActive`
+записывал новый выбор, но НЕ инвалидировал кэш (`done`), поэтому после
+первого чата/запуска смена модели не действовала до перезапуска процесса.
+`server/resolve.go` переписан: единое состояние выбора под `mu`
+(`selection`/`setOverride`/`clearOverride`/`resolved`/`describe`), кэш
+сбрасывается при смене, провайдер создаётся сразу (ошибка битого `base_url`
+→ 400/502 в REST, а не на первом запросе к модели). Убрана гонка и
+дублирование: поля `Server.activeProvider/activeModel` удалены — источник
+правды только в `providerResolve`. `models/resolve.go` — `Selection`/
+`Resolved`/`ResolveSelection` (явный выбор без `os.Setenv`), `Describe()`
+даёт строку вида `ollama/qwen3-coder:30b (large=qwen3.6:35b-a3b)`;
+`ResolveProvider()` — обёртка над `EnvSelection()` для CLI. `models/
+providers_config.go` — кэш по пути + отпечатку (mtime+size) вместо
+`sync.Once`: правка `providers.json` подхватывается без перезапуска, путь
+через `PROVIDERS_CONFIG` (даёт тестовый шов). REST: `GET /api/providers`
+(сортированный список, `current_provider`/`current_model`/
+`current_large_model`/`override`/`error`), `POST /api/providers/select`
+(`provider`/`model`/`large_model`/`reset`, валидация против `selectableModels`
+= models+default_model+large_model, предупреждение `applies_to_running` +
+`message`, если оркестрация уже идёт). Логи модели: `server: LLM <describe>`
+на старте сервера и на каждый (ре)резолв, `[llm] модель запуска: …` на каждый
+старт оркестрации (`Session.start`), `[llm] модель: …` на сообщение в чат.
+Фронт: `ModelSelector` — два селекта (провайдер+модель, крупная модель) и
+кнопка «сброс»; значение `<option>` — индекс в плоском списке, НЕ
+`провайдер:модель` (иначе `qwen3-coder:30b` и `/models/T-pro-it-1.0`
+ломались по двоеточию/слэшу), ошибки сервера больше не глушатся `catch(() =>
+{})`, выбор откатывается при отказе; стили вынесены в
+`ModelSelector/ModelSelector.scss` (блок из глобального `styles.scss`
+удалён, мёртвый дубликат переписан), `Api.ts` — `SelectProviderBody`/
+`SelectProviderResult`. Тесты: `server/resolve_test.go` (новый) —
+`TestSelectProviderAppliesAfterFirstResolve` (регресс кэша), `…EnvModelAsDefault`,
+`TestRESTProvidersReportsEnvSelection`, `TestRESTSelectProviderSwitchesModel`,
+`…LargeModel`, `…LargeModelFallsBackToConfig`, `…WarnsAboutRunningOrchestration`,
+`…RejectsUnknown`, `…BrokenBaseURL`, `TestProvidersConfigReloadsOnChange`;
+хелпер `stubProviderResolve` заменил 4 места сборки `providerResolve{}`.
+Документация: `providers.md` (переписан под providers.json + Web UI + таблица
+логов), `rest-api.md` (секция «Модель и провайдеры» + 502),
+`web-ui.md` («Выбор модели»), `troubleshooting.md` («Какая модель работает?»,
+«выбор не применился», `PROVIDERS_CONFIG`, игнорируемые `OLLAMA_MODEL`),
+`environment-variables.md` (MODEL/MODEL_LARGE/PROVIDERS_CONFIG, разобраны
+устаревшие YANDEX_*/TRIM_*/REG_*), `quickstart`/`configuration`/
+`installation`/`glossary`/`planner` — модель из `providers.json`, а не
+`OLLAMA_MODEL`; в коде поправлены устаревшие комменты `models/OllamaModel.go`
+(settings из providers.json, а не `OLLAMA_NUM_CTX`). Верификация зелёная: `go
+build`/`go vet`/`go test` по перечню выше (в т.ч. `./models/`, `./server/`,
+`-race` на новых тестах) + `npm run build` web/. Остался ручной E2E: выбрать
+модель в UI до/после первого чата, убедиться по `logs/server.log` и
+`logs/<проект>.log`, что строка `[llm] модель запуска` совпала с выбранным
+значением.
+
+Состояние последней сессии (E2E выбора модели закрыт): ручной E2E из предыдущей
+сессии заменён постоянным живым тестом `server/e2e_model_selection_test.go`
+(build-тег `e2e`, вне рабочего набора: `E2E_LIVE=1 go test -tags e2e -run
+TestE2EModelSelection ./server/ -timeout 10m`). Тест поднимает настоящий сервер
+(`httptest` + `newTestServer` с miniredis — живая нужна только Ollama), сам
+подбирает две модели с tool-calls из `/api/tags` (`E2E_MODEL_SMALL`/
+`E2E_MODEL_SECOND`/`E2E_MODEL_LARGE`, адрес `OLLAMA_BASE_URL`) и проверяет:
+стартовый выбор из окружения, сортировку провайдеров, переключение через
+`POST /api/providers/select` → подтверждение в `GET` (регресс кэша провайдера),
+**реальный** чат `/api/projects/{id}/chat` с доказательством через `/api/ps`
+(до запроса модели выгружены — загружена ровно выбранная), логи `server: LLM:`
+в `server.log` и `[llm] модель:` в логе проекта, отказы (400 на неизвестную
+модель/провайдер, битый `base_url` → 400 + ошибка в `GET`, `reset` →
+`override=false`). Прогон зелёный (26s), `go build`/`go vet`/`go test` по
+перечню AGENTS.md зелёные. Документация: новая секция «Живой E2E (опционально,
+нужна Ollama)» в `docs/40-operations/testing.md`.

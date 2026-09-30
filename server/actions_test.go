@@ -454,7 +454,7 @@ func TestChatAssistantKanbanStartLaunchesOrchestration(t *testing.T) {
 	// Оркестрация резолвит провайдер через srv.prov: подменяем на stub,
 	// фиксирующий вызов лида (декомпозиция эпика без задач).
 	prov := &leadSeenProvider{}
-	srv.prov = providerResolve{prov: prov, done: true}
+	srv.prov = stubProviderResolve(prov)
 
 	m := runScriptedChatAssistant(t, sess, "запусти канбан по эпику",
 		&runner.ModelReply{ToolCalls: []tools.ToolCall{{Name: actionKanbanStart, Arguments: "{}"}}, FinishReason: "tool_calls"},
