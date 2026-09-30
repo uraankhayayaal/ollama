@@ -264,6 +264,24 @@ func (s *Server) removeTaskWorktree(project, taskID, worktree string) {
 
 func childTaskKey(project, taskID string) string { return project + "::" + taskID }
 
+// gitflowErrBoard собирает однострочное сообщение об ошибке git-шага для
+// доски: при отказе GitHub по scope workflow — готовая инструкция (секреты
+// скрыты, многострочный вывод git не тащится), иначе — первая строка ошибки,
+// сжатая до 200 символов. Исходная причина целиком остаётся в логе проекта.
+func gitflowErrBoard(prefix string, err error) string {
+	if errors.Is(err, gitops.ErrWorkflowScope) {
+		return prefix + ": " + gitops.ErrWorkflowScope.Error()
+	}
+	msg := gitops.RedactSecrets(err.Error())
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	if r := []rune(msg); len(r) > 200 {
+		msg = string(r[:200]) + "…"
+	}
+	return prefix + ": " + msg
+}
+
 // autoCommitAndMergeTask — Ф-2/Ф-3: авто-действия при переводе задачи в done:
 //
 //  1. авто-коммит незакоммиченных изменений worktree в ветку задачи;
@@ -303,6 +321,9 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 	if inf.GitRemote != "" {
 		if mrURL, created, merr := s.createTaskMROnce(ctx, project, task.TaskID, task); merr != nil {
 			logging.For(project).Warnf("gitflow: авто-MR задачи %s: %v", task.TaskID, merr)
+			// Ошибка push/MR видна на доске: без неё коммиты задачи
+			// остаются локальными, а пользователь видит только «done».
+			s.srvEmitBoard(project, gitflowErrBoard(fmt.Sprintf("авто-MR задачи %s не создан", task.TaskID), merr))
 		} else if created {
 			logging.For(project).Infof("gitflow: задача %s → авто-MR %s", task.TaskID, mrURL)
 		}
@@ -365,7 +386,7 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 			if worktree != "" {
 				s.removeTaskWorktree(project, task.TaskID, worktree)
 			}
-			s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи завершён с ошибкой")
+			s.srvEmitBoard(project, gitflowErrBoard("авто-мёрдж задачи завершён с ошибкой", err))
 			return
 		}
 		// Конфликт не разрешён: задача откачена в in_progress, worktree НЕ

@@ -385,3 +385,108 @@ func TestGitCLIMergeFeatureEndToEnd(t *testing.T) {
 		t.Fatal("конфликт не должен менять релизную ветку")
 	}
 }
+
+// TestRedactSecrets проверяет маскировку секретов в тексте git-команд:
+// пароль в userinfo credentialed URL push и известные префиксы токенов.
+func TestRedactSecrets(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{
+			name: "токен в URL push",
+			in:   "gitops: git push https://x-access-token:ghp_FakeTokenNotReal12345678@github.com/o/r ai/epic/e1: exit status 1",
+			want: "gitops: git push https://x-access-token:***@github.com/o/r ai/epic/e1: exit status 1",
+		},
+		{
+			name: "голый ghp-токен",
+			in:   "authorization failed for ghp_FakeTokenNotReal12345678",
+			want: "authorization failed for ***",
+		},
+		{
+			name: "fine-grained и gitlab-токены",
+			in:   "github_pat_11ABCDEFGHijklmnopQRSTUVWX_1234567890abcd + glpat-FakeToken1234567",
+			want: "*** + ***",
+		},
+		{
+			name: "без секретов не меняется",
+			in:   "fatal: не найден git репозиторий",
+			want: "fatal: не найден git репозиторий",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RedactSecrets(c.in); got != c.want {
+				t.Fatalf("RedactSecrets() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestCLIExecRedactsTokenInPushError: отказ git-команды с токеном в argv не
+// должен выдавать токен (так ошибка попадала в логи проекта). git падает до
+// сети — каталог не является репозиторием.
+func TestCLIExecRedactsTokenInPushError(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git недоступен")
+	}
+	_, err := CLIExecutor{}.Exec(context.Background(), t.TempDir(),
+		"git", "push", "https://x-access-token:ghp_FakeTokenNotReal12345678@github.com/o/r", "main")
+	if err == nil {
+		t.Fatal("ожидали ошибку git push")
+	}
+	if strings.Contains(err.Error(), "ghp_") {
+		t.Fatalf("токен утёк в ошибку: %v", err)
+	}
+	if !strings.Contains(err.Error(), "x-access-token:***@github.com") {
+		t.Fatalf("URL не маскирован: %v", err)
+	}
+}
+
+// TestCLIExecWrapsWorkflowScopeRefusal: отказ remote с текстом GitHub про
+// отсутствие scope workflow (pre-receive-хук локального origin) заворачивается
+// в ErrWorkflowScope; прочие ошибки — нет.
+func TestCLIExecWrapsWorkflowScopeRefusal(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git недоступен")
+	}
+	ctx := context.Background()
+	base := t.TempDir()
+
+	origin := filepath.Join(base, "origin.git")
+	if out, err := run(t, "", "", "git", "init", "--bare", "-b", "main", origin); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+	hook := "#!/bin/sh\n" +
+		"echo ' ! [remote rejected] main -> main (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)' >&2\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(origin, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(base, "src")
+	if out, err := run(t, "", "", "git", "init", "-b", "main", src); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	setGitUser(t, src)
+	if _, err := run(t, src, "", "git", "commit", "--allow-empty", "-m", "init"); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	_, err := CLIExecutor{}.Exec(ctx, src, "git", "push", origin, "main")
+	if err == nil {
+		t.Fatal("ожидали отказ push")
+	}
+	if !errors.Is(err, ErrWorkflowScope) {
+		t.Fatalf("ожидали ErrWorkflowScope, получили: %v", err)
+	}
+	if !strings.Contains(err.Error(), "without `workflow` scope") {
+		t.Fatalf("исходный текст отказа потерян: %v", err)
+	}
+
+	// Обычная ошибка (битый refspec) не заворачивается в ErrWorkflowScope.
+	_, err = CLIExecutor{}.Exec(ctx, src, "git", "push", origin, "no-such-branch")
+	if err == nil {
+		t.Fatal("ожидали ошибку битого refspec")
+	}
+	if errors.Is(err, ErrWorkflowScope) {
+		t.Fatalf("ложный ErrWorkflowScope: %v", err)
+	}
+}

@@ -1240,3 +1240,38 @@ func gitHead(dir string) (string, error) {
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
+
+// TestGitflowErrBoard: сообщение об ошибке git-шага для доски — понятная
+// подсказка при отказе по scope workflow, иначе одна строка без секретов.
+func TestGitflowErrBoard(t *testing.T) {
+	// Отказ GitHub по scope workflow: подсказка вместо сырого вывода git.
+	wrapped := fmt.Errorf("подготовка базы MR: %w",
+		fmt.Errorf("gitops: git push %s: %w", "ai/epic/e1",
+			fmt.Errorf("exit status 1: %s: %w", " ! [remote rejected] … without `workflow` scope", gitops.ErrWorkflowScope)))
+	msg := gitflowErrBoard("авто-MR задачи T-01 не создан", wrapped)
+	if !strings.Contains(msg, "авто-MR задачи T-01 не создан") {
+		t.Fatalf("нет префикса: %q", msg)
+	}
+	if !strings.Contains(msg, "scope `workflow`") || !strings.Contains(msg, "GITHUB_TOKEN") {
+		t.Fatalf("нет подсказки про scope workflow: %q", msg)
+	}
+
+	// Многострочная ошибка → только первая строка (без вывода git в UI).
+	multi := fmt.Errorf("первый строка\nвторая строка")
+	if got := gitflowErrBoard("префикс", multi); got != "префикс: первый строка" {
+		t.Fatalf("gitflowErrBoard(multi) = %q", got)
+	}
+
+	// Токен в ошибке маскируется.
+	leaky := fmt.Errorf("gitops: git push https://x-access-token:ghp_FakeTokenNotReal12345678@github.com/o/r main: exit status 1")
+	got := gitflowErrBoard("префикс", leaky)
+	if strings.Contains(got, "ghp_") || !strings.Contains(got, "***") {
+		t.Fatalf("токен не скрыт: %q", got)
+	}
+
+	// Длинная ошибка усечена до 200 рун.
+	long := fmt.Errorf("ошибка: %s", strings.Repeat("я", 300))
+	if r := []rune(gitflowErrBoard("префикс", long)); len(r) > 220 {
+		t.Fatalf("сообщение не усечено: %d рун", len(r))
+	}
+}
