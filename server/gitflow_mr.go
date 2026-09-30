@@ -11,6 +11,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,6 +25,28 @@ import (
 	"ai/logging"
 	"ai/workspace"
 )
+
+// errMREmptyBranch — в ветке нет коммитов относительно базы MR: ветка либо
+// создана без правок, либо уже влита в базу. Фордж отклоняет такой MR
+// (GitHub/GitLab — 422 «No commits between …»), поэтому пуш и запрос к API
+// бессмысленны. Это состояние, а не сбой сервера: ручной путь отвечает 400
+// с понятным текстом, авто-шаг тихо пропускает.
+var errMREmptyBranch = errors.New("в ветке нет коммитов относительно базы MR — создавать MR нечего")
+
+// branchHasCommits — есть ли в ветке свои коммиты (repo.CountCommits > 0).
+// Ошибка git (неизвестный реф, сломанный клон) возвращается отдельно:
+// тогда проверка считается непройденной и MR создаётся как раньше —
+// дефекты git не должны блокировать создание MR.
+func branchHasCommits(ctx context.Context, repo *gitops.Repo, base, branch string) (bool, error) {
+	if repo == nil {
+		return false, errors.New("gitflow: репозиторий не инициализирован")
+	}
+	n, err := repo.CountCommits(ctx, base, branch)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
 
 // gitLinkView — состояние «ветка + MR» одного эпика/задачи в снимке доски.
 type gitLinkView struct {
@@ -96,6 +119,13 @@ func (s *Server) handleCreateEpicMR(w http.ResponseWriter, r *http.Request) {
 	defer lock.Unlock()
 
 	repo := s.repoForBranch(inf, epicRef.Branch, epicRef.Base)
+	// Релизная ветка эпика без своих коммитов — фордж ответит 422
+	// «No commits between …» (та же защита, что у задачи).
+	if ok, cerr := branchHasCommits(r.Context(), repo, epicRef.Base, epicRef.Branch); cerr == nil && !ok {
+		writeErr(w, http.StatusBadRequest,
+			fmt.Sprintf("%v (%s → %s)", errMREmptyBranch, epicRef.Branch, epicRef.Base))
+		return
+	}
 	if err := s.pushRepo(r.Context(), repo, inf.GitRemote); err != nil {
 		writeErr(w, http.StatusBadGateway, "push ветки "+epicRef.Branch+": "+err.Error())
 		return
@@ -175,6 +205,11 @@ func (s *Server) handleCreateTaskMR(w http.ResponseWriter, r *http.Request) {
 	mrURL, err := s.createTaskMRLocked(r.Context(), project, inf, taskID, task, taskRef)
 	lock.Unlock()
 	if err != nil {
+		if errors.Is(err, errMREmptyBranch) {
+			// Пустая ветка — не сбой сети, а «сливать нечего»: 400, а не 502.
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeErr(w, http.StatusBadGateway, "создание MR задачи: "+err.Error())
 		return
 	}
@@ -193,13 +228,19 @@ func (s *Server) handleCreateTaskMR(w http.ResponseWriter, r *http.Request) {
 // mergeLock проекта (вызывающий удерживает его): база MR должна существовать в
 // remote, ветка задачи пушится, MR создаётся и пишется в side-реестр.
 func (s *Server) createTaskMRLocked(ctx context.Context, project string, inf workspace.Info, taskID string, task *board.Task, taskRef workspace.BranchRef) (string, error) {
+	repo := s.repoForBranch(inf, taskRef.Branch, taskRef.Base)
+	// Ветка без своих коммитов (специалист не правил, либо всё уже в базе):
+	// 422 «No commits between …» от форджа — гарантированно. Пропускаем ДО
+	// push, чтобы не толкать ветку впустую и не путать WARN в логе.
+	if ok, cerr := branchHasCommits(ctx, repo, taskRef.Base, taskRef.Branch); cerr == nil && !ok {
+		return "", fmt.Errorf("%w: %s → %s", errMREmptyBranch, taskRef.Branch, taskRef.Base)
+	}
 	// База MR (ветка эпика) должна существовать в remote: GitHub/GitLab
 	// отклоняют MR с неизвестной base (422 "base invalid"), а ветка эпика
 	// до первого MR задачи живёт только в локальном клоне.
 	if err := s.ensureRemoteBase(ctx, inf, taskRef.Base); err != nil {
 		return "", fmt.Errorf("подготовка базы MR: %w", err)
 	}
-	repo := s.repoForBranch(inf, taskRef.Branch, taskRef.Base)
 	if err := s.pushRepo(ctx, repo, inf.GitRemote); err != nil {
 		return "", fmt.Errorf("push ветки %s: %w", taskRef.Branch, err)
 	}
@@ -246,6 +287,12 @@ func (s *Server) createTaskMROnce(ctx context.Context, project, taskID string, t
 	defer lock.Unlock()
 	mrURL, err := s.createTaskMRLocked(ctx, project, inf, taskID, task, taskRef)
 	if err != nil {
+		// Ветка пуста (например, QA-задача без правок) — авто-шаг это не
+		// ошибка: мёрдж в релиз ниже сам разберётся, а WARN не нужен.
+		if errors.Is(err, errMREmptyBranch) {
+			logging.For(project).Detailf("gitflow: авто-MR задачи %s: %v — пропуск", taskID, err)
+			return "", false, nil
+		}
 		return "", false, err
 	}
 	return mrURL, true, nil

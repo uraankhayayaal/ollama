@@ -556,7 +556,8 @@ func readBoardGit(t *testing.T, conn net.Conn, timeout time.Duration) (struct {
 
 // TestCreateEpicMREndToEndRealGit — E2E «Создать MR» эпика на реальном git:
 // клон локального origin → ветка эпика через REST → MR-кнопка пушит ветку
-// в origin и регистрирует ссылку.
+// в origin и регистрирует ссылку. Перед MR в ветку кладётся коммит: пустую
+// ветку фордж отклоняет (422 «No commits between …»), и кнопка это проверяет.
 func TestCreateEpicMREndToEndRealGit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git недоступен")
@@ -613,6 +614,15 @@ func TestCreateEpicMREndToEndRealGit(t *testing.T) {
 		t.Fatalf("ветка эпика: %d, body: %s", rec.Code, rec.Body.String())
 	}
 
+	// Коммит в ветку эпика: MR для ветки без своих коммитов создать нельзя.
+	setGitUserReal(t, repo.Root)
+	if out, err := exec.Command("git", "-C", repo.Root, "checkout", "ai/epic/epic-1").CombinedOutput(); err != nil {
+		t.Fatalf("checkout ветки эпика: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", repo.Root, "commit", "--allow-empty", "-m", "содержимое эпика").CombinedOutput(); err != nil {
+		t.Fatalf("commit в ветку эпика: %v\n%s", err, out)
+	}
+
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
 		"POST", "/api/projects/myrepo/epics/epic-1/mr", strings.NewReader(`{}`)))
@@ -627,5 +637,97 @@ func TestCreateEpicMREndToEndRealGit(t *testing.T) {
 	}
 	if mf, err := srv.reg.EpicMR("myrepo", "epic-1"); err != nil || mf.URL != stub.url {
 		t.Fatalf("EpicMR = %+v, %v", mf, err)
+	}
+}
+
+// TestCreateTaskMREmptyBranch400 — ветка задачи без своих коммитов (правок не
+// было либо всё уже в базе): фордж гарантированно ответил бы 422 «No commits
+// between …». Проверка идёт ДО push, поэтому ветка не толкается впустую,
+// фордж не вызывается, а клиент получает 400 с понятным текстом вместо 502
+// с куском JSON форджа.
+func TestCreateTaskMREmptyBranch400(t *testing.T) {
+	git := &fakeGit{starts: map[string]string{"git rev-list --count": "0\n"}}
+	stub := &stubMRForge{url: "https://github.com/o/r/pull/99"}
+	srv, handler, mr := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		return stub, nil
+	})
+	setupMRBoards(t, mr, srv)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		"POST", "/api/projects/myrepo/tasks/task-1/mr", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("код = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "нет коммитов") {
+		t.Fatalf("текст должен объяснять причину, body: %s", rec.Body.String())
+	}
+	if git.saw("push -u origin ai/task/t1") {
+		t.Fatalf("ветка без коммитов не должна пушиться, вызовы: %v", git.callsList())
+	}
+	if stub.opts.SourceBranch != "" {
+		t.Fatalf("фордж не должен вызываться, opts = %+v", stub.opts)
+	}
+	if _, err := srv.reg.TaskMR("myrepo", "task-1"); err == nil {
+		t.Fatal("MR не должен попасть в реестр")
+	}
+}
+
+// TestCreateEpicMREmptyBranch400 — та же защита для релизной ветки эпика.
+func TestCreateEpicMREmptyBranch400(t *testing.T) {
+	git := &fakeGit{starts: map[string]string{"git rev-list --count": "0\n"}}
+	stub := &stubMRForge{url: "https://gitlab.com/g/myrepo/-/merge_requests/99"}
+	srv, handler, mr := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		return stub, nil
+	})
+	setupMRBoards(t, mr, srv)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		"POST", "/api/projects/myrepo/epics/epic-1/mr", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("код = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if git.saw("push -u origin ai/epic/e1") {
+		t.Fatalf("ветка без коммитов не должна пушиться, вызовы: %v", git.callsList())
+	}
+	if stub.opts.SourceBranch != "" {
+		t.Fatalf("фордж не должен вызываться, opts = %+v", stub.opts)
+	}
+}
+
+// TestAutoTaskMRSkipsEmptyBranch — авто-MR задачи на done для ветки без
+// коммитов (например, QA-проверка без правок): раньше фордж отвечал 422
+// «No commits between …» и в лог проекта летел WARN. Теперь авто-шаг тихо
+// пропускается, а последующий мёрдж в релиз эпика идёт как обычно.
+func TestAutoTaskMRSkipsEmptyBranch(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "tok")
+	git := &fakeGit{starts: map[string]string{"git rev-list --count": "0\n"}}
+	stub := &stubMRForge{url: "https://github.com/o/r/pull/402"}
+	srv, _, _ := newTestServerGit(t, git, func(remote, token string) (forges.Forge, error) {
+		return stub, nil
+	})
+	ctx := context.Background()
+	registerGit(t, srv, "myrepo", "https://github.com/o/r.git", "ai/myrepo", "main")
+	if err := srv.reg.SetEpicBranch("myrepo", "epic-1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("myrepo", "task-1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.autoCommitAndMergeTask(ctx, "myrepo", &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "QA-проверка без правок"},
+		EpicID:   "epic-1",
+	}, nil)
+
+	if _, err := srv.reg.TaskMR("myrepo", "task-1"); err == nil {
+		t.Fatal("авто-MR создан, хотя коммитов в ветке нет")
+	}
+	if stub.opts.SourceBranch != "" {
+		t.Fatalf("фордж не должен вызываться, opts = %+v", stub.opts)
+	}
+	if git.saw("push -u origin ai/task/t1") {
+		t.Fatalf("ветка без коммитов не должна пушиться, вызовы: %v", git.callsList())
 	}
 }
