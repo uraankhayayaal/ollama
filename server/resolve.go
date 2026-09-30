@@ -3,20 +3,20 @@ package server
 import (
 	"ai/models"
 	"fmt"
+	"os"
 	"sync"
 )
 
-// providerResolve кэширует провайдер LLM. Вызывается при первом POST /chat;
-// позволяет серверу стартовать без настроенного LLM (только доска и чат).
 type providerResolve struct {
-	mu   sync.Mutex
-	prov models.LLMProvider
-	name models.ProviderName
-	err  error
-	done bool
+	mu             sync.Mutex
+	prov           models.LLMProvider
+	name           models.ProviderName
+	err            error
+	done           bool
+	activeProvider string
+	activeModel    string
 }
 
-// get возвращает провайдер, инициируя ResolveProvider при первом вызове.
 func (p *providerResolve) get() (models.LLMProvider, models.ProviderName, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -24,6 +24,22 @@ func (p *providerResolve) get() (models.LLMProvider, models.ProviderName, error)
 		return p.prov, p.name, p.err
 	}
 	p.done = true
+
+	provider := models.ProviderName(os.Getenv("LLM_PROVIDER"))
+	model := os.Getenv("MODEL")
+
+	if p.activeProvider != "" {
+		provider = models.ProviderName(p.activeProvider)
+	}
+	if p.activeModel != "" {
+		model = p.activeModel
+	}
+
+	os.Setenv("LLM_PROVIDER", string(provider))
+	if model != "" {
+		os.Setenv("MODEL", model)
+	}
+
 	prov, name, err := models.ResolveProvider()
 	if err != nil {
 		err = fmt.Errorf("инициализация провайдера LLM: %w", err)
@@ -32,7 +48,13 @@ func (p *providerResolve) get() (models.LLMProvider, models.ProviderName, error)
 	return p.prov, p.name, p.err
 }
 
-// ok возвращает true, если провайдер уже был успешно получен.
+func (p *providerResolve) setActive(provider, model string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.activeProvider = provider
+	p.activeModel = model
+}
+
 func (p *providerResolve) ok() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

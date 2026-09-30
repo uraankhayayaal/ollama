@@ -56,6 +56,9 @@ type Server struct {
 	gitExec      gitops.Executor
 	forgeFactory func(remoteURL, token string) (forges.Forge, error)
 
+	activeProvider string
+	activeModel    string
+
 	// auth — аутентификация Web UI (nil/отключена, если пароль не задан).
 	auth *authManager
 	// Лимитеры (Ф-3): общий API, строгий на вход, отдельный на чат.
@@ -178,6 +181,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects", s.handleListProjects)
 	mux.HandleFunc("POST /api/projects", s.handleOpenProject)
 
+	// REST — провайдеры и модели (для выбора в WebUI)
+	mux.HandleFunc("GET /api/providers", s.handleGetProviders)
+	mux.HandleFunc("POST /api/providers/select", s.handleSelectProvider)
+
 	// REST — доска/чат/сессия проекта
 	mux.HandleFunc("GET /api/projects/{id}", s.handleGetBoard)
 	mux.HandleFunc("POST /api/projects/{id}/chat", s.handlePostChat)
@@ -271,6 +278,85 @@ func (s *Server) session(project string) *Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessions[project]
+}
+
+func (s *Server) handleGetProviders(w http.ResponseWriter, r *http.Request) {
+	cfg, err := models.LoadProvidersConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type providerInfo struct {
+		Name         string   `json:"name"`
+		Models       []string `json:"models"`
+		DefaultModel string   `json:"default_model"`
+	}
+
+	providers := make([]providerInfo, 0, len(cfg.Providers))
+	for name, p := range cfg.Providers {
+		providers = append(providers, providerInfo{
+			Name:         name,
+			Models:       p.Models,
+			DefaultModel: p.DefaultModel,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"providers": providers,
+		"current":   s.activeProvider,
+		"model":     s.activeModel,
+	})
+}
+
+func (s *Server) handleSelectProvider(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := models.LoadProvidersConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	providerCfg, ok := cfg.Providers[body.Provider]
+	if !ok {
+		http.Error(w, "provider not found", http.StatusBadRequest)
+		return
+	}
+
+	model := body.Model
+	if model == "" {
+		model = providerCfg.DefaultModel
+	}
+
+	found := false
+	for _, m := range providerCfg.Models {
+		if m == model {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "model not found", http.StatusBadRequest)
+		return
+	}
+
+	s.activeProvider = body.Provider
+	s.activeModel = model
+	s.prov.setActive(body.Provider, model)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"ok": true,
+	})
 }
 
 // --- утилиты ---

@@ -1,0 +1,23 @@
+.model-selector {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-selector select {
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+  max-width: 200px;
+}
+
+.model-selector-provider {
+  font-weight: 500;
+}
+
+.model-selector.error {
+  color: #d32f2f;
+  font-size: 13px;
+}

@@ -19,6 +19,7 @@ import { WorkspacePicker } from "./Components/WorkspacePicker";
 import { Badge } from "./Components/Badge";
 import { GateBanner } from "./Components/GateBanner";
 import { GateEvent } from "./Types";
+import { ModelSelector } from "./Components/ModelSelector";
 
 const BASE = ""; // dev: Vite-прокси /api→backend; прод: embed same-origin.
 
@@ -758,6 +759,7 @@ export function App() {
               {indexing ? "Индексирую…" : "Индекс RAG"}
             </button>
           )}
+          <ModelSelector />
           <RunButton
             status={status}
             canContinue={canContinue}

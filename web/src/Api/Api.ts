@@ -131,6 +131,31 @@ export async function logout(base: string): Promise<void> {
   }
 }
 
+// --- провайдеры и модели ---
+
+export interface ProviderInfo {
+  name: string;
+  models: string[];
+  default_model: string;
+}
+
+export interface ProvidersResponse {
+  providers: ProviderInfo[];
+  current: string;
+  model: string;
+}
+
+export async function getProviders(base: string): Promise<ProvidersResponse> {
+  return req<ProvidersResponse>("GET", `${base}/api/providers`);
+}
+
+export async function selectProvider(
+  base: string,
+  body: { provider: string; model: string },
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>("POST", `${base}/api/providers/select`, body);
+}
+
 // --- проекты ---
 
 export async function listProjects(base: string): Promise<ProjectMeta[]> {

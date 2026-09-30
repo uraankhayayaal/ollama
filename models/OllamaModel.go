@@ -38,7 +38,12 @@ func NewOllamaProvider(model string, cfg ProviderConfig) (*OllamaProvider, error
 		baseURL = "http://127.0.0.1:11434"
 	}
 
-	client := api.NewClient(&url.URL{Scheme: "http", Host: baseURL}, http.DefaultClient)
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("некорректный BaseURL %q: %w", baseURL, err)
+	}
+
+	client := api.NewClient(u, http.DefaultClient)
 
 	return &OllamaProvider{
 		client: client,
