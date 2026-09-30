@@ -46,7 +46,7 @@ ACCEPT_*_CMD  →  make-цель из Makefile проекта  →  автоде
 
 ```bash
 # Обязательно
-LLM_PROVIDER=ollama          # ollama | yandex | trim
+LLM_PROVIDER=ollama          # ollama | yandex | trim | reg
 
 # Модели (Ollama)
 OLLAMA_MODEL=qwen3-coder:30b # рядовые шаги

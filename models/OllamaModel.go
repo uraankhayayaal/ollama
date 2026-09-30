@@ -2,12 +2,13 @@ package models
 
 import (
 	"ai/agents"
-	"ai/logging"
 	"ai/runner"
 	"ai/tools"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -31,19 +32,22 @@ type OllamaProvider struct {
 	settings ModelSettings
 }
 
-func NewOllamaProvider(model string) (*OllamaProvider, error) {
-	// 1. Создаем клиент Ollama (по умолчанию подключается к http://127.0.0.1:11434)
-	client, err := api.ClientFromEnvironment()
-	if err != nil {
-		logging.Fatalf("Ошибка инициализации клиента: %v", err)
+func NewOllamaProvider(model string, cfg ProviderConfig) (*OllamaProvider, error) {
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:11434"
 	}
+
+	client := api.NewClient(&url.URL{Scheme: "http", Host: baseURL}, http.DefaultClient)
 
 	return &OllamaProvider{
 		client: client,
 		model:  model,
-		settings: resolveSettings("OLLAMA", ModelSettings{
-			InputTokens: 32000,
-		}),
+		settings: ModelSettings{
+			ThinkTokens:  cfg.Settings.ThinkTokens,
+			InputTokens:  cfg.Settings.InputTokens,
+			OutputTokens: cfg.Settings.OutputTokens,
+		},
 	}, nil
 }
 

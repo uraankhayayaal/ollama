@@ -1,10 +1,10 @@
 # LLM-провайдеры
 
 Провайдер выбирается одной переменной `LLM_PROVIDER`. Поддерживаются
-Ollama, YandexGPT и Trim.
+Ollama, YandexGPT, Trim и Reg Cloud.
 
 ```bash
-LLM_PROVIDER=ollama    # ollama | yandex | trim
+LLM_PROVIDER=ollama    # ollama | yandex | trim | reg
 ```
 
 Без неё запуск падает с «unknown provider» (`models/resolve.go:24,57`).
@@ -12,14 +12,14 @@ LLM_PROVIDER=ollama    # ollama | yandex | trim
 
 ## Сравнение
 
-| | Ollama | YandexGPT | Trim |
-|---|---|---|---|
-| Где работает | Локально (в т.ч. в Docker) | Облако Yandex Cloud | Облако Trim |
-| Ключ | Не нужен | `YANDEX_API_KEY` + `YANDEX_FOLDER_ID` | `TRIM_API_KEY` |
-| Выход по умолчанию | Не задан (рекомендуется 16384) | 8000 (16000 на первом `WriteFiles`) | 4000 |
-| Входной контекст | Задаётся в модели | Только как конфигурация | Только как конфигурация |
-| Reasoning | `OLLAMA_THINK`, `OLLAMA_THINK_TOKENS` | `YANDEX_THINK_TOKENS` → `reasoning_effort` | `TRIM_THINK_TOKENS` → `reasoning_effort` |
-| Нюанс | Нужен запуск `ollama serve` | Ревью диффов у Trim идёт целиком (`noChunk`) | Совместим с OpenAI |
+| | Ollama | YandexGPT | Trim | Reg Cloud |
+|---|---|---|---|---|
+| Где работает | Локально (в т.ч. в Docker) | Облако Yandex Cloud | Облако Trim | Облако Reg Cloud |
+| Ключ | Не нужен | `YANDEX_API_KEY` + `YANDEX_FOLDER_ID` | `TRIM_API_KEY` | `REG_API_KEY` |
+| Выход по умолчанию | Не задан (рекомендуется 16384) | 8000 (16000 на первом `WriteFiles`) | 4000 | 32768 |
+| Входной контекст | Задаётся в модели | Только как конфигурация | Только как конфигурация | Только как конфигурация |
+| Reasoning | `OLLAMA_THINK`, `OLLAMA_THINK_TOKENS` | `YANDEX_THINK_TOKENS` → `reasoning_effort` | `TRIM_THINK_TOKENS` → `reasoning_effort` | `REG_THINK_TOKENS` → `reasoning_effort` |
+| Нюанс | Нужен запуск `ollama serve` | Ревью диффов у Trim идёт целиком (`noChunk`) | Совместим с OpenAI | Совместим с OpenAI |
 
 ## Ollama
 
@@ -134,6 +134,21 @@ API совместим с OpenAI. Нюанс: дифф для ревью пер�
 разбиения на части (`noChunk`), поэтому на Trim стоит держать
 `REVIEW_MAX_DIFF_SIZE` небольшим.
 
+## Reg Cloud
+
+```bash
+LLM_PROVIDER=reg
+REG_API_KEY=...
+REG_HOST=https://ai.reg.cloud/v1
+REG_MODEL=qwen-3.8-27b
+REG_OUTPUT_TOKENS=32768     # Legacy: REG_MAX_TOKENS
+REG_INPUT_TOKENS=262144
+REG_THINK_TOKENS=4000
+```
+
+API совместим с OpenAI. Модель по умолчанию — `qwen-3.8-27b` с контекстом
+262144 и выходом 32768.
+
 ## Как выбирается модель
 
 ```
@@ -144,7 +159,8 @@ models/resolve.go
       │
       ├── ollama → OLLAMA_MODEL (+ OLLAMA_MODEL_LARGE) → LayeredProvider
       ├── yandex → AlisaDefinition (YANDEX_MODEL)
-      └── trim   → TrimProvider (TRIM_MODEL)
+      ├── trim   → TrimProvider (TRIM_MODEL)
+      └── reg    → RegProvider (REG_MODEL)
               │
               ▼
       runner.Runner  (цикл раундов)

@@ -60,7 +60,7 @@
 
 | Переменная | Дефолт | Смысл |
 |---|---|---|
-| `LLM_PROVIDER` | авто | `ollama` / `yandex` / `trim` / `layered` |
+| `LLM_PROVIDER` | авто | `ollama` / `yandex` / `trim` / `reg` / `layered` |
 | `LLM_DEBUG` | выкл | Лог запросов и ответов провайдера |
 | `LLM_ALWAYS_HEAVY` | выкл | Всегда слать в модель «heavy» (для тестов маршрутизации) |
 | `PARALLEL_TOOL_CALLS` | **вкл** | Параллельное выполнение read-only инструментов в раунде |
@@ -90,7 +90,8 @@
 > `models/ModelSettings.go:47-65`: `<PREFIX>_OUTPUT_TOKENS` важнее legacy
 > `<PREFIX>_MAX_TOKENS`, `<PREFIX>_INPUT_TOKENS` важнее `<PREFIX>_NUM_CTX`.
 > Дефолты входа задаёт провайдер: Ollama — `32000` (`models/OllamaModel.go:45`),
-> Yandex/Trim — не заданы (0 = окно провайдера).
+> Yandex/Trim — не заданы (0 = окно провайдера), Reg — `262144`
+> (`models/RegProvider.go:47`).
 > `OLLAMA_KEEP_ALIVE` — параметр самого Ollama, не приложения.
 
 ## YandexGPT
@@ -128,6 +129,20 @@
 
 > **Trim не поддерживает разбиение диффа на части** (`noChunk`) — держите
 > `REVIEW_MAX_DIFF_SIZE` небольшим.
+
+## Reg Cloud
+
+| Переменная | Дефолт | Смысл |
+|---|---|---|
+| `REG_API_KEY` | — | Ключ |
+| `REG_HOST` | `https://ai.reg.cloud/v1` | Адрес |
+| `REG_MODEL` | `qwen-3.8-27b` | Модель |
+| `REG_OUTPUT_TOKENS` | 32768 | Лимит выхода |
+| `REG_MAX_TOKENS` | — | Legacy-имя выхода (fallback) |
+| `REG_INPUT_TOKENS` | 262144 | Лимит входа (провайдер не применяет) |
+| `REG_THINK_TOKENS` | — | Бюджет thinking |
+
+Дефолты выхода/входа — из `models/RegProvider.go:46-49`.
 
 ## Цены токенов
 

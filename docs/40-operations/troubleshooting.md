@@ -12,7 +12,7 @@
 **Решение:**
 
 ```bash
-LLM_PROVIDER=ollama   # или yandex / trim / layered
+LLM_PROVIDER=ollama   # или yandex / trim / reg / layered
 ```
 
 ### Ollama недоступна

@@ -1,0 +1,63 @@
+{
+  "providers": {
+    "ollama": {
+      "base_url": "http://localhost:11434",
+      "api_key": "",
+      "models": [
+        "qwen3-coder:30b",
+        "llama3.2",
+        "qwen2.5-coder:7b"
+      ],
+      "default_model": "qwen3-coder:30b",
+      "large_model": "",
+      "settings": {
+        "think_tokens": 0,
+        "input_tokens": 32000,
+        "output_tokens": 16384
+      }
+    },
+    "yandex": {
+      "base_url": "https://ai.api.cloud.yandex.net/v1",
+      "api_key": "your-yandex-api-key",
+      "folder_id": "your-folder-id",
+      "model_prefix": "gpt://your-folder-id/",
+      "models": [
+        "qwen3.6-35b-a3b/latest",
+        "yandexgpt/latest",
+        "gpt-4o-mini"
+      ],
+      "default_model": "qwen3.6-35b-a3b/latest",
+      "settings": {
+        "think_tokens": 0,
+        "input_tokens": 16000,
+        "output_tokens": 8000
+      }
+    },
+    "trim": {
+      "base_url": "https://vllm-app.rc.itops.su/v1",
+      "api_key": "your-trim-api-key",
+      "models": [
+        "/models/T-pro-it-1.0"
+      ],
+      "default_model": "/models/T-pro-it-1.0",
+      "settings": {
+        "think_tokens": 0,
+        "input_tokens": 16000,
+        "output_tokens": 4000
+      }
+    },
+    "reg": {
+      "base_url": "https://ai.reg.cloud/v1",
+      "api_key": "your-reg-api-key",
+      "models": [
+        "qwen-3.8-27b"
+      ],
+      "default_model": "qwen-3.8-27b",
+      "settings": {
+        "think_tokens": 0,
+        "input_tokens": 262144,
+        "output_tokens": 32768
+      }
+    }
+  }
+}
