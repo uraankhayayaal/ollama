@@ -35,8 +35,15 @@ go test . ./agents/... ./tools/ ./board/
 Известные нюансы:
 - `go build ./...` падает на `temp/moon-distance/internal/middleware/cors.go`
   (артефакт сгенерированного проекта) — используй перечень выше.
-- Предсуществующие неформатированные файлы (`agents/acceptor/checks.go`,
-  `agents/acceptor/run.go`) не трогать.
+- `gofmt -l .` показывает 29 файлов с предсуществующими отклонениями
+  форматирования (часто — отсутствующая завершающая строка). Это не гейт:
+  запускай `gofmt -l`/`gofmt -w` только на своих файлах, иначе в коммит
+  попадёт форматирование чужого кода.
+- На macOS (GNU Make 3.81) падают два теста `agents/acceptor`:
+  `TestAcceptBuildFallsBackToInfraMirror` и
+  `TestAcceptBuildToolMissingSkips` — они ждут make-маркер
+  (`Ошибка`/`Error 127`), которого нет в выводе локального GNU Make
+  (`make: *** [build] Error 1`). Зависит от хоста, не регрессия.
 
 ## Токено-эффективные Bash-команды
 
