@@ -52,13 +52,128 @@ func TestSandboxDisabledByDefault(t *testing.T) {
 	t.Setenv("CODEGEN_SANDBOX", "auto")
 	t.Setenv("CODEGEN_SANDBOX_DOCKER", filepath.Join(t.TempDir(), "no-such-docker"))
 	cfg := loadSandboxConfig()
-	if cfg.Mode != SandboxModeLocal && cfg.Mode != SandboxModeContainer {
-		t.Errorf("auto: неожиданный режим %q", cfg.Mode)
-	}
 	if !dockerAvailable() {
 		if cfg.Mode != SandboxModeLocal {
 			t.Errorf("auto без Docker: ожидался хост, получен %q", cfg.Mode)
 		}
+	}
+}
+
+// Пустой CODEGEN_SANDBOX_ALLOW_WRITE обязан означать «запись РАЗРЕШЕНА».
+// Инвертированная семантика давала контейнер с read-only /workspace, в
+// котором агент не видел ни одного файла проекта: выглядит как «песочница
+// сломалась», а на деле это был запрет записи по умолчанию.
+func TestSandboxWriteAllowedByDefault(t *testing.T) {
+	t.Setenv("CODEGEN_SANDBOX_ALLOW_WRITE", "")
+	if cfg := loadSandboxConfig(); cfg.WorkdirReadOnly {
+		t.Error("без CODEGEN_SANDBOX_ALLOW_WRITE рабочий каталог должен быть доступен на запись")
+	}
+	t.Setenv("CODEGEN_SANDBOX_ALLOW_WRITE", "true")
+	if cfg := loadSandboxConfig(); cfg.WorkdirReadOnly {
+		t.Error("CODEGEN_SANDBOX_ALLOW_WRITE=true обязан разрешать запись")
+	}
+	t.Setenv("CODEGEN_SANDBOX_ALLOW_WRITE", "false")
+	if cfg := loadSandboxConfig(); !cfg.WorkdirReadOnly {
+		t.Error("CODEGEN_SANDBOX_ALLOW_WRITE=false обязан запрещать запись в рабочий каталог")
+	}
+}
+
+// Ровно так же, но на уровне аргументов docker: проект смонтирован всегда, а
+// режим монтирования переключается между :rw и :ro.
+func TestSandboxMountsWorkdirReadWriteByDefault(t *testing.T) {
+	dir := goProject(t)
+	spec, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default", Memory: "1g", CPUs: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := dir + ":" + sandboxWorkspace + ":rw"
+	if spec.Mount != want {
+		t.Errorf("монтирование рабочего каталога: ожидалось %q, получено %q", want, spec.Mount)
+	}
+	if strings.Contains(strings.Join(dockerArgs(spec, "go test ./..."), " "), "-w "+dir) {
+		t.Error("docker run не должен получать -w <dir>:/workspace:rw: -w задаёт workdir, а не монтаж, и проект в контейнер не попадает")
+	}
+	if !strings.Contains(strings.Join(dockerArgs(spec, "go test ./..."), " "), "--volume "+want) {
+		t.Errorf("ожидался --volume %q", want)
+	}
+
+	ro, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default", Memory: "1g", CPUs: "1", WorkdirReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantRO := dir + ":" + sandboxWorkspace + ":ro"; ro.Mount != wantRO {
+		t.Errorf("при запрете записи ожидалось %q, получено %q", wantRO, ro.Mount)
+	}
+}
+
+// Образ выбирается по цепочке «явно заданный → стек проекта → dev-образ».
+// Последний шаг обязателен: у ЛСП-чекера манифеста нет, и без него
+// контейнерный режим был бы недостижим (именно из-за этого раньше дефолтный
+// образ ставился в loadSandboxConfig, и ветка выбора по стеку была мёртвой).
+func TestSandboxImageFallbackChain(t *testing.T) {
+	dir := goProject(t)
+	t.Setenv("CODEGEN_SANDBOX_IMAGE", "")
+	t.Setenv("CODEGEN_IMAGE", "")
+
+	spec, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Network: "default", Memory: "1g", CPUs: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Image != "golang:1.24" {
+		t.Errorf("проект на Go без заданного образа: ожидался %q, получен %q", "golang:1.24", spec.Image)
+	}
+
+	// Алиас CODEGEN_IMAGE работает наравне с CODEGEN_SANDBOX_IMAGE.
+	t.Setenv("CODEGEN_IMAGE", "alpine:3.20")
+	if got := sandboxImageFor(dir); got != "alpine:3.20" {
+		t.Errorf("CODEGEN_IMAGE должен учитываться при выборе образа, получено %q", got)
+	}
+	t.Setenv("CODEGEN_SANDBOX_IMAGE", "explicit:1")
+	if got := sandboxImageFor(dir); got != "explicit:1" {
+		t.Errorf("CODEGEN_SANDBOX_IMAGE должен перекрывать стек, получено %q", got)
+	}
+
+	// Каталог без манифестов (как у ЛСП-чекера) → dev-образ, а не ошибка.
+	t.Setenv("CODEGEN_IMAGE", "")
+	t.Setenv("CODEGEN_SANDBOX_IMAGE", "")
+	bare := t.TempDir()
+	spec, err = sandboxSpecFor("cat marker.txt", bare, sandboxConfig{Mode: SandboxModeContainer, Network: "default", Memory: "1g", CPUs: "1"})
+	if err != nil {
+		t.Fatalf("проект без манифестов обязан запускаться на dev-образе: %v", err)
+	}
+	if spec.Image != defaultSandboxImage {
+		t.Errorf("ожидался dev-образ %q, получен %q", defaultSandboxImage, spec.Image)
+	}
+}
+
+// Путь с двоеточием или запятой ломает разбор --volume «src:dst:opts» молча:
+// контейнер стартует и не видит проекта. Лучше отказ до запуска.
+func TestSandboxRejectsUnmountablePath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "проект:с-двоеточием")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := sandboxSpecFor("ls", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default", Memory: "1g", CPUs: "1"})
+	if err == nil || !strings.Contains(err.Error(), "--volume") {
+		t.Errorf("ожидался отказ по пути каталога с «:», получено %v", err)
+	}
+}
+
+// Кэши и HOME в tmpfs, а не в рабочем каталоге: иначе git/npm оставляют
+// ~/.gitconfig и ~/.npmrc прямо в проекте, и они попадают в ревьюируемый diff.
+func TestSandboxEnvKeepsHomeOutOfWorkdir(t *testing.T) {
+	env := sandboxEnv()
+	if env["HOME"] != sandboxTmp {
+		t.Errorf("HOME=%q, ожидался %q: иначе конфиги тулчейна попадут в проект", env["HOME"], sandboxTmp)
+	}
+	for _, k := range []string{"GOCACHE", "GOMODCACHE", "GOPATH", "npm_config_cache", "PIP_CACHE_DIR", "XDG_CACHE_HOME"} {
+		if !strings.HasPrefix(env[k], sandboxTmp) {
+			t.Errorf("%s=%q должен быть внутри %s, иначе кэш осядет в проекте", k, env[k], sandboxTmp)
+		}
+	}
+	// Коммит из песочницы не должен падать из-за отсутствия ~/.gitconfig.
+	if env["GIT_CONFIG_GLOBAL"] == "" || env["GIT_AUTHOR_EMAIL"] == "" || env["GIT_COMMITTER_EMAIL"] == "" {
+		t.Errorf("нужна git-идентификация для make-целей приёмки: %+v", env)
 	}
 }
 
@@ -82,30 +197,9 @@ func TestRunCommandLocalReportsNoSandbox(t *testing.T) {
 	}
 }
 
-// Контейнерный режим включается только явно. Конфигурацию задаём напрямую:
-// loadSandboxConfig всегда подставляет образ по умолчанию (dev-образ песочницы
-// из compose.yaml), поэтому «образа нет» проверяется на уровне spec.
-func TestRunCommandSandboxContainerRefusesWithoutImage(t *testing.T) {
-	dir := t.TempDir() // без манифестов — стек не определить
-	res, err := runCommandSandbox("echo hi", dir, sandboxConfig{
-		Mode: SandboxModeContainer, Image: "", Network: "default", Memory: "1g", CPUs: "1", AllowWrite: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res["status"] != "error" {
-		t.Errorf("ожидалась ошибка конфигурации песочницы, получено %q", res["status"])
-	}
-	if res["sandbox"] != string(SandboxModeContainer) {
-		t.Errorf("sandbox=%q, ожидалось %q", res["sandbox"], SandboxModeContainer)
-	}
-	if !strings.Contains(res["message"], "CODEGEN_SANDBOX_IMAGE") {
-		t.Errorf("сообщение должно подсказывать, что задать образ: %q", res["message"])
-	}
-}
-
-// То же самое для несуществующего рабочего каталога: docker смонтировал бы
-// мусор, команда упала бы с невнятной ошибкой — конфигурацию надо ловить заранее.
+// Контейнерный режим включается только явно, и конфигурацию ловит пре-флайт
+// ДО запуска: несуществующий рабочий каталог — это ошибка конфигурации, а не
+// падение команды с невнятным «not a directory».
 func TestRunCommandContainerRefusesBadWorkdir(t *testing.T) {
 	t.Setenv("CODEGEN_SANDBOX", "container")
 	t.Setenv("CODEGEN_SANDBOX_IMAGE", "ai-sandbox:test")
@@ -124,7 +218,7 @@ func TestRunCommandContainerRefusesBadWorkdir(t *testing.T) {
 func TestDockerArgsContainIsolationFlags(t *testing.T) {
 	dir := goProject(t)
 	t.Setenv("CODEGEN_SANDBOX_IMAGE", "")
-	spec, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "", Network: "none", Memory: "2g", CPUs: "2", AllowWrite: true})
+	spec, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "", Network: "none", Memory: "2g", CPUs: "2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +234,7 @@ func TestDockerArgsContainIsolationFlags(t *testing.T) {
 		"--cpus 2",       // лимит CPU
 		"--cap-drop ALL", // без привилегированных возможностей
 		"--security-opt no-new-privileges",
-		"-w " + spec.Dir + ":/workspace:rw",
+		"--volume " + spec.Dir + ":/workspace:rw", // проект ВИДЕН контейнеру
 		"--workdir /workspace",
 		"golang:1.24",
 		"sh -c go test ./...",
@@ -152,8 +246,28 @@ func TestDockerArgsContainIsolationFlags(t *testing.T) {
 	if strings.Contains(args, "--privileged") || strings.Contains(args, "--network host") {
 		t.Errorf("в песочнице недопустимы --privileged/--network host: %s", args)
 	}
+	// --user ровно один: раньше он попадал и в spec.Extra, и отдельно.
+	if n := strings.Count(args, "--user "); n > 1 {
+		t.Errorf("--user продублирован %d раз: %s", n, args)
+	}
 	if !strings.Contains(args, "--user "+sandboxHostUser()) && sandboxHostUser() != "" {
 		t.Errorf("контейнер должен работать как non-root с UID/GID хоста: %s", args)
+	}
+}
+
+// Порядок аргументов -e детерминирован: обход map неупорядочен, а из-за этого
+// скакали логи, сообщения об ошибках и строгие тесты.
+func TestDockerArgsEnvOrderIsStable(t *testing.T) {
+	dir := goProject(t)
+	spec, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "none", Memory: "1g", CPUs: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.Join(dockerArgs(spec, "go test ./..."), " ")
+	for i := 0; i < 8; i++ {
+		if got := strings.Join(dockerArgs(spec, "go test ./..."), " "); got != first {
+			t.Fatalf("порядок аргументов плавает между вызовами:\n%s\n%s", first, got)
+		}
 	}
 }
 
@@ -161,7 +275,7 @@ func TestDockerArgsContainIsolationFlags(t *testing.T) {
 // начинает перебирать варианты установки.
 func TestDockerArgsNetworkNoneDisablesModuleFetch(t *testing.T) {
 	dir := goProject(t)
-	spec, err := sandboxSpecFor("go build ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "none", Memory: "1g", CPUs: "1", AllowWrite: true})
+	spec, err := sandboxSpecFor("go build ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "none", Memory: "1g", CPUs: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,9 +288,13 @@ func TestDockerArgsNetworkNoneDisablesModuleFetch(t *testing.T) {
 	}
 }
 
-// Режим «только чтение»: корень read-only, рабочий каталог НЕ монтируется
-// (иначе запись всё равно проходит), временные каталоги — tmpfs, иначе
-// go/node/py не запустятся.
+// Два независимых уровня записи, и их важно не путать:
+//
+//	CODEGEN_SANDBOX_RO=true        → read-only КОРЕНЬ контейнера, проект :rw
+//	CODEGEN_SANDBOX_ALLOW_WRITE=0  → проект :ro
+//
+// Раньше read-only убирал монтирование вовсе, и агент в «безопасном» режиме
+// не видел ни одного файла проекта.
 func TestDockerArgsReadOnlyMode(t *testing.T) {
 	dir := goProject(t)
 	spec, err := sandboxSpecFor("go vet ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default", Memory: "1g", CPUs: "1", ReadOnly: true})
@@ -187,11 +305,28 @@ func TestDockerArgsReadOnlyMode(t *testing.T) {
 	if !strings.Contains(args, "--read-only") {
 		t.Errorf("ожидался --read-only: %s", args)
 	}
-	if strings.Contains(args, "/workspace:rw") {
-		t.Errorf("в read-only режиме рабочий каталог не должен монтироваться на запись: %s", args)
+	// Проект остаётся доступен НА ЗАПИСЬ: это файлы, которые агент правит.
+	if !strings.Contains(args, "--volume "+dir+":"+sandboxWorkspace+":rw") {
+		t.Errorf("read-only корня не должен отнимать запись в рабочий каталог: %s", args)
 	}
-	if !strings.Contains(args, "--tmpfs /tmp:exec") {
-		t.Errorf("нужен tmpfs /tmp, иначе тулчейн не запустится: %s", args)
+	if !strings.Contains(args, "--tmpfs "+sandboxTmp+":exec") {
+		t.Errorf("нужен tmpfs %s, иначе тулчейн не запустится: %s", sandboxTmp, args)
+	}
+	if !strings.Contains(args, "--tmpfs /run:exec") {
+		t.Errorf("при read-only корневой ФС нужен tmpfs /run: %s", args)
+	}
+
+	// А вот запрет записи в проект — это отдельный флаг и отдельный режим :ro.
+	ro, err := sandboxSpecFor("go vet ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default", Memory: "1g", CPUs: "1", WorkdirReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roArgs := strings.Join(dockerArgs(ro, "go vet ./..."), " ")
+	if strings.Contains(roArgs, ":rw") {
+		t.Errorf("CODEGEN_SANDBOX_ALLOW_WRITE=false обязан дать монтаж :ro: %s", roArgs)
+	}
+	if !strings.Contains(roArgs, "--volume "+dir+":"+sandboxWorkspace+":ro") {
+		t.Errorf("проект должен остаться видимым и на чтение: %s", roArgs)
 	}
 }
 
@@ -264,6 +399,95 @@ func TestSandboxRealContainer(t *testing.T) {
 	if strings.TrimSpace(res["stdout"]) == "0" {
 		t.Errorf("команда выполнена от root: %+v", res)
 	}
+	// Кэши и HOME не должны оседать в проекте: иначе ~/.gitconfig и ~/.npmrc
+	// попадают в diff, который потом ревьюит человек.
+	res, err = runCommand("git init -q . && echo ok", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["status"] != "success" {
+		t.Fatalf("git в песочнице должен работать без ~/.gitconfig: %+v", res)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if e.Name() == ".git" {
+			continue
+		}
+		if strings.HasPrefix(e.Name(), ".") {
+			t.Errorf("служебный файл %q появился в рабочем каталоге: HOME должен быть в tmpfs", e.Name())
+		}
+	}
+	// Явно: HOME внутри контейнера указывает на tmpfs, а не на проект.
+	res, err = runCommand("echo $HOME", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(res["stdout"]); got != sandboxTmp {
+		t.Errorf("HOME внутри песочницы = %q, ожидался %q (tmpfs), иначе конфиги тулчейна осядут в проекте", got, sandboxTmp)
+	}
+}
+
+// Режимы записи проверяются на ЖИВОМ контейнере: именно тут отличается
+// «флаг назван --read-only» от «проект действительно монтируется».
+func TestSandboxRealContainerWriteModes(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("Docker недоступен — hermetic-проверки покрывают песочницу")
+	}
+	image := firstEnv("CODEGEN_SANDBOX_IMAGE", "CODEGEN_SANDBOX_TEST_IMAGE")
+	if image == "" {
+		image = "ai-sandbox:latest"
+	}
+	if err := exec.Command("docker", "image", "inspect", image).Run(); err != nil {
+		t.Skipf("образ %s не собран локально (соберите его через compose.yaml песочницы)", image)
+	}
+	t.Setenv("CODEGEN_SANDBOX", "container")
+	t.Setenv("CODEGEN_SANDBOX_IMAGE", image)
+	t.Setenv("CODEGEN_RUN_TIMEOUT", "60s")
+	t.Setenv("CODEGEN_SANDBOX_ALLOW_WRITE", "")
+	t.Setenv("CODEGEN_SANDBOX_RO", "")
+
+	dir := t.TempDir()
+
+	// Дефолт: проект виден И доступен на запись, иначе агент ничего не может
+	// сделать — это был исходный дефект (нет монтирования вовсе).
+	res, err := runCommand("touch written.txt && echo wrote", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["status"] != "success" {
+		t.Fatalf("в режиме по умолчанию запись в проект обязана работать: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "written.txt")); err != nil {
+		t.Errorf("файл, созданный в песочнице, не появился на хосте: %v", err)
+	}
+
+	// CODEGEN_SANDBOX_ALLOW_WRITE=false: проект виден, но запись запрещена.
+	t.Setenv("CODEGEN_SANDBOX_ALLOW_WRITE", "false")
+	res, err = runCommand("cat go.mod >/dev/null 2>&1; ls >/dev/null && touch denied.txt; echo exit=$?", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res["stdout"], "exit=0") {
+		t.Errorf("при ALLOW_WRITE=false запись обязана падать: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "denied.txt")); err == nil {
+		t.Error("при ALLOW_WRITE=false файл не должен появляться в проекте")
+	}
+	t.Setenv("CODEGEN_SANDBOX_ALLOW_WRITE", "")
+
+	// CODEGEN_SANDBOX_RO=true: корень контейнера read-only, но тулчейн обязан
+	// работать (кэши в tmpfs), а проект — остаться на запись.
+	t.Setenv("CODEGEN_SANDBOX_RO", "true")
+	res, err = runCommand("touch root-ok.txt && echo root-fs-writable-enough", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["status"] != "success" || !strings.Contains(res["stdout"], "root-fs-writable-enough") {
+		t.Errorf("read-only корень не должен ломать запись в рабочий каталог: %+v", res)
+	}
 }
 
 // Образ песочницы объявлен в трёх местах: дефолт в коде, hermetic-тест и
@@ -271,9 +495,15 @@ func TestSandboxRealContainer(t *testing.T) {
 // работает на другом образе» — самый неприятный вид расхождения, потому что
 // он невидим до первого реального запуска.
 func TestSandboxComposeMatchesCodeDefaults(t *testing.T) {
+	// loadSandboxConfig образ по умолчанию НЕ подставляет: fallback живёт в
+	// sandboxSpecFor, иначе ветка выбора образа по стеку недостижима.
 	t.Setenv("CODEGEN_SANDBOX_IMAGE", "")
-	if got := loadSandboxConfig().Image; got != defaultSandboxImage {
-		t.Errorf("образ по умолчанию в коде = %q, тесты ждут %q", got, defaultSandboxImage)
+	t.Setenv("CODEGEN_IMAGE", "")
+	if got := loadSandboxConfig().Image; got != "" {
+		t.Errorf("loadSandboxConfig не должен подставлять образ сам (иначе sandboxImageFor мёртв): %q", got)
+	}
+	if got := sandboxImageFor(t.TempDir()); got != "" {
+		t.Errorf("sandboxImageFor не должен угадывать образ для каталога без манифеста: %q", got)
 	}
 
 	composePath := filepath.Join("..", "sandbox", "compose.yaml")
@@ -293,7 +523,29 @@ func TestSandboxComposeMatchesCodeDefaults(t *testing.T) {
 	if !strings.Contains(compose, sandboxWorkspace+":rw") {
 		t.Errorf("в compose ожидался монтаж %q, а он не согласован с константой sandboxWorkspace", sandboxWorkspace+":rw")
 	}
+	// HOME обязан совпадать с sandboxEnv: /tmp, а не /tmp/home (под tmpfs на
+	// /tmp каталога /tmp/home просто не существует) и тем более не /workspace.
+	if !strings.Contains(compose, "HOME: "+sandboxTmp) {
+		t.Errorf("в compose ожидался HOME: %s, как в sandboxEnv", sandboxTmp)
+	}
+	if strings.Contains(compose, "HOME: "+sandboxWorkspace) {
+		t.Error("HOME в /workspace означает, что ~/.gitconfig и ~/.npmrc осядут в проекте и попадут в ревьюимый diff")
+	}
 	if _, err := os.Stat(filepath.Join("..", "sandbox", "Dockerfile")); err != nil {
 		t.Errorf("нет Dockerfile песочницы: %v", err)
+	}
+
+	// Тот же env в Dockerfile — иначе образ и docker run ведут себя по-разному.
+	dockerfile, err := os.ReadFile(filepath.Join("..", "sandbox", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("нет Dockerfile песочницы: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "HOME="+sandboxTmp) {
+		t.Errorf("в Dockerfile ожидался HOME=%s, как в sandboxEnv", sandboxTmp)
+	}
+	for k, v := range sandboxEnv() {
+		if !strings.Contains(string(dockerfile), k) {
+			t.Errorf("переменная %s=%s есть в sandboxEnv, но не объявлена в Dockerfile образа", k, v)
+		}
 	}
 }

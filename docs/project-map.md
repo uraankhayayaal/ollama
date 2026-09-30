@@ -248,6 +248,35 @@ ollama/  (go.mod module ai)
 | `CODEGEN_HISTORY_COMPACT` | компакция середины моделью (Ф-10) | выкл |
 | `CODEGEN_SKELETON_CACHE` | скелетон-кеш (выкл: `0/false/off`) | вкл |
 
+### Песочница выполнения (`CODEGEN_SANDBOX_*`)
+Команды `Run` по умолчанию идут на хосте; контейнер включается явно. Реализация —
+`tools/sandbox.go` + `tools/destructive.go`, образ — `sandbox/Dockerfile`.
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `CODEGEN_SANDBOX` | исполнитель: `container`/`1`/`on`/`true`/`yes`/`docker`, `auto`, либо хост (`""`/`0`/`off`/`false`/`no`/`local`/`host`) | хост |
+| `CODEGEN_SANDBOX_IMAGE` (алиас `CODEGEN_IMAGE`) | образ; пусто — по стеку проекта, иначе dev-образ `ai-sandbox:latest` | по стеку |
+| `CODEGEN_SANDBOX_NETWORK` (алиас `CODEGEN_SANDBOX_NET`) | сеть: `default` / `none` / `bridge` | `default` |
+| `CODEGEN_SANDBOX_MEMORY` (алиас `CODEGEN_MEMORY`) | `--memory` | `2g` |
+| `CODEGEN_SANDBOX_CPUS` (алиас `CODEGEN_CPUS`) | `--cpus` | `2` |
+| `CODEGEN_SANDBOX_RO` | read-only корень контейнера; рабочий каталог остаётся `:rw` | `false` |
+| `CODEGEN_SANDBOX_ALLOW_WRITE` | запись в рабочий каталог (`false` → монтаж `:ro`) | разрешена |
+| `CODEGEN_SANDBOX_DOCKER` | путь к клиенту docker; читается до `PATH` | `docker` |
+| `CODEGEN_DOCKER_HOST` / `_TLS` / `_CERT` | сокет и TLS демона docker (`DOCKER_*`) | — |
+| `CODEGEN_SANDBOX_BIN` | путь к docker для дочернего compose-процесса | — |
+| `CODEGEN_SANDBOX_USER` | UID хоста для сборки образа | — |
+| `SANDBOX_UID` / `SANDBOX_GID` / `CODEGEN_SANDBOX_PLAYWRIGHT` | только `docker compose -f sandbox/compose.yaml build` | `1000` / `1000` / `0` |
+
+Песочница покрывает инструмент `Run` (и CLI-чекер `LspCheck`); приёмка
+(`agents/acceptor`), `ReadAppLogs` и LSP-серверы выполняются на хосте.
+Разрушительные команды (`rm -rf /`, `mkfs`, `dd of=/dev/`, …) отбраковываются
+**до** запуска в обоих режимах.
+
+### Логи рантайма (`APP_LOG_*`)
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `APP_LOG_AUTO_FEED` | подмешивать хвост логов приложения в промпт модели (выкл: `0/false/off/no`) | вкл |
+| `APP_LOG_MAX_FEED_ROUNDS` | сколько раз за цикл логи подмешиваются заново | `2` |
+
 ### По ролям
 | Переменная | Описание | По умолчанию |
 |---|---|---|

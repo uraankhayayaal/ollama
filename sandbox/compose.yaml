@@ -48,18 +48,26 @@ services:
     # sandbox.go, иначе «тот же образ» окажется в другом каталоге.
     volumes:
       - "${PROJECT_DIR:-..}:/workspace:rw"
-    # HOME и кэши — в tmpfs: файлы не должны попадать в образ и в хостовую ФС.
+    # HOME и кэши — в tmpfs: файлы не должны попадать ни в образ, ни в хостовую
+    # ФС, ни в рабочий каталог проекта (иначе ~/.gitconfig и ~/.npmrc попадут
+    # в ревьюимый diff). Значения совпадают с sandboxEnv в tools/sandbox.go.
     tmpfs:
       - /tmp:exec,mode=1777
     working_dir: /workspace
     environment:
-      HOME: /tmp/home
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
       GOCACHE: /tmp/.cache/go-build
       GOMODCACHE: /tmp/go/pkg/mod
       GOPATH: /tmp/go
-      XDG_CACHE_HOME: /tmp/.cache
       npm_config_cache: /tmp/.npm
       PIP_CACHE_DIR: /tmp/.cache/pip
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/ms-playwright
+      GIT_CONFIG_GLOBAL: /tmp/.gitconfig
+      GIT_AUTHOR_NAME: "AI Sandbox"
+      GIT_AUTHOR_EMAIL: "sandbox@localhost"
+      GIT_COMMITTER_NAME: "AI Sandbox"
+      GIT_COMMITTER_EMAIL: "sandbox@localhost"
       CI: "true"
     # Никакого command/entrypoint: иначе аргументы после `run` подставлялись бы
     # внутрь и вторая обёртка shell ломала бы команды вида `make && npm test`.

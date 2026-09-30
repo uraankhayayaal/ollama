@@ -10,19 +10,20 @@ package tools
 // При этом тулчейн проекта почти всегда живёт в контейнере, и «не найдено
 // go/node/pytest» на хосте — обычное дело, а не поломка.
 //
-// Что делает песочница: монтирует рабочий каталог в контейнер и запускает
-// команду там, от имени непривилегированного пользователя, без host-сети и с
-// ограничением по ресурсам. Что НЕ делает: не меняет контракт инструмента Run —
-// агент по-прежнему получает {command, stdout, stderr, status}.
+// Что делает песочница: монтирует рабочий каталог в контейнер (--volume, то
+// есть bind-mount) и запускает команду там, от имени непривилегированного
+// пользователя, без host-сети и с ограничением по ресурсам. Что НЕ делает: не
+// меняет контракт инструмента Run — агент по-прежнему получает {command, stdout,
+// stderr, status}.
 //
 // Чего песочница принципиально не даёт (и это важно не переоценивать):
 //   - образы из реестра не изолированы по содержимому: доверять им нужно так
 //     же, как к бинарям из apt. Для своего кода образ — доверенный;
-//   - ПРОМЕНТЫ: изоляция файловой системы держится на --read-only, а
-//     «-w /workspace» — это запись в рабочий каталог проекта, то есть в
-//     файлы, которые агент и так правит по заданию. Защита здесь не в стене
-//     песочницы, а в ревью диффа: DESTRUCTIVE-команды отбрасываются до
-//     запуска, а результат показывается агенту;
+//   - ПРОМЕНТЫ: рабочий каталог монтируется на ЗАПИСЬ, потому что агент по
+//     заданию правит файлы проекта (тесты, артефакты сборки, gofmt). «Стена»
+//     песочницы не спасла бы от `rm -rf /workspace` — том это файлы проекта.
+//     Защита здесь не в изоляции, а в отбраковке DESTRUCTIVE-команд до запуска
+//     и в ревью диффа;
 //   - сеть: по умолчанию она ЕСТЬ (go mod download, npm ci без этого не
 //     работают). CODEGEN_SANDBOX_NETWORK=none отключает её полностью; без сети
 //     нужен локальный кэш модулей (см. sandboxNetworkHelp).
@@ -37,6 +38,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -44,10 +46,16 @@ import (
 // sandboxWorkspace — точка монтирования рабочего каталога внутри контейнера.
 const sandboxWorkspace = "/workspace"
 
+// sandboxTmp — каталог для HOME и всех кэшей (Go/npm/pip) внутри контейнера.
+// Именно tmpfs: он существует в ЛЮБОМ образе (в том числе в стоковых
+// golang:1.24/node:22/python:3.12), не переживает конец запуска и не оставляет
+// в проекте мусор вида ~/.npmrc, который иначе попал бы в git diff.
+const sandboxTmp = "/tmp"
+
 // defaultSandboxImage — dev-образ песочницы по умолчанию. Собирается из
 // sandbox/Dockerfile (docker compose -f sandbox/compose.yaml build) и содержит
-// тулчейн для монорепо. Для проекта одного стека дешевле стоковый образ по
-// стеку — его выбирает sandboxImageFor.
+// тулчейн для монорепо. Для проекта одного известного стека дешевле стоковый
+// образ — его выбирает sandboxImageFor.
 const defaultSandboxImage = "ai-sandbox:latest"
 
 // sandboxFallbackReason — результат без container/auto, когда Docker
@@ -58,10 +66,13 @@ const sandboxFallbackReason = "песочница недоступна: кома
 
 // sandboxSpec — параметры запуска команды в контейнере.
 type sandboxSpec struct {
-	Image    string
-	Dir      string
-	Workdir  string
-	Network  string
+	Image   string
+	Dir     string
+	Mount   string // аргумент --volume: <dir>:/workspace:rw либо :ro
+	Workdir string
+	Network string
+	// ReadOnly — read-only корневая ФС контейнера. Рабочий каталог при этом
+	// монтируется отдельно (по Mount), поэтому агент по-прежнему видит проект.
 	ReadOnly bool
 	Memory   string
 	CPUs     string
@@ -80,14 +91,23 @@ const (
 
 // sandboxConfig — разобранная конфигурация песочницы (тесты подменяют поля
 // напрямую, поэтому здесь всё в одном месте и без скрытых глобалок).
+//
+// Ноль-значения безопасны: конфигурация без флагов (тест, ручной вызов) даёт
+// работающую песочницу — проект смонтирован на запись, корень контейнера
+// доступен на запись, кэши в tmpfs. Именно так, а не наоборот: обратная
+// конфигурация даёт контейнер, в котором агент не видит ни одного файла
+// проекта, и это выглядит как «песочница сломалась», а не как «нечего было
+// запускать».
 type sandboxConfig struct {
-	Mode       SandboxMode
-	Image      string
-	Network    string
-	Memory     string
-	CPUs       string
-	ReadOnly   bool
-	AllowWrite bool
+	Mode     SandboxMode
+	Image    string
+	Network  string
+	Memory   string
+	CPUs     string
+	ReadOnly bool // read-only корневая ФС контейнера (CODEGEN_SANDBOX_RO)
+	// WorkdirReadOnly — рабочий каталог монтируется только на чтение
+	// (CODEGEN_SANDBOX_ALLOW_WRITE=false).
+	WorkdirReadOnly bool
 	// LocalCommand — исполнитель на хосте. Продакшн всегда nil (тогда
 	// exec.Command), в тестах подменяется заглушкой: hermetic-тесты не должны
 	// дёргать shell.
@@ -125,9 +145,11 @@ func loadSandboxConfig() sandboxConfig {
 		cfg.Mode = SandboxModeLocal
 	}
 	cfg.Image = firstEnv("CODEGEN_SANDBOX_IMAGE", "CODEGEN_IMAGE")
-	if cfg.Image == "" {
-		cfg.Image = defaultSandboxImage
-	}
+	// Образ по умолчанию НЕ подставляется здесь: sandboxSpecFor сначала
+	// спрашивает стек проекта, и лишь для нераспознанного (или вовсе
+	// безманифестного — как у ЛСП-чекера) берёт dev-образ. Раньше дефолт
+	// ставился здесь, и из-за этого ветка выбора образа по стеку была
+	// недостижимой: sandboxImageFor не вызывался никогда.
 	cfg.Network = firstEnv("CODEGEN_SANDBOX_NETWORK", "CODEGEN_SANDBOX_NET")
 	switch cfg.Network {
 	case "", "default", "host":
@@ -145,9 +167,17 @@ func loadSandboxConfig() sandboxConfig {
 	if cfg.CPUs == "" {
 		cfg.CPUs = "2"
 	}
-	// Запись в рабочий каталог — норма для агента (тесты, артефакты сборки),
-	// поэтому по умолчанию она разрешена, но выключается флагом: режимы
-	// «только прочитать» нужны для проверок и приёмки.
+	// Два независимых уровня записи, по умолчанию оба разрешены:
+	//   - CODEGEN_SANDBOX_RO=true — read-only корень контейнера. Рабочий
+	//     каталог при этом всё равно доступен на запись (это файлы проекта,
+	//     которые агент правит по заданию), зато тулчейн не может писать в слои
+	//     образа. Режим для приёмки и «только посмотреть»;
+	//   - CODEGEN_SANDBOX_ALLOW_WRITE=false — рабочий каталог монтируется
+	//     :ro. Команда, которая пишет в проект, упадёт с error, а не сделает
+	//     вид, что отработала.
+	// Значение по умолчанию — «можно писать»: неинвертированное, иначе
+	// пустая переменная выдавала запрет записи и песочница запускалась с
+	// неработающим /workspace.
 	if v := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_RO")); v != "" {
 		if ro, err := strconv.ParseBool(v); err == nil {
 			cfg.ReadOnly = ro
@@ -155,7 +185,7 @@ func loadSandboxConfig() sandboxConfig {
 	}
 	if v := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_ALLOW_WRITE")); v != "" {
 		if w, err := strconv.ParseBool(v); err == nil {
-			cfg.AllowWrite = !w
+			cfg.WorkdirReadOnly = !w
 		}
 	}
 	return cfg
@@ -165,6 +195,21 @@ func loadSandboxConfig() sandboxConfig {
 // звать исполнитель рано.
 const SandboxModeUnset SandboxMode = ""
 
+// sandboxDockerBin — путь к клиенту docker. CODEGEN_SANDBOX_DOCKER читается
+// ДО LookPath: в CI и в тестах бинаря нет в PATH, а путь задан явно, и старая
+// проверка всё равно отвечала «Docker недоступен», хотя dockerAvailable и
+// sandboxCommand разрешали бинарь по-разному.
+func sandboxDockerBin() (string, bool) {
+	if v := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_DOCKER")); v != "" {
+		return v, true
+	}
+	path, err := exec.LookPath("docker")
+	if err != nil {
+		return "", false
+	}
+	return path, true
+}
+
 // dockerAvailable — доступен ли Docker для запуска контейнера.
 func dockerAvailable() bool {
 	if runtime.GOOS == "windows" {
@@ -172,12 +217,9 @@ func dockerAvailable() bool {
 		// честнее, чем неверно собранный docker run.
 		return false
 	}
-	path, err := exec.LookPath("docker")
-	if err != nil {
+	path, ok := sandboxDockerBin()
+	if !ok {
 		return false
-	}
-	if v := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_DOCKER")); v != "" {
-		path = v
 	}
 	// Наличие бинаря недостаточно: демон может быть не запущен. Короткая
 	// проверка версии — дешёвая и не тянет образы.
@@ -211,8 +253,12 @@ func dockerEnv() []string {
 // sandboxImageFor — образ по стеку проекта: тот же список, что у
 // acceptor.detectKind и ReadAppLogs, иначе песочница и остальной конвейер
 // будут считать один и тот же проект разными.
+//
+// Здесь учитываются и CODEGEN_SANDBOX_IMAGE, и его алиас CODEGEN_IMAGE:
+// loadSandboxConfig читает оба, и расхождение означало бы, что образ из
+// CODEGEN_IMAGE работает, а из sandboxImageFor — нет.
 func sandboxImageFor(dir string) string {
-	if v := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_IMAGE")); v != "" {
+	if v := firstEnv("CODEGEN_SANDBOX_IMAGE", "CODEGEN_IMAGE"); v != "" {
 		return v
 	}
 	switch detectSandboxStack(dir) {
@@ -245,27 +291,41 @@ func sandboxSpecFor(command, workdir string, cfg sandboxConfig) (sandboxSpec, er
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return sandboxSpec{}, fmt.Errorf("рабочий каталог %q не найден", workdir)
 	}
+	// Путь рабочего каталога попадает в аргумент --volume «src:dst:opts»,
+	// поэтому двоеточие или запятая в пути тихо ломают монтаж: контейнер
+	// стартует и не видит проекта — ровно тот дефект, который здесь чинится.
+	// Лучше явная ошибка конфигурации до запуска.
+	if strings.ContainsAny(dir, ":,") {
+		return sandboxSpec{}, fmt.Errorf("путь рабочего каталога %q содержит «:» или «,» и не переносится в --volume: перенесите проект в каталог без этих символов", dir)
+	}
+	// Порядок выбора образа: явно заданный → по стеку проекта → dev-образ
+	// песочницы. Последний шаг обязателен: у ЛСП-чекера манифеста проекта нет,
+	// и без него контейнерный режим был бы недостижим вовсе.
 	image := cfg.Image
 	if image == "" {
 		image = sandboxImageFor(dir)
 	}
-	spec := sandboxSpec{
-		Image:   image,
-		Dir:     dir,
-		Workdir: sandboxWorkspace,
-		Network: cfg.Network,
-		Memory:  cfg.Memory,
-		CPUs:    cfg.CPUs,
-		// Пользователь контейнера по умолчанию (node/ubuntu) не совпадает с
-		// UID хоста: файлы, созданные в /workspace, получают чужой владелец и
-		// следующий агентский запуск (или удаление) упирается в права. Поэтому
-		// USER подставляется всегда, синхронизируя UID/GID с хостом.
-		User:     sandboxHostUser(),
-		Env:      map[string]string{"HOME": sandboxWorkspace, "GOCACHE": "/tmp/gocache", "GOMODCACHE": "/tmp/gomodcache", "GOPATH": "/tmp/gopath", "XDG_CACHE_HOME": "/tmp/.cache", "npm_config_cache": "/tmp/.npm", "PIP_CACHE_DIR": "/tmp/.cache/pip"},
-		ReadOnly: !cfg.AllowWrite || cfg.ReadOnly,
+	if image == "" {
+		image = defaultSandboxImage
 	}
-	if spec.Image == "" {
-		return sandboxSpec{}, fmt.Errorf("не удалось определить образ песочницы для проекта: добавь CODEGEN_SANDBOX_IMAGE или манифест (go.mod/package.json/requirements.txt/composer.json)")
+	spec := sandboxSpec{
+		Image: image,
+		Dir:   dir,
+		// Рабочий каталог монтируется ВСЕГДА. Раньше здесь стоял -w
+		// (working directory) вместо -v (bind mount): контейнер стартовал с
+		// несуществующим workdir и не видел ни одного файла проекта.
+		Mount:    dir + ":" + sandboxWorkspace + sandboxMountMode(cfg.WorkdirReadOnly),
+		Workdir:  sandboxWorkspace,
+		Network:  cfg.Network,
+		Memory:   cfg.Memory,
+		CPUs:     cfg.CPUs,
+		ReadOnly: cfg.ReadOnly,
+		// Файлы в /workspace создаёт процесс с UID/GID хоста, иначе артефакты
+		// сборки получат чужого владельца и следующий запуск агента (или
+		// обычный rm) упрётся в права. Пользователь по умолчанию образа
+		// (node/ubuntu) хосту не равен, поэтому --user подставляется всегда.
+		User: sandboxHostUser(),
+		Env:  sandboxEnv(),
 	}
 	if spec.Network == "none" {
 		// Без сети go mod download/npm ci не пройдут — это ожидаемо, но
@@ -273,18 +333,50 @@ func sandboxSpecFor(command, workdir string, cfg sandboxConfig) (sandboxSpec, er
 		spec.Env["GOFLAGS"] = "-mod=mod"
 		spec.Env["GOPROXY"] = "off"
 	}
-	if cfg.ReadOnly || !cfg.AllowWrite {
-		// Read-only корневая ФС: то, что нужно для работы, живёт во
-		// временных каталогах (--tmpfs), иначе go/node/py не запустятся вовсе.
-		spec.Extra = append(spec.Extra,
-			"--tmpfs", "/tmp:exec,mode=1777",
-			"--tmpfs", "/run:exec,mode=755",
-		)
-	}
-	if uid := sandboxHostUID(); uid != "" {
-		spec.Extra = append(spec.Extra, "--user", uid+":"+sandboxHostGID())
+	// Кэши и HOME — в tmpfs: их не должно быть ни в слое образа, ни в
+	// проекте. Именно поэтому HOME=/tmp, а не /workspace: иначе git и npm
+	// раскладывают ~/.gitconfig и ~/.npmrc прямо в рабочий каталог, и они
+	// попадают в diff, который потом ревьюит человек.
+	spec.Extra = append(spec.Extra, "--tmpfs", sandboxTmp+":exec,mode=1777")
+	if spec.ReadOnly {
+		// При read-only корневой ФС /run тоже нужен на запись, иначе часть
+		// инструментов падает на отсутствующем сокете.
+		spec.Extra = append(spec.Extra, "--tmpfs", "/run:exec,mode=755")
 	}
 	return spec, nil
+}
+
+// sandboxMountMode — суффикс режима монтирования рабочего каталога.
+func sandboxMountMode(readOnly bool) string {
+	if readOnly {
+		return ":ro"
+	}
+	return ":rw"
+}
+
+// sandboxEnv — окружение внутри контейнера. Совпадает с sandbox/Dockerfile и
+// sandbox/compose.yaml: HOME и все кэши в /tmp, чтобы рабочий каталог был
+// единственным местом записи, а read-only-режим работал на любом образе.
+func sandboxEnv() map[string]string {
+	return map[string]string{
+		"HOME":                     sandboxTmp,
+		"XDG_CACHE_HOME":           sandboxTmp + "/.cache",
+		"GOCACHE":                  sandboxTmp + "/.cache/go-build",
+		"GOMODCACHE":               sandboxTmp + "/go/pkg/mod",
+		"GOPATH":                   sandboxTmp + "/go",
+		"npm_config_cache":         sandboxTmp + "/.npm",
+		"PIP_CACHE_DIR":            sandboxTmp + "/.cache/pip",
+		"PLAYWRIGHT_BROWSERS_PATH": sandboxTmp + "/ms-playwright",
+		"CI":                       "true",
+		// Коммит из песочницы (через make-цели приёмки) не должен падать из-за
+		// отсутствия ~/.gitconfig: HOME — tmpfs, глобального конфига в ней нет,
+		// а без него git не может определить автора коммита.
+		"GIT_CONFIG_GLOBAL":   sandboxTmp + "/.gitconfig",
+		"GIT_AUTHOR_NAME":     "AI Sandbox",
+		"GIT_AUTHOR_EMAIL":    "sandbox@localhost",
+		"GIT_COMMITTER_NAME":  "AI Sandbox",
+		"GIT_COMMITTER_EMAIL": "sandbox@localhost",
+	}
 }
 
 // dockerArgs — аргументы docker run для spec и команды агента. Порядок и
@@ -300,17 +392,25 @@ func dockerArgs(spec sandboxSpec, command string) []string {
 		"--security-opt", "no-new-privileges",
 	}
 	args = append(args, spec.Extra...)
+	// --volume, а НЕ -w: -w задаёт рабочий каталог ВНУТРИ контейнера, монтаж
+	// хоста делает только --volume. С -w проект не попадал в контейнер вовсе.
+	args = append(args, "--volume", spec.Mount)
 	if spec.ReadOnly {
 		args = append(args, "--read-only")
-	} else {
-		args = append(args, "-w", spec.Dir+":/workspace"+":rw")
 	}
 	if spec.User != "" {
 		args = append(args, "--user", spec.User)
 	}
 	if len(spec.Env) > 0 {
-		for k, v := range spec.Env {
-			args = append(args, "-e", k+"="+v)
+		// Ключи сортируются: обход map в Go неупорядочен, а из-за этого
+		// скакали аргументы в логах, ошибках и строгих тестах.
+		keys := make([]string, 0, len(spec.Env))
+		for k := range spec.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			args = append(args, "-e", k+"="+spec.Env[k])
 		}
 	}
 	args = append(args, "--workdir", spec.Workdir, spec.Image)
@@ -325,31 +425,27 @@ func sandboxCommand(command, workdir string, cfg sandboxConfig) (string, []strin
 	if err != nil {
 		return "", nil, err
 	}
-	path := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_DOCKER"))
-	if path == "" {
+	path, ok := sandboxDockerBin()
+	if !ok {
+		// Недостижимо: сюда попадают только из режима container, который
+		// dockerAvailable уже проверил. Но «docker» вместо пути лучше паника.
 		path = "docker"
 	}
 	return path, dockerArgs(spec, command), nil
 }
 
-// sandboxHostUID/GID/USER — идентификаторы текущего пользователя хоста.
-func sandboxHostUID() string { return hostID("-u") }
-func sandboxHostGID() string { return hostID("-g") }
-
+// sandboxHostUser — идентификаторы текущего пользователя хоста в формате
+// uid:gid для --user. Берутся из os.Getuid/Getgid, а НЕ из `id -u`: это тот же
+// идентификатор, что и у процесса Go, без четырёх лишних подпроцессов на
+// каждый вызов sandboxSpecFor (а он зовётся дважды на команду — пре-флайт и
+// сам запуск). На Windows идентификаторов нет — возвращаем пустую строку, и
+// dockerAvailable там всё равно всегда false.
 func sandboxHostUser() string {
-	uid, gid := sandboxHostUID(), sandboxHostGID()
-	if uid == "" || gid == "" {
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid < 0 || gid < 0 {
 		return ""
 	}
-	return uid + ":" + gid
-}
-
-func hostID(flag string) string {
-	out, err := exec.Command("id", flag).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return strconv.Itoa(uid) + ":" + strconv.Itoa(gid)
 }
 
 // sandboxNetworkHelp — подсказка модели для режима без сети: что делать с

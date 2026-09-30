@@ -10,8 +10,9 @@
 #   - непривилегированный пользователь с UID/GID хоста (аргументы --user в
 #     docker run всё равно подставляются, но USER здесь нужен для ручного
 #     `docker compose run` и для проверки образа вручную);
-#   - HOME и кэши (Go/npm/pip) — в /tmp, чтобы рабочий каталог оставался
-#     единственным местом, куда пишет агент, и read-only-режим песочницы работал;
+#   - HOME и кэши (Go/npm/pip) — в /tmp, а не в /workspace: иначе git и npm
+#     оставят ~/.gitconfig и ~/.npmrc прямо в проекте, и они попадут в diff,
+#     который потом ревьюит человек;
 #   - тулчейн без дев-серверов: то, что поднимают долгоживущие процессы, в образ
 #     не ставится намеренно (node-gyp без python3-dev не нужен: образ для
 #     запуска тестов и сборки, а не для установки нативных модулей).
@@ -20,11 +21,15 @@ FROM golang:1.24-bookworm
 
 ARG TARGET_UID=1000
 ARG TARGET_GID=1000
+# Объявлен именно ARG, а не только compose.args: в RUN ниже стоит `set -eux`,
+# и без объявления обращение к переменной падает с «parameter not set» —
+# то есть образ не собирался вообще ни разу.
+ARG CODEGEN_SANDBOX_PLAYWRIGHT=0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     TZ=UTC \
-    HOME=/tmp/home \
+    HOME=/tmp \
     XDG_CACHE_HOME=/tmp/.cache \
     GOCACHE=/tmp/.cache/go-build \
     GOMODCACHE=/tmp/go/pkg/mod \
@@ -32,6 +37,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     npm_config_cache=/tmp/.npm \
     PIP_CACHE_DIR=/tmp/.cache/pip \
     PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright \
+    GIT_CONFIG_GLOBAL=/tmp/.gitconfig \
+    GIT_AUTHOR_NAME="AI Sandbox" \
+    GIT_AUTHOR_EMAIL="sandbox@localhost" \
+    GIT_COMMITTER_NAME="AI Sandbox" \
+    GIT_COMMITTER_EMAIL="sandbox@localhost" \
     CI=true
 
 # Один слой apt-get: apt сам не умеет чистить в том же слое при удалении.
@@ -70,9 +80,11 @@ RUN set -eux; \
     fi
 
 # Каталоги кэшей заранее с правильным владельцем: иначе первый же запуск под
-# UID хоста упрётся в «permission denied» на /tmp/go.
+# UID хоста упрётся в «permission denied» на /tmp/go. HOME не создаётся
+# отдельным каталогом — dockerArgs и compose накладывают на /tmp tmpfs, и
+# каталога /tmp/home под ней просто не было бы.
 RUN set -eux; \
-    mkdir -p "$HOME" "$XDG_CACHE_HOME" "$GOMODCACHE" "$GOPATH" \
+    mkdir -p "$XDG_CACHE_HOME" "$GOMODCACHE" "$GOPATH" \
         "$npm_config_cache" "$PIP_CACHE_DIR" "$PLAYWRIGHT_BROWSERS_PATH"; \
     groupadd -g "$TARGET_GID" sandbox 2>/dev/null || true; \
     useradd -m -u "$TARGET_UID" -g "$TARGET_GID" sandbox 2>/dev/null || true; \
