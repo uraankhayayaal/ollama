@@ -1,5 +1,11 @@
-qwen3-8b:
-	docker compose exec -it ollama ollama pull qwen3:8b
+.PHONY: build up
 
-qwen3-coder-30b:
-	docker compose exec -it ollama ollama pull qwen3-coder:30b
+build:
+	npm run build --prefix ./web
+	go build
+
+up: build
+	go run . serve
+
+kill:
+	kill -9 $$(lsof -t -i :8090 -sTCP:LISTEN)
