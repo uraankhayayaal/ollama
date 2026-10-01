@@ -176,6 +176,191 @@ func TestOpenGitProjectClonesAndRegisters(t *testing.T) {
 	}
 }
 
+// Открытие ПУСТОГО удалённого репозитория (0 коммитов): HEAD клона
+// нерождённый, база определяется по имени ветки, создаётся первым коммитом и
+// публикуется. Регрессия к «ошибка клонирования: git rev-parse --abbrev-ref
+// HEAD: exit status 128».
+func TestOpenGitProjectEmptyRemoteSeedsBase(t *testing.T) {
+	dest := projects.ProjectDir("emptyrepo")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dest) })
+
+	git := &fakeGit{
+		starts: map[string]string{
+			"git symbolic-ref --short HEAD": "main\n",
+		},
+		fails: map[string]string{
+			"git rev-parse --abbrev-ref HEAD": "fatal: ambiguous argument 'HEAD': unknown revision",
+			"git rev-parse --verify":          "fatal: Needed a single revision",
+		},
+	}
+	srv, handler, _ := newTestServerGit(t, git, nil)
+
+	url := "git@github.com:u/emptyrepo.git"
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects",
+		bytes.NewBufferString(`{"path_or_git":"`+url+`"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST path_or_git: %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var meta map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["git_base"] != "main" || meta["git_branch"] != "ai/emptyrepo" {
+		t.Fatalf("git_base/git_branch = %v/%v, want main/ai/emptyrepo", meta["git_base"], meta["git_branch"])
+	}
+	for _, want := range []string{
+		"git clone " + url,
+		"git add README.md",
+		"git commit -m chore: initial commit (main)",
+		"git push -u origin main",
+		"git checkout -b ai/emptyrepo",
+	} {
+		if !git.saw(want) {
+			t.Fatalf("ожидали %q, вызовы: %v", want, git.callsList())
+		}
+	}
+	if _, err := srv.reg.Get("emptyrepo"); err != nil {
+		t.Fatalf("проект не зарегистрирован: %v", err)
+	}
+}
+
+// Неудачный клон не должен оставлять мусор: иначе повторное открытие проекта
+// упирается в 409 «каталог уже существует и не пуст» и проект не открыть вовсе.
+func TestOpenGitProjectRemovesFailedCloneDir(t *testing.T) {
+	git := &fakeGit{fails: map[string]string{
+		"git clone": "fatal: could not read from remote repository",
+	}}
+	_, handler, _ := newTestServerGit(t, git, nil)
+	dest := projects.ProjectDir("failclone")
+	t.Cleanup(func() { _ = os.RemoveAll(dest) })
+
+	url := "git@github.com:u/failclone.git"
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects",
+		bytes.NewBufferString(`{"path_or_git":"`+url+`"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("код = %d, want 502; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "could not read from remote repository") {
+		t.Fatalf("в ответе нет вывода git: %s", rec.Body.String())
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("полу-клон %s не убран (stat err = %v)", dest, err)
+	}
+}
+
+// Каталог от неудачного клона того же репозитория (тот же origin, ни одного
+// коммита, чистое состояние) убирается автоматически — открытие повторяется.
+// Такой мусор блокирует проект навсегда, если пользователь не почистит temp/
+// вручную.
+func TestOpenGitProjectDiscardsHalfClone(t *testing.T) {
+	url := "git@github.com:u/emptyrepo.git"
+	dest := projects.ProjectDir("emptyrepo")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dest) })
+
+	git := &fakeGit{
+		starts: map[string]string{
+			"git rev-parse --git-dir":         ".git\n",
+			"git remote get-url origin":       url + "\n",
+			"git status --porcelain":          "",
+			"git rev-parse --abbrev-ref HEAD": "main\n",
+		},
+		fails: map[string]string{
+			"git rev-parse --verify": "fatal: Needed a single revision",
+		},
+	}
+	_, handler, _ := newTestServerGit(t, git, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects",
+		bytes.NewBufferString(`{"path_or_git":"`+url+`"}`))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if !git.saw("git clone " + url) {
+		t.Fatalf("клонирование не выполнено, вызовы: %v", git.callsList())
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("каталог клона должен быть восстановлен заново: %v", err)
+	}
+}
+
+// Чужой каталог (другой репозиторий, наша работа с коммитами, незакоммиченные
+// правки) не трогаем — 409. Авточистка должна быть узкой.
+func TestOpenGitProjectKeepsForeignDir(t *testing.T) {
+	cases := map[string]*fakeGit{
+		"другой origin": {
+			starts: map[string]string{
+				"git rev-parse --git-dir":   ".git\n",
+				"git remote get-url origin": "git@github.com:u/other.git\n",
+				"git status --porcelain":    "",
+			},
+			fails: map[string]string{"git rev-parse --verify": "fatal: Needed a single revision"},
+		},
+		"есть коммиты": {
+			starts: map[string]string{
+				"git rev-parse --git-dir":         ".git\n",
+				"git remote get-url origin":       "git@github.com:u/emptyrepo.git\n",
+				"git rev-parse --abbrev-ref HEAD": "main\n",
+				"git status --porcelain":          "",
+			},
+		},
+		"незакоммиченные правки": {
+			starts: map[string]string{
+				"git rev-parse --git-dir":         ".git\n",
+				"git remote get-url origin":       "git@github.com:u/emptyrepo.git\n",
+				"git rev-parse --abbrev-ref HEAD": "main\n",
+				"git status --porcelain":          " M src/a.go\n",
+			},
+			fails: map[string]string{"git rev-parse --verify": "fatal: Needed a single revision"},
+		},
+		"это не git-клон": {
+			starts: map[string]string{"git rev-parse --git-dir": "fatal: not a git repository"},
+		},
+	}
+	for name, git := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, handler, _ := newTestServerGit(t, git, nil)
+			dest := projects.ProjectDir("emptyrepo")
+			if err := os.MkdirAll(dest, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dest, "keep.txt"), []byte("user data\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(dest) })
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/api/projects",
+				bytes.NewBufferString(`{"path_or_git":"git@github.com:u/emptyrepo.git"}`))
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("код = %d, want 409; body: %s", rec.Code, rec.Body.String())
+			}
+			if git.saw("git clone") {
+				t.Fatalf("чужой каталог клонировать нельзя, вызовы: %v", git.callsList())
+			}
+			if _, err := os.Stat(filepath.Join(dest, "keep.txt")); err != nil {
+				t.Fatalf("содержимое каталога уничтожено: %v", err)
+			}
+			if _, err := srv.reg.Get("emptyrepo"); err == nil {
+				t.Fatal("проект не должен регистрироваться")
+			}
+		})
+	}
+}
+
 func TestGitProjectNameFromURLs(t *testing.T) {
 	cases := map[string]string{
 		"git@gitlab.com:group/proj.git":          "proj",

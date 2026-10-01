@@ -89,7 +89,44 @@ LSP/структурированных инструментах они дубл�
 `npm test -- --silent`), git-контекст через `Run`, точечный `grep` через `Run`
 только при `status skipped` у LSP/`CodeSearch`.
 
-Состояние последней сессии (PLAN-2026-09-27-done-branch-aware-rag, Ф-1..Ф-7
+Состояние последней сессии (пустой удалённый репозиторий, E2E закрыт на живом
+GitHub): `gitops.Clone` больше не падает на репозитории без коммитов.
+`git clone` пустого репозитория проходит (exit 0 + «cloned an empty
+repository»), но HEAD нерождённый, поэтому `rev-parse --abbrev-ref HEAD` давал
+128 и Web UI отвечал 502 «ошибка клонирования: … ambiguous argument 'HEAD'».
+`gitops/gitops.go`: `detectBaseBranch` (rev-parse → `symbolic-ref --short HEAD`
+unborn-ветка → `origin/HEAD` для detached HEAD → константа
+`DefaultBaseBranch`="main", ошибок не возвращает), `HasCommit` и
+`seedBaseBranch` — базовая ветка создаётся и публикуется (README.md `# <имя>` →
+`chore: initial commit (<base>)` → `git push -u origin <base>`), коммит сначала
+от identity хоста, при отказе повтор с `-c user.name=AI -c
+user.email=ai@localhost`. `server/git.go`: при ошибке клона полу-клон
+`temp/<имя>` удаляется (иначе повтор упирается в 409) и `discardHalfClone`
+убирает каталог от неудачного клона ТОГО ЖЕ origin при нуле коммитов и чистом
+состоянии; чужой клон/наши коммиты/незакоммиченные правки не трогаются (409,
+`sameGitRemote` нормализует только `.git` и слеш). Тесты: `gitops/gitops_test.go`
+— `TestCloneSeedsEmptyRemoteBase` (посев), `TestCloneEmptyRemotePushFailure`,
+`TestCloneDetachedHeadUsesOriginHead`, `TestCloneNoBranchSignalFallsBackToDefault`
+(+ переписан `TestCloneDryRun` — добавилась проверка `rev-parse --verify`);
+`gitops/cli_test.go` — `TestGitCLICloneEmptyRemoteSeedsBase` (реальный git на
+пустом bare-origin: пуш базы, `git show refs/heads/main:README.md`,
+merge-base, diff); `server/git_test.go` — `TestOpenGitProjectEmptyRemoteSeedsBase`,
+`TestOpenGitProjectRemovesFailedCloneDir`, `TestOpenGitProjectDiscardsHalfClone`,
+`TestOpenGitProjectKeepsForeignDir` (4 негативных случая в подтестах).
+Верификация: `go build`/`go vet`/`go test` по перечню выше (зелёные, кроме двух
+пред-существующих macOS-флаков `agents/acceptor`), `-race` на новых тестах.
+Живой E2E на хосте: `go run . serve` (Redis 56379, Qdrant 6333, Ollama —
+в Docker/локально) + `POST /api/projects {"path_or_git":
+"git@github.com:uraankhayayaal/mytrip.git"}` → 200, в GitHub появились
+`refs/heads/main` и `HEAD` на коммите `chore: initial commit (main)`, локально
+ветки `main` (с upstream origin/main) и `ai/mytrip`, `merge-base main ai/mytrip`
+разрешается, `GET /api/projects/mytrip/diff` → 200 (`files: null` — проект ещё
+пуст). Документация: раздел «Пустой удалённый репозиторий» в
+`docs/20-features/gitops-workflow.md`, три записи в
+`docs/40-operations/troubleshooting.md` («ambiguous argument 'HEAD'», «каталог
+уже существует и не пуст», «плохой origin»).
+
+Состояние сессии PLAN-2026-09-27-done-branch-aware-rag (Ф-1..Ф-7
 готовы, остался ручной E2E): версионированный RAG по веткам Git. Агент в
 worktree `ai/task/<id>` через CodeSearch видит свою ветку + актуальный main и
 НЕ видит изменений соседних эпиков. Ключевое: `rag/chunk.go` — `Chunk.Symbol`

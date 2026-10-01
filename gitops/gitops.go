@@ -227,6 +227,10 @@ func (r *Repo) PushTo(ctx context.Context, remoteURL string) error {
 //
 // Режим — branch-in-place: репозиторий уже принадлежит проекту, отдельный
 // worktree не создаётся (якорь — сам свежий клон в temp/<проект>).
+//
+// Пустой удалённый репозиторий (0 коммитов) поддержан: базовая ветка
+// создаётся автоматически (см. seedBaseBranch), поэтому открыть репозиторий,
+// в котором проект ещё не существует, — штатный сценарий.
 func Clone(ctx context.Context, ex Executor, remoteURL, branch, dest string) (*Repo, error) {
 	if ex == nil {
 		return nil, fmt.Errorf("gitops: не задан исполнитель")
@@ -255,13 +259,15 @@ func Clone(ctx context.Context, ex Executor, remoteURL, branch, dest string) (*R
 	}
 
 	// Ветка по умолчанию (точка отхода базы) — до создания фича-ветки.
-	base, err := ex.Exec(ctx, dest, "git", "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return nil, fmt.Errorf("gitops: определение ветки по умолчанию: %w", err)
-	}
-	base = strings.TrimSpace(base)
-	if base == "" {
-		return nil, fmt.Errorf("gitops: не удалось определить ветку по умолчанию клона %s", remoteURL)
+	base := detectBaseBranch(ctx, ex, dest)
+
+	// Пустой удалённый репозиторий: базовой ветки нет нигде. Создаём её
+	// (README + коммит + push), иначе фича-ветка отталкивалась бы от
+	// несуществующего ref, а merge-base/MR/merge — падали бы всю дорогу.
+	if !HasCommit(ctx, ex, dest, base) {
+		if err := seedBaseBranch(ctx, ex, dest, base, filepath.Base(dest)); err != nil {
+			return nil, fmt.Errorf("gitops: инициализация пустого репозитория %s: %w", remoteURL, err)
+		}
 	}
 
 	if _, err := ex.Exec(ctx, dest, "git", "checkout", "-b", branch); err != nil {
@@ -269,8 +275,8 @@ func Clone(ctx context.Context, ex Executor, remoteURL, branch, dest string) (*R
 	}
 	var subs []Submodule
 	if os.Getenv("GITOPS_SUBMODULES") != "0" {
-		subs, err = PrepareSubmodules(ctx, ex, dest, branch)
-		if err != nil {
+		var err error
+		if subs, err = PrepareSubmodules(ctx, ex, dest, branch); err != nil {
 			return nil, fmt.Errorf("gitops: подготовка сабмодулей: %w", err)
 		}
 	}
@@ -283,6 +289,102 @@ func Clone(ctx context.Context, ex Executor, remoteURL, branch, dest string) (*R
 		Submodules: subs,
 		ex:         ex,
 	}, nil
+}
+
+// DefaultBaseBranch — база по умолчанию для клонов, у которых имя ветки
+// определить нечем (пустой удалённый репозиторий без origin/HEAD).
+const DefaultBaseBranch = "main"
+
+// detectBaseBranch определяет ветку, от которой отходит фича-ветка клона.
+//
+// Обычный клон отвечает на `rev-parse --abbrev-ref HEAD`. Два случая — нет:
+//
+//   - Пустой удалённый репозиторий (только что созданный на хостинге, ни одного
+//     коммита). `git clone` при этом УСПЕВАЕТ (exit 0 + предупреждение «You
+//     appear to have cloned an empty repository»), но HEAD «ещё не родился»:
+//     rev-parse падает с 128 «ambiguous argument 'HEAD'», и раньше клон такого
+//     репозитория считался ошибкой. Имя ветки при этом есть — берём его из
+//     `symbolic-ref --short HEAD` (unborn-ветка, обычно main).
+//   - Detached HEAD (remote HEAD указывает на тег). rev-parse отдаёт «HEAD»,
+//     что как база бессмысленно; тогда смотрим origin/HEAD.
+//
+// Если имени нет нигде — DefaultBaseBranch: клон-то состоялся, значит и база
+// должна быть названа, иначе проект не откроется вовсе.
+func detectBaseBranch(ctx context.Context, ex Executor, dir string) string {
+	if out, err := ex.Exec(ctx, dir, "git", "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		if b := strings.TrimSpace(out); b != "" && b != "HEAD" {
+			return b
+		}
+	}
+	// unborn HEAD: имя ветки есть, коммитов ещё нет.
+	if out, err := ex.Exec(ctx, dir, "git", "symbolic-ref", "--short", "HEAD"); err == nil {
+		if b := strings.TrimSpace(out); b != "" && b != "HEAD" {
+			return b
+		}
+	}
+	// Detached HEAD у клона: ветка по умолчанию со стороны remote.
+	if out, err := ex.Exec(ctx, dir, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if b := strings.TrimSpace(out); b != "" {
+			return strings.TrimPrefix(b, "origin/")
+		}
+	}
+	return DefaultBaseBranch
+}
+
+// HasCommit сообщает, разрешается ли ref в коммит. Нерождённая база (пустой
+// удалённый репозиторий) и ветка без единого коммита дают false.
+func HasCommit(ctx context.Context, ex Executor, dir, ref string) bool {
+	if ex == nil || strings.TrimSpace(ref) == "" {
+		return false
+	}
+	if _, err := ex.Exec(ctx, dir, "git", "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
+		return false
+	}
+	return true
+}
+
+// Личность сервисного коммита — fallback для хостов без git identity
+// (контейнер сервера, где нет ~/.gitconfig пользователя).
+const (
+	seedAuthorName  = "AI"
+	seedAuthorEmail = "ai@localhost"
+)
+
+// seedBaseBranch создаёт базовую ветку пустого удалённого репозитория:
+// README.md → коммит → push в origin.
+//
+// Зачем: пустой репозиторий (только что созданный на хостинге) клонируется
+// успешно, но ветки в нём нет вообще — ни локально, ни в remote. Без базы
+// весь git-flow упирается в несуществующий ref: merge-base, MR в main, merge
+// релиза и ревью диффа. Пользователь открывает пустой репозиторий, чтобы
+// агент построил проект с нуля, поэтому база создаётся автоматически; README
+// делает коммит осмысленным, а push — видимым для всего git-flow.
+//
+// Коммит сначала идёт от identity хоста (уважаем настройки пользователя), а
+// при отказе повторяется с сервисной личностью: иначе пустой репозиторий не
+// открылся бы на хосте без git config.
+func seedBaseBranch(ctx context.Context, ex Executor, dir, base, title string) error {
+	body := "# " + title + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(body), 0o644); err != nil {
+		return fmt.Errorf("gitops: создание README.md: %w", err)
+	}
+	if _, err := ex.Exec(ctx, dir, "git", "add", "README.md"); err != nil {
+		return fmt.Errorf("gitops: git add README.md: %w", err)
+	}
+	msg := "chore: initial commit (" + base + ")"
+	_, err := ex.Exec(ctx, dir, "git", "commit", "-m", msg)
+	if err != nil {
+		// Нет identity на хосте — повторяем коммит с сервисной личностью.
+		if _, err2 := ex.Exec(ctx, dir, "git",
+			"-c", "user.name="+seedAuthorName, "-c", "user.email="+seedAuthorEmail,
+			"commit", "-m", msg); err2 != nil {
+			return fmt.Errorf("gitops: первый коммит в %s: %w", base, err)
+		}
+	}
+	if _, err := ex.Exec(ctx, dir, "git", "push", "-u", "origin", base); err != nil {
+		return fmt.Errorf("gitops: публикация базовой ветки %s: %w", base, err)
+	}
+	return nil
 }
 
 // RepoFromState восстанавливает Repo по сохранённому состоянию (реестр

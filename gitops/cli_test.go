@@ -108,6 +108,74 @@ func TestGitCLICloneBranchDiffCommitEndToEnd(t *testing.T) {
 	}
 }
 
+// TestGitCLICloneEmptyRemoteSeedsBase прогоняет реальный git CLI на ПУСТОМ
+// удалённом репозитории (0 коммитов — репозиторий, только что созданный на
+// хостинге). Такой клон проходит, но HEAD нерождённый, поэтому база берётся из
+// имени ветки и создаётся первым коммитом с публикацией в remote: после Clone
+// merge-base/MR/merge обязаны работать как обычно. Пропускается, если git
+// недоступен.
+func TestGitCLICloneEmptyRemoteSeedsBase(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git недоступен")
+	}
+	ctx := context.Background()
+	base := t.TempDir()
+
+	origin := filepath.Join(base, "origin.git")
+	if out, err := run(t, "", "", "git", "init", "-b", "main", "--bare", origin); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+	// Исходная точка: удалённый репозиторий пуст.
+	if out, err := run(t, origin, "", "git", "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
+		t.Fatalf("origin должен быть пуст, а HEAD = %q", out)
+	}
+
+	dest := filepath.Join(base, "mytrip")
+	repo, err := Clone(ctx, CLIExecutor{}, origin, "ai/mytrip", dest)
+	if err != nil {
+		t.Fatalf("Clone пустого репозитория: %v", err)
+	}
+	if repo.Base != "main" || repo.Branch != "ai/mytrip" {
+		t.Fatalf("Base/Branch = %q/%q, want main/ai/mytrip", repo.Base, repo.Branch)
+	}
+	if out, _ := run(t, dest, "", "git", "rev-parse", "--abbrev-ref", "HEAD"); strings.TrimSpace(out) != "ai/mytrip" {
+		t.Fatalf("HEAD после клона = %q, want ai/mytrip", out)
+	}
+
+	// База создана и опубликована: в remote появилась ветка main с коммитом.
+	if out, err := run(t, origin, "", "git", "rev-parse", "--verify", "refs/heads/main"); err != nil {
+		t.Fatalf("базовая ветка не опубликована в origin: %v\n%s", err, out)
+	}
+	// origin bare, поэтому README смотрим в дереве коммита.
+	readme, err := run(t, origin, "", "git", "show", "refs/heads/main:README.md")
+	if err != nil {
+		t.Fatalf("README.md не попал в origin: %v\n%s", err, readme)
+	}
+	if !strings.Contains(readme, "mytrip") {
+		t.Fatalf("README.md = %q, ожидалось имя проекта", readme)
+	}
+
+	// База разрешима в коммит → diff/merge-base (основа всего git-flow) работают.
+	if !HasCommit(ctx, CLIExecutor{}, dest, "main") {
+		t.Fatal("main должен разрешаться в коммит")
+	}
+	if out, err := run(t, dest, "", "git", "merge-base", "main", "ai/mytrip"); err != nil {
+		t.Fatalf("merge-base main ai/mytrip: %v\n%s", err, out)
+	} else if strings.TrimSpace(out) == "" {
+		t.Fatal("merge-base пуст")
+	}
+	if err := os.WriteFile(filepath.Join(dest, "app.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := repo.Diff(ctx)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !strings.Contains(diff, "app.go") {
+		t.Fatalf("дифф не содержит нового файла:\n%s", diff)
+	}
+}
+
 // setGitUser задаёт user.name/email для коммитов (клоны не наследуют конфиг).
 func setGitUser(t *testing.T, dir string) {
 	t.Helper()

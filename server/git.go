@@ -44,14 +44,23 @@ func (s *Server) handleOpenGitProject(w http.ResponseWriter, r *http.Request, gi
 	// конфликт (чтобы не смешать чужое содержимое с клоном).
 	if st, err := os.Stat(dest); err == nil {
 		if !st.IsDir() || !dirIsEmpty(dest) {
-			writeErr(w, http.StatusConflict,
-				fmt.Sprintf("каталог %s уже существует и не пуст: используйте другое имя или удалите его", dest))
-			return
+			// Неудачный клон того же репозитория (мусор прошлой попытки) —
+			// убираем сами, иначе открыть проект второй раз невозможно.
+			if !s.discardHalfClone(r.Context(), name, dest, gitURL) {
+				writeErr(w, http.StatusConflict,
+					fmt.Sprintf("каталог %s уже существует и не пуст: используйте другое имя или удалите его", dest))
+				return
+			}
 		}
 	}
 
 	repo, err := gitops.Clone(r.Context(), s.gitExec, gitURL, branch, dest)
 	if err != nil {
+		// Полу-клон оставлять нельзя: следующая попытка упрётся в 409, и
+		// пользователь уже не сможет открыть проект без ручной чистки temp/.
+		if rmErr := os.RemoveAll(dest); rmErr != nil {
+			logging.Warnf("git-проект %s: не удалось убрать неудачный клон %s: %v", name, dest, rmErr)
+		}
 		writeErr(w, http.StatusBadGateway, "ошибка клонирования: "+err.Error())
 		return
 	}
@@ -88,6 +97,58 @@ func submoduleProjectName(parent, path string) string {
 	path = strings.Trim(filepath.ToSlash(path), "/")
 	path = strings.NewReplacer("~", "~t", "/", "~s", "\\", "~s").Replace(path)
 	return parent + "--" + path
+}
+
+// discardHalfClone убирает каталог, оставшийся от НЕУДАЧНОГО клона того же
+// репозитория, и сообщает, можно ли продолжать клонирование.
+//
+// Такой мусор появляется, когда клон упал уже после создания каталога
+// (например, раньше — на определении ветки в пустом репозитории), и блокирует
+// все следующие попытки открыть проект (409 «каталог не пуст»).
+//
+// Удаляем только заведомо свой мусор — все четыре признака обязательны:
+//   - обычный клон (каталог .git, не worktree-указатель);
+//   - origin совпадает с запрошенным URL;
+//   - ни одного коммита (unborn HEAD) — истории, которую жалко, нет;
+//   - чистое состояние — нет ни правок, ни неотслеживаемых файлов.
+//
+// Всё остальное (чужой клон, наша работа с коммитами, незакоммиченные правки)
+// не трогаем: возвращаем false и отдаём 409.
+func (s *Server) discardHalfClone(ctx context.Context, name, dir, gitURL string) bool {
+	out, err := s.gitExec.Exec(ctx, dir, "git", "rev-parse", "--git-dir")
+	if err != nil || strings.TrimSpace(out) != ".git" {
+		return false
+	}
+	origin, err := s.gitExec.Exec(ctx, dir, "git", "remote", "get-url", "origin")
+	if err != nil || !sameGitRemote(strings.TrimSpace(origin), gitURL) {
+		return false
+	}
+	if gitops.HasCommit(ctx, s.gitExec, dir, "HEAD") {
+		return false // есть история — это не мусор
+	}
+	if status, err := s.gitExec.Exec(ctx, dir, "git", "status", "--porcelain"); err != nil || strings.TrimSpace(status) != "" {
+		return false
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		logging.Warnf("git-проект %s: не удалось убрать неудачный клон %s: %v", name, dir, err)
+		return false
+	}
+	logging.For(name).Infof("убран неудачный клон %s (%s) — повторное клонирование", dir, gitURL)
+	return true
+}
+
+// sameGitRemote сравнивает URL remote, игнорируя формы записи одного адреса:
+// с суффиксом .git и без, со слешем и без. Схему/хост/путь не нормализует —
+// git@github.com:u/r и https://github.com/u/r это разные адреса.
+func sameGitRemote(a, b string) bool {
+	norm := func(s string) string {
+		s = strings.TrimSpace(s)
+		s = strings.TrimSuffix(s, "/")
+		s = strings.TrimSuffix(s, ".git")
+		s = strings.TrimSuffix(s, "/")
+		return s
+	}
+	return norm(a) == norm(b)
 }
 
 func (s *Server) repositoriesForProject(project string) []string {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -231,9 +233,122 @@ func TestCloneDryRun(t *testing.T) {
 	}
 	want := `/tmp | git clone git@gitlab.com:g/p.git /tmp/feat
 /tmp/feat | git rev-parse --abbrev-ref HEAD
+/tmp/feat | git rev-parse --verify --quiet main^{commit}
 /tmp/feat | git checkout -b ai/feat-myapp`
 	if got := strings.Join(ex.calls, "\n"); got != want {
 		t.Fatalf("вызовы:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+// Пустой удалённый репозиторий: HEAD клона нерождённый, rev-parse на нём падает.
+// Clone обязан определить базу по имени unborn-ветки, создать её первым
+// коммитом и опубликовать — иначе весь git-flow упирается в несуществующий ref.
+func TestCloneSeedsEmptyRemoteBase(t *testing.T) {
+	parent := t.TempDir()
+	dest := filepath.Join(parent, "mytrip")
+	// Настоящий git создаёт каталог клона сам; dry-run-исполнитель — нет.
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unborn := errors.New("fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree")
+	ex := &fakeExecutor{
+		resp: map[string]string{
+			dest + " | git symbolic-ref --short HEAD": "main\n",
+		},
+		failOn: map[string]error{
+			dest + " | git rev-parse --abbrev-ref HEAD":              unborn,
+			dest + " | git rev-parse --verify --quiet main^{commit}": unborn,
+		},
+	}
+	repo, err := Clone(context.Background(), ex, "git@github.com:u/mytrip.git", "ai/mytrip", dest)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if repo.Base != "main" || repo.Branch != "ai/mytrip" {
+		t.Fatalf("Base/Branch = %q/%q, want main/ai/mytrip", repo.Base, repo.Branch)
+	}
+	want := parent + ` | git clone git@github.com:u/mytrip.git ` + dest + `
+` + dest + ` | git rev-parse --abbrev-ref HEAD
+` + dest + ` | git symbolic-ref --short HEAD
+` + dest + ` | git rev-parse --verify --quiet main^{commit}
+` + dest + ` | git add README.md
+` + dest + ` | git commit -m chore: initial commit (main)
+` + dest + ` | git push -u origin main
+` + dest + ` | git checkout -b ai/mytrip`
+	if got := strings.Join(ex.calls, "\n"); got != want {
+		t.Fatalf("вызовы:\n%s\n\nwant:\n%s", got, want)
+	}
+	body, err := os.ReadFile(filepath.Join(dest, "README.md"))
+	if err != nil {
+		t.Fatalf("README.md не создан: %v", err)
+	}
+	if !strings.Contains(string(body), "mytrip") {
+		t.Fatalf("README.md = %q, ожидалось имя проекта", body)
+	}
+}
+
+// Посев не должен превращаться в бесконечный retry при отказе push: понятная
+// ошибка, а не тихий проект без базовой ветки в remote.
+func TestCloneEmptyRemotePushFailure(t *testing.T) {
+	parent := t.TempDir()
+	dest := filepath.Join(parent, "mytrip")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unborn := errors.New("unknown revision")
+	ex := &fakeExecutor{
+		resp: map[string]string{
+			dest + " | git symbolic-ref --short HEAD": "main\n",
+		},
+		failOn: map[string]error{
+			dest + " | git rev-parse --abbrev-ref HEAD":              unborn,
+			dest + " | git rev-parse --verify --quiet main^{commit}": unborn,
+			dest + " | git push -u origin main":                      errors.New("permission denied"),
+		},
+	}
+	if _, err := Clone(context.Background(), ex, "git@github.com:u/mytrip.git", "ai/mytrip", dest); err == nil {
+		t.Fatal("отказ push базовой ветки должен возвращать ошибку")
+	} else if !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("в ошибке нет вывода git: %v", err)
+	}
+}
+
+// Detached HEAD у клона (remote HEAD указывает на тег): rev-parse отдаёт «HEAD»,
+// который как база бессмысленен — берём ветку по умолчанию со стороны remote.
+func TestCloneDetachedHeadUsesOriginHead(t *testing.T) {
+	ex := &fakeExecutor{
+		resp: map[string]string{
+			"/c | git rev-parse --abbrev-ref HEAD":                   "HEAD\n",
+			"/c | git symbolic-ref --short refs/remotes/origin/HEAD": "origin/master\n",
+		},
+		failOn: map[string]error{
+			"/c | git symbolic-ref --short HEAD": errors.New("fatal: ref HEAD is not a symbolic ref"),
+		},
+	}
+	repo, err := Clone(context.Background(), ex, "https://host/o/r.git", "ai/r", "/c")
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if repo.Base != "master" {
+		t.Fatalf("Base = %q, want master", repo.Base)
+	}
+}
+
+// Клон без единого сигнала о ветке (битый clone-dir) всё равно получает базу:
+// проект должен открыться, а не упасть на определении ветки.
+func TestCloneNoBranchSignalFallsBackToDefault(t *testing.T) {
+	broken := errors.New("fatal: not a git repository")
+	ex := &fakeExecutor{failOn: map[string]error{
+		"/c | git rev-parse --abbrev-ref HEAD":                   broken,
+		"/c | git symbolic-ref --short HEAD":                     broken,
+		"/c | git symbolic-ref --short refs/remotes/origin/HEAD": broken,
+	}}
+	repo, err := Clone(context.Background(), ex, "https://host/o/r.git", "ai/r", "/c")
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if repo.Base != DefaultBaseBranch {
+		t.Fatalf("Base = %q, want %q", repo.Base, DefaultBaseBranch)
 	}
 }
 
