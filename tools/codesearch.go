@@ -15,7 +15,13 @@ package tools
 // задан, он определяется из рабочего каталога агента (detectBranch, кэш на
 // инструмент) — ветка в рамках шага не меняется; вне git — main. Каждый
 // результат помечен строкой происхождения [Файл: … | Ветка: … | Коммит: …],
-// чтобы модель не ссылалась на код из чужой ветки.
+// чтобы модель не ссылалась на код из чужой ветки. Актуальность main и своей
+// ветки поддерживает сервер: индекс пересобирается при merge в main и при
+// старте задачи (server/ragindex.go, server/gitflow_auto.go).
+//
+// Проект: имя для фильтра берётся из FileOps.Project (задаёт оркестрация), иначе
+// из basename OutputDir — у специалиста задачи OutputDir это worktree
+// (.wt-task-<проект>-<id>), и basename не совпадает с именем в индексе.
 //
 // Degrade: RAG опционален. Без клиента (tools.Deps.RAG == nil) или при
 // недоступном Qdrant/эмбеддингах — статус skipped с подсказкой использовать
@@ -27,7 +33,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,9 +56,10 @@ type RAGSearcher interface {
 type codeSearchTool struct {
 	// searcher — клиент RAG (нил — инструмент деградирует в skipped).
 	searcher RAGSearcher
-	// ops — файловый контекст: имя проекта и ветка берутся из положения
-	// OutputDir (temp/<имя>), чтобы поиск шёл по коду только своего проекта
-	// и только своей ветки.
+	// ops — файловый контекст: имя проекта (FileOps.Project с фолбэком на
+	// basename OutputDir) и ветка из положения OutputDir (temp/<имя> или
+	// worktree задачи), чтобы поиск шёл по коду только своего проекта и
+	// только своей ветки.
 	ops *FileOps
 
 	branchOnce sync.Once
@@ -131,7 +137,7 @@ func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
 
 	// Имя проекта — базовое имя OutputDir (temp/<имя>): поиск ограничен кодом
 	// этого проекта (фильтр payload project_name).
-	project := projectFromOutputDir(t.ops)
+	project := projectNameOf(t.ops)
 	if project == "" {
 		return codeSearchJSON(map[string]any{
 			"status":  "skipped",
@@ -221,13 +227,15 @@ func codeSearchJSON(v map[string]any) []byte {
 	return b
 }
 
-// projectFromOutputDir выводит имя проекта из OutputDir (базовое имя пути):
-// temp/<имя> → "<имя>". Пустой OutputDir — "" (skipped).
-func projectFromOutputDir(ops *FileOps) string {
-	if ops == nil || ops.OutputDir == "" {
+// projectNameOf — имя проекта для фильтра RAG: явно заданное FileOps.Project,
+// иначе basename OutputDir. У специалиста задачи OutputDir — worktree
+// (temp/.wt-task-<проект>-<id>), поэтому явное имя обязательно: иначе поиск
+// шёл бы по несуществующему «проекту» и всегда возвращал пустую выдачу.
+func projectNameOf(ops *FileOps) string {
+	if ops == nil {
 		return ""
 	}
-	return filepath.Base(filepath.Clean(ops.OutputDir))
+	return ops.ProjectName()
 }
 
 // detectBranch определяет ветку рабочего каталога агента для поиска по RAG

@@ -171,15 +171,24 @@ func TestCodeSearchInternalError(t *testing.T) {
 	}
 }
 
-// Проект берётся из OutputDir: temp/<имя> → <имя>; пустой OutputDir — skipped.
-func TestCodeSearchProjectFromOutputDir(t *testing.T) {
-	if got := projectFromOutputDir(&FileOps{OutputDir: "/tmp/temp/billingService"}); got != "billingService" {
+// Имя проекта: явное FileOps.Project приоритетно (worktree задачи), иначе
+// basename OutputDir: temp/<имя> → <имя>; пусто — skipped.
+func TestCodeSearchProjectName(t *testing.T) {
+	if got := projectNameOf(&FileOps{OutputDir: "/tmp/temp/billingService"}); got != "billingService" {
 		t.Fatalf("проект: got %q, want billingService", got)
 	}
-	if got := projectFromOutputDir(nil); got != "" {
+	// Регресс: worktree специалиста называется .wt-task-<проект>-<id>; без
+	// явного имени поиск шёл бы по несуществующему «проекту» (пустая выдача).
+	if got := projectNameOf(&FileOps{OutputDir: "/tmp/temp/.wt-task-billingService-T-01", Project: "billingService"}); got != "billingService" {
+		t.Fatalf("явное имя проекта: got %q, want billingService", got)
+	}
+	if got := projectNameOf(&FileOps{OutputDir: "/tmp/temp/.wt-task-billingService-T-01"}); got != ".wt-task-billingService-T-01" {
+		t.Fatalf("worktree без явного имени: got %q, want .wt-task-billingService-T-01", got)
+	}
+	if got := projectNameOf(nil); got != "" {
 		t.Fatalf("нет Ops: got %q, want ''", got)
 	}
-	if got := projectFromOutputDir(&FileOps{OutputDir: ""}); got != "" {
+	if got := projectNameOf(&FileOps{OutputDir: ""}); got != "" {
 		t.Fatalf("пустой OutputDir: got %q, want ''", got)
 	}
 
@@ -188,6 +197,22 @@ func TestCodeSearchProjectFromOutputDir(t *testing.T) {
 	var m map[string]any
 	if json.Unmarshal(out, &m) != nil || m["status"] != "skipped" {
 		t.Fatalf("без OutputDir должен быть skipped, got %s", out)
+	}
+}
+
+// Явное имя проекта доходит до поиска: запрос фильтруется по нему, а не по
+// имени каталога worktree.
+func TestCodeSearchUsesExplicitProjectName(t *testing.T) {
+	fake := &fakeSearcher{}
+	tool := &codeSearchTool{
+		ops:      &FileOps{OutputDir: "/tmp/temp/.wt-task-billingService-T-01", Project: "billingService"},
+		searcher: fake,
+	}
+	if _, err := tool.Execute(map[string]any{"query": "тест"}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if fake.last.Project != "billingService" {
+		t.Fatalf("поиск шёл по проекту %q, want billingService", fake.last.Project)
 	}
 }
 

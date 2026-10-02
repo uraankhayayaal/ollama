@@ -126,198 +126,45 @@ merge-base, diff); `server/git_test.go` — `TestOpenGitProjectEmptyRemoteSeedsB
 `docs/40-operations/troubleshooting.md` («ambiguous argument 'HEAD'», «каталог
 уже существует и не пуст», «плохой origin»).
 
-Состояние сессии PLAN-2026-09-27-done-branch-aware-rag (Ф-1..Ф-7
-готовы, остался ручной E2E): версионированный RAG по веткам Git. Агент в
-worktree `ai/task/<id>` через CodeSearch видит свою ветку + актуальный main и
-НЕ видит изменений соседних эпиков. Ключевое: `rag/chunk.go` — `Chunk.Symbol`
-+ `ChunkID(project, file, chunkKey)` (фолбэк `L<start_line>`; TS-символ только у
-определений/методов, вызов `run()` символом не становится — иначе два вызова
-делили бы chunk_id); `rag/index.go` — payload `branch`/`commit_sha`/`chunk_id`/
-`content_hash`/`replaced_by`, `IndexOptions{Branch, CommitSHA}`,
-`upsertChunks` (Scroll активных версий → `SetPayload(replaced_by, Wait: true)` →
-Upsert; `pruneSuperseded` держит одно предыдущее поколение; пустой commit =
-проект без Git, прежние точки удаляются по ID), `pointID` включает ветку,
-коммит и content_hash — иначе незакоммиченная правка агента (главный сценарий
-`runner.ReindexFiles` после мутации) терялась бы; `rag/branch.go` (новый) —
-`MainBranch`, `DetectBranch`/`DetectCommit`/`DetectIndexOptions`, git-вызовы
-через инъектируемый `rag.gitRunner`; `rag/search.go` — `SearchParams.Branch`,
-`SearchResult.Branch/CommitSHA/ChunkID`, фильтр `should(активные ветка, активные
-main)` + второй проход `dropOverriddenByBranch` (Scroll активных точек ветки ПО
-ФАЙЛАМ результатов, отсечение перекрытых версий main по chunk_id — список
-исключений в фильтр не вносим: `NewHasID` это ID точек, не chunk_id),
-overfetch ×3 (мин. 12), порядок сборки выдачи: перекрытие → лимит → `maxTotal`;
-`rag/client.go` — `QdrantStore` += `Scroll`/`SetPayload`; `rag/status.go` —
-`ProjectInfo` считает только активные версии; `tools/codesearch.go` —
-`CodeSearchParams.Branch`, `detectBranch` с кэшем, шапка
-`[Файл: … | Ветка: … | Коммит: …]`, `ragLimits`/`ragSearchTimeout`;
-`runner/reindex.go` — `ReindexFiles(..., rag.IndexOptions)`;
-`agents/developer/developer.go` — `ReindexTouched` с
-`rag.DetectIndexOptions(OutputDir)` + правило «поиск ветко-осознанный» в промпте;
-`server/ragindex.go`/`actions.go`/`server.go` — `IndexBackground(ctx, branch)` и
-`POST /api/projects/{id}/index?branch=`; `main.go` — CLI печатает ветку/коммит.
-Тесты: `rag/memstore_test.go` (новый) — in-memory QdrantStore с семантикой
-фильтров (must/must_not/should, match, is_null, is_empty, has_id) и
-`textEmbedder`; на нём проверены версионирование, изоляция веток, идемпотентность
-и выдача поиска. Тесты поймали 4 реальных дефекта: `IndexProject` искал
-исчезнувшие файлы по ключам карты chunk_id вместо значений (файлы не устаревали),
-`activeBranchCond` для main строил взаимоисключающие `Must: branch=main` +
-`Should: is_null(branch)` (поиск из main не возвращал НИЧЕГО), `SetPayload` без
-`Wait` (гонка с prune/поиском), идемпотентность по одному `commit_sha` теряла
-незакоммиченные правки. Плюс флак тест-хелпера: `chunk_id` делится версиями
-одной функции МЕЖДУ ветками, поэтому искать активную точку надо по
-`(branch, chunk_id)` — `codeOf` без ветки зависел от порядка обхода map. Верификация зелёная: `go build`/`go vet`/`go test` по
-перечню выше (в т.ч. `./rag/`, `./runner/`, `./server/`) + `npm run build` (web/).
-Остался ручной E2E на живом Qdrant (шаги — в плане, раздел «Что осталось
-пользователю»).
-
-Состояние последней сессии (PLAN-2026-09-24-done-architect-intelligence, Ф-1..Ф-8, остался ручной E2E):
-Ф-4 «Корректность задачи, паттерны, AskUser» — архитектор получил
-`KanbanRunner.SetRAG` (Р-6) и `KanbanRunner.SetArchitectExtras` (Р-5),
-применяемые в `phaseArchitect`/`phaseArchitectReview`/`phaseBugs` через
-`prepareArchitect` (kanban.go); `sess.start` передаёт
-`SetRAG(ragClient)` + `SetArchitectExtras(&askTool{b: sess}, newIndexBackgroundTool(sess))`
-(server/session.go:235); CLI-канбан (main.go) — только `SetRAG(ragClient)`
-(автономно, без AskUser/IndexBackground — degrade). Промпт архитектора —
-секции «КОРРЕКТНОСТЬ ЗАДАЧИ (спрашивать, а не угадывать)» (AskUser с
-`recommended=true` до публикации бэклога, иначе явные допущения в
-`architecture_summary`), «ПАТТЕРНЫ ПРОЕКТИРОВАНИЯ» (REST/12-factor/KISS,
-анти-GraphQL/devcontainer), «RAG-ИНДЕКС (предложи построить в фоне)»
-(RagIndexStatus → AskUser → IndexBackground, продолжать проектирование).
-Runner: `RequiredToolFirstRound` трактуется как группа обязательных
-инструментов (предварительные чтения/AskUser разрешены) — правка только
-doc-комментариев.
-
-Ф-5 «Фоновая индексация RAG» — `server/ragindex.go`: мост
-`IndexBackground` (безопасный, без подтверждения) в `ActionsBackend` +
-`Session.IndexBackground` — горутина (walk + `IndexProject`, single-flight
-через `sess.indexing`, отчёт в `chat.RoleStatus`/лог проекта), идемпотентный
-прогон (`IndexProject` сперва очищает точки проекта). Фоновая индексация не
-блокирует агентский цикл; клиент RAG создаётся фабрикой `buildProjectIndexer`
-(замена для hermetic-тестов). `npm run build` web/ зелёный; `go test
-./server/` — неизвестно 2 флаки чат-ассистента
-(`TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`),
-падают и на чистой базе (не связаны с Ф-4/Ф-5). Опциональный нюанс Ф-5
-сделан: REST `POST /api/projects/{id}/index` (`handleProjectIndex`,
-server/server.go — 409 при идущей, 503 при недоступном RAG) + кнопка «Индекс
-RAG» в `web/src/App.tsx` (head-actions); тесты `TestRESTProjectIndex` /
-`TestRESTProjectIndexRAGUnavailable`.
-
-Ф-6 «Кросс-функциональные инсайты» — `board/entity.go`: тип
-`Opportunity{TargetRole, Suggestion}` + `Backlog.Opportunities []Opportunity`
-(`json:"opportunities,omitempty"`). `agents/architect/agent.go`: опциональное
-поле `opportunities` в схеме `submit_architecture_backlog`; `submitBacklog`
-валидирует записи (непустые target_role+suggestion) — грязные деградируют в
-`skipped_opportunities`, валидные складываются в `Summary` эпиков секцией
-«КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ (рекомендации смежным направлениям)»;
-промпт — секция «КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ (opportunities)» (в
-основной фазе) и пометка «opportunities: <роль> — <предложение>» в описании
-эпика исправления (экспертиза багов). Тесты: парсинг + round-trip в Summary
-(`agents/architect/agent_test.go`, `board/entity_test.go`), опциональность
-(старые вызовы без поля валидны), скип грязных записей.
-
-Ф-7 «Верификация и полировка»: `go build/vet` по всем пакетам
-(./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/) — зелёные;
-`go test` — зелёные, кроме 2 пред-существующих флаков aссистента
-(`TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
-падают и на чистой базе); `npm run build` web/ зелёный. Остался ручной E2E
-на реальном проекте (Web UI, инфраструктура Redis/Qdrant/модель у
-пользователя): новая задача → архитектор поднимает RAG-индекс в фоне по
-согласию, декомпозирует с учётом стека и ролей; консольный проект — без
-Frontend Lead. Далее по плану — Ф-8 и следующие фазы уже реализованы
-(Ф-8 в списке: эпики из чата — ревизия архитектора).
-
-Состояние последней сессии (PLAN-2026-09-24-done-makefile, Ф-1..Ф-5 готовы,
-остался ручной E2E): корневой Makefile проекта (temp/<проект>/Makefile) —
-единая точка входа команд субагентов и приёмки. Ф-1: `tools/stacktool.go`
-`StackInfo.Makefile (json:"makefile")` + маркер «Makefile»; секция «MAKEFILE
-ПРОЕКТА» в `architectureSystemPrompt` (обязательный эпик «Makefile проекта»,
-эталонный контракт целей, assigned_role Backend Lead/DevOps Lead) + п.8
-`bugExpertSystemPrompt`/п.7 `epicReviewSystemPrompt`. Ф-2: `developer.go:264`
-п.5 (сначала ReadFiles Makefile → `make backend-*`/`make frontend-*`), QA
-(`make test`/`make e2e`, приёмка `make build`/`make lint`), лиды backend/
-frontend/devops/qa — «ЦЕЛЬ ПРОВЕРКИ ИЗ MAKEFILE» (devopslead — «ИНФРА-БЛОК
-ЧЕРЕЗ MAKEFILE»). Ф-3: `acceptor/detect.go` `makefileLocate(root,dir)` (поиск
-от подпроекта до корня приёмки) + `makefileTargets` (парсер целей, multi-target
-`build test:`, пропуск `:=`, `.PHONY`, `%`, с переменными) + `makeCommand`/
-`makeAnalyzeCommand` (test→lint)/`makeInfraMirror`; приоритет env ACCEPT_* →
-make-цель → автодетект kind; make-команды исполняются в mkDir (Makefile);
-фолбэк `make infra.<цель>` при недоступном инструменте хоста (make-специфичный
-маркер «Ошибка/Error 127» в `toolMissing`, accept.go — в checks.go/run.go
-правок нет); для run инфра-зеркало НЕ применяется. Ф-4: `devops/agent.go` п.5-6
-(инфра-блок: up/down/logs/ps, зеркальные infra.<цель>, самозавершающийся e2e),
-`fileops.go:991` missingToolHint → «make infra.<цель>». Верификация зелёная
-(плюс 3 пред-существующих флака чат-ассистента на чистой HEAD:
-`TestChatAssistantCreatesBugAndTask`, `TestChatAssistantDeleteTaskAfterConfirm`,
-`TestChatAssistantPublishesBoardWhenIdle`).
-
-Состояние после PLAN-2026-09-24-done-merge-conflict-board (Ф-1..Ф-5, остался
-ручной E2E): конфликты мёрджа стали видимы на доске. Ф-1: `board/entity.go` —
-`MergeConflictFiles []string` у `Epic`/`Task` (`json:"merge_conflict_files,
-omitempty"`); запись/очистка в `autoCommitAndMergeTask` (done→релиз), `Session.
-TaskMerge` (server/actions.go), REST `handleMergeTask`/`handleReleaseEpic`
-(server/gitflow.go), авто-синхрон эпика `autoResolveMainSync` +
-`clearEpicMergeConflict` (server/gitflow_auto.go:471), `handleEpicRebase`/
-`handleEpicResolve` (server/gitflow_resolve.go); `RoleStatus`-уведомления.
-Ф-2: блок «Конфликты мёрджа» в `chatAssistantPrompt` (server/chatassist.go) +
-правило «не повторять TaskMerge» в `agents/chatassist/agent.go`. Ф-3:
-`web/src/Types/Types.ts` `merge_conflict_files` + бейдж в модалках
-`TaskModal`/`EpicModal` (TaskModal/styles.scss, EpicModal/styles.scss). Ф-4:
-`TaskMerge` возвращает детерминированную конфликт-строку с файлами и точкой
-резолва, состояние не меняется. Тесты: `TestTaskDoneAutoMergeConflict` (поле
-f.txt), `TestMergeTaskConflict409` (409+поле), `TestMergeTaskConflictIdempotent`,
-`TestMergeTaskClearsConflictField`, `TestMergeConflictFilesJSON` (board),
-`TestChatAssistPromptShowsMergeConflict`; `go build/vet` по перечню AGENTS.md
-зелёные, `go test` зелёные кроме 3 пред-существующих флаков чат-ассистента.
-Состояние после 84ec174 (fix выбора модели в Web UI, остался ручной E2E):
-дефекты переключателя исправлены. Главный — `providerResolve.setActive`
-записывал новый выбор, но НЕ инвалидировал кэш (`done`), поэтому после
-первого чата/запуска смена модели не действовала до перезапуска процесса.
-`server/resolve.go` переписан: единое состояние выбора под `mu`
-(`selection`/`setOverride`/`clearOverride`/`resolved`/`describe`), кэш
-сбрасывается при смене, провайдер создаётся сразу (ошибка битого `base_url`
-→ 400/502 в REST, а не на первом запросе к модели). Убрана гонка и
-дублирование: поля `Server.activeProvider/activeModel` удалены — источник
-правды только в `providerResolve`. `models/resolve.go` — `Selection`/
-`Resolved`/`ResolveSelection` (явный выбор без `os.Setenv`), `Describe()`
-даёт строку вида `ollama/qwen3-coder:30b (large=qwen3.6:35b-a3b)`;
-`ResolveProvider()` — обёртка над `EnvSelection()` для CLI. `models/
-providers_config.go` — кэш по пути + отпечатку (mtime+size) вместо
-`sync.Once`: правка `providers.json` подхватывается без перезапуска, путь
-через `PROVIDERS_CONFIG` (даёт тестовый шов). REST: `GET /api/providers`
-(сортированный список, `current_provider`/`current_model`/
-`current_large_model`/`override`/`error`), `POST /api/providers/select`
-(`provider`/`model`/`large_model`/`reset`, валидация против `selectableModels`
-= models+default_model+large_model, предупреждение `applies_to_running` +
-`message`, если оркестрация уже идёт). Логи модели: `server: LLM <describe>`
-на старте сервера и на каждый (ре)резолв, `[llm] модель запуска: …` на каждый
-старт оркестрации (`Session.start`), `[llm] модель: …` на сообщение в чат.
-Фронт: `ModelSelector` — два селекта (провайдер+модель, крупная модель) и
-кнопка «сброс»; значение `<option>` — индекс в плоском списке, НЕ
-`провайдер:модель` (иначе `qwen3-coder:30b` и `/models/T-pro-it-1.0`
-ломались по двоеточию/слэшу), ошибки сервера больше не глушатся `catch(() =>
-{})`, выбор откатывается при отказе; стили вынесены в
-`ModelSelector/ModelSelector.scss` (блок из глобального `styles.scss`
-удалён, мёртвый дубликат переписан), `Api.ts` — `SelectProviderBody`/
-`SelectProviderResult`. Тесты: `server/resolve_test.go` (новый) —
-`TestSelectProviderAppliesAfterFirstResolve` (регресс кэша), `…EnvModelAsDefault`,
-`TestRESTProvidersReportsEnvSelection`, `TestRESTSelectProviderSwitchesModel`,
-`…LargeModel`, `…LargeModelFallsBackToConfig`, `…WarnsAboutRunningOrchestration`,
-`…RejectsUnknown`, `…BrokenBaseURL`, `TestProvidersConfigReloadsOnChange`;
-хелпер `stubProviderResolve` заменил 4 места сборки `providerResolve{}`.
-Документация: `providers.md` (переписан под providers.json + Web UI + таблица
-логов), `rest-api.md` (секция «Модель и провайдеры» + 502),
-`web-ui.md` («Выбор модели»), `troubleshooting.md` («Какая модель работает?»,
-«выбор не применился», `PROVIDERS_CONFIG`, игнорируемые `OLLAMA_MODEL`),
-`environment-variables.md` (MODEL/MODEL_LARGE/PROVIDERS_CONFIG, разобраны
-устаревшие YANDEX_*/TRIM_*/REG_*), `quickstart`/`configuration`/
-`installation`/`glossary`/`planner` — модель из `providers.json`, а не
-`OLLAMA_MODEL`; в коде поправлены устаревшие комменты `models/OllamaModel.go`
-(settings из providers.json, а не `OLLAMA_NUM_CTX`). Верификация зелёная: `go
-build`/`go vet`/`go test` по перечню выше (в т.ч. `./models/`, `./server/`,
-`-race` на новых тестах) + `npm run build` web/. Остался ручной E2E: выбрать
-модель в UI до/после первого чата, убедиться по `logs/server.log` и
-`logs/<проект>.log`, что строка `[llm] модель запуска` совпала с выбранным
-значением.
+Состояние последней сессии (PLAN-2026-09-28-done-rag-main-freshness,
+жалоба «переключаю эпик — агент в analysis не видит изменений предыдущего»,
+остался ручной E2E): пользователь одобрил все три причины. Ф-1 явное имя
+RAG-проекта: `tools/fileops.go` `FileOps.Project` + `SetProjectName` +
+`ProjectName`, `tools/codesearch.go`/`ragstatus.go` на `tools.projectNameOf`
+(было `basename(OutputDir)` — у агента задачи это `.wt-task-…`, проект не
+находился), `agents/developer/developer.go:ReindexTouched`,
+`agents/architect|chatassist` (Project при создании),
+`agents/planner/kanban.go:specialistFor` (знает и проект, и worktree).
+Ф-2 `server/ragref.go` (новый): ветка читается из git-объектов —
+`collectRefItems` (`git ls-tree -r -z --long` + `git show ref:<путь>`,
+`parseLsTreeEntry`, `indexablePath/Content`, `maxRefFileBytes`),
+`Session.IndexRefBackground` (индекс ветки) и `IndexRefDiffBackground` +
+`collectRefDiff` (`git diff base...ref`, `git cat-file -s`) — индекс ИЗМЕНЕНИЙ
+ветки задачи относительно main (остальное покрывает индекс main; полная
+индексация worktree стоила бы эмбеддингов всего проекта на каждый старт
+задачи). Явный `branch` больше не переименовывает снимок checkout:
+`IndexBackground(branch)` = ref, `IndexBackground("")` = каталог. Ф-3
+`rag.Client.BranchIndexed` (`rag/status.go`) + пропуск прогона с отдельным
+статусом «RAG-индекс проекта актуален» (не путать с «обновлено 0 файлов»);
+single-flight стал ПО ВЕТКЕ (`sess.indexing map[string]bool`, `indexSlotKey`) —
+иначе переиндексация main съедала бы индексацию ветки задачи. Хуки:
+`server/gitflow.go` (после реального merge эпика `afterMainChanged`; при
+`already=true` только проверка индекса main — сохранён тест «уже слитая ветка
+не должна мутировать git»), `server/gitflow_auto.go:66` (синхронизация эпика)
+и `:164` (старт задачи — дифф ветки), `server/session.go:285` (фоновый merge
+main в ai/<имя> до первого агента). Merge в рабочую копию: только чистое
+дерево, `git merge --abort` при конфликте (`abortMerge`), пропуск при
+отсутствии сдвига HEAD (`headSHA`) — правки агентов не теряются. Тесты
+`server/ragref_test.go` (новый, 10 шт.: разбор ls-tree/отсевы/бинарник/ошибки,
+дифф ветки, релиз→индекс main, грязное дерево, конфликт+abort, без сдвига
+HEAD, актуальный индекс, хук диффа, хуки без сессии). Верификация зелёная:
+`go build`/`go vet`/`go test` по перечню выше + `./rag/ ./server/ ./runner/
+./gitops/`. Документация:
+`docs/plans/PLAN-2026-09-28-done-rag-main-freshness.md` (+ строка в
+`docs/plans/README.md`), раздел «Хуки git-flow (без env)» и правки
+CodeSearch/IndexBackground в `docs/20-features/rag.md`, хуки RAG в
+`docs/20-features/gitops-workflow.md`, две записи в
+`docs/40-operations/troubleshooting.md`.
 
 Состояние последней сессии (E2E выбора модели закрыт): ручной E2E из предыдущей
 сессии заменён постоянным живым тестом `server/e2e_model_selection_test.go`

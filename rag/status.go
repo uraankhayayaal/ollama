@@ -61,3 +61,39 @@ func (c *Client) ProjectInfo(ctx context.Context, projectName string) (ProjectIn
 	}
 	return ProjectInfo{Project: projectName, Chunks: int(n)}, nil
 }
+
+// BranchIndexed сообщает, есть ли в индексе актуальные точки ветки на указанном
+// коммите. Нужен, чтобы не переиндексировать ветку без изменений: полная
+// индексация проекта стоит эмбеддингов всех файлов, а хуки поддержания индекса
+// (после merge в main, при старте задачи) срабатывают часто. Пустой commit —
+// сравнение невозможно (проект без Git), ответ false.
+func (c *Client) BranchIndexed(ctx context.Context, projectName, branch, commit string) (bool, error) {
+	if strings.TrimSpace(projectName) == "" || strings.TrimSpace(commit) == "" {
+		return false, nil
+	}
+	b := strings.TrimSpace(branch)
+	if b == "" {
+		b = MainBranch
+	}
+	exists, err := c.store.CollectionExists(ctx, c.collection)
+	if err != nil {
+		return false, &UnavailableError{Err: err}
+	}
+	if !exists {
+		return false, nil
+	}
+	n, err := c.store.Count(ctx, &qdrant.CountPoints{
+		CollectionName: c.collection,
+		Filter: &qdrant.Filter{Must: []*qdrant.Condition{
+			qdrant.NewMatchKeyword(PayloadProject, projectName),
+			qdrant.NewMatchKeyword(PayloadBranch, b),
+			qdrant.NewMatchKeyword(PayloadCommit, commit),
+			qdrant.NewIsEmpty(PayloadReplacedBy),
+		}},
+		Exact: qdrant.PtrOf(true),
+	})
+	if err != nil {
+		return false, &UnavailableError{Err: err}
+	}
+	return n > 0, nil
+}

@@ -135,7 +135,7 @@ func NewAssistantInDir(dir, projectName, prompt string, store *board.Store, ragC
 // Используется конструкторами.
 func newAssistant(dir, projectName, prompt string, store *board.Store, ragClient tools.RAGSearcher) *Assistant {
 	os.MkdirAll(dir, 0755)
-	ops := &tools.FileOps{OutputDir: dir}
+	ops := &tools.FileOps{OutputDir: dir, Project: projectName}
 	return &Assistant{
 		FileOps:     ops,
 		Prompt:      prompt,

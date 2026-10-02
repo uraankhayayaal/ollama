@@ -44,6 +44,13 @@ Worktree}`.
 | Задача → `done` | `autoCommitAndMergeTask` | `gitflow_auto.go:281-391` |
 | Эпик → `done` | `syncEpicWithMain` (фон, таймаут 5 мин) | `gitflow.go:397-403` |
 
+Хуки поддержания RAG-индекса (`server/ragref.go`) — тоже фоновые и тоже не
+ломают переход статуса: после реального merge эпика в `main` индекс `main`
+пересобирается по содержимому ветки, а рабочая копия агентов
+(`temp/<имя>`, ветка `ai/<имя>`) подтягиется merge-ом `main` и
+переиндексируется. Иначе анализ следующего эпика шёл бы по коду до релизов
+предыдущих. Подробно — [RAG и CodeSearch](rag.md#хуки-git-flow-без-env).
+
 ## Порядок авто-merge задачи
 
 `autoCommitAndMergeTask` (`server/gitflow_auto.go:281-391`):

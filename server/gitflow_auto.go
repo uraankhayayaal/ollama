@@ -59,6 +59,12 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 	lock.Lock()
 	defer lock.Unlock()
 
+	// 0) Актуальность main в индексе RAG: задача стартует, и её агент должен
+	// искать по коду, который уже ушёл в main (релизы прошлых эпиков, в т.ч.
+	// сделанные мимо releaseEpic — с пуша). Индексация по ref читает git, а не
+	// рабочую копию, и выполняется в фоне (см. server/ragref.go).
+	s.refreshRagIndexBranch(project, inf.GitBase)
+
 	// 0) Синхронизация релизной ветки эпика с main (как перед релизом, но без
 	// требования done): эпик получает свежий main, задача стартует от актуального
 	// кода. Конфликты main ↔ релизная ветка не блокируют старт задачи — они
@@ -149,6 +155,13 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 		return
 	}
 	s.invalidateDiffs(project)
+	// Индекс ветки задачи: worktree только что пересобран (rebase на релизную
+	// ветку эпика, а эпик синхронизирован с main), а точки ветки задачи в
+	// индексе ещё нет. Индексируем ИЗМЕНЕНИЯ ветки относительно main (остальное
+	// покрывает индекс main) — дёшево и ровно то, что нужно выдаче поиска:
+	// код самой задачи и слитых задач эпика. Без этого CodeSearch специалиста
+	// видел бы только main и не нашёл бы код, собранный задачами эпика.
+	s.refreshRagTaskBranch(project, taskRef.Branch, inf.GitBase)
 	logging.For(project).Infof("gitflow: задача %s → worktree %s (%s)", task.TaskID, wtPath, taskRef.Branch)
 	s.srvEmitBoard(project, "gitflow: worktree задачи")
 }

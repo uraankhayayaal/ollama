@@ -1209,6 +1209,14 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				}
 			}
 		}
+		// Имя проекта для RAG — всегда до worktree: имя каталога задачи
+		// (.wt-task-<проект>-<id>) в индексе не совпадает с именем проекта,
+		// и без явного значения CodeSearch идёт по пустому «проекту».
+		if k.store != nil {
+			if sn, ok := specialist.(interface{ SetProjectName(string) }); ok {
+				sn.SetProjectName(k.store.Project())
+			}
+		}
 
 		k.log.Infof("[задача %s] специалист %s выполняет: %s",
 			t.TaskID, t.Assignee, truncateText(t.Title, 60))

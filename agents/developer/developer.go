@@ -15,7 +15,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/ollama/ollama/api"
 )
@@ -187,7 +186,13 @@ func (d *base) ReindexTouched(touched []string) (int, error) {
 	if d.RAG == nil || len(touched) == 0 {
 		return 0, nil
 	}
-	project := filepath.Base(filepath.Clean(d.OutputDir))
+	// Имя проекта — явное FileOps.Project: OutputDir специалиста это worktree
+	// задачи (temp/.wt-task-<проект>-<id>), и basename каталога указал бы на
+	// несуществующий проект — точки ушли бы в отдельный индекс.
+	project := d.FileOps.ProjectName()
+	if project == "" {
+		return 0, nil
+	}
 	return runner.ReindexFiles(context.Background(), d.RAG, rag.ScopeForPath, d.OutputDir, project, touched,
 		rag.DetectIndexOptions(d.OutputDir))
 }
