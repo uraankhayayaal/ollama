@@ -675,6 +675,9 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("фаза архитектора: %w", err)
 	}
+	if err := resp.LoopError("фаза архитектора"); err != nil {
+		return false, err
+	}
 	if resp != nil && resp.Truncated {
 		return false, fmt.Errorf("фаза архитектора: цикл остановлен по лимиту раундов")
 	}
@@ -721,6 +724,9 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 	resp, err := k.generate(ctx, tokens.ScopeArchitecture, reviewer)
 	if err != nil {
 		return false, fmt.Errorf("фаза ревизии эпиков: %w", err)
+	}
+	if err := resp.LoopError("фаза ревизии эпиков"); err != nil {
+		return false, err
 	}
 	if resp != nil && resp.Truncated {
 		return false, fmt.Errorf("фаза ревизии эпиков: цикл остановлен по лимиту раундов")
@@ -832,18 +838,19 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("декомпозиция эпика %s: %w", epic.TaskID, err)
 	}
-	if resp != nil && resp.Truncated {
-		// Лимит раундов агентского цикла не должен ронять весь запуск, если
-		// лид уже опубликовал на доске частичную (но рабочую) декомпозицию:
-		// продолжаем, задачи передадутся специалистам после затвора.
+	if stop := resp.StopReason(); stop != "" {
+		// Ни лимит раундов, ни зацикливание лида не должны ронять весь запуск,
+		// если он уже опубликовал на доске частичную (но рабочую) декомпозицию:
+		// продолжаем, задачи передадутся специалистам после затвора. Задач нет —
+		// эпик пуст, работа не выполнена: сообщаем причину явно.
 		tasks, terr := k.store.TasksByEpic(ctx, epic.TaskID)
 		if terr != nil {
-			return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов: %w", epic.TaskID, terr)
+			return false, fmt.Errorf("декомпозиция эпика %s: цикл прерван (%s): %w", epic.TaskID, stop, terr)
 		}
 		if len(tasks) == 0 {
-			return false, fmt.Errorf("декомпозиция эпика %s: цикл остановлен по лимиту раундов (задачи не созданы)", epic.TaskID)
+			return false, fmt.Errorf("декомпозиция эпика %s: цикл прерван (%s), задачи не созданы", epic.TaskID, stop)
 		}
-		k.log.Infof("[эпик %s] лимит раундов лида, но опубликовано задач: %d — продолжаем с частичной декомпозицией", epic.TaskID, len(tasks))
+		k.log.Infof("[эпик %s] цикл лида прерван (%s), но опубликовано задач: %d — продолжаем с частичной декомпозицией", epic.TaskID, stop, len(tasks))
 	}
 
 	// Инструментный путь: лид мог создать/изменить задачи прямо на доске
@@ -1224,6 +1231,13 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
 		}
+		// Специалист зациклился: разрыв петли не помог, модель не поняла свою
+		// ошибку и повторяет то же самое. Задачу НЕ помечаем выполненной
+		// (fallback ниже этого не достигает) — роняем запуск с понятной
+		// причиной, чтобы задачу взяли с другой стороны.
+		if err := resp.LoopError(fmt.Sprintf("задача %s", t.TaskID)); err != nil {
+			return false, err
+		}
 		if resp != nil && resp.Truncated {
 			return false, fmt.Errorf("задача %s: цикл остановлен по лимиту раундов", t.TaskID)
 		}
@@ -1291,9 +1305,12 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("фаза триажа багрепортов: %w", err)
 		}
-		if resp != nil && resp.Truncated {
-			return false, fmt.Errorf("фаза триажа багрепортов: цикл остановлен по лимиту раундов")
-		}
+if err := resp.LoopError("фаза триажа багрепортов"); err != nil {
+		return false, err
+	}
+	if resp != nil && resp.Truncated {
+		return false, fmt.Errorf("фаза триажа багрепортов: цикл остановлен по лимиту раундов")
+	}
 		k.log.Infof("[QA Lead] триаж %d багрепортов", len(newBugs))
 		progress = true
 	}
@@ -1307,9 +1324,12 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("фаза экспертизы багрепортов: %w", err)
 		}
-		if resp != nil && resp.Truncated {
-			return false, fmt.Errorf("фаза экспертизы багрепортов: цикл остановлен по лимиту раундов")
-		}
+if err := resp.LoopError("фаза экспертизы багрепортов"); err != nil {
+		return false, err
+	}
+	if resp != nil && resp.Truncated {
+		return false, fmt.Errorf("фаза экспертизы багрепортов: цикл остановлен по лимиту раундов")
+	}
 		k.log.Infof("[Системный архитектор] экспертиза %d багрепортов", len(confirmedBugs))
 		progress = true
 	}

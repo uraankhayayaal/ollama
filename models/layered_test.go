@@ -16,13 +16,26 @@ type layerStub struct {
 	name     string
 	genErr   error
 	trunc    bool
+	looped   bool
+	loopWhy  string
 	genCalls int
+	// resumeSeen — resume-состояние, которое видел слой (проверяем, что
+	// эскалация начинает цикл заново, а не продолжает застрявший диалог).
+	resumeSeen *runner.ResumeState
 }
 
 func (s *layerStub) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	s.genCalls++
+	s.resumeSeen = runner.ResumeStateFromContext(ctx)
 	if s.genErr != nil {
 		return nil, s.genErr
+	}
+	if s.looped {
+		why := s.loopWhy
+		if why == "" {
+			why = "повтор одного и того же вызова"
+		}
+		return &runner.AgentResponse{Looped: true, LoopReason: why, Rounds: 5}, nil
 	}
 	if s.trunc {
 		return &runner.AgentResponse{Content: "частично", Truncated: true, Rounds: 5}, nil
@@ -135,6 +148,58 @@ func TestLayeredEscalatesOnSmallError(t *testing.T) {
 	}
 	if small.genCalls != 1 || large.genCalls != 1 {
 		t.Fatalf("вызовы: small=%d, large=%d (ожидали 1 и 1)", small.genCalls, large.genCalls)
+	}
+}
+
+// Зацикливание малого слоя (Looped) — такой же повод для эскалации, как срыв
+// по лимиту раундов: задачу выполняет БОЛЬШАЯ модель. Продолжать тот же
+// застрявший диалог нельзя, поэтому resume-история сбрасывается.
+func TestLayeredEscalatesOnLoop(t *testing.T) {
+	small := &layerStub{name: "small", looped: true, loopWhy: "повтор Run npm test"}
+	large := &layerStub{name: "large"}
+	prov := NewLayeredProvider(small, large).(*LayeredProvider)
+
+	resume := &runner.ResumeState{Rounds: 120, Messages: []runner.Message{{Role: "system", Content: "s"}}}
+	ctx := runner.WithResumeState(context.Background(), resume)
+
+	resp, err := prov.Generate(ctx, &testAgent{name: "developer"})
+	if err != nil {
+		t.Fatalf("после эскалации ошибки быть не должно: %v", err)
+	}
+	if !strings.Contains(resp.Content, "large") {
+		t.Fatalf("зацикливание должно уводить задачу на большую модель, got %q", resp.Content)
+	}
+	if small.genCalls != 1 || large.genCalls != 1 {
+		t.Fatalf("вызовы: small=%d, large=%d (ожидали 1 и 1)", small.genCalls, large.genCalls)
+	}
+	if small.resumeSeen == nil || small.resumeSeen.Rounds != 120 {
+		t.Fatalf("малый слой должен увидеть сохранённый диалог, got %#v", small.resumeSeen)
+	}
+	if large.resumeSeen != nil {
+		t.Fatalf("большая модель должна начать с чистой истории, а не продолжать петлю: %#v", large.resumeSeen)
+	}
+}
+
+// Большая модель тоже зациклилась — её вердикт возвращается наружу: вызывающий
+// код обязан честно уронить задачу (AgentResponse.Looped), а не считать её
+// выполненной.
+func TestLayeredReturnsLoopVerdictFromLarge(t *testing.T) {
+	small := &layerStub{name: "small", looped: true}
+	large := &layerStub{name: "large", looped: true, loopWhy: "петля на большой модели"}
+	prov := NewLayeredProvider(small, large).(*LayeredProvider)
+
+	resp, err := prov.Generate(context.Background(), &testAgent{name: "developer"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !resp.Looped || resp.LoopReason != "петля на большой модели" {
+		t.Fatalf("наружу должен уйти вердикт большой модели, got %+v", resp)
+	}
+	if resp.StopReason() != "зацикливание" {
+		t.Fatalf("StopReason = %q", resp.StopReason())
+	}
+	if err := resp.LoopError("задача T-1"); err == nil {
+		t.Fatal("вызывающий код должен получить ошибку вместо тихого успеха")
 	}
 }
 

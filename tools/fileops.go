@@ -1076,12 +1076,16 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 		runErr = werr
 	}
 
+	// Вывод команды нормализуется ДО упаковки в JSON: цвета терминала (ANSI),
+	// управляющие и NUL-байты в строке ломают JSON-пакет и разбор аргументов
+	// следующих вызовов модели («invalid character ']' looking for beginning of
+	// value»), из-за чего падал сам харнес.
 	result := map[string]string{
 		"command":    command,
 		"workdir":    workdir,
 		"exit_error": "",
-		"stdout":     stdout.String(),
-		"stderr":     stderr.String(),
+		"stdout":     SanitizeToolOutput(stdout.String()),
+		"stderr":     SanitizeToolOutput(stderr.String()),
 		// Явно сообщаем модели, где выполнялась команда. Без этого «песочница»
 		// существует только в коде, а агент (и человек в логе) считает все
 		// запуски изолированными — включая те, что ушли на хост по фолбэку.
@@ -1099,7 +1103,7 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 	} else if runErr != nil {
 		result["exit_error"] = runErr.Error()
 		result["status"] = "error"
-		if h := missingToolHint(command, stdout.String()+"\n"+stderr.String(), runErr); h != "" {
+		if h := missingToolHint(command, SanitizeToolOutput(stdout.String())+"\n"+SanitizeToolOutput(stderr.String()), runErr); h != "" {
 			result["hint"] = h
 		}
 	} else {

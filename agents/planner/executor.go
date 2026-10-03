@@ -717,6 +717,17 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 		return nil, err
 	}
 
+	// Агент зациклился (разрыв петли не помог): историю в чекпоинт НЕ
+	// сохраняем — resume продолжил бы тот же застрявший диалог и повторил
+	// петлю с новым бюджетом раундов. Шаг падает явно, чтобы его взяли с другой
+	// стороны (другая модель/новый запуск), а не «доработали» тем же способом.
+	if err := resp.LoopError(fmt.Sprintf("шаг %q", step.ID)); err != nil {
+		if e.store != nil {
+			e.clearRoundState(ctx, step)
+		}
+		return nil, err
+	}
+
 	// Цикл упёрся в лимит раундов (или модель обрезалась по лимиту токенов):
 	// сохраняем историю диалога в чекпоинт, чтобы следующий запуск с --resume
 	// продолжил шаг с раунда resp.Rounds+1, и останавливаем выполнение плана.
@@ -798,20 +809,16 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	if _, ok := e.loadResumeState(ctx, step.ID); ok {
 		e.log.Infof("[%s] шаг %s: сбрасываю устаревшую историю resume, шаг выполнится заново", agentLabel(step.Agent, step.Role), step.ID)
 	}
-	if e.store != nil {
-		e.mu.Lock()
-		if snap, err := e.store.Load(ctx); err == nil {
-			if _, ok := snap.Conversations[step.ID]; ok {
-				_ = e.store.ClearRoundState(ctx, snap, step.ID)
-			}
-		}
-		e.mu.Unlock()
-	}
+	e.clearRoundState(ctx, step)
 
 	resp, err := e.provider.Generate(ctx, lead)
 	if err != nil {
 		e.rollbackStep(projectName, step.ID, snap)
 		return fmt.Errorf("декомпозиция эпика %q: %w", step.ID, err)
+	}
+	if err := resp.LoopError(fmt.Sprintf("декомпозиция эпика %q", step.ID)); err != nil {
+		e.clearRoundState(ctx, step)
+		return err
 	}
 	if resp != nil && resp.Truncated {
 		if err := e.truncatedStepError(ctx, step, resp); err != nil {
@@ -862,6 +869,10 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		if err != nil {
 			e.rollbackStep(projectName, step.ID, snap)
 			return fmt.Errorf("шаг %q, задача %s: %w", step.ID, ts.TaskID, err)
+		}
+		if err := resp.LoopError(fmt.Sprintf("шаг %q, задача %s", step.ID, ts.TaskID)); err != nil {
+			e.clearRoundState(ctx, step)
+			return err
 		}
 		if resp != nil && resp.Truncated {
 			if err := e.truncatedStepError(ctx, step, resp); err != nil {
@@ -915,11 +926,24 @@ func (e *Executor) writePlan(projectName string) error {
 // лида. Шаг атомарен и при resume выполняется заново целиком, поэтому
 // сохранённая история очищается; при отключённом чекпоинте допускается
 // продолжить с частичным результатом (вернёт nil).
+// clearRoundState удаляет сохранённую историю агентского цикла шага из
+// чекпоинта: следующий запуск выполнит шаг заново, без застрявшего диалога.
+// Сериализуется e.mu — параллельные шаги волны не должны терять обновления
+// снимка чекпоинта.
+func (e *Executor) clearRoundState(ctx context.Context, step *Step) {
+	if e.store == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if snap, err := e.store.Load(ctx); err == nil {
+		_ = e.store.ClearRoundState(ctx, snap, step.ID)
+	}
+}
+
 func (e *Executor) truncatedStepError(ctx context.Context, step *Step, resp *runner.AgentResponse) error {
 	if e.store != nil {
-		if snap, err := e.store.Load(ctx); err == nil {
-			_ = e.store.ClearRoundState(ctx, snap, step.ID)
-		}
+		e.clearRoundState(ctx, step)
 		return fmt.Errorf("шаг %q: исчерпан лимит раундов (%d) агентского цикла — запустите с --resume, шаг выполнится заново", step.ID, resp.Rounds)
 	}
 	if strings.TrimSpace(resp.Content) == "" {

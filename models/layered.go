@@ -17,9 +17,9 @@ import (
 //
 // Настройка: LayeredProvider оборачивает два провайдера — small (быстрый и
 // дешёвый) и large (качественный). Тяжёлые шаги/агенты сразу идут на large;
-// для остальных первый проход выполняет small, а при финальной ошибке или
-// срыве по лимиту раундов происходит эскалация: весь цикл повторяется на
-// large (один раз, чтобы не растить токен-бюджет).
+// для остальных первый проход выполняет small, а при финальной ошибке, срыве по
+// лимиту раундов или зацикливании происходит эскалация: весь цикл повторяется
+// на large (один раз, чтобы не растить токен-бюджет).
 //
 // Управление переменными окружения:
 //   - LLM_ALWAYS_HEAVY=1 — все шаги выполняются только на большой модели;
@@ -78,8 +78,14 @@ func agentName(agent agents.Agent) string {
 }
 
 // Generate выполняет полный агентский цикл на выбранном слое с эскалацией:
-// обычный агент пробует small, при ошибке или зацикленном/обрезанном ответе
+// обычный агент пробует small, при ошибке, зацикливании или обрезанном ответе
 // один раз повторяет цикл на large. Ответ large считается финальным.
+//
+// Зацикливание (AgentResponse.Looped) — такой же повод для эскалации, как
+// срыв по лимиту раундов: разрыв петли не помог, модель не поняла свою ошибку
+// и повторяет то же самое. Задачу с другой стороны выполняет БОЛЬШАЯ модель —
+// с чистой историей (runner.WithoutResumeState), потому что продолжение того же
+// застрявшего диалога воспроизвело бы ту же петлю.
 func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	if l.heavyFor(agent) {
 		logging.Detailf("[Layered] агент %T: тяжёлая модель (LARGE)", agent)
@@ -87,16 +93,16 @@ func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 	}
 
 	resp, err := l.Small.Generate(ctx, agent)
-	if err == nil && resp != nil && !resp.Truncated {
+	if err == nil && resp != nil && !resp.Truncated && !resp.Looped {
 		return resp, nil
 	}
 
 	// Эскалация: сильная модель получает свежий шанс (без resume-истории —
 	// бюджет раундов начинается заново). На повторном цикле тяжелый слой
 	// пробует ещё раз; если и он не смог — возвращаем его вердикт.
-	logging.Warnf("[Layered] агент %T: малый слой не справился (error=%v, truncated=%v) — эскалация на LARGE",
-		agent, err, resp != nil && resp.Truncated)
-	heavResp, heavErr := l.Large.Generate(ctx, agent)
+	logging.Warnf("[Layered] агент %T: малый слой не справился (error=%v, truncated=%v, looped=%v%s) — эскалация на LARGE",
+		agent, err, resp != nil && resp.Truncated, resp != nil && resp.Looped, loopDetail(resp))
+	heavResp, heavErr := l.Large.Generate(runner.WithoutResumeState(ctx), agent)
 	if heavErr != nil {
 		if err != nil {
 			return nil, err
@@ -104,6 +110,15 @@ func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 		return nil, heavErr
 	}
 	return heavResp, nil
+}
+
+// loopDetail дополняет лог эскалации причиной зацикливания (если цикл был
+// прерван петлёй), чтобы в логе было видно, ЧТО именно не получилось.
+func loopDetail(resp *runner.AgentResponse) string {
+	if resp == nil || !resp.Looped {
+		return ""
+	}
+	return ", причина: " + resp.LoopReason
 }
 
 // ModelLimits сообщает лимиты слоёв маршрутизации: входное окно — по самому

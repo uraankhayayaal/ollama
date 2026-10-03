@@ -26,12 +26,51 @@ type AgentResponse struct {
 	// или модель обрезалась по лимиту токенов, а не потому, что модель
 	// завершила ответ корректно.
 	Truncated bool
+	// Looped указывает, что цикл прерван ДЕТЕКТОРОМ ЗАЦИКЛИВАНИЯ: модель
+	// повторяла один и тот же вызов (или не делала ничего нового), не поняла
+	// свою ошибку и не предприняла других действий даже после разрыва петли
+	// (см. loop.go). В отличие от Truncated это не «бюджет кончился», а
+	// приговор: продолжать тот же диалог бессмысленно.
+	//
+	// Вызывающий код обязан отреагировать иначе, чем на успех: эскалировать на
+	// другую модель (models.LayeredProvider) либо честно уронить задачу
+	// (AgentResponse.LoopError), но НЕ считать задачу выполненной.
+	Looped bool
+	// LoopReason — человекочитаемая причина зацикливания (для лога, ошибки
+	// оркестратора и интерфейса).
+	LoopReason string
 	// Messages — полная история диалога цикла (system/user + все раунды).
 	// Сохраняется вызывающим кодом в чекпоинт для возобновления (resume).
 	Messages []Message
 	// Rounds — количество уже потраченных раундов цикла. При resume новый
 	// запуск продолжит с раунда Rounds+1, получив снова полный бюджет maxRounds.
 	Rounds int
+}
+
+// StopReason возвращает причину, по которой цикл не завершился успешно:
+// «зацикливание», «лимит раундов» или пусто (модель закончила сама).
+func (r *AgentResponse) StopReason() string {
+	if r == nil {
+		return ""
+	}
+	switch {
+	case r.Looped:
+		return "зацикливание"
+	case r.Truncated:
+		return "лимит раундов"
+	}
+	return ""
+}
+
+// LoopError возвращает ошибку для вызывающего кода, если цикл прерван
+// зацикливанием (nil иначе). Вызывающий код обязан вернуть её наружу: задача,
+// на которой агент зациклился, не выполнена, и тихий fallback «готово» здесь
+// означал бы потерю работы.
+func (r *AgentResponse) LoopError(prefix string) error {
+	if r == nil || !r.Looped {
+		return nil
+	}
+	return fmt.Errorf("%s: агент зациклился и не предпринял других действий (%s) — задача не выполнена", prefix, r.LoopReason)
 }
 
 // Message — нейтральное представление сообщения диалога,
@@ -202,6 +241,10 @@ type ResumeState struct {
 // resumeStateKey — тип ключа контекста для передачи состояния resume.
 type resumeStateKey struct{}
 
+// resumeOffKey — тип ключа контекста для принудительного сброса resume
+// (WithoutResumeState): задача берётся «с другой стороны», заново.
+type resumeOffKey struct{}
+
 // WithResumeState помещает состояние возобновления агентского цикла в контекст.
 // Провайдеры сами не меняются: runner.Generate читает состояние из контекста.
 func WithResumeState(ctx context.Context, state *ResumeState) context.Context {
@@ -210,10 +253,22 @@ func WithResumeState(ctx context.Context, state *ResumeState) context.Context {
 
 // ResumeStateFromContext извлекает состояние возобновления из контекста.
 func ResumeStateFromContext(ctx context.Context) *ResumeState {
+	if off, _ := ctx.Value(resumeOffKey{}).(bool); off {
+		return nil
+	}
 	if st, ok := ctx.Value(resumeStateKey{}).(*ResumeState); ok {
 		return st
 	}
 	return nil
+}
+
+// WithoutResumeState убирает состояние возобновления из контекста: следующий
+// цикл начнётся заново (свежая история, полный бюджет раундов).
+//
+// Нужен там, где задачу берут «с другой стороны»: продолжение того же
+// застрявшего диалога после срыва воспроизводит ту же петлю.
+func WithoutResumeState(ctx context.Context) context.Context {
+	return context.WithValue(ctx, resumeOffKey{}, true)
 }
 
 // requiredRetries — сколько раз переспрашиваем модель, если она не вызвала
@@ -579,6 +634,22 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// для каких имён уже подсказали. Ловит перебор аргументов в цикле ошибок.
 	failCounts := make(map[string]int)
 	loopFailNudged := make(map[string]bool)
+	// Детектор зацикливания (loop.go) — жёсткая реакция на петлю: разрыв
+	// зацикленного хвоста истории с дайджестом «иди с другой стороны», а при
+	// повторе запрещённого — приговор Looped вместо сжигания бюджета раундов.
+	// Мягкие подсказки выше остаются как первый, дешёвый уровень помощи.
+	loop := newLoopDetector()
+	// loopPrefix — число ведущих сообщений с постановкой задачи: разрыв петли
+	// их не трогает, даже если петля началась на первом раунде.
+	loopPrefix := loopPrefixLen(messages)
+	// loopProgressIdx — индекс сообщения, где цикл последний раз делал что-то
+	// новое. Разрыв схлопывает всё после него: модель перестаёт видеть паттерн,
+	// который повторяет.
+	loopProgressIdx := loopPrefix
+	// loopTask — постановка задачи (пользовательские сообщения префикса). После
+	// разрыва петли она печатается заново последним сообщением: заставляем
+	// модель вернуться к заданию, а не продолжать «по памяти».
+	loopTask := loopTaskStatement(messages[:loopPrefix])
 	// needRefills — сколько раз за цикл уже дозаправляли контекст по маркерам
 	// NEED_* (защита от петли «модель просит контекст → дозаправка → снова»).
 	needRefills := 0
@@ -622,6 +693,20 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// allToolCalls/requiredDone от истории не зависят.
 		if compacted, _ := compressHistoryForRound(ctx, provider, messages, lastInputTokens); len(compacted) != len(messages) {
 			messages = compacted
+		}
+
+		// Принудительное вмешательство детектора петли уходит в ЭТОТ запрос.
+		// Порядок принципиален: предупреждение приготовлено в прошлом раунде по
+		// наблюдению «проверка падает, состояние не меняется», и должно быть видно
+		// модели немедленно — иначе оно доезжает на 1–2 раунда позже, а к этому
+		// моменту разрыв петли уже схлопнул историю и предупреждение пропало бы
+		// вместе с ней. После сжатия истории, чтобы компрессор его не вырезал.
+		if injection := loop.takeInjection(); injection != "" {
+			Debugf("RUNNER: раунд %d: вмешательство детектора петли внедрено в запрос (%d символов)", round+1, len(injection))
+			messages = append(messages, Message{Role: "user", Content: injection})
+			if rep != nil {
+				rep.OnMessage("user", injection, false)
+			}
 		}
 
 		// Если провайдер поддерживает стриминг — текст отдаём по кускам
@@ -740,13 +825,22 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// результатов других вызовов).
 		jobs := make([]toolCallJob, len(reply.ToolCalls))
 		parallel := make([]bool, len(reply.ToolCalls))
+		badArgs := make([]string, len(reply.ToolCalls))
 		nParallel := 0
 		for i, tc := range reply.ToolCalls {
 			Debugf("RUNNER: выполняю инструмент %q args=%s", tc.Name, Truncate(tc.Arguments, 500))
 
 			args, err := tools.ParseArguments(tc.Arguments)
 			if err != nil {
-				return nil, fmt.Errorf("разбор аргументов инструмента %s: %w", tc.Name, err)
+				// Дефект JSON от модели не должен убивать оркестрацию: раньше
+				// здесь запуск падал с «invalid character ']' looking for
+				// beginning of value» и вся сессия терялась. Вместо этого
+				// вызов помечается как невыполненный, а модель получает
+				// требование повторить его с валидным JSON.
+				badArgs[i] = fmt.Sprintf("Аргументы инструмента %q пришли невалидным JSON (%s), поэтому вызов НЕ выполнен. "+
+					"Повтори вызов с корректным JSON: двойные кавычки, без висячих запятых, переводы строк внутри строк — как \n.",
+					tc.Name, Truncate(err.Error(), 160))
+				Debugf("RUNNER: аргументы инструмента %q не разобрались: %v", tc.Name, err)
 			}
 
 			jobs[i] = toolCallJob{tc: tc, args: args}
@@ -803,14 +897,36 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// готовый результат волны, остальные выполняются как раньше — по одному.
 		// Учёт в callCounts/failCounts/requiredDone и история диалога идентичны
 		// последовательному исполнению; порядок tool-сообщений = порядок вызова.
+		var loopCalls []loopRoundCall
+		roundProgress := false
 		for i, j := range jobs {
 			var (
-				result []byte
-				err    error
+				result  []byte
+				err     error
+				blocked bool
 			)
-			if parallel[i] {
+			sig := callSignature(j.tc.Name, j.args)
+			switch {
+			case badArgs[i] != "":
+				// Модель прислала невалидный JSON аргументов: вызов не
+				// выполняем, но и запуск не роняем.
+				result = toolErrorResult(badArgs[i])
+			case parallel[i]:
 				result, err = outcomes[i].result, outcomes[i].err
-			} else {
+			default:
+				// Verify guard: проверка, которая падала слишком много раз подряд,
+				// не запускается повторно — раунд сгорал бы впустую. Блокировка по
+				// нормализованной проверке, поэтому смена аргументов (строки, grep,
+				// --reporter) её не обходит.
+				if reason, isBlocked := loop.blockedVerifyCall(j.tc.Name, j.args); isBlocked {
+					blocked = true
+					result = toolErrorResult(reason)
+					Debugf("RUNNER: раунд %d: вызов %q заблокирован verify guard: %s", round+1, j.tc.Name, reason)
+					if rep != nil {
+						rep.OnToolResult(j.tc.Name, Truncate(string(result), 8000), false)
+					}
+					break
+				}
 				if rep != nil {
 					rep.OnToolStart(j.tc.Name, Truncate(j.tc.Arguments, 2000))
 				}
@@ -825,13 +941,35 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				return nil, fmt.Errorf("выполнение инструмента %s: %w", j.tc.Name, err)
 			}
 
-			callCounts[callSignature(j.tc.Name, j.args)]++
+			// Вывод любого инструмента нормализуется ДО попадания в историю
+			// диалога: escape-последовательности терминала и управляющие байты
+			// деформируют JSON-пакеты и роняют разбор аргументов на следующих
+			// раундах (см. runner/sanitize.go).
+			result = []byte(tools.SanitizeToolOutput(string(result)))
+
+			callCounts[sig]++
 
 			Debugf("RUNNER: результат инструмента %q: %s", j.tc.Name, Truncate(string(result), 500))
+			failed := toolResultFailed(j.tc.Name, result)
+			state, stateSample, stateLabel := loopStateFromCall(j.tc.Name, j.args, result)
+			loopCalls = append(loopCalls, loopRoundCall{
+				name:        j.tc.Name,
+				sig:         sig,
+				failed:      failed,
+				result:      Truncate(string(result), loopDigestResult),
+				paths:       loopCallPaths(j.args),
+				state:       state,
+				stateSample: stateSample,
+				stateLabel:  stateLabel,
+				blocked:     blocked,
+			})
+			if !failed {
+				roundProgress = true
+			}
 			// Считаем провалы инструмента НЕЗАВИСИМО от аргументов: если модель
 			// «перебирает» аргументы в цикле ошибок, сигнатурный определитель
 			// её не ловит, а счётчик по имени — ловит.
-			if toolResultFailed(j.tc.Name, result) {
+			if failed {
 				failCounts[j.tc.Name]++
 			}
 			// Отмечаем успешность обязательных инструментов: ошибки/пустые
@@ -840,7 +978,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				if requiredDone[gi] {
 					continue
 				}
-				if slices.Contains(grp, j.tc.Name) && !toolResultFailed(j.tc.Name, result) {
+				if slices.Contains(grp, j.tc.Name) && !failed {
 					requiredDone[gi] = true
 					Debugf("RUNNER: обязательный инструмент %q выполнен успешно", j.tc.Name)
 				}
@@ -851,6 +989,26 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				ToolCallID: j.tc.ID,
 				Content:    string(result),
 			})
+
+			// Модель повторила вызов, который разрыв петли прямо запретил:
+			// вежливое предупреждение не сработало — возвращаем приговор, чтобы
+			// вызывающий код взял задачу с другой стороны (другая модель или
+			// честный фейл), вместо того чтобы жечь остаток бюджета раундов.
+			if loop.bannedSignature(sig, j.tc.Name) && loop.registerStrike() {
+				reason := fmt.Sprintf("после предупреждения о петле модель повторила запрещённый вызов %s (%d-й раз)", signatureLabel(sig), loop.strikes)
+				Debugf("RUNNER: раунд %d: %s — цикл прерван (Looped)", round+1, reason)
+				if rep != nil {
+					rep.OnMessage("user", "Цикл агента прерван: "+reason, false)
+				}
+				return &AgentResponse{
+					Content:    content,
+					ToolCalls:  allToolCalls,
+					Looped:     true,
+					LoopReason: reason,
+					Rounds:     round + 1,
+					Messages:   append([]Message{}, messages...),
+				}, nil
+			}
 		}
 
 		// Ф-2 + Ф-5: хуки после раунда с мутациями. Очередь затронутых файлов
@@ -945,6 +1103,63 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 					messages = append(messages, Message{Role: "user", Content: appLogFeedMessage(source, fresh, appLogFeedUsed, appLogMaxFeedRounds())})
 				}
 			}
+		}
+
+		// Раунд сделал что-то новое — запоминаем точку, до которой история
+		// реально полезна: разрыв петли схлопнет только хвост после неё.
+		if roundProgress {
+			loopProgressIdx = len(messages)
+		}
+
+		// Детектор зацикливания (жёсткий уровень, после мягких подсказок
+		// ниже): по объективным счётчикам — повторы одного вызова, серия
+		// раундов без успеха, отсутствие прогресса, только чтение, неподвижное
+		// состояние — петля подтверждена. Модель, не понявшая свою ошибку,
+		// игнорирует подсказки, поэтому действие одно: разрыв петли с
+		// требованием идти с другой стороны. Если разрывы исчерпаны (или модель
+		// повторила запрещённое) — приговор Looped: задачу должен взять другой
+		// (см. AgentResponse.Looped). Предупреждение о неподвижной проверке
+		// (stateWarning) приходит в запрос на следующем раунде — см. выше.
+		// Срок действия временных блокировок проверок истекает в конце раунда, в
+		// котором они были выставлены (блок живёт ровно verifyBlockRounds).
+		loop.expireBlocks()
+
+		if reason := loop.observeRound(loopCalls); reason != "" {
+			if !loop.canBreak() {
+				Debugf("RUNNER: раунд %d: петля подтверждена (%s), разрывы исчерпаны (%d) — цикл прерван (Looped)", round+1, reason, loop.breaks)
+				if rep != nil {
+					rep.OnMessage("user", "Цикл агента прерван: "+reason, false)
+				}
+				return &AgentResponse{
+					Content:    content,
+					ToolCalls:  allToolCalls,
+					Looped:     true,
+					LoopReason: reason,
+					Rounds:     round + 1,
+					Messages:   append([]Message{}, messages...),
+				}, nil
+			}
+			digest, banned := loop.breakLoop(reason, pendingRequired())
+			Debugf("RUNNER: раунд %d: детектировано зацикливание (%s) — разрыв петли %d/%d, под запретом %d вызов(ов)",
+				round+1, reason, loop.breaks, loop.cfg.breaks, banned)
+			messages = loopCollapsedMessages(messages, loopProgressIdx, loopPrefix)
+			// К дайджесту добавляем перезапуск: постановка задачи печатается
+			// заново последним сообщением, а уже тронутые файлы предлагается
+			// перечитать. Только запрет «не повторяй» без этого оставлял модели
+			// право продолжать по памяти, не сверившись с заданием и кодом.
+			digest += loopRestartMessage(loopTask, loop.touchedFiles(), pendingRequired())
+			messages = append(messages, Message{Role: "user", Content: digest})
+			if rep != nil {
+				rep.OnMessage("user", digest, false)
+			}
+			// После разрыва пороги считаются заново, иначе первая же попытка
+			// повторить запрещённое тут же объявила бы новую петлю.
+			loopProgressIdx = loopPrefixLen(messages)
+			callCounts = make(map[string]int)
+			failCounts = make(map[string]int)
+			loopNudged = make(map[string]bool)
+			loopFailNudged = make(map[string]bool)
+			continue
 		}
 
 		// Защита от зацикливания: если какой-то вызов был повторён

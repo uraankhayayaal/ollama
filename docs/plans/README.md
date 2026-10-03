@@ -46,6 +46,7 @@
 | [PLAN-2026-09-25-done-e2e-findings.md](PLAN-2026-09-25-done-e2e-findings.md) | Находки ручных E2E (дефекты Ф-1..Ф-7) | Выполнено |
 | [PLAN-2026-09-27-done-branch-aware-rag.md](PLAN-2026-09-27-done-branch-aware-rag.md) | Branch-Aware RAG: версионированный поиск по веткам | Выполнено |
 | [PLAN-2026-09-28-done-rag-main-freshness.md](PLAN-2026-09-28-done-rag-main-freshness.md) | Актуальность RAG между эпиками: индекс `main` + рабочая копия агентов | Выполнено |
+| [PLAN-2026-10-03-done-loop-breaker.md](PLAN-2026-10-03-done-loop-breaker.md) | Разрыв петли агента + эскалация на другую модель + честный фейл | Выполнено |
 
 ## Что из планов важно знать
 
