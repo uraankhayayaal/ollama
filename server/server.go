@@ -245,6 +245,7 @@ func (s *Server) routes() http.Handler {
 
 	// Логи проекта (панель «Логи», см. logs.go).
 	mux.HandleFunc("GET /api/projects/{id}/logs", s.handleGetLogs)
+	mux.HandleFunc("DELETE /api/projects/{id}/logs", s.handleDeleteLogs)
 
 	// WebSocket
 	mux.HandleFunc("GET /api/projects/{id}/ws", s.handleWS)

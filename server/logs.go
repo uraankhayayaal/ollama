@@ -8,16 +8,19 @@
 // самого приложения, и они отдаются все.
 //
 // Эндпоинт GET /api/projects/{id}/logs возвращает метаданные + содержимое и
-// имя выделенного файла для показа в Logboard.
+// имя выделенного файла для показа в Logboard. DELETE с тем же путём обрезает
+// эти файлы (кнопка «Очистить логи»).
 
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"ai/logging"
 )
@@ -46,6 +49,48 @@ type logsResponse struct {
 	Truncated bool           `json:"truncated"`
 }
 
+// logDirs — каталоги, где могут лежать лог-файлы проекта: общий каталог
+// логов сервера + подкаталог logs внутри рабочей папки проекта (если есть).
+// Единая точка для чтения и очистки: обе операции обязаны видеть один и тот
+// же набор файлов, иначе панель показывала бы то, что очистка не тронула.
+func (s *Server) logDirs(root string) []string {
+	globalDir := s.logsDir()
+	dirs := []string{globalDir}
+	if root != "" {
+		if local := filepath.Join(root, "logs"); fileExists(local) {
+			dirs = append(dirs, local)
+		}
+	}
+	return dirs
+}
+
+// collectProjectLogs собирает лог-файлы проекта по dirs с дедупликацией по
+// имени. Факт обрезки хвоста — в out.cut.
+//
+// В общем каталоге сервера лежат логи ВСЕХ проектов и самого процесса
+// (server.log) — оттуда берётся только файл этого проекта, иначе панель
+// показывала бы чужие логи, а очистка стирала бы их. В локальном logs/
+// проекта берутся все.
+func collectProjectLogs(dirs []string, globalDir, own string) (out []logFileEntry, cut bool) {
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		entries := collectLogFiles(dir)
+		if dir == globalDir {
+			entries = filterLogEntries(entries, own)
+		}
+		for _, e := range entries {
+			if seen[e.Name] {
+				continue
+			}
+			seen[e.Name] = true
+			cut = cut || e.cut
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, cut
+}
+
 // handleGetLogs возвращает логи проекта: файлы каталога logs/ (глобального
 // и внутри каталога проекта) с содержимым. Подписывает проект на
 // real-time обновления (строчки шлются по WS type="log").
@@ -57,15 +102,8 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Каталоги, где могут лежать лог-файлы: общий каталог логов сервера +
-	// подкаталог logs внутри рабочей папки проекта (если есть).
 	globalDir := s.logsDir()
-	dirs := []string{globalDir}
-	if inf.Root != "" {
-		if local := filepath.Join(inf.Root, "logs"); fileExists(local) {
-			dirs = append(dirs, local)
-		}
-	}
+	dirs := s.logDirs(inf.Root)
 
 	// У каждого проекта свой файл logs/<проект>.log. Создаём его сразу, чтобы
 	// панель не показывала «файлов нет» до первого запуска задачи и чтобы
@@ -79,25 +117,7 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	s.logBroker.Subscribe(project, dirs, listLogFiles(dirs))
 
 	out := logsResponse{Dir: strings.Join(dirs, " · ")}
-	seen := map[string]bool{}
-	for _, dir := range dirs {
-		entries := collectLogFiles(dir)
-		// В общем каталоге сервера лежат логи ВСЕХ проектов и самого процесса
-		// (server.log) — оставляем только файл этого проекта, иначе панель
-		// показывала бы чужие логи. В локальном logs/ проекта берутся все.
-		if dir == globalDir {
-			entries = filterLogEntries(entries, own)
-		}
-		for _, e := range entries {
-			if seen[e.Name] {
-				continue
-			}
-			seen[e.Name] = true
-			out.Truncated = out.Truncated || e.cut
-			out.Files = append(out.Files, e)
-		}
-	}
-	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Name < out.Files[j].Name })
+	out.Files, out.Truncated = collectProjectLogs(dirs, globalDir, own)
 
 	// Выделяем файл проекта: logs/<проект>.log, иначе самый свежий.
 	if out.Selected == "" {
@@ -127,6 +147,52 @@ func (s *Server) logsDir() string {
 		return d
 	}
 	return "logs"
+}
+
+// clearMarker — заголовок, который очистка оставляет вместо прежнего
+// содержимого. Пустой файл не отличить от «логов ещё никогда не было», а
+// содержимое лога — это улики агентского прогона, поэтому момент стирания
+// должен остаться в самом файле.
+const clearMarker = "=== Логи очищены %s ==="
+
+// handleDeleteLogs обрезает лог-файлы проекта: DELETE /api/projects/{id}/logs.
+// Обрезаются ровно те файлы, которые отдаёт GET (см. collectProjectLogs) —
+// иначе очистка либо не тронула бы то, что панель показывает, либо стёрла бы
+// чужие логи из общего каталога.
+//
+// Перезаписывание открытых дескрипторов безопасно: логгеры пишут с
+// O_APPEND, поэтому следующая запись уходит в конец уже пустого файла. Брокер
+// ловит усечение сам (размер меньше позиции чтения) и переоткрывает файл с
+// начала — отдельного сброса его состояния не требуется.
+func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	inf, err := s.reg.Get(project)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "проект не найден")
+		return
+	}
+
+	own := logging.ProjectLogName(project) + ".log"
+	logging.Attach(project)
+	dirs := s.logDirs(inf.Root)
+	files, _ := collectProjectLogs(dirs, s.logsDir(), own)
+
+	marker := fmt.Sprintf(clearMarker, time.Now().Format("2006-01-02 15:04:05")) + "\n"
+	cleared := make([]string, 0, len(files))
+	for _, f := range files {
+		if err := os.WriteFile(f.Path, []byte(marker), 0o644); err != nil {
+			writeErr(w, http.StatusInternalServerError, "не удалось очистить лог "+f.Name+": "+err.Error())
+			return
+		}
+		cleared = append(cleared, f.Name)
+	}
+	logging.Infof("логи очищены: проект=%s файлов=%d", project, len(cleared))
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"cleared": cleared,
+		"count":   len(cleared),
+	})
 }
 
 // fileExists проверяет существование пути.

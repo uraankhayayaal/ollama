@@ -18,10 +18,11 @@
 //
 // Верхний action-bar: «Копировать» — все логи в буфер обмена, «Экспорт» —
 // скачивание всех логов файлом (содержимое файлов из REST-снапшота, с учётом
-// ещё не вошедших в снапшот потоковых строк).
+// ещё не вошедших в снапшот потоковых строк), «Очистить» — обрезка файлов логов
+// на сервере (необратимо, поэтому за подтверждением).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { projectLogs } from "@/Api";
+import { clearProjectLogs, projectLogs } from "@/Api";
 import type { LogStream, LogsView } from "@/Types";
 import { downloadText, safeName, stampedName } from "@/download";
 import "./styles.scss";
@@ -64,6 +65,8 @@ export function Logboard(props: LogboardProps) {
   const [error, setError] = useState("");
   // Признак «только что скопировали логи» — для краткой фидбеков надписи.
   const [copied, setCopied] = useState(false);
+  // Идёт обрезка файлов логов на сервере — кнопка ждёт ответа.
+  const [clearing, setClearing] = useState(false);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<"all" | "warn" | "err">("all");
   // followingRef — намерение «держим хвост», following — его отражение в UI.
@@ -350,6 +353,37 @@ export function Logboard(props: LogboardProps) {
     downloadText(stampedName("logs", `${safeName(props.project)}.txt`), text);
   };
 
+  // Очистка обрезает файлы логов НА СЕРВЕРЕ: сбросить только буфер панели
+  // бессмысленно, его через 3с вернёт поллинг из файла. После обрезки
+  // перечитываем снимок — иначе в буфере остались бы старые строки (поллинг
+  // включается только при появлении НОВОГО файла, а файл остался тем же).
+  // Перечитываем НЕ тихо: снимок уже загружен, поэтому надписи «Загружаю
+  // логи…» не будет, а вот ошибка перечитывания покажется пользователю —
+  // иначе после обрезки он увидел бы пустую панель и не знал почему.
+  const onClearAll = async () => {
+    if (!window.confirm("Очистить логи проекта? Файлы логов будут обрезаны без возможности восстановить.")) {
+      return;
+    }
+    setClearing(true);
+    setError("");
+    try {
+      await clearProjectLogs(BASE, props.project);
+      await load();
+      // Обрезка меняет файл целиком — снимок сходится с буфером только по
+      // заголовку очистки, поэтому прежние строки надо убрать явно.
+      applied.current.clear();
+      consumed.current.clear();
+      snapAt.current.clear();
+      rendered.current = "";
+      setRows([]);
+      jumpToBottom();
+    } catch (e) {
+      setError(fmtErr(e));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   // Чем занят пустой контейнер: ошибка, первая загрузка, пустой каталог логов
   // или отсутствие совпадений фильтра.
   const emptyText = error
@@ -375,6 +409,15 @@ export function Logboard(props: LogboardProps) {
             <button className="ab" onClick={onExportAll} disabled={!hasLogs} title="Скачать все логи файлом">
               <IconDownload />
               Экспорт
+            </button>
+            <button
+              className="ab danger"
+              onClick={() => void onClearAll()}
+              disabled={!hasLogs || clearing}
+              title="Обрезать файлы логов на сервере (необратимо)"
+            >
+              <IconTrash />
+              {clearing ? "Очистка…" : "Очистить"}
             </button>
           </div>
           <button className="btn close" onClick={props.toggleLogboard} title="Свернуть окно">
@@ -567,6 +610,18 @@ function IconCopy() {
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="9" y="9" width="12" height="12" rx="2" />
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+// Иконка «удалить» для кнопки очистки логов (action-bar).
+function IconTrash() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
     </svg>
   );
 }

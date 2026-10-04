@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -323,4 +324,33 @@ func TestListLogFiles(t *testing.T) {
 	if got["c.txt"] || got["sub.log"] {
 		t.Fatalf("лишнее в списке: %v", got)
 	}
+}
+
+// Очистка логов обрезает файл и тут же пишет заголовок, а агент может
+// дописать строки ДО следующего такта брокера. Если обрезка не была поймана
+// по размеру (новая запись успела перекрыть старую позицию), стрим обязан
+// взять файл с начала по отпечатку — иначе хвост читался бы с середины
+// чужого содержимого и в панель попадали бы обрывки.
+func TestSubFileReadNewAfterTruncateWithFastRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proj.log")
+	if err := os.WriteFile(path, []byte("старое содержимое\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sf := &subFile{name: "proj.log", path: path}
+	if !sf.openAtEnd() {
+		t.Fatal("openAtEnd = false")
+	}
+	pos := sf.pos
+
+	// Новый файл ЛОНЖЕ прежней позиции: сравнение размеров ротацию не видит.
+	fresh := "=== Логи очищены ===\n"
+	for len(fresh) <= int(pos) {
+		fresh += "новая строка после очистки\n"
+	}
+	if err := os.WriteFile(path, []byte(fresh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Split(strings.TrimSuffix(fresh, "\n"), "\n")
+	assertLines(t, sf.readNew(), want)
 }

@@ -571,3 +571,15 @@ export async function projectLogs(
 ): Promise<LogsView> {
   return req<LogsView>("GET", `${base}/api/projects/${enc(project)}/logs`);
 }
+
+// Очистка логов проекта: сервер обрезает те же файлы, что отдаёт projectLogs.
+// Действие необратимое, поэтому подтверждение остаётся на стороне UI.
+export async function clearProjectLogs(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean; cleared: string[]; count: number }> {
+  return req<{ ok: boolean; cleared: string[]; count: number }>(
+    "DELETE",
+    `${base}/api/projects/${enc(project)}/logs`,
+  );
+}
