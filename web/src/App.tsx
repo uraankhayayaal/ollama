@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
+import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, LogStream, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -340,6 +340,28 @@ export function App() {
     setThinking(true);
     try {
       await postChat(BASE, project.project_name, text);
+    } catch (e) {
+      setThinking(false);
+      fail(e);
+    }
+  };
+
+  // Разбор лога ассистентом (кнопка «Разобрать» в панели логов). Ответ
+  // всегда приезжает в чат, поэтому разворачиваем свёрнутую панель чата:
+  // иначе кнопка «отработала в пустоту» и непонятно, куда смотреть.
+  // Условия отбора (файл, поиск, уровень) приходят из Logboard — разбираем
+  // ровно то, что пользователь видит на экране.
+  const onAnalyzeLogs = async (args: { file?: string; level?: string; query?: string }) => {
+    if (!project) {
+      return;
+    }
+    if (collapsedSide === "chat") {
+      setCollapsedSide("");
+      localStorage.removeItem(PANE_COLLAPSED_KEY);
+    }
+    setThinking(true);
+    try {
+      await analyzeProjectLogs(BASE, project.project_name, args);
     } catch (e) {
       setThinking(false);
       fail(e);
@@ -934,6 +956,7 @@ export function App() {
             project={project.project_name}
             showLogboard={showLogboard}
             logLines={logLines}
+            onAnalyze={(args) => void onAnalyzeLogs(args)}
             toggleLogboard={() => {
               setShowLogboard(false);
             }}

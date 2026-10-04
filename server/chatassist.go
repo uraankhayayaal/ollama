@@ -25,15 +25,38 @@ import (
 // болтовня») убран: триггер «класть задачу на доску» — это вызов инструмента
 // моделью, а не регэкспеп.
 
+// chatAsk — что именно спрашиваем у ассистента в этом ходе.
+type chatAsk struct {
+	// question — реплика пользователя (может быть пустой при разборе логов).
+	question string
+	// logDigestPrompt — блок разбора логов для промпта (Ф-5, кнопка
+	// «Разобрать»). Пусто в обычных ходах чата.
+	logDigestPrompt string
+}
+
 // runChatAssistant отвечает на сообщение пользователя в отдельной горутине:
 // строит промпт с состоянием проекта и доски, вызывает ассистента (у которого
 // есть write-инструменты доски, семантический поиск CodeSearch по RAG и блок
 // «релевантный код» в промпте) и публикует ответ в чат.
 func (sess *Session) runChatAssistant(ctx context.Context, question string, provider models.LLMProvider) {
+	sess.runChatAsk(ctx, chatAsk{question: question}, provider)
+}
+
+// runChatLogAnalysis — ход ассистента, порождённый кнопкой «Разобрать» в
+// панели логов. Отличие от обычного: в промпт уходит подготовленный сервером
+// дайджест лога, а «реплики пользователя» нет — пользователь не что-то
+// писал, он нажал кнопку. Выдумывать от его имени текст в истории нельзя.
+func (sess *Session) runChatLogAnalysis(ctx context.Context, a logAnalysis, provider models.LLMProvider) {
+	question := fmt.Sprintf("Разбери лог %s и объясни, что в нём сломалось.", a.FilesLabel())
+	sess.runChatAsk(ctx, chatAsk{question: question, logDigestPrompt: logDigestPrompt(a)}, provider)
+}
+
+// runChatAsk — общий запуск ассистента чата.
+func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider models.LLMProvider) {
 	sess.wg.Add(1)
 	go func() {
 		defer sess.wg.Done()
-		prompt := sess.chatAssistantPrompt(question)
+		prompt := sess.chatPromptFor(ask)
 		// Работаем в каталоге зарегистрированного проекта (Root), а не в новой
 		// temp/<имя>: ассистент должен читать те же файлы, что видит дашборд.
 		dir := projects.ProjectDir(sess.project)
@@ -284,7 +307,15 @@ func prevUserDiffers(asked, answer string) bool {
 // состояние оркестрации и компактную сводку Kanban-доски (эпики, задачи, баги).
 // Доска также доступна ассистенту напрямую через Board* инструменты чтения,
 // блок «релевантный код» (RAG) добавляет сам ассистент в системный промпт.
+// chatAssistantPrompt — промпт ассистента чата для обычной реплики.
 func (sess *Session) chatAssistantPrompt(question string) string {
+	return sess.chatPromptFor(chatAsk{question: question})
+}
+
+// chatPromptFor строит полный промпт хода: вопрос, якорь действия, состояние
+// оркестрации, доска, RAG-блок и (для разбора логов) дайджест.
+func (sess *Session) chatPromptFor(ask chatAsk) string {
+	question := ask.question
 	var b strings.Builder
 	fmt.Fprintf(&b, "Вопрос пользователя:\n%s\n", question)
 
@@ -408,6 +439,12 @@ func (sess *Session) chatAssistantPrompt(question string) string {
 				fmt.Fprintf(&b, "- %s: %d\n", st.Label(), n)
 			}
 		}
+	}
+
+	// Дайджест логов (Ф-5, кнопка «Разобрать»). Идёт последним: он большой и
+	// относится к текущему ходу, а не к постоянному состоянию проекта.
+	if ask.logDigestPrompt != "" {
+		b.WriteString(ask.logDigestPrompt)
 	}
 
 	return b.String()

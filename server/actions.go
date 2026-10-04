@@ -236,6 +236,9 @@ func (sess *Session) serverActionTools() []tools.Tool {
 	// (файловые инструменты ассистента привязаны к каталогу проекта, а
 	// конфликтный worktree лежит вне его).
 	ts = append(ts, newConflictResolveTools(sess)...)
+	// Ф-5 «разобрать логи»: мост к логам проекта, они лежат вне корня
+	// рабочей папки, куда файловые инструменты ассистента не дотягиваются.
+	ts = append(ts, newLogReadTool(sess))
 	return ts
 }
 
@@ -243,6 +246,18 @@ func (sess *Session) serverActionTools() []tools.Tool {
 func actionArg(args map[string]any, key string) string {
 	s, _ := args[key].(string)
 	return strings.TrimSpace(s)
+}
+
+// actionArgInt — целочисленный аргумент инструмента действий. Модели шлют
+// числа как float64 (JSON без типов), поэтому берём оба представления.
+func actionArgInt(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
 }
 
 // --- реализация ActionsBackend на Session ---

@@ -583,3 +583,25 @@ export async function clearProjectLogs(
     `${base}/api/projects/${enc(project)}/logs`,
   );
 }
+
+// Разбор логов ассистентом (кнопка «Разобрать» в панели логов). Отдельный
+// ход вместо обычного сообщения: сервер собирает детерминированный дайджест
+// (сырой лог в промпт не идёт) и отвечает в чат. Пустой разбор (empty) и
+// повтор того же лога (cached) НЕ зовут модель — об этом сообщает сервер.
+export interface LogAnalysisReq {
+  file?: string;
+  level?: string;
+  query?: string;
+}
+
+export async function analyzeProjectLogs(
+  base: string,
+  project: string,
+  args: LogAnalysisReq,
+): Promise<{ ok: boolean; empty?: boolean; cached?: boolean; findings?: number }> {
+  return req<{ ok: boolean; empty?: boolean; cached?: boolean; findings?: number }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/chat`,
+    { log_analysis: args },
+  );
+}

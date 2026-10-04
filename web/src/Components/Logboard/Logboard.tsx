@@ -18,7 +18,8 @@
 //
 // Верхний action-bar: «Копировать» — все логи в буфер обмена, «Экспорт» —
 // скачивание всех логов файлом (содержимое файлов из REST-снапшота, с учётом
-// ещё не вошедших в снапшот потоковых строк), «Очистить» — обрезка файлов логов
+// ещё не вошедших в снапшот потоковых строк), «Разобрать» — разбор выбранного
+// лога ассистентом (ответ приезжает в чат), «Очистить» — обрезка файлов логов
 // на сервере (необратимо, поэтому за подтверждением).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +34,9 @@ export interface LogboardProps {
   toggleLogboard?: () => void;
   // Потоковые строки (из App.tsx): «имя файла → накопленный хвост».
   logLines: Map<string, LogStream>;
+  // Разбор лога ассистентом (кнопка «Разобрать»). В App: отправляет запрос и
+  // открывает чат с ответом — в Logboard ответа нет, он всегда в чате.
+  onAnalyze?: (args: { file?: string; level?: string; query?: string }) => void;
 }
 
 const BASE = "";
@@ -67,6 +71,8 @@ export function Logboard(props: LogboardProps) {
   const [copied, setCopied] = useState(false);
   // Идёт обрезка файлов логов на сервере — кнопка ждёт ответа.
   const [clearing, setClearing] = useState(false);
+  // Идёт разбор лога ассистентом: ответ приедет в чат, здесь — ожидание.
+  const [analyzing, setAnalyzing] = useState(false);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<"all" | "warn" | "err">("all");
   // followingRef — намерение «держим хвост», following — его отражение в UI.
@@ -384,6 +390,32 @@ export function Logboard(props: LogboardProps) {
     }
   };
 
+  // Разбор лога ассистентом. Условия отбора из панели (файл, поиск, фильтр
+  // уровней) уходят вместе с запросом: пользователь разбирает ровно то, что
+  // видит, иначе пришлось бы объяснять модели, что именно он смотрит.
+  // Фильтр уровней отображается в «не легче»: «warn» на сервере означает
+  // WARN + ERROR + FATAL — иначе кнопка «покажи ошибки» приносила бы тонну
+  // предупреждений.
+  const onAnalyzeClick = async () => {
+    if (!props.onAnalyze) return;
+    setAnalyzing(true);
+    setError("");
+    try {
+      props.onAnalyze({
+        file: selected || undefined,
+        level: level === "all" ? undefined : level === "err" ? "ERROR" : "WARN",
+        query: query.trim() || undefined,
+      });
+      // Сброс состояния — по ответу ассистента в чате: он приезжает по WS и
+      // погасит «Разбираю…» там. Здесь ждать нечего: запрос вернулся сразу,
+      // а ход ассистента ещё идёт.
+      setAnalyzing(false);
+    } catch (e) {
+      setAnalyzing(false);
+      setError(fmtErr(e));
+    }
+  };
+
   // Чем занят пустой контейнер: ошибка, первая загрузка, пустой каталог логов
   // или отсутствие совпадений фильтра.
   const emptyText = error
@@ -410,6 +442,17 @@ export function Logboard(props: LogboardProps) {
               <IconDownload />
               Экспорт
             </button>
+            {props.onAnalyze && (
+              <button
+                className="ab"
+                onClick={() => void onAnalyzeClick()}
+                disabled={!hasLogs || analyzing}
+                title="Попросить ассистента разобрать выбранный лог — ответ придёт в чат"
+              >
+                <IconSearch />
+                {analyzing ? "Разбираю…" : "Разобрать"}
+              </button>
+            )}
             <button
               className="ab danger"
               onClick={() => void onClearAll()}

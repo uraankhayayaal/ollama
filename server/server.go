@@ -816,12 +816,23 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 // эпик/задачу/баг инструментами Board* или ответить текстом. Бинарный сплит
 // по ключевым словам убран: оркестрацию ассистент не запускает (берёт кнопка
 // «Продолжить»).
+// handlePostChat принимает сообщение пользователя (message) ИЛИ запрос разбора
+// логов (log_analysis — кнопка «Разобрать» в панели логов). Второй вариант не
+// пишет в историю выдуманную реплику пользователя: он добавляет служебную
+// строку статуса, а разбор идёт отдельным ходом ассистента с дайджестом в
+// промпте (см. runChatLogAnalysis).
 func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	var body struct {
-		Message string `json:"message"`
+		Message     string          `json:"message"`
+		LogAnalysis *logAnalysisReq `json:"log_analysis"`
 	}
-	if err := decodeBody(r, &body); err != nil || body.Message == "" {
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "поле message обязательно")
+		return
+	}
+	body.Message = strings.TrimSpace(body.Message)
+	if body.Message == "" && body.LogAnalysis == nil {
 		writeErr(w, http.StatusBadRequest, "поле message обязательно")
 		return
 	}
@@ -831,6 +842,23 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
 		return
 	}
+
+	// Ветка разбора логов. Провайдера она берёт сама и только когда до него
+	// дойдёт дело: отказ (нет файла), пустой разбор и cooldown не должны
+	// требовать настроенной модели.
+	if body.LogAnalysis != nil {
+		s.handleChatLogAnalysis(w, sess, *body.LogAnalysis)
+		return
+	}
+
+	// Единый ассистент: решает по смыслу (создание эпика/задачи/бага — через
+	// его board-инструменты, а не по регэкспепу).
+	prov, err := s.provider()
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
+		return
+	}
+	log.Printf("[llm] модель: %s", s.prov.describe())
 
 	// Пользовательское сообщение → чат (для истории) и в лог проекта.
 	sess.log.Infof("[чат] пользователь: %s", truncateText(body.Message, 300))
@@ -852,15 +880,74 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 
 	// Единый ассистент: решает по смыслу (создание эпика/задачи/бага — через
 	// его board-инструменты, а не по регэкспепу).
+	sess.log.Infof("[чат] маршрут: единый ассистент (действия по смыслу, без сплита)")
+	sess.runChatAssistant(context.Background(), body.Message, prov)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleChatLogAnalysis обслуживает кнопку «Разобрать» в панели логов. Ответ
+// уходит в чат (и в шину), в REST — короткий статус.
+func (s *Server) handleChatLogAnalysis(w http.ResponseWriter, sess *Session, req logAnalysisReq) {
+	ctx := context.Background()
+	a, err := sess.buildLogAnalysis(req)
+	if err != nil {
+		sess.append(chat.RoleStatus, "Разбор логов не удался: "+err.Error(), "", "", nil)
+		writeErr(w, http.StatusBadRequest, "разбор логов: "+err.Error())
+		return
+	}
+
+	// Служебная строка в чате: пользователь нажал кнопку, а не что-то написал.
+	status := "Разбор логов: " + a.FilesLabel()
+	if a.Note != "" {
+		status += " (" + a.Note + ")"
+	}
+	sess.log.Infof("[чат] %s", status)
+	sess.append(chat.RoleStatus, status, "", "", nil)
+	sess.srv.hub.Publish(sess.project, "chat", chat.Message{
+		Role:    chat.RoleStatus,
+		Content: status,
+		Time:    time.Now().UTC(),
+	})
+
+	// Пустой разбор: критичных проблем нет. Отвечаем детерминированно, без
+	// вызова модели — тратить токены на «всё хорошо» незачем, а модель на
+	// пустом дайджесте склонна выдумать проблему.
+	if a.Digest.empty() {
+		msg := fmt.Sprintf("В логе %s критичных проблем не найдено: ни одной записи уровня WARN/ERROR/FATAL%s.",
+			a.FilesLabel(), logAnalysisWhere(a.Note))
+		sess.append(chat.RoleAssistant, msg, "assistant", "", nil)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "empty": true})
+		return
+	}
+
+	sess.log.Infof("[чат] маршрут: разбор логов (%d строк, %d находок)",
+		a.Digest.Lines, len(a.Digest.Findings))
+	if sess.markAnalyzed(a.key()) {
+		// Тот же лог только что разобран: модель второй раз не зовём, ответ
+		// уже выше в чате.
+		sess.append(chat.RoleStatus,
+			fmt.Sprintf("Лог %s не изменился с прошлого разбора — повторно не запускаю, ответ выше в чате.", a.FilesLabel()),
+			"", "", nil)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cached": true})
+		return
+	}
+
 	prov, err := s.provider()
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "LLM-провайдер не настроен: "+err.Error())
 		return
 	}
-	sess.log.Infof("[чат] маршрут: единый ассистент (действия по смыслу, без сплита)")
-	sess.log.Infof("[llm] модель: %s", s.prov.describe())
-	sess.runChatAssistant(context.Background(), body.Message, prov)
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	log.Printf("[llm] модель: %s", s.prov.describe())
+	sess.runChatLogAnalysis(ctx, a, prov)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "findings": len(a.Digest.Findings)})
+}
+
+// logAnalysisWhere — хвост фразы про объём выборки для ответа «проблем нет».
+func logAnalysisWhere(note string) string {
+	if note == "" {
+		return ""
+	}
+	return " в выборке (" + note + ")"
 }
 
 // handleContinue запускает/возобновляет оркестрацию на текущей доске (кнопка
