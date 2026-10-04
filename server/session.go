@@ -109,6 +109,12 @@ type Session struct {
 	// много проектов, поэтому сообщения сессии пишутся в файл своего проекта,
 	// а не в общий logs/server.log.
 	log *logging.Logger
+
+	// sessionInjections — инъекции уровня сессии: добавляются в работающей
+	// сессии через API и применяются к следующему вызову модели. Хранятся
+	// в памяти под mutex ( наблюдаются в wg/stop, персистентность пока не
+	// требуется).
+	sessionInjections []board.Injection
 }
 
 // newSession создаёт сессию проекта (без запуска runner'а).
@@ -833,6 +839,38 @@ func truncateText(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// SessionInjections возвращает сессионные инъекции (копия для потокобезопасности).
+func (s *Session) SessionInjections() []board.Injection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionInjections == nil {
+		return nil
+	}
+	out := make([]board.Injection, len(s.sessionInjections))
+	copy(out, s.sessionInjections)
+	return out
+}
+
+// AddSessionInjection добавляет инъекцию в сессию (hot apply).
+func (s *Session) AddSessionInjection(inj board.Injection) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionInjections = append(s.sessionInjections, inj)
+}
+
+// RemoveSessionInjection удаляет инъекцию по ID из сессии.
+func (s *Session) RemoveSessionInjection(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]board.Injection, 0, len(s.sessionInjections))
+	for _, inj := range s.sessionInjections {
+		if inj.ID != id {
+			out = append(out, inj)
+		}
+	}
+	s.sessionInjections = out
 }
 
 var _ = workspace.KindTemp // связь с реестром для будущих эндпоинтов регистрации

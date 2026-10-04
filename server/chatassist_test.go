@@ -17,6 +17,7 @@ import (
 	"ai/agents/chatassist"
 	"ai/board"
 	"ai/chat"
+	"ai/injections"
 	"ai/runner"
 	"ai/tools"
 	"ai/workspace"
@@ -648,5 +649,91 @@ func TestChatAssistantLeavesBoardUntouched(t *testing.T) {
 		}
 		bugs, err := sess.board.ListBugReports(context.Background())
 		return err == nil && len(epics) == 0 && len(tasks) == 0 && len(bugs) == 0
+	})
+}
+
+// TestSessionInjectionHotApply: AddSessionInjection → SessionInjections()
+// возвращает добавленную; Add → Get → Remove → Get возвращает пусто.
+func TestSessionInjectionHotApply(t *testing.T) {
+	t.Run("CRUD", func(t *testing.T) {
+		var sess Session
+		// Сессия по умолчанию возвращает nil.
+		if got := sess.SessionInjections(); len(got) != 0 {
+			t.Fatalf("expected empty initially, got %d", len(got))
+		}
+
+		// Добавляем инъекцию.
+		inj := board.Injection{
+			Name:     "hot-test",
+			Scope:    "session",
+			Target:   "system",
+			Position: "prepend",
+			Content:  "ТЕСТОВАЯ ИНЪЕКЦИЯ",
+		}
+		sess.AddSessionInjection(inj)
+
+		// Получаем — одна инъекция.
+		got := sess.SessionInjections()
+		if len(got) != 1 {
+			t.Fatalf("expected 1 injection, got %d", len(got))
+		}
+		if got[0].Name != "hot-test" {
+			t.Fatalf("got name %q, want 'hot-test'", got[0].Name)
+		}
+
+		// Удаляем — пусто.
+		sess.RemoveSessionInjection(got[0].ID)
+		got2 := sess.SessionInjections()
+		if len(got2) != 0 {
+			t.Fatalf("expected 0 after remove, got %d", len(got2))
+		}
+	})
+
+	t.Run("AssistantReceives", func(t *testing.T) {
+		// Ассистент получает инъекции сессии через GetInjections.
+		var sess Session
+		sess.AddSessionInjection(board.Injection{
+			Name:     "asst-test",
+			Scope:    "session",
+			Target:   "system",
+			Position: "prepend",
+			Content:  "Привет от сессии",
+		})
+
+		// Создаём ассистент и копируем сессионные инъекции.
+		dir := filepath.Join(t.TempDir(), "asst-test")
+		os.MkdirAll(dir, 0o755)
+		asst := chatassist.NewAssistantInDir(dir, "test", "вопрос", nil, nil)
+		asst.Injections = sess.SessionInjections()
+
+		// Ассистент получает инъекцию.
+		got := asst.GetInjections()
+		if len(got) != 1 {
+			t.Fatalf("expected assistant to have 1 injection, got %d", len(got))
+		}
+
+		// Вызываем ApplyInjections с этой инъекцией.
+		injs := injections.CollectInjections(nil, got, nil, nil)
+		if len(injs) != 1 {
+			t.Fatalf("expected 1 collected injection, got %d", len(injs))
+		}
+		result, err := injections.ApplyInjections("base system", nil, injs, injections.MergeContext{
+			RenderFn: injections.RenderFnDefault,
+			EvalFn:   injections.EvalFnDefault,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.System == "base system" {
+			t.Fatal("expected prepended content in system")
+		}
+
+		// Метаданные.Application.
+		if len(result.Applied) != 1 {
+			t.Fatalf("expected 1 applied, got %d", len(result.Applied))
+		}
+		if result.Applied[0].Name != "asst-test" {
+			t.Fatalf("metadata name %q != 'asst-test'", result.Applied[0].Name)
+		}
 	})
 }

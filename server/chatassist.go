@@ -72,6 +72,8 @@ func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider model
 		// промпт, чтобы модель помнила, «о чём писали минуту назад», а не только
 		// текущий вопрос. Текущая реплика (последняя запись стрима) исключается.
 		asst.History = sess.chatDialogueHistory(ctx)
+		// Сессионные инъекции: применяются к следующему вызову модели (hot apply).
+		asst.Injections = sess.SessionInjections()
 		// Ф-3: мосты-инструменты к серверным git/канбан-действиям живут вне
 		// общего реестра tools (цикл импортов) — инъектируем их в набор
 		// ассистента на стороне сервера.

@@ -196,6 +196,109 @@ POST /api/projects/{id}/ask/{askID}/answer
 по умолчанию, потолок 1000) с необязательным `grep`, и ровно те же файлы,
 что видит Logboard: чужие логи проектов и `server.log` не утекают.
 
+## Промпт-инъекции (injections)
+
+Промпт-инъекции — структурированные фрагменты системных сообщений, которые
+применяются к работе ассистента и оркестратора в реальном времени (runtime),
+без перезапуска сервера.
+
+### Источники (scope)
+
+Инъекции собираются из четырёх источников в порядке `global → assistant
+→ session → runtime` и применяются к каждому вызову модели (`runner/runner.go:583-613`,
+функция `collectInjs` + `injections.ApplyInjections`):
+
+| Scope | Источник | Применение |
+|---|---|---|
+| `global` | Конфиг приложения (`server.Config`) | Действует для **всех** сессий |
+| `assistant` | Поле `Assistant.Injections` | Для **всех** вызовов этого ассистента |
+| `session` | `Session.sessionInjections` + API | Только для текущей сессии (горячее применение) |
+| `runtime` | `board.Task.Injections` + контекст задачи | Только для одной задачи |
+
+### Структура инъекции
+
+```json
+{
+  "id": "chat-rag-disable",
+  "name": "disable-chat-rag",
+  "scope": "session",
+  "target": "system",
+  "position": "prepend",
+  "content": "⚠️ RAG-поиск отключён. Не вызывай CodeSearch.",
+  "when": "model == \"llama3.1\"",
+  "enabled": true,
+  "priority": 10
+}
+```
+
+| Поле | Описание | Возможные значения |
+|---|---|---|
+| `id` | Уникальный идентификатор (для удаления) | строка |
+| `name` | Имя (обязательно) | — |
+| `scope` | Источник (информативно) | `global`, `assistant`, `session`, `runtime` |
+| `target` | Куда вставить | `system`, `messages`, `user_last`, `assistant_last` |
+| `position` | Как вставить | `prepend`, `append`, `replace`, `inject_at_index` |
+| `index` | Индекс (только для `inject_at_index`) | int |
+| `content` | Тело инъекции (шаблон) | строка, до 10 KB |
+| `when` | Условие (`when`-фильтр) | boolean expr: `==`, `!=`, `&&`, `\|\|`, `!` |
+| `enabled` | Активна | True / False |
+| `priority` | Приоритет (убывание) | int (по умолчанию 0) |
+| `vars` | Переменные шаблона | map |
+| `tags` | Метки | []string |
+
+### API для сессионных инъекций
+
+| Эндпоинт | Что делает |
+|---|---|
+| `POST /api/projects/{id}/injections` | Добавить инъекцию (JSON body) |
+| `DELETE /api/projects/{id}/injections/{injID}` | Удалить по ID |
+| `GET /api/projects/{id}/injections` | Список активных注入 |
+
+**Пример добавления:**
+
+```http
+POST /api/projects/mytrip/injections
+Content-Type: application/json
+
+{
+  "name": "禁用特定模型",
+  "scope": "session",
+  "target": "system",
+  "position": "prepend",
+  "content": "Модель <<"llama3">"可能会有幻觉。回答时保持谨慎。"
+}
+```
+
+### Шаблонизация и условия
+
+`content` поддерживает `$`-переменные: `{{vars.*}}, {{env.*}}, {{session.*}},
+{{assistant.*}}`. Чувствительные переменные окружения (`*_TOKEN`, `*_SECRET`,
+`*_KEY`)Redacted (заменяются на `[REDACTED]`).
+
+Условие `when` — булево выражение с дискованными переменными: `model`,
+`provider`, `role`, `project`, `turn`, `user`, `has_files`, `has_tools`.
+
+### Ограничения
+
+- `MaxContentSize` = 10 KB на инъекцию (обрезается + предупреждение).
+- `MaxTotalSize` = 50 KB суммарно (остальные пропускаются).
+- Fast-path: если никаких инъекций нет — промпт собирается без изменения
+  (обратная совместимость с существующими ассистентами без `injections`).
+
+### Диаграмма пайплайна
+
+```
+Global injections (config)
+    ↓
+Assistant injections (struct field)
+    ↓
+Session injections (API add)
+    ↓
+Runtime injections (task taskAssigned)
+    ↓
+ApplyInjections(ctx, context.mergeFn, ...) → applied → system + messages
+```
+
 ## Связанное
 
 - [Web UI](web-ui.md) — где живёт чат

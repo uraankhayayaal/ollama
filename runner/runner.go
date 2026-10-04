@@ -2,6 +2,8 @@ package runner
 
 import (
 	"ai/agents"
+	"ai/board"
+	"ai/injections"
 	"ai/runevents"
 	"ai/tools"
 	"bytes"
@@ -576,6 +578,45 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		}
 		for _, m := range userMessages {
 			messages = append(messages, Message{Role: "user", Content: m.Message})
+		}
+
+		// Применяем промпт-инъекции после сборки
+		// system+user messages, но до вызова LLM. Собираем из всех источников:
+		// global → assistant → session → runtime.
+		var assistantInjs []board.Injection
+		if injProvider, ok := agent.(interface{ GetInjections() []board.Injection }); ok {
+			assistantInjs = injProvider.GetInjections()
+		}
+		taskInjs := board.InjectionsFromContext(ctx)
+		allInjs := injections.CollectInjections(nil, assistantInjs, nil, taskInjs)
+
+		if len(allInjs) > 0 {
+			var baseSystem string
+			var baseMsgs []injections.Message
+			for _, m := range messages {
+				if m.Role == "system" {
+					baseSystem = m.Content
+				} else {
+					baseMsgs = append(baseMsgs, injections.Message{Role: m.Role, Content: m.Content})
+				}
+			}
+
+			mergeCtx := injections.MergeContext{
+				System:   baseSystem,
+				Messages: baseMsgs,
+				Role:     "agent",
+				RenderFn: injections.RenderFnDefault,
+				EvalFn:   injections.EvalFnDefault,
+			}
+
+			result, err := injections.ApplyInjections(baseSystem, baseMsgs, allInjs, mergeCtx)
+			if err == nil {
+				messages = nil
+				messages = append(messages, Message{Role: "system", Content: result.System})
+				for _, m := range result.Messages {
+					messages = append(messages, Message{Role: m.Role, Content: m.Content})
+				}
+			}
 		}
 	}
 
@@ -1222,3 +1263,5 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		Messages:  append([]Message{}, messages...),
 	}, nil
 }
+
+

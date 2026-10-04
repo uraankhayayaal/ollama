@@ -220,6 +220,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/status", s.handleSetEpicStatus)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
+	// Инъекции (Ф-8): управление сессионными промпт-инъекциями — add, remove, list.
+	mux.HandleFunc("POST /api/projects/{id}/injections", s.handleAddInjection)
+	mux.HandleFunc("DELETE /api/projects/{id}/injections/{injID}", s.handleRemoveInjection)
+	mux.HandleFunc("GET /api/projects/{id}/injections", s.handleListInjections)
+
 	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
 	mux.HandleFunc("GET /api/projects/{id}/diff", s.handleGetDiff)
 	mux.HandleFunc("POST /api/projects/{id}/accept", s.handleAccept)
@@ -1407,4 +1412,56 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Ф-5: при открытии дашборда асинхронно сверяем MR с форджем (ветки,
 	// созданные вне UI, и статусы merged/closed у отслеживаемых).
 	s.reconcileMRsAsync(project)
+}
+
+// handleAddInjection добавляет сессионную инъекцию.
+func (s *Server) handleAddInjection(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	var body board.Injection
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	if body.Name == "" {
+		writeErr(w, http.StatusBadRequest, "имя инъекции обязательно")
+		return
+	}
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка: "+err.Error())
+		return
+	}
+	sess.AddSessionInjection(body)
+	body.ID = randomID()
+	var resp = struct {
+		ID  string `json:"id"`
+		Msg string `json:"msg"`
+	}{ID: body.ID, Msg: "inject added"}
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleRemoveInjection удаляет сессионную инъекцию по ID.
+func (s *Server) handleRemoveInjection(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	injID := r.PathValue("injID")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка: "+err.Error())
+		return
+	}
+	sess.RemoveSessionInjection(injID)
+	json.NewEncoder(w).Encode(map[string]string{"msg": "inject removed"})
+}
+
+// handleListInjections возвращает список сессионных инъекций.
+func (s *Server) handleListInjections(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка: "+err.Error())
+		return
+	}
+	injs := sess.SessionInjections()
+	json.NewEncoder(w).Encode(injs)
 }

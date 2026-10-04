@@ -1227,6 +1227,9 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 
 		k.log.Infof("[задача %s] специалист %s выполняет: %s",
 			t.TaskID, t.Assignee, truncateText(t.Title, 60))
+		// Пропускаем инъекции задачи в контекст — runner будет применять их
+		// при сборке system+user messages (runner/runner.go:585-621).
+		ctx = board.NewInjectionContext(ctx, t.Injections)
 		resp, err := k.generate(ctx, tokens.ScopeTask(t.TaskID), specialist)
 		if err != nil {
 			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)

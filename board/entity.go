@@ -14,6 +14,7 @@
 package board
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -281,6 +282,32 @@ type Task struct {
 	// заново проверит зависимости и фазовые гейты на прежнем месте цепочки.
 	// Пусто, если задача не на паузе.
 	ResumeStatus Status `json:"resume_status,omitempty"`
+	// Injections — промпт-инъекции, привязанные к задаче. Применяются к
+	// работающей модели в рамках этой задачи (runtime injections): добавляются
+	// в работающей сессии, внедряются со следующего запроса к модели.
+	Injections []Injection `json:"injections,omitempty"`
+}
+
+// Injection — промпт-инъекция, привязанная к задаче. Применяется к работающей
+// модели в рамках этой задачи (runtime injections).
+type Injection struct {
+	ID       string            `json:"id,omitempty"`
+	Name     string            `json:"name"`
+	Scope    string            `json:"scope"` // task|global
+	Target   string            `json:"target"` // system|messages|user_last|assistant_last
+	Position string            `json:"position"` // prepend|append|replace|inject_at_index
+	Index    int               `json:"index,omitempty"`
+	Content  string            `json:"content"`
+	When     string            `json:"when,omitempty"`
+	Disabled bool              `json:"disabled"`
+	Priority int               `json:"priority"`
+	Vars     map[string]any    `json:"vars,omitempty"`
+	Tags     []string          `json:"tags,omitempty"`
+}
+
+// IsEnabled возвращает true, если инъекция не отключена явно.
+func (inj Injection) IsEnabled() bool {
+	return !inj.Disabled
 }
 
 // UnmarshalJSON для Epic с безопасным дефолтом Ф-8: записи, где поле
@@ -614,4 +641,34 @@ func writeUnicodeEscape(b *strings.Builder, r rune) {
 	for shift := 12; shift >= 0; shift -= 4 {
 		b.WriteByte(hex[(r>>shift)&0xf])
 	}
+}
+
+// ---- Injection context helpers ----
+// Эти функции инжектируют инъекции задачи в контекст работы агента.
+// Используется в kanban.go и runner/runner.go.
+
+type injectionKey struct{}
+
+// NewInjectionContext создаёт контекст с инъекциями для агента.
+// Используется перед вызовом Generate().
+func NewInjectionContext(ctx context.Context, injs []Injection) context.Context {
+	if injs == nil || len(injs) == 0 {
+		return ctx // Fast-path: no injections needed.
+	}
+	return context.WithValue(
+		ctx,
+		injectionKey{},
+		injs,
+	)
+}
+
+// InjectionsFromContext извлекает инъекции из контекста.
+func InjectionsFromContext(ctx context.Context) []Injection {
+	if ctx == nil {
+		return nil
+	}
+	if injs, ok := ctx.Value(injectionKey{}).([]Injection); ok && injs != nil {
+		return injs
+	}
+	return nil
 }

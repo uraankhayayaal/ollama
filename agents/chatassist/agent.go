@@ -103,6 +103,12 @@ type Assistant struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis); nil — доска недоступна.
 	Store *board.Store
+	// Injections — промпт-инъекции уровня Assistant: применяются к работающей
+	// модели в рамках всех задач/сессий этого ассистента. Нужны, например,
+	// для деактивации ChatRAG (напрямую добавляя инструкцию в системное
+	// сообщение ассистента), ограничения무리ов или других прикладных нужд.
+	// При пустом списке не влияют на работу (fast-path в ApplyInjections).
+	Injections []board.Injection
 	// seenCalls — счётчик повторов одинаковых вызовов инструментов
 	// (антизацикливание по инструментам). Ключ — сигнатура вызова
 	// (имя инструмента + аргументы). Нужен, потому что модель, объявив
@@ -206,6 +212,11 @@ func (a *Assistant) ragContextBlock() string {
 // GetTools возвращает определения инструментов в OpenAI/Yandex формате.
 func (a *Assistant) GetTools() []tools.ToolDefinition {
 	return a.Tools.Definitions()
+}
+
+// GetInjections возвращает инъекции уровня Assistant (пусто — fast-path).
+func (a *Assistant) GetInjections() []board.Injection {
+	return a.Injections
 }
 
 // GetToolsForOllama возвращает определения инструментов в формате Ollama.
