@@ -38,20 +38,24 @@ func (t *readFilesTool) Name() string { return "ReadFiles" }
 func (t *readFilesTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "ReadFiles",
-		Description: "Используй этот инструмент для чтения содержимого одного или нескольких файлов проекта.",
+		Description: "Чтение файлов проекта. За один вызов запрашивай НЕ БОЛЕЕ 3 файлов: остальные вернутся отметкой «skipped» и их придётся заказывать повторно. Если файл не поместился в ответ, у записи будут has_more и next_offset — дочитай его повторным вызовом с offset=next_offset, а не перечитывай файл с нуля.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"filenames": map[string]any{
 					"type":        "array",
-					"description": "Список путей к файлам, которые нужно прочитать, например ['main.go', 'utils/math.go']",
+					"description": "Список путей к файлам, которые нужно прочитать (не более 3 за вызов), например ['main.go', 'utils/math.go']",
 					"items": map[string]any{
 						"type": "string",
 					},
 				},
 				"lines": map[string]any{
 					"type":        "string",
-					"description": "Опционально: интервал строк для точечного чтения («хирургическое окно»), 1-based включительно, например '20-45' или '40'. Вместо файла целиком возвращаются только эти строки с номерами.",
+					"description": "Опционально: интервал строк для точечного чтения («хирургическое окно»), 1-based включительно, например '20-45' или '40'. Вместо файла целиком возвращаются только эти строки с номерами. Взаимоисключающе с offset.",
+				},
+				"offset": map[string]any{
+					"type":        "integer",
+					"description": "Опционально: смещение в байтах для дочитки файла. Передавай сюда next_offset из предыдущего ответа, если у файла был has_more. Взаимоисключающе с lines.",
 				},
 			},
 			"required":             []string{"filenames"},

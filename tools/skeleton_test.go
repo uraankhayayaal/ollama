@@ -285,14 +285,14 @@ func TestReadFilesLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFiles: %v", err)
 	}
-	var items []map[string]string
+	var items []FileContentResult
 	if err := json.Unmarshal(result, &items); err != nil {
 		t.Fatalf("ReadFiles JSON: %v", err)
 	}
-	if len(items) != 1 || items[0]["status"] != "success" {
+	if len(items) != 1 || items[0].Status != "success" {
 		t.Fatalf("ReadFiles должен вернуть success: %#v", items)
 	}
-	if !strings.Contains(items[0]["content"], "3") || strings.Contains(items[0]["content"], "8") {
+	if !strings.Contains(items[0].Content, "3") || strings.Contains(items[0].Content, "8") {
 		t.Fatalf("ReadFiles с lines должен вернуть только диапазон строк: %#v", items[0])
 	}
 }

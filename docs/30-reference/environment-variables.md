@@ -147,7 +147,9 @@
 | `CODEGEN_CONTRACT_ENFORCE` | снимок берётся | `=1` повышает уровень до предупреждения |
 | `CODEGEN_RUN_TIMEOUT` | `60s` | Таймаут команды `Run` |
 | `CODEGEN_RUN_MAX_OUTPUT` | 20000 | Лимит символов вывода `Run` |
-| `CODEGEN_READ_MAX_FILE` | 100000 | Лимит символов на файл |
+| `CODEGEN_READ_MAX_FILE` | 100000 | Верхняя граница символов на файл (обрезание заменено пагинацией) |
+| `CODEGEN_READ_CHUNK` | 16384 | Порция чтения на файл в одном вызове `ReadFiles` |
+| `CODEGEN_READ_MAX_FILES` | 3 | Сколько файлов `ReadFiles` возвращает за вызов |
 | `CODEGEN_READ_MAX_TOTAL` | 800000 | Лимит символов за `ReadFiles` |
 | `CODEGEN_SKELETON_CACHE` | вкл | Кеш сигнатур без тел |
 
