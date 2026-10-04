@@ -47,6 +47,7 @@
 | [PLAN-2026-09-27-done-branch-aware-rag.md](PLAN-2026-09-27-done-branch-aware-rag.md) | Branch-Aware RAG: версионированный поиск по веткам | Выполнено |
 | [PLAN-2026-09-28-done-rag-main-freshness.md](PLAN-2026-09-28-done-rag-main-freshness.md) | Актуальность RAG между эпиками: индекс `main` + рабочая копия агентов | Выполнено |
 | [PLAN-2026-10-03-done-loop-breaker.md](PLAN-2026-10-03-done-loop-breaker.md) | Разрыв петли агента + эскалация на другую модель + честный фейл | Выполнено |
+| [PLAN-2026-10-04-todo-marketing-site.md](PLAN-2026-10-04-todo-marketing-site.md) | Маркетинговый сайт: мультиязычность, метрики, CTA на SaaS | В работе |
 
 ## Что из планов важно знать
 
