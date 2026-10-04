@@ -902,12 +902,11 @@ func (s *Server) handleChatLogAnalysis(w http.ResponseWriter, sess *Session, req
 		status += " (" + a.Note + ")"
 	}
 	sess.log.Infof("[чат] %s", status)
+	// Именно append, а не sess.chat.Append + отдельный hub.Publish: appendMsg
+	// сам публикует в шину (type=chat), а вторая публикация отправила бы ту же
+	// строку в UI дважды — фронт добавляет каждое событие чата в состояние
+	// без дедупликации, и в панели появлялись два «Разбор логов: …».
 	sess.append(chat.RoleStatus, status, "", "", nil)
-	sess.srv.hub.Publish(sess.project, "chat", chat.Message{
-		Role:    chat.RoleStatus,
-		Content: status,
-		Time:    time.Now().UTC(),
-	})
 
 	// Пустой разбор: критичных проблем нет. Отвечаем детерминированно, без
 	// вызова модели — тратить токены на «всё хорошо» незачем, а модель на

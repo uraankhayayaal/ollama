@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"ai/agents"
+	"ai/chat"
 	"ai/models"
 	"ai/runner"
 )
@@ -215,6 +217,105 @@ func readChatHistory(t *testing.T, sess *Session) string {
 		b.WriteString(string(m.Role) + ": " + m.Content + "\n")
 	}
 	return b.String()
+}
+
+// wsChatProbe — фальшивый WS-клиент: собирает события, которые сервер отдал бы
+// браузеру. Горутины writeLoop не нужны — Publish кладёт данные в буфер
+// send, поэтому тест читает его сам.
+type wsChatProbe struct {
+	hub      *Hub
+	project  string
+	client   *wsClient
+	messages []chat.Message
+}
+
+func newWSChatProbe(srv *Server, project string) *wsChatProbe {
+	p := &wsChatProbe{hub: srv.hub, project: project}
+	p.client = &wsClient{send: make(chan []byte, 256), project: project, hub: srv.hub, closeCh: make(chan struct{})}
+	srv.hub.mu.Lock()
+	if srv.hub.clients[project] == nil {
+		srv.hub.clients[project] = make(map[*wsClient]struct{})
+	}
+	srv.hub.clients[project][p.client] = struct{}{}
+	srv.hub.mu.Unlock()
+	return p
+}
+
+// collect забирает накопленные события чата (role + content).
+func (p *wsChatProbe) collect(t *testing.T) []chat.Message {
+	t.Helper()
+	for {
+		select {
+		case raw := <-p.client.send:
+			var ev struct {
+				Type    string          `json:"type"`
+				Payload json.RawMessage `json:"payload"`
+			}
+			if err := json.Unmarshal(raw, &ev); err != nil {
+				t.Fatalf("событие не разобрано: %v (%s)", err, raw)
+			}
+			if ev.Type != "chat" {
+				continue
+			}
+			var m chat.Message
+			if err := json.Unmarshal(ev.Payload, &m); err != nil {
+				t.Fatalf("сообщение не разобрано: %v", err)
+			}
+			p.messages = append(p.messages, m)
+		default:
+			return p.messages
+		}
+	}
+}
+
+// countStatus считает, сколько раз в поток ушла конкретная статус-строка.
+func (p *wsChatProbe) countStatus(role chat.Role, content string) int {
+	n := 0
+	for _, m := range p.messages {
+		if m.Role == role && m.Content == content {
+			n++
+		}
+	}
+	return n
+}
+
+// Регрессия: строка статуса разбора уходила в UI ДВАЖДЫ. sess.append уже
+// публикует в шину (appendMsg → hub.Publish), а следом шёл лишний
+// hub.Publish. Фронт добавляет каждое событие чата в состояние без
+// дедупликации, поэтому в панели появлялось два «Разбор логов: …».
+// Проверяем на уровне шины — история чата тут одинаковая при обоих вариантах.
+func TestChatLogAnalysisStatusPublishedOnce(t *testing.T) {
+	sess := analysisFixture(t, "an-once", analysisLogBody)
+	setProviderForTest(sess.srv, newCountingProvider())
+	probe := newWSChatProbe(sess.srv, "an-once")
+
+	if _, code := postLogAnalysis(t, sess, `{"log_analysis":{"file":"an-once.log"}}`); code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	msgs := probe.collect(t)
+	if got := probe.countStatus(chat.RoleStatus, "Разбор логов: an-once.log"); got != 1 {
+		t.Fatalf("статус-строка разбора ушла в шину %d раз, want 1: %+v", got, msgs)
+	}
+	if got := probe.countStatus(chat.RoleUser, ""); got != 0 {
+		t.Errorf("выдуманных реплик пользователя в шине: %d", got)
+	}
+}
+
+// Тот же контроль для пустого разбора и для cooldown: во всех трёх ветках
+// статус уходит ровно один раз.
+func TestChatLogAnalysisStatusPublishedOnceOnEmptyAndCached(t *testing.T) {
+	sess := analysisFixture(t, "an-once2", "2026-01-01 10:00:00.000 INFO   всё хорошо\n")
+	setProviderForTest(sess.srv, newCountingProvider())
+	probe := newWSChatProbe(sess.srv, "an-once2")
+
+	// Пустой разбор.
+	if _, code := postLogAnalysis(t, sess, `{"log_analysis":{"file":"an-once2.log"}}`); code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	probe.collect(t)
+	if got := probe.countStatus(chat.RoleStatus, "Разбор логов: an-once2.log"); got != 1 {
+		t.Errorf("пустой разбор: статус ушёл %d раз, want 1", got)
+	}
 }
 
 // Главный сценарий: кнопка «Разобрать» → ответ в чате. Проверяем, что в чат
