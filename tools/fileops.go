@@ -26,6 +26,12 @@ type FileOps struct {
 	// OutputDir — единственная директория, внутри которой разрешена работа
 	// инструментов (защита от выхода за пределы через ".." или абсолютные пути).
 	OutputDir string
+	// Project — ИМЯ проекта для RAG (payload project_name) и логов. Задаётся
+	// оркестрацией явно: OutputDir у специалиста — worktree задачи
+	// (temp/.wt-task-<проект>-<id>), и имя из его basename указывало бы на
+	// несуществующий проект (пустая выдача CodeSearch, чанки в чужой индекс).
+	// Пусто — фолбэк на basename OutputDir (консольные/простые проекты).
+	Project string
 	// MaxFiles — максимальное число файлов, которое можно записать за запуск.
 	// 0 или отрицательное — без лимита.
 	MaxFiles int
@@ -71,6 +77,27 @@ func (ops *FileOps) SetOutputDir(dir string) {
 	ops.touchedMu.Lock()
 	ops.touched = nil
 	ops.touchedMu.Unlock()
+}
+
+// SetProjectName задаёт имя проекта для RAG-инструментов и переиндексации.
+// Оркестрация зовёт метод через интерфейс { SetProjectName(string) } у агента
+// вместе с SetOutputDir: у git-проектов специалист работает в worktree задачи,
+// имя которого не совпадает с именем проекта в индексе. Пустое имя снимает
+// явное значение (фолбэк — basename OutputDir).
+func (ops *FileOps) SetProjectName(name string) {
+	ops.Project = strings.TrimSpace(name)
+}
+
+// ProjectName — имя проекта для RAG: явное Project, иначе basename OutputDir
+// (temp/<имя> → "<имя>"; пустой OutputDir — "").
+func (ops *FileOps) ProjectName() string {
+	if name := strings.TrimSpace(ops.Project); name != "" {
+		return name
+	}
+	if ops == nil || ops.OutputDir == "" {
+		return ""
+	}
+	return filepath.Base(filepath.Clean(ops.OutputDir))
 }
 
 // allowed проверяет, разрешён ли файл (относительный slash-путь) областью
@@ -1049,12 +1076,16 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 		runErr = werr
 	}
 
+	// Вывод команды нормализуется ДО упаковки в JSON: цвета терминала (ANSI),
+	// управляющие и NUL-байты в строке ломают JSON-пакет и разбор аргументов
+	// следующих вызовов модели («invalid character ']' looking for beginning of
+	// value»), из-за чего падал сам харнес.
 	result := map[string]string{
 		"command":    command,
 		"workdir":    workdir,
 		"exit_error": "",
-		"stdout":     stdout.String(),
-		"stderr":     stderr.String(),
+		"stdout":     SanitizeToolOutput(stdout.String()),
+		"stderr":     SanitizeToolOutput(stderr.String()),
 		// Явно сообщаем модели, где выполнялась команда. Без этого «песочница»
 		// существует только в коде, а агент (и человек в логе) считает все
 		// запуски изолированными — включая те, что ушли на хост по фолбэку.
@@ -1072,7 +1103,7 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 	} else if runErr != nil {
 		result["exit_error"] = runErr.Error()
 		result["status"] = "error"
-		if h := missingToolHint(command, stdout.String()+"\n"+stderr.String(), runErr); h != "" {
+		if h := missingToolHint(command, SanitizeToolOutput(stdout.String())+"\n"+SanitizeToolOutput(stderr.String()), runErr); h != "" {
 			result["hint"] = h
 		}
 	} else {

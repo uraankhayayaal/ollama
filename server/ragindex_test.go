@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"ai/chat"
+	"ai/gitops"
 	"ai/rag"
 )
 
@@ -104,6 +105,7 @@ type fakeProjectIndexer struct {
 	mu      sync.Mutex
 	ensured int
 	calls   []fakeIndexCall
+	indexed bool // BranchIndexed: индекс ветки уже актуален
 }
 
 type fakeIndexCall struct {
@@ -127,6 +129,13 @@ func (f *fakeProjectIndexer) IndexProject(_ context.Context, project string, ite
 }
 
 func (f *fakeProjectIndexer) Close() error { return nil }
+
+// branchIndexed отдаёт заранее заданное значение проверки «индекс ветки актуален».
+func (f *fakeProjectIndexer) BranchIndexed(context.Context, string, string, string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.indexed, nil
+}
 
 // TestIndexProjectRAGHermetic — indexProjectRAG подготавливает коллекцию,
 // собирает файлы реального каталога и вызывает IndexProject по имени проекта.
@@ -206,6 +215,10 @@ func (i *blockingIndexer) IndexProject(_ context.Context, p string, _ []rag.Inde
 	return &rag.IndexResult{Files: 0, Chunks: 0}, nil
 }
 
+func (i *blockingIndexer) BranchIndexed(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+
 func (i *blockingIndexer) Close() error {
 	i.closeOnce.Do(func() { close(i.closed) })
 	return nil
@@ -214,6 +227,25 @@ func (i *blockingIndexer) Close() error {
 // TestSessionIndexBackground — Session.IndexBackground: запускает горутину
 // (возврат без блокировки), повторный вызов при идущей индексации отклоняется,
 // по завершении публикуется status-сообщение в чат.
+// stubRefItems подменяет загрузчик содержимого ветки: отдаёт фиксированный
+// снапшот (без git). Принимает optional refErr — имитация недоступной ветки.
+// Возвращает указатель на последний запрошенный ref.
+func stubRefItems(t *testing.T, snap refSnapshot, refErr error) *string {
+	t.Helper()
+	orig := loadRefItems
+	t.Cleanup(func() { loadRefItems = orig })
+	got := ""
+	loadRefItems = func(_ context.Context, _ gitops.Executor, _, ref string) (refSnapshot, error) {
+		got = ref
+		if refErr != nil {
+			return refSnapshot{}, refErr
+		}
+		snap.Branch = ref
+		return snap, nil
+	}
+	return &got
+}
+
 func TestSessionIndexBackground(t *testing.T) {
 	orig := buildProjectIndexer
 	defer func() { buildProjectIndexer = orig }()
@@ -227,6 +259,10 @@ func TestSessionIndexBackground(t *testing.T) {
 
 	bi := newBlockingIndexer()
 	buildProjectIndexer = func() (projectIndexerCloser, error) { return bi, nil }
+	gotRef := stubRefItems(t, refSnapshot{
+		CommitSHA: "abc123",
+		Items:     []rag.IndexItem{{Path: "main.go", Scope: "root", Content: "package main"}},
+	}, nil)
 
 	start := time.Now()
 	if err := sess.IndexBackground(context.Background(), "ai/epic/ARCH-01"); err != nil {
@@ -252,6 +288,9 @@ func TestSessionIndexBackground(t *testing.T) {
 	m := waitChatStatusContains(t, sess, "RAG-индекс проекта обновлён", 3*time.Second)
 	if !containsCase(m.Content, "ai/epic/ARCH-01") {
 		t.Fatalf("отчёт не упоминает ветку индексации: %q", m.Content)
+	}
+	if *gotRef != "ai/epic/ARCH-01" {
+		t.Fatalf("индексирован ref %q, want ai/epic/ARCH-01", *gotRef)
 	}
 	select {
 	case <-bi.closed:
@@ -310,6 +349,10 @@ func TestRESTProjectIndex(t *testing.T) {
 
 	idx := &fakeProjectIndexer{}
 	buildProjectIndexer = func() (projectIndexerCloser, error) { return idx, nil }
+	stubRefItems(t, refSnapshot{
+		CommitSHA: "abc123",
+		Items:     []rag.IndexItem{{Path: "main.go", Scope: "root", Content: "package main\n"}},
+	}, nil)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
@@ -339,6 +382,10 @@ func TestRESTProjectIndex(t *testing.T) {
 	// Ветка из query-параметра доходит до индексации (Р-7).
 	if got := idx.calls[0].opts.Branch; got != "ai/epic/ARCH-01" {
 		t.Fatalf("ветка индексации: %q, want ai/epic/ARCH-01", got)
+	}
+	// Содержимое берётся из ветки (по ref), а не из файлов каталога проекта.
+	if got := idx.calls[0].opts.CommitSHA; got != "abc123" {
+		t.Fatalf("коммит индексации: %q, want abc123", got)
 	}
 }
 

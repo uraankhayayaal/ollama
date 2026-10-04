@@ -4,6 +4,7 @@ import (
 	"ai/agents"
 	"ai/tools"
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -74,6 +75,17 @@ func (f *fakeChatProvider) ChatOnce(ctx context.Context, agent agents.Agent, mes
 }
 
 func testGenerate(t *testing.T, agent agents.Agent, provider *fakeChatProvider) *AgentResponse {
+	t.Helper()
+	resp, err := Generate(context.Background(), provider, agent)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	return resp
+}
+
+// testGenerateAny — testGenerate для произвольного ChatProvider (например,
+// выдающего аргументы вызовов по ходу диалога).
+func testGenerateAny(t *testing.T, agent agents.Agent, provider ChatProvider) *AgentResponse {
 	t.Helper()
 	resp, err := Generate(context.Background(), provider, agent)
 	if err != nil {
@@ -236,24 +248,42 @@ func (r *recordingProvider) ChatOnce(ctx context.Context, agent agents.Agent, me
 	return r.fakeChatProvider.ChatOnce(ctx, agent, messages)
 }
 
+// varyingToolProvider каждый раунд просит один и тот же инструмент с РАЗНЫМИ
+// аргументами (чтение разных файлов): детектор зацикливания по сигнатуре
+// молчит, поэтому цикл честно доходит до лимита раундов.
+type varyingToolProvider struct {
+	calls int
+}
+
+func (v *varyingToolProvider) ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error) {
+	n := v.calls
+	v.calls++
+	return &ModelReply{
+		FinishReason: "tool_calls",
+		ToolCalls: []tools.ToolCall{{
+			ID:        fmt.Sprintf("c%d", n+1),
+			Name:      "ReadFiles",
+			Arguments: fmt.Sprintf(`{"filenames":["file%d.go"]}`, n),
+		}},
+	}, nil
+}
+
 // После лимита раундов Generate должен вернуть полную историю диалога и
 // количество потраченных раундов, чтобы вызывающий код мог сохранить их
 // в чекпоинт для resume.
 func TestGenerateRoundLimitExposesHistory(t *testing.T) {
 	agent := &fakeAgent{}
-	// Модель на каждый вызов просит инструмент — цикл упрётся в лимит раундов.
-	provider := &fakeChatProvider{
-		replies: []*ModelReply{{
-			Content:      "",
-			FinishReason: "tool_calls",
-			ToolCalls:    []tools.ToolCall{{ID: "c1", Name: "WriteFiles", Arguments: "{}"}},
-		}},
-	}
+	// Модель каждый раунд читает РАЗНЫЙ файл — повторов нет, цикл упирается
+	// в лимит раундов (не в детектор зацикливания).
+	provider := &varyingToolProvider{}
 
-	resp := testGenerate(t, agent, provider)
+	resp := testGenerateAny(t, agent, provider)
 
 	if !resp.Truncated {
 		t.Fatal("ожидали Truncated после исчерпания лимита раундов")
+	}
+	if resp.Looped {
+		t.Fatalf("цикл не должен быть помечен как зацикливание: %s", resp.LoopReason)
 	}
 	if resp.Rounds != maxRounds() {
 		t.Fatalf("ожидали Rounds=%d, got %d", maxRounds(), resp.Rounds)

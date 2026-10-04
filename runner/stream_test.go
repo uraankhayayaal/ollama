@@ -133,9 +133,7 @@ func TestGenerateToolFailGuardNudgesRepeatedErrors(t *testing.T) {
 			{ToolCalls: []tools.ToolCall{{Name: "BoardCreateEpic", Arguments: `{"task_id":"ARCH-02"}`}}, FinishReason: "tool_calls"},
 			{ToolCalls: []tools.ToolCall{{Name: "BoardCreateEpic", Arguments: `{"task_id":"ARCH-03"}`}}, FinishReason: "tool_calls"},
 			{ToolCalls: []tools.ToolCall{{Name: "BoardCreateEpic", Arguments: `{"task_id":"ARCH-04"}`}}, FinishReason: "tool_calls"},
-			// раунд 5: модель после подсказки вызывает submit_architecture_backlog
-			{ToolCalls: []tools.ToolCall{{Name: "submit_architecture_backlog", Arguments: `{}`}}, FinishReason: "tool_calls"},
-			// раунд 6: последний — финальный ответ
+			// раунд 5: модель после подсказки завершает итоговым ответом
 			{Content: "бэклог уже на доске", FinishReason: "stop"},
 		},
 	}
@@ -144,6 +142,9 @@ func TestGenerateToolFailGuardNudgesRepeatedErrors(t *testing.T) {
 
 	if resp.Truncated {
 		t.Fatal("цикл не должен упереться в лимит раундов: per-tool защита должна прервать перебор")
+	}
+	if resp.Looped {
+		t.Fatalf("перебор аргументов уложился в порог детектора петли, цикл не должен прерываться: %s", resp.LoopReason)
 	}
 	if resp.Content != "бэклог уже на доске" {
 		t.Fatalf("ожидали эпилог модели, got %q", resp.Content)

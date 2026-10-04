@@ -90,7 +90,9 @@ func NewArchitect(projectName, prompt string) (*Architect, error) {
 func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Architect {
 	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
-	ops := &tools.FileOps{OutputDir: dir}
+	// Project задан явно: каталог проекта может быть переименован/подменён
+	// (сабмодуль, worktree), а RAG-фильтр строится по имени проекта.
+	ops := &tools.FileOps{OutputDir: dir, Project: projectName}
 	return &Architect{
 		FileOps: ops,
 		Prompt:  prompt,

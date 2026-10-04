@@ -56,7 +56,7 @@ func (t *ragIndexStatusTool) exec(args map[string]any) ([]byte, error) {
 		}), nil
 	}
 
-	project := projectFromOutputDir(t.ops)
+	project := projectNameOf(t.ops)
 	if project == "" {
 		return ragIndexStatusJSON(map[string]any{
 			"status":  "skipped",

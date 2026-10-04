@@ -387,6 +387,19 @@ func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*gito
 		return nil, "", "", &apiError{code: http.StatusBadGateway, msg: err.Error()}
 	}
 	s.invalidateDiffs(project)
+	// main изменился: переиндексировать его по ref и подтянуть рабочую копию
+	// агентов. Иначе следующий эпик (и его анализ) видел бы в RAG и в файлах
+	// код до этого релиза — см. server/ragref.go.
+	//
+	// Только когда ветка действительно слита: при already=true main не менялся,
+	// и лишние git-вызовы/индексация ничего не дают (тест «уже слитая ветка не
+	// должна мутировать git»). Рабочая копия подтягивается и на старте сессии —
+	// см. syncAgentBranchAsync.
+	if res.AlreadyMerged {
+		s.refreshRagIndexBranch(project, main)
+	} else {
+		s.afterMainChanged(project, main)
+	}
 	return res, epicRef.Branch, main, nil
 }
 
