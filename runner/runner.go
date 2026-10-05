@@ -2,6 +2,7 @@ package runner
 
 import (
 	"ai/agents"
+	"ai/injections"
 	"ai/runevents"
 	"ai/tools"
 	"bytes"
@@ -558,13 +559,15 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// их контекст в метод системных сообщений (GetSystemMessages).
 	userMessages := agent.GetUserMessages()
 
-	var messages []Message
-	startRound := 0
+	// messages хранит «чистый» диалог без инъекций; модель в каждом раунде
+	// получает его копию с инъекциями (applyInjections ниже). Благодаря этому
+	// правка инъекций видна модели со следующего раунда, а не со следующего
+	// запуска агента, и resume-сегмент получает инъекции заново из контекста.
+	baseMessages := []Message{}
 	if resume != nil && len(resume.Messages) > 0 {
 		// Возобновление после лимита раундов: история уже содержит системные
 		// и user-сообщения, добавлять их повторно нельзя.
-		messages = append(messages, resume.Messages...)
-		startRound = resume.Rounds
+		baseMessages = append(baseMessages, resume.Messages...)
 	} else {
 		// Системные сообщения размещаем в начале диалога, как это принято,
 		// а user-сообщения — следом. Контекст (дифф) передаётся в метод
@@ -572,12 +575,82 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		systemMessages := agent.GetSystemMessages(userMessages)
 
 		for _, m := range systemMessages {
-			messages = append(messages, Message{Role: "system", Content: m.Message})
+			baseMessages = append(baseMessages, Message{Role: "system", Content: m.Message})
 		}
 		for _, m := range userMessages {
-			messages = append(messages, Message{Role: "user", Content: m.Message})
+			baseMessages = append(baseMessages, Message{Role: "user", Content: m.Message})
 		}
 	}
+
+	// Промпт-инъекции: собираем из всех источников (global → assistant →
+	// session → runtime), включая живую задачу из контекста.
+	injs := newInjectionSet(ctx, agent)
+	// Контекст для условий when и шаблонов инъекций.
+	injCtx := injectionMergeContext(ctx, agent, provider)
+
+	startRound := 0
+	if resume != nil {
+		startRound = resume.Rounds
+	}
+
+	// applyInjections собирает рабочее сообщение для запроса: применяет
+	// инъекции к истории и логирует метаданные. Без инъекций возвращает
+	// историю как есть (fast-path, обратная совместимость).
+	//
+	// Источники читаются ОДИН раз на запрос: живой источник ходит в доску, и
+	// двойное чтение давало бы два разных снимка инъекций в одном промпте.
+	applyInjections := func(history []Message, turn int) []Message {
+		all := injs.collect()
+		if len(all) == 0 {
+			return history
+		}
+		ctxFor := injCtx
+		ctxFor.Turn = turn + 1
+
+		var baseSystem string
+		var baseMsgs []injections.Message
+		for _, m := range history {
+			if m.Role == "system" {
+				baseSystem = m.Content
+			} else {
+				baseMsgs = append(baseMsgs, injections.Message{Role: m.Role, Content: m.Content})
+			}
+		}
+		ctxFor.System = baseSystem
+		ctxFor.Messages = baseMsgs
+
+		result, err := injections.ApplyInjections(baseSystem, baseMsgs, all, ctxFor)
+		if err != nil || result == nil {
+			// Ошибка пайплайна не должна ронять агентский цикл: модель получит
+			// промпт без инъекций, а причина уйдёт в debug-лог.
+			if err != nil {
+				Debugf("RUNNER: инъекции не применены: %v", err)
+			}
+			return history
+		}
+		if applied := injections.DescribeApplied(result.Applied); applied != "" {
+			Debugf("RUNNER: раунд %d: применены инъекции: %s", turn+1, applied)
+		}
+		if skipped := injections.DescribeSkipped(result.Skipped); skipped != "" {
+			Debugf("RUNNER: раунд %d: инъекции пропущены: %s", turn+1, skipped)
+		}
+		if result.ReplaceWarning != "" {
+			Debugf("RUNNER: раунд %d: %s", turn+1, result.ReplaceWarning)
+		}
+
+		out := make([]Message, 0, len(result.Messages)+1)
+		if result.System != "" {
+			out = append(out, Message{Role: "system", Content: result.System})
+		}
+		for _, m := range result.Messages {
+			out = append(out, Message{Role: m.Role, Content: m.Content})
+		}
+		return out
+	}
+
+	// messages — чистая история сегмента; инъекции добавляются в request
+	// по раундам (см. applyInjections и вызов внутри цикла).
+	messages := baseMessages
 
 	// Инструменты, уже вызванные в истории диалога: при resume они должны
 	// засчитываться, чтобы проверка «обязательный инструмент первого раунда
@@ -709,6 +782,13 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			}
 		}
 
+		// Промпт-инъекции применяются именно к ЭТОМУ запросу: messages хранит
+		// «чистый» диалог (без инъекций), а модель получает request — ту же
+		// историю с инъекциями. Поэтому правка инъекций (доска/сессия) видна
+		// модели со следующего раунда, а не со следующего запуска агента, и
+		// resume-сегмент получает инъекции заново, из контекста.
+		request := applyInjections(messages, round)
+
 		// Если провайдер поддерживает стриминг — текст отдаём по кускам
 		// (Reporter.OnMessageDelta), иначе fallback на разовый ChatOnce.
 		// Финальное OnMessage с полным текстом приходит в обоих случаях ниже.
@@ -716,13 +796,13 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		var err error
 		if sp, ok := provider.(StreamChatProvider); ok {
 			streamID := fmt.Sprintf("stream-%d", round+1)
-			reply, err = sp.ChatStream(ctx, agent, messages, func(ch StreamChunk) {
+			reply, err = sp.ChatStream(ctx, agent, request, func(ch StreamChunk) {
 				if rep != nil && ch.Partial != "" {
 					rep.OnMessageDelta(streamID, ch.Partial)
 				}
 			})
 		} else {
-			reply, err = provider.ChatOnce(ctx, agent, messages)
+			reply, err = provider.ChatOnce(ctx, agent, request)
 		}
 		if err != nil {
 			return nil, err
@@ -731,7 +811,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// Счётчик токенов: предпочитаем фактический usage провайдера, иначе —
 		// эвристическую оценку по истории и ответу. Событие уходит в репортёр
 		// (Web UI) для живой трансляции в шину проекта.
-		in, out := EstimateUsage(messages, reply)
+		in, out := EstimateUsage(request, reply)
 		var tps float64
 		if u := reply.Usage; u != nil {
 			if u.InputTokens > 0 {

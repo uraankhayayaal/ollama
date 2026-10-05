@@ -643,3 +643,24 @@ func TestGenerateNudgesPendingRequiredGroupDuringRounds(t *testing.T) {
 		t.Fatalf("подсказок %d — больше лимита %d (история раздувается)", nudges, maxRequiredProgressNudges)
 	}
 }
+
+// TestBackwardCompatibilityNoInjections: ассистент БЕЗ инъекций
+// не должен ломаться — в pipeline ApplyInjections(…, nil, …) создаёт fast-path
+// и возвращает baseSystem/baseMessages без изменений.
+func TestBackwardCompatibilityNoInjections(t *testing.T) {
+	agent := &fakeAgent{}
+	provider := &fakeChatProvider{replies: []*ModelReply{
+		{Content: "привет!", FinishReason: "stop"},
+	}}
+
+	resp := testGenerate(t, agent, provider)
+	if resp.Content != "привет!" {
+		t.Fatalf("expected 'привет!', got %q", resp.Content)
+	}
+	// Response содержит историю (system + user + assistant/message).
+	// Главное: ни одна инъекция не применена,fast-path аккумулирует
+	// три стандартных сообщения без изменений system.
+	if len(resp.Messages) < 1 {
+		t.Fatalf("expected at least one message, got %d", len(resp.Messages))
+	}
+}

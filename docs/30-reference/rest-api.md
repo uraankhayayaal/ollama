@@ -183,6 +183,25 @@ POST /api/projects/calc/chat
 | `POST` | `/api/projects/{id}/epics/{eid}/status` | Сменить статус эпика |
 | `GET` | `/api/projects/{id}/bugs` | Список багрепортов |
 
+## Промпт-инъекции
+
+Инъекции сессии (чат-ассистент) и инъекции задачи (её исполнитель) — разные
+области; обе применяются к следующему обращению к модели.
+
+| Метод | Путь | Что делает |
+|---|---|---|
+| `POST` | `/api/projects/{id}/injections` | Добавить (или перезаписать по `id`) инъекцию сессии → `201` |
+| `DELETE` | `/api/projects/{id}/injections/{injID}` | Удалить инъекцию сессии; чужой id → `404` |
+| `GET` | `/api/projects/{id}/injections` | Список инъекций сессии (`[]`, не `null`) |
+| `POST` | `/api/projects/{id}/tasks/{tid}/injections` | Добавить инъекцию задачи → `201` |
+| `DELETE` | `/api/projects/{id}/tasks/{tid}/injections/{injID}` | Удалить инъекцию задачи; чужой id → `404` |
+| `PUT` | `/api/projects/{id}/tasks/{tid}` с `injections` | Полная замена списка инъекций задачи |
+
+Неизвестное поле в теле запроса, неизвестный `target`/`position`/`scope`,
+дубль `id` или превышение лимита — `400`, состояние не меняется.
+
+Формат записи и условия — [Промпт-инъекции](../20-features/chat-assistant.md#промпт-инъекции-injections).
+
 ## Git-flow
 
 | Метод | Путь | Что делает |

@@ -281,6 +281,11 @@ type Task struct {
 	// заново проверит зависимости и фазовые гейты на прежнем месте цепочки.
 	// Пусто, если задача не на паузе.
 	ResumeStatus Status `json:"resume_status,omitempty"`
+	// Injections — промпт-инъекции, привязанные к задаче. Применяются к
+	// работающей модели в рамках этой задачи (runtime injections): правка
+	// списка видна модели со СЛЕДУЮЩЕГО запроса — в том числе в середине уже
+	// идущего агентского цикла. Тип и правила — board/injection.go.
+	Injections []Injection `json:"injections,omitempty"`
 }
 
 // UnmarshalJSON для Epic с безопасным дефолтом Ф-8: записи, где поле

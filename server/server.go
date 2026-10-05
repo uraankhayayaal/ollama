@@ -220,6 +220,16 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/status", s.handleSetEpicStatus)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
+	// Инъекции (Ф-8): управление сессионными промпт-инъекциями — add, remove, list.
+	mux.HandleFunc("POST /api/projects/{id}/injections", s.handleAddInjection)
+	mux.HandleFunc("DELETE /api/projects/{id}/injections/{injID}", s.handleRemoveInjection)
+	mux.HandleFunc("GET /api/projects/{id}/injections", s.handleListInjections)
+	// Инъекции задачи: привязаны к конкретной задаче доски и применяются к её
+	// исполнителю со следующего обращения к модели. Полную замену списка делает
+	// PUT /tasks/{tid} (поле injections), эти два эндпоинта — точечные правки.
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/injections", s.handleAddTaskInjection)
+	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}/injections/{injID}", s.handleRemoveTaskInjection)
+
 	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
 	mux.HandleFunc("GET /api/projects/{id}/diff", s.handleGetDiff)
 	mux.HandleFunc("POST /api/projects/{id}/accept", s.handleAccept)
@@ -604,6 +614,16 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 func decodeBody(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// decodeBodyStrict — декодер с DisallowUnknownFields: опечатка в имени поля
+// возвращает 400, а не «успех, параметр молча потерян». Применяется там, где
+// тело задаёт поведение (инъекции).
+func decodeBodyStrict(r *http.Request, v any) error {
+	defer r.Body.Close()
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 // --- REST: проекты ---
@@ -1223,14 +1243,45 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Промпт-инъекции задачи: список заменяется целиком, нормализуется
+	// (выдаётся id) и валидируется. Раньше поле было только для чтения — задать
+	// инъекции задачи было нечем, кроме прямой правки Redis.
+	injectionsChanged := false
+	if raw, ok := patch["injections"]; ok {
+		list, err := decodeInjections(raw)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "injections: "+err.Error())
+			return
+		}
+		if err := board.ValidateInjections(list); err != nil {
+			writeErr(w, http.StatusBadRequest, "injections: "+err.Error())
+			return
+		}
+		t.Injections = list
+		injectionsChanged = true
+	}
+
 	if err := store.SaveTask(r.Context(), t); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Публикуем обновлённую доску.
+	if injectionsChanged {
+		// Инъекции видны модели со следующего запроса: агентский цикл читает
+		// их из записи задачи перед каждым обращением (board.InjectionSource).
+		logging.For(project).Infof("[задача %s] промпт-инъекции обновлены: %d", taskID, len(t.Injections))
+	}
+
+	// Публикуем обновённую доску.
 	s.srvEmitBoard(project, "REST: задача обновлена")
 	writeJSON(w, http.StatusOK, t)
+}
+
+// decodeInjections разбирает поле injections из JSON-патча: массив объектов
+// или одиночный объект (удобно для точечных правок из UI). Общая реализация
+// живёт в board, чтобы ею пользовался и инструмент доски.
+func decodeInjections(raw any) ([]board.Injection, error) {
+	return board.DecodeInjections(raw)
 }
 
 // handleDeleteTask удаляет задачу с доски (Ф-3). Задачи в работе/done/cancelled
@@ -1407,4 +1458,148 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Ф-5: при открытии дашборда асинхронно сверяем MR с форджем (ветки,
 	// созданные вне UI, и статусы merged/closed у отслеживаемых).
 	s.reconcileMRsAsync(project)
+}
+
+// handleAddInjection добавляет сессионную инъекцию. Идентификатор выдаётся
+// ДО сохранения: раньше он присваивался после AddSessionInjection, поэтому
+// клиент получал id, которого в сессии не было, а DELETE по нему молча
+// ничего не удалял.
+func (s *Server) handleAddInjection(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	var body board.Injection
+	if err := decodeBodyStrict(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON: "+err.Error())
+		return
+	}
+	// Инъекция сессии по умолчанию принадлежит scope session.
+	if body.Scope == "" {
+		body.Scope = board.InjectionScopeSession
+	}
+	body.Normalize()
+	if err := body.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.ID == "" {
+		body.ID = randomID()
+	}
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка: "+err.Error())
+		return
+	}
+	if err := sess.UpsertSessionInjection(body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Ответ отдаёт id той записи, которая реально лежит в сессии.
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"id":  body.ID,
+		"msg": "инъекция добавлена; применяется со следующего запроса к модели",
+	})
+}
+
+// handleRemoveInjection удаляет сессионную инъекцию по ID. Отсутствующий id —
+// 404, а не 200: иначе клиент считает удаление успешным, а инъекция продолжает
+// применяться.
+func (s *Server) handleRemoveInjection(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	injID := r.PathValue("injID")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка: "+err.Error())
+		return
+	}
+	if !sess.RemoveSessionInjection(injID) {
+		writeErr(w, http.StatusNotFound, "инъекция не найдена: "+injID)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"msg": "инъекция удалена"})
+}
+
+// handleListInjections возвращает список сессионных инъекций.
+func (s *Server) handleListInjections(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	sess, _, err := s.getOrCreate(project)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ошибка: "+err.Error())
+		return
+	}
+	injs := sess.SessionInjections()
+	if injs == nil {
+		injs = []board.Injection{}
+	}
+	json.NewEncoder(w).Encode(injs)
+}
+
+// handleAddTaskInjection добавляет промпт-инъекцию к конкретной задаче доски
+// (или перезаписывает запись с тем же id). Инъекция применяется к исполнителю
+// этой задачи со СЛЕДУЮЩЕГО обращения к модели — в том числе если её цикл уже
+// идёт: агентский цикл перечитывает задачу перед каждым запросом.
+func (s *Server) handleAddTaskInjection(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	taskID := r.PathValue("tid")
+
+	var inj board.Injection
+	if err := decodeBodyStrict(r, &inj); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON: "+err.Error())
+		return
+	}
+	inj.Normalize()
+	if err := inj.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if inj.ID == "" {
+		inj.ID = randomID()
+	}
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	list, err := store.AddTaskInjection(r.Context(), taskID, inj)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "задача "+taskID+": "+err.Error())
+		return
+	}
+	logging.For(project).Infof("[задача %s] добавлена промпт-инъекция %s (%d всего); применится со следующего запроса к модели",
+		taskID, inj.Name, len(list))
+	s.srvEmitBoard(project, "REST: инъекция задачи добавлена")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         inj.ID,
+		"injections": list,
+	})
+}
+
+// handleRemoveTaskInjection удаляет инъекцию задачи по id; отсутствующий id —
+// 404 (иначе клиент считал бы удаление успешным, а текст продолжал бы уходить
+// в модель).
+func (s *Server) handleRemoveTaskInjection(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	taskID := r.PathValue("tid")
+	injID := r.PathValue("injID")
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	list, found, err := store.RemoveTaskInjection(r.Context(), taskID, injID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "задача "+taskID+": "+err.Error())
+		return
+	}
+	if !found {
+		writeErr(w, http.StatusNotFound, "инъекция не найдена: "+injID)
+		return
+	}
+	logging.For(project).Infof("[задача %s] удалена промпт-инъекция %s (осталось %d)", taskID, injID, len(list))
+	s.srvEmitBoard(project, "REST: инъекция задачи удалена")
+	writeJSON(w, http.StatusOK, map[string]any{"injections": list})
 }

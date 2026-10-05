@@ -59,6 +59,15 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 	return runner.Generate(ctx, o, agent)
 }
 
+// ModelName — имя модели, реально выбранной для этого провайдера. Раннер
+// кладёт его в контекст промпт-инъекций (MergeContext.Model), чтобы условия
+// вида `when: "model == \"qwen3:30b\""` вычислялись по факту, а не по пустоте.
+func (o *OllamaProvider) ModelName() string { return o.model }
+
+// ProviderName — «ollama»: то же назначение, что у ModelName, для переменной
+// provider в условиях when.
+func (o *OllamaProvider) ProviderName() string { return "ollama" }
+
 // ModelLimits сообщает ключевые лимиты модели (окно входа/вывода, бюджет
 // thinking) — раннер использует их для авто-ограничения истории диалога по
 // умолчанию (см. runner.ModelLimitsProvider, runner/compression.go).

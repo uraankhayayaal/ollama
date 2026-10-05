@@ -18,7 +18,10 @@ import (
 const bigWriteTokens = 16000
 
 type OpenAIProvider struct {
-	client    openai.Client
+	client openai.Client
+	// name — имя провайдера из providers.json. Хранится, чтобы отдавать его
+	// наружу (ProviderName): раннер кладёт имя в контекст промпт-инъекций.
+	name      ProviderName
 	model     string
 	settings  ModelSettings
 	folderID  string
@@ -51,6 +54,7 @@ func NewOpenAIProvider(name ProviderName, model string, cfg ProviderConfig) (*Op
 
 	return &OpenAIProvider{
 		client:   openai.NewClient(opts...),
+		name:     name,
 		model:    fullModel,
 		folderID: cfg.FolderID,
 		settings: ModelSettings{
@@ -65,6 +69,13 @@ func NewOpenAIProvider(name ProviderName, model string, cfg ProviderConfig) (*Op
 func (p *OpenAIProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	return runner.Generate(ctx, p, agent)
 }
+
+// ModelName — имя модели провайдера (контекст промпт-инъекций, см. ModelName
+// у OllamaProvider).
+func (p *OpenAIProvider) ModelName() string { return p.model }
+
+// ProviderName — имя провайдера из providers.json (yandex/openai/trim/reg/…).
+func (p *OpenAIProvider) ProviderName() string { return string(p.name) }
 
 func (p *OpenAIProvider) ModelLimits() runner.ModelLimits {
 	return runner.ModelLimits{

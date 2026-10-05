@@ -6,5 +6,8 @@ providers.json
 ai
 /services/mrListener/mrListener
 
+# Бинари `go test -c` (случайно попадали в индекс — injections.test на 5 МБ)
+*.test
+
 # Лог-файлы запусков (подробный лог по проектам)
 logs/

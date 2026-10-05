@@ -109,6 +109,12 @@ type Session struct {
 	// много проектов, поэтому сообщения сессии пишутся в файл своего проекта,
 	// а не в общий logs/server.log.
 	log *logging.Logger
+
+	// sessionInjections — инъекции уровня сессии: добавляются в работающей
+	// сессии через API и применяются к следующему вызову модели. Хранятся
+	// в памяти под mutex ( наблюдаются в wg/stop, персистентность пока не
+	// требуется).
+	sessionInjections []board.Injection
 }
 
 // newSession создаёт сессию проекта (без запуска runner'а).
@@ -833,6 +839,74 @@ func truncateText(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// SessionInjections возвращает сессионные инъекции (копия для потокобезопасности).
+func (s *Session) SessionInjections() []board.Injection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionInjections == nil {
+		return nil
+	}
+	out := make([]board.Injection, len(s.sessionInjections))
+	copy(out, s.sessionInjections)
+	return out
+}
+
+// AddSessionInjection добавляет инъекцию в сессию (hot apply): применяется
+// со СЛЕДУЮЩЕГО запроса к модели в этой сессии.
+func (s *Session) AddSessionInjection(inj board.Injection) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionInjections = append(s.sessionInjections, inj)
+}
+
+// UpsertSessionInjection добавляет инъекцию в сессию, перезаписывая запись с
+// тем же id. Именно Upsert, а не Add: повторный POST с тем же id должен
+// править инъекцию, а не плодить дубли (иначе id не адресует ровно одну
+// запись, и DELETE сносит только одну из копий).
+func (s *Session) UpsertSessionInjection(inj board.Injection) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if inj.ID == "" {
+		return fmt.Errorf("инъекция: id обязателен")
+	}
+	out := make([]board.Injection, 0, len(s.sessionInjections)+1)
+	replaced := false
+	for _, existing := range s.sessionInjections {
+		if existing.ID == inj.ID {
+			out = append(out, inj)
+			replaced = true
+			continue
+		}
+		out = append(out, existing)
+	}
+	if !replaced {
+		out = append(out, inj)
+	}
+	s.sessionInjections = out
+	return nil
+}
+
+// RemoveSessionInjection удаляет инъекцию по ID из сессии и сообщает, была ли
+// она вообще. Раньше возврата не было, и DELETE по несуществующему (или, что
+// хуже, по несохранившемуся) id отвечал 200 — инъекция продолжала жить.
+func (s *Session) RemoveSessionInjection(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]board.Injection, 0, len(s.sessionInjections))
+	found := false
+	for _, inj := range s.sessionInjections {
+		if inj.ID == id {
+			found = true
+			continue
+		}
+		out = append(out, inj)
+	}
+	if found {
+		s.sessionInjections = out
+	}
+	return found
 }
 
 var _ = workspace.KindTemp // связь с реестром для будущих эндпоинтов регистрации

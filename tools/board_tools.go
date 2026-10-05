@@ -641,9 +641,29 @@ func (t *boardUpdateTaskTool) Definition() ToolDefinition {
 		props[k] = v
 	}
 	props["epic_id"] = map[string]any{"type": "string", "description": "ID эпика (перенести задачу в другой эпик)"}
+	props["injections"] = map[string]any{
+		"type":        "array",
+		"description": "Промпт-инъекции задачи: текст, который будет добавлен к промпту исполнителя ровно этой задачи со следующего обращения к модели (в том числе если цикл уже идёт). Полный список ЗАМЕНЯЕТ прежний.",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":       map[string]any{"type": "string", "description": "ID инъекции (если совпадёт с существующей — она перезапишется)"},
+				"name":     map[string]any{"type": "string", "description": "Короткое имя инъекции"},
+				"target":   map[string]any{"type": "string", "enum": []string{"system", "messages", "user_last", "assistant_last"}, "description": "Куда вставить текст"},
+				"position": map[string]any{"type": "string", "enum": []string{"prepend", "append", "replace", "inject_at_index"}, "description": "Куда именно в целевом блоке (по умолчанию append)"},
+				"index":    map[string]any{"type": "integer", "description": "Индекс для position=inject_at_index"},
+				"content":  map[string]any{"type": "string", "description": "Текст инъекции"},
+				"when":     map[string]any{"type": "string", "description": "Условие применения, например: role == \"backend\" && project != \"\""},
+				"enabled":  map[string]any{"type": "boolean", "description": "false — выключить инъекцию, не удаляя её"},
+				"priority": map[string]any{"type": "integer", "description": "Приоритет внутри scope: чем больше, тем раньше"},
+			},
+			"required":             []string{"name", "target", "content"},
+			"additionalProperties": false,
+		},
+	}
 	return ToolDefinition{
 		Name:        BoardUpdateTask,
-		Description: "Обновить задачу доски: переприоритетизировать (sequence_order), изменить описание/контракты, роль, зависимости или перенести в другой эпик. Используется лидами направлений.",
+		Description: "Обновить задачу доски: переприоритетизировать (sequence_order), изменить описание/контракты, роль, зависимости, перенести в другой эпик или задать промпт-инъекции задачи. Используется лидами направлений.",
 		Parameters: map[string]any{
 			"type":                 "object",
 			"properties":           props,
@@ -704,11 +724,30 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 		logging.For(t.b.Project()).Infof("[задача %s] перенесена в эпик %s", tk.TaskID, epicID)
 		return boardOK(map[string]any{"task_id": tk.TaskID, "epic_id": epicID})
 	}
+	// Промпт-инъекции задачи: список ЗАМЕНЯЕТ прежний, валидация — до записи.
+	// Применятся к следующему обращению модели по этой задаче (в том числе к
+	// уже идущему циклу), поэтому применять их нужно осознанно.
+	injectionsChanged := false
+	if raw, ok := args["injections"]; ok {
+		list, err := board.DecodeInjections(raw)
+		if err != nil {
+			return boardErr(BoardUpdateTask, fmt.Errorf("injections: %w", err))
+		}
+		if err := board.ValidateInjections(list); err != nil {
+			return boardErr(BoardUpdateTask, fmt.Errorf("injections: %w", err))
+		}
+		tk.Injections = list
+		injectionsChanged = true
+	}
 	if err := t.b.SaveTask(ctx, tk); err != nil {
 		return boardErrStore(BoardUpdateTask, t.b, err)
 	}
+	if injectionsChanged {
+		logging.For(t.b.Project()).Infof("[задача %s] промпт-инъекции обновлены: %d (применятся со следующего запроса к модели)",
+			tk.TaskID, len(tk.Injections))
+	}
 	logging.For(t.b.Project()).Infof("[задача %s] обновлена: %s", tk.TaskID, boardTitle(tk.Title))
-	return boardOK(map[string]any{"task_id": tk.TaskID})
+	return boardOK(map[string]any{"task_id": tk.TaskID, "injections": len(tk.Injections)})
 }
 
 type boardDeleteTaskTool struct{ b *board.Store }
