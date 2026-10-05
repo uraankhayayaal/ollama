@@ -1,4 +1,4 @@
-# PLAN-2026-10-04-todo-assistant-injections
+# PLAN-2026-10-04-done-assistant-injections
 
 Инъекции через Assistant для работающей модели (runtime injections).
 
