@@ -1091,15 +1091,48 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			}
 		}
 
-		// Ф-2 + Ф-5: хуки после раунда с мутациями. Очередь затронутых файлов
-		// дренится ОДИН раз (TakeTouched) и раздаётся активным хукам: авто-
-		// самоисправление LSP (Ф-2) и частичная переиндексация RAG (Ф-5).
+		// Ф-2 + Ф-5 + Ф-6: хуки после раунда с мутациями. Очередь затронутых
+		// файлов дренится ОДИН раз (TakeTouched) и раздаётся активным хукам:
+		// авто-самоисправление LSP (Ф-2), частичная переиндексация RAG (Ф-5) и
+		// промежуточный коммит правок (Ф-6).
 		// Хук активен, когда включён ЛЮБОЙ из режимов (LSP_AUTO_FIX,
-		// RAG_AUTO_REINDEX). События в Web UI — как у обычного инструмента.
+		// RAG_AUTO_REINDEX, KANBAN_WIP_COMMIT). События в Web UI — как у
+		// обычного инструмента.
 		autofixOn := autoFixEnabled()
 		reindexOn := reindexEnabled()
-		if af, ok := agent.(AutoFixer); ok && (autofixOn || reindexOn) {
+		wipOn := wipCommitEnabled()
+		if af, ok := agent.(AutoFixer); ok && (autofixOn || reindexOn || wipOn) {
 			touched := af.TakeTouched()
+
+			// Ф-6: промежуточный коммит раунда — единица ручного отката задачи.
+			// Идёт ПЕРВЫМ, до авто-лечения и реиндексации, чтобы в коммит
+			// попали ровно те файлы, которые агент изменил в этом раунде.
+			if wipOn && len(touched) > 0 {
+				if wc, ok := agent.(WIPCommitter); ok {
+					if rep != nil {
+						rep.OnToolStart("WipCommit", "промежуточный коммит правок раунда")
+					}
+					sha, committed, cerr := wc.CommitRoundTouched(touched, round+1)
+					switch {
+					case cerr != nil:
+						// Коммит — вспомогательная фиксация: недоступный git не
+						// должен ронять генерацию (деградируем в лог, как RAG).
+						if rep != nil {
+							rep.OnToolResult("WipCommit", Truncate("коммит не выполнен: "+cerr.Error(), 2000), false)
+						}
+						Debugf("RUNNER: раунд %d: промежуточный коммит: %v", round+1, cerr)
+					case committed:
+						if rep != nil {
+							rep.OnToolResult("WipCommit", Truncate("зафиксировано раундом "+strconv.Itoa(round+1)+": "+sha, 2000), true)
+						}
+						Debugf("RUNNER: раунд %d: промежуточный коммит %s (%d файлов)", round+1, sha, len(touched))
+					default:
+						if rep != nil {
+							rep.OnToolResult("WipCommit", "дерево чистое, коммит не создавался", true)
+						}
+					}
+				}
+			}
 
 			// Ф-5: частичная переиндексация RAG. Промптов модели не подмешивает —
 			// обновляет векторную память, чтобы последующие CodeSearch/контекст

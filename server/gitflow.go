@@ -26,7 +26,9 @@ const (
 	// epicBranchPrefix — префикс релизной ветки эпика (база = main).
 	epicBranchPrefix = "ai/epic/"
 	// taskBranchPrefix — префикс фича-ветки задачи (база = ветка эпика).
-	taskBranchPrefix = "ai/task/"
+	// Источник правды — gitops: тем же префиксом проверяется принадлежность
+	// рабочей копии задаче (промежуточные коммиты, ручной откат).
+	taskBranchPrefix = gitops.TaskBranchPrefix
 )
 
 // boardStore открывает хранилище доски проекта, привязывая авто-действия

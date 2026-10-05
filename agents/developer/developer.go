@@ -8,6 +8,7 @@ package developer
 import (
 	"ai/agents"
 	"ai/board"
+	"ai/gitops"
 	"ai/projects"
 	"ai/rag"
 	"ai/runner"
@@ -72,6 +73,12 @@ type base struct {
 	// ("Ты — опытный разработчик на ... и архитектор"). Пусто — используется
 	// Config.Language (глобальный CODEGEN_LANG).
 	langDesc string
+	// wipSubs — сабмодули рабочего каталога для промежуточных коммитов,
+	// читаются один раз (при первом коммите) и кэшируются: набор сабмодулей
+	// в ходе прогона не меняется, а git-вызов на каждом раунде лишний.
+	wipSubs []gitops.Submodule
+	// wipSubsDone — сабмодули уже читались (в том числе когда их нет).
+	wipSubsDone bool
 }
 
 // BackendDeveloper — агент «Backend разработчик». Выполняет задачи разработки
@@ -195,6 +202,53 @@ func (d *base) ReindexTouched(touched []string) (int, error) {
 	}
 	return runner.ReindexFiles(context.Background(), d.RAG, rag.ScopeForPath, d.OutputDir, project, touched,
 		rag.DetectIndexOptions(d.OutputDir))
+}
+
+// CommitRoundTouched фиксирует правки раунда промежуточным коммитом (Ф-6,
+// реализует runner.WIPCommitter). Вызывается раннером в пост-раундовом хуке
+// из единой очереди затронутых файлов.
+//
+// Гард области: коммит создаётся только в изолированной копии задачи
+// (gitops.InTaskBranch). Общий клон temp/<проект>, где агент пишет в режиме
+// `plan`, стоит на ветке ai/<проект> — там коммит не создаётся, и это
+// правильно: общий клон делят все шаги плана, коммитить его нельзя.
+//
+// Сабмодули читаются один раз и кэшируются: набор сабмодулей в ходе прогона
+// не меняется, а лишний git-вызов на каждом раунде не нужен. Без них
+// `git add -A` закоммитил бы изменённый gitlink на коммит, которого нет на
+// remote сабмодуля, — сломанная ссылка.
+//
+// Ошибка не должна ронять генерацию: раннер деградирует её в лог, а правки
+// останутся в рабочем дереве до следующего раунда.
+func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, error) {
+	if d.OutputDir == "" {
+		return "", false, nil
+	}
+	// RepoFromState — единственный способ получить Repo с реальным
+	// исполнителем (поле ex не экспортируется): промежуточный коммит —
+	// локальная операция, remote и точка отхода ему не нужны.
+	repo := gitops.RepoFromState(&gitops.CLIExecutor{}, d.OutputDir, "", "", "")
+	inTask, err := repo.InTaskBranch(context.Background())
+	if err != nil {
+		return "", false, err
+	}
+	if !inTask {
+		return "", false, nil
+	}
+	if !d.wipSubsDone {
+		subs, err := gitops.ListSubmodules(context.Background(), &gitops.CLIExecutor{}, d.OutputDir)
+		if err != nil {
+			return "", false, err
+		}
+		d.wipSubs = subs
+		d.wipSubsDone = true
+	}
+	repo.Submodules = d.wipSubs
+	sha, committed, err := repo.CommitIfDirty(context.Background(), runner.WipRoundMessage(round, touched))
+	if err != nil {
+		return "", false, err
+	}
+	return sha, committed, nil
 }
 
 // SetBoardStore подключает разработчика к общей Kanban-доске проекта: добавляет

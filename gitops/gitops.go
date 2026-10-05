@@ -119,6 +119,15 @@ func remoteOf(ctx context.Context, ex Executor, root string) (string, error) {
 // message — сообщение коммита; author при необходимости можно задать через
 // env (AI_GIT_AUTHOR_NAME/EMAIL), иначе используется конфиг git по умолчанию.
 func (r *Repo) Commit(ctx context.Context, message string) error {
+	return r.commitTracked(ctx, message)
+}
+
+// commitTracked — тело Commit: грязные сабмодули фиксируются ДО родителя
+// (remote родителя ссылается на gitlink, поэтому SHA сабмодуля обязан лечь на
+// remote раньше), затем индекс родителя обновляется целиком (`add -A`) и
+// создаётся коммит. Пустое дерево здесь — ошибка git: без --allow-empty
+// коммит не создаётся (для этого есть CommitAllowEmpty).
+func (r *Repo) commitTracked(ctx context.Context, message string) error {
 	if r == nil || r.Root == "" {
 		return fmt.Errorf("gitops: пустой Repo")
 	}
@@ -144,6 +153,87 @@ func (r *Repo) Commit(ctx context.Context, message string) error {
 		return fmt.Errorf("gitops: git commit: %w", err)
 	}
 	return nil
+}
+
+// CommitIfDirty фиксирует изменения рабочего дерева, только если они есть.
+// Раунд агента без мутаций не должен оставлять коммит, поэтому пустое дерево
+// — не ошибка (в отличие от Commit, который на нём падает).
+//
+// Промежуточные коммиты задачи (единица ручного отката, см.
+// PLAN-2026-10-05-todo-kanban-rollback.md, Р-1) опираются на этот метод:
+// возвращённый SHA — цель отката. Проверки Dirty достаточно и для случая
+// «изменился только сабмодуль»: `git status --porcelain` показывает
+// модифицированный gitlink сабмодуля, поэтому родитель тоже считается грязным.
+//
+// ok=false означает «дерево было чистым, коммит не создавался» (SHA пустой).
+func (r *Repo) CommitIfDirty(ctx context.Context, message string) (sha string, ok bool, err error) {
+	if r == nil || r.Root == "" {
+		return "", false, fmt.Errorf("gitops: пустой Repo")
+	}
+	dirty, err := r.Dirty(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	if !dirty {
+		return "", false, nil
+	}
+	if err := r.commitTracked(ctx, message); err != nil {
+		return "", false, err
+	}
+	sha, err = r.HeadSHA(ctx)
+	if err != nil {
+		// Коммит создан, но SHA не прочитали: откатываться будет некуда —
+		// ошибку поднимаем, но ok остаётся true (изменения зафиксированы).
+		return "", true, err
+	}
+	return sha, true, nil
+}
+
+// HeadSHA возвращает полный SHA текущего HEAD рабочего дерева.
+func (r *Repo) HeadSHA(ctx context.Context) (string, error) {
+	if r == nil || r.Root == "" {
+		return "", fmt.Errorf("gitops: пустой Repo")
+	}
+	return r.revParse(ctx, "HEAD")
+}
+
+// TaskBranchPrefix — префикс фича-ветки задачи (ai/task/<id>). Единственный
+// источник правды: сервер строит по нему ветки, а InTaskBranch проверяет по
+// нему, что рабочая копия принадлежит задаче.
+const TaskBranchPrefix = "ai/task/"
+
+// CurrentBranch возвращает имя ветки, на которой стоит рабочее дерево.
+func (r *Repo) CurrentBranch(ctx context.Context) (string, error) {
+	if r == nil || r.Root == "" {
+		return "", fmt.Errorf("gitops: пустой Repo")
+	}
+	out, err := r.ex.Exec(ctx, r.Root, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("gitops: git rev-parse --abbrev-ref HEAD: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// InTaskBranch сообщает, стоит ли рабочее дерево на ветке задачи.
+//
+// Это гард области для промежуточных коммитов и ручного отката (Ф-6, см.
+// PLAN-2026-10-05-todo-kanban-rollback.md, этап 1.4): коммитить и откатывать
+// можно только изолированную копию задачи. Общий клон проекта temp/<проект>,
+// где агент пишет в режиме `plan`, стоит на ветке ai/<проект> — он под
+// гард не попадает, и коммит там не создаётся (там же пропадает и
+// авто-коммит на done — см. server/gitflow_auto.go).
+//
+// Проверка идёт по ветке, а не по имени каталога: имя worktree — конвенция
+// уровня сервера, а ветка задаёт принадлежность кода самой задаче и
+// переживает перенос каталога. Detached HEAD и пустой репозиторий (ошибка
+// rev-parse) дают false вместе с ошибкой — вызывающий деградирует в «не
+// наша ветка».
+func (r *Repo) InTaskBranch(ctx context.Context) (bool, error) {
+	branch, err := r.CurrentBranch(ctx)
+	if err != nil {
+		return false, err
+	}
+	return strings.HasPrefix(branch, TaskBranchPrefix), nil
 }
 
 // CommitAllowEmpty фиксирует изменения, даже если индекс пуст (рабочая копия
