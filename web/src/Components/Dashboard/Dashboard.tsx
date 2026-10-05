@@ -28,6 +28,7 @@ export function Dashboard({
   onTaskBranch,
   onEpicMR,
   onTaskMR,
+  onTaskRollback,
   onShowDiff,
   onTaskAutoResolve,
   onEpicAutoResolve,
@@ -48,6 +49,8 @@ export function Dashboard({
   onTaskBranch?: (t: TaskRow) => Promise<void>;
   onEpicMR?: (e: EpicRow) => Promise<void>;
   onTaskMR?: (t: TaskRow) => Promise<void>;
+  // Ф-6 (этап 3): ручной откат кода задачи к "last_good"/"base"/SHA.
+  onTaskRollback?: (t: TaskRow, to: string) => Promise<void>;
   onShowDiff?: (context: BranchDiffContext) => void;
   // Ф-9: авторезолвинг конфликтов мёрджа через LLM. Кнопка в блоке конфликта.
   onTaskAutoResolve?: (t: TaskRow) => Promise<void>;
@@ -314,6 +317,7 @@ export function Dashboard({
           onShowDiff={onShowDiff}
           onAutoResolve={onTaskAutoResolve}
           onTaskUpdate={onTaskUpdate}
+          onRollback={onTaskRollback}
           onClose={() => setTaskId(null)}
         />
       )}

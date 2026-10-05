@@ -94,6 +94,7 @@ func TestCommitPushPushBranchRemote(t *testing.T) {
 		t.Fatalf("Push: %v", err)
 	}
 	want := `/clone | git add -A
+/clone | git diff --cached --name-only -z
 /clone | git commit -m верификация dry-run
 /clone | git push -u origin ai/g`
 	if got := strings.Join(ex.calls, "\n"); got != want {
@@ -210,8 +211,9 @@ func TestCommitAndPushCallOrderStable(t *testing.T) {
 	sorted := append([]string(nil), ex.calls...)
 	sort.Strings(sorted)
 	_ = sorted // порядок важен, а не сортировка
-	if len(ex.calls) != 3 {
-		t.Fatalf("нужно 3 вызова, получено %d: %v", len(ex.calls), ex.calls)
+	// 4 вызова: add -A, проверка объёма гарда (Ф-6), commit, push.
+	if len(ex.calls) != 4 {
+		t.Fatalf("нужно 4 вызова, получено %d: %v", len(ex.calls), ex.calls)
 	}
 }
 

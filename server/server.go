@@ -240,6 +240,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/branch", s.handleCreateTaskBranch)
 	// Git-workflow (Ф-2): мёрдж фича-ветки задачи в релизную ветку эпика.
 	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/merge", s.handleMergeTask)
+	// Ф-6 (этап 3): ручной откат кода задачи к опорной точке git-истории.
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/rollback", s.handleRollbackTask)
 	// Git-workflow (Ф-3): кнопка «Залить в main» — релизная ветка эпика → main.
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/release", s.handleReleaseEpic)
 	// Git-workflow (Ф-4): авто-резолв конфликтов «main ↔ релизная ветка».

@@ -502,6 +502,20 @@ export async function createTaskMR(
   );
 }
 
+// Ручной откат кода задачи (Ф-6): `to` — "last_good" (последний раунд,
+// прошедший проверку), "base" (состояние на момент старта задачи) или SHA
+// коммита. Откатывает worktree задачи вместе с сабмодулями и возвращает задачу
+// в очередь. Действие необратимо в рабочем дереве — вызывающий обязан
+// подтвердить его у человека.
+export async function rollbackTask(
+  base: string,
+  project: string,
+  taskID: string,
+  to: string,
+): Promise<{ ok: boolean; task_id: string; sha: string; submodules?: string[]; status: string }> {
+  return req("POST", `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/rollback`, { to });
+}
+
 // --- приёмка (Ф-2-3) ---
 
 // Дифф предложенных изменений: для git-проектов — список файлов (метаданные,

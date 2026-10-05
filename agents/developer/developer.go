@@ -8,6 +8,8 @@ package developer
 import (
 	"ai/agents"
 	"ai/board"
+	"ai/gitops"
+	"ai/logging"
 	"ai/projects"
 	"ai/rag"
 	"ai/runner"
@@ -15,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/ollama/ollama/api"
 )
@@ -72,6 +76,15 @@ type base struct {
 	// ("Ты — опытный разработчик на ... и архитектор"). Пусто — используется
 	// Config.Language (глобальный CODEGEN_LANG).
 	langDesc string
+	// wipSubs — сабмодули рабочего каталога для промежуточных коммитов,
+	// читаются один раз (при первом коммите) и кэшируются: набор сабмодулей
+	// в ходе прогона не меняется, а git-вызов на каждом раунде лишний.
+	wipSubs []gitops.Submodule
+	// wipSubsDone — сабмодули уже читались (в том числе когда их нет).
+	wipSubsDone bool
+	// taskID — id задачи, ради которой построен агент (SetTaskID). Нужен для
+	// State Tracking: в какую запись доски писать состояние раунда.
+	taskID string
 }
 
 // BackendDeveloper — агент «Backend разработчик». Выполняет задачи разработки
@@ -197,6 +210,53 @@ func (d *base) ReindexTouched(touched []string) (int, error) {
 		rag.DetectIndexOptions(d.OutputDir))
 }
 
+// CommitRoundTouched фиксирует правки раунда промежуточным коммитом (Ф-6,
+// реализует runner.WIPCommitter). Вызывается раннером в пост-раундовом хуке
+// из единой очереди затронутых файлов.
+//
+// Гард области: коммит создаётся только в изолированной копии задачи
+// (gitops.InTaskBranch). Общий клон temp/<проект>, где агент пишет в режиме
+// `plan`, стоит на ветке ai/<проект> — там коммит не создаётся, и это
+// правильно: общий клон делят все шаги плана, коммитить его нельзя.
+//
+// Сабмодули читаются один раз и кэшируются: набор сабмодулей в ходе прогона
+// не меняется, а лишний git-вызов на каждом раунде не нужен. Без них
+// `git add -A` закоммитил бы изменённый gitlink на коммит, которого нет на
+// remote сабмодуля, — сломанная ссылка.
+//
+// Ошибка не должна ронять генерацию: раннер деградирует её в лог, а правки
+// останутся в рабочем дереве до следующего раунда.
+func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, error) {
+	if d.OutputDir == "" {
+		return "", false, nil
+	}
+	// RepoFromState — единственный способ получить Repo с реальным
+	// исполнителем (поле ex не экспортируется): промежуточный коммит —
+	// локальная операция, remote и точка отхода ему не нужны.
+	repo := gitops.RepoFromState(&gitops.CLIExecutor{}, d.OutputDir, "", "", "")
+	inTask, err := repo.InTaskBranch(context.Background())
+	if err != nil {
+		return "", false, err
+	}
+	if !inTask {
+		return "", false, nil
+	}
+	if !d.wipSubsDone {
+		subs, err := gitops.ListSubmodules(context.Background(), &gitops.CLIExecutor{}, d.OutputDir)
+		if err != nil {
+			return "", false, err
+		}
+		d.wipSubs = subs
+		d.wipSubsDone = true
+	}
+	repo.Submodules = d.wipSubs
+	sha, committed, err := repo.CommitIfDirty(context.Background(), runner.WipRoundMessage(round, touched))
+	if err != nil {
+		return "", false, err
+	}
+	return sha, committed, nil
+}
+
 // SetBoardStore подключает разработчика к общей Kanban-доске проекта: добавляет
 // инструменты статуса задачи (BoardGetTask/BoardSetTaskStatus), передаёт
 // Board-контекст в реестр. Вызывается оркестратором Kanban при построении
@@ -208,6 +268,61 @@ func (d *base) SetBoardStore(s *board.Store) {
 	d.Store = s
 	names := append(append([]string{}, devToolNames...), devBoardToolNames...)
 	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s, RAG: d.RAG})
+}
+
+// SetTaskID записывает id задачи, ради которой построен агент (Ф-6, этап 2).
+// Нужен для State Tracking: без него агент не знает, в какую запись доски
+// писать состояние раунда, и откатываться будет не к чему. Вызывается
+// оркестратором рядом с SetBoardStore/SetOutputDir.
+func (d *base) SetTaskID(id string) { d.taskID = strings.TrimSpace(id) }
+
+// ReportRoundState записывает состояние раунда на доску задачи (Ф-6, этап 2,
+// реализует runner.RoundStateReporter). Раннер вызывает его раз за раунд в
+// том же хуке, где делает промежуточный коммит.
+//
+// Что важно и почему:
+//   - last_good_sha двигается только на раунде с ПРОШЕДШЕЙ проверкой и
+//     фиксируется коммитом того же раунда: это и есть «последняя рабочая
+//     точка», к которой возвращает ручной откат;
+//   - при падении проверки сохраняется нормализованный усечённый вывод —
+//     диалог с человеком начинается с него, а не с «что-то сломалось»;
+//   - heartbeat_at обновляется каждый раунд: по нему watchdog понимает, что
+//     задача жива, и возвращает в работу зависшую после рестарта сервера.
+//
+// Промахи записи не поднимаются: состояние — вспомогательная телеметрия, её
+// потеря не должна ронять генерацию.
+func (d *base) ReportRoundState(rs runner.RoundState) {
+	if d.Store == nil || d.taskID == "" {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	rs.Agent = d.label
+	errText := runner.RoundStateErrorText(rs)
+	err := d.Store.PatchTask(context.Background(), d.taskID, func(t *board.Task) error {
+		t.AgentState = rs.State
+		t.ActiveAgent = d.label
+		t.HeartbeatAt = now
+		if errText != "" {
+			t.LastError = errText
+		} else if rs.VerifyRan && !rs.VerifyFailed {
+			t.LastError = ""
+		}
+		if rs.Committed && rs.CommitSHA != "" {
+			if t.Checkpoint == nil {
+				t.Checkpoint = &board.TaskCheckpoint{}
+			}
+			t.Checkpoint.LastSHA = rs.CommitSHA
+			// Проверка прошла в этом же раунде: коммит раунда — точка,
+			// после которой состояние рабочее.
+			if rs.VerifyRan && !rs.VerifyFailed {
+				t.Checkpoint.LastGoodSHA = rs.CommitSHA
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		logging.For(d.ProjectName()).Detailf("разработчик: состояние раунда %d задачи %s не записано: %v", rs.Round, d.taskID, err)
+	}
 }
 
 func (d *base) GetUserMessages() []agents.Message {

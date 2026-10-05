@@ -59,22 +59,31 @@ func newLoopedKanbanRunner(t *testing.T) (*KanbanRunner, *board.Store) {
 	return NewKanbanRunner(&loopedProvider{}, store), store
 }
 
-// Специалист зациклился: задача НЕ помечается выполненной (тихий fallback
-// «выполнена» скрыл бы потерю работы), а запуск падает с понятной причиной —
-// чтобы задачу взяли с другой стороны.
-func TestKanbanTaskLoopFailsInsteadOfMarkingDone(t *testing.T) {
+// Специалист зациклился (Ф-6, этапы 4.4–4.5): работа НЕ откатывается и НЕ
+// помечается выполненной (тихий fallback «выполнена» скрыл бы потерю работы) —
+// идёт эскалация: сильная модель + инъекция с разбором петли, задача
+// возвращается в очередь. Исчерпание бюджета останавливает работу задачи и
+// зовёт человека понятным сообщением, а не «нет прогресса».
+func TestKanbanTaskLoopEscalatesThenAsksHuman(t *testing.T) {
+	t.Setenv("KANBAN_MAX_ESCALATIONS", "2")
 	ctx := context.Background()
 	kr, store := newLoopedKanbanRunner(t)
 
+	var audit []string
+	kr.SetStatusNotifier(func(msg string) { audit = append(audit, msg) })
+
 	err := kr.Run(ctx, "kanban-loop", "Сделай todo-приложение")
 	if err == nil {
-		t.Fatal("зацикливание специалиста должно останавливать запуск")
+		t.Fatal("исчерпание бюджета автономии должно останавливать запуск")
 	}
-	if !strings.Contains(err.Error(), "зациклился") {
-		t.Fatalf("ошибка должна называть зацикливание, got %v", err)
+	if !strings.Contains(err.Error(), "бюджет автономии исчерпан") || !strings.Contains(err.Error(), "нужен человек") {
+		t.Fatalf("ошибка должна называть исчерпание бюджета и нужду в человеке, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "WriteFiles") {
 		t.Fatalf("ошибка должна нести причину петли, got %v", err)
+	}
+	if strings.Contains(err.Error(), "нет прогресса") {
+		t.Fatalf("ошибка не должна прятаться под «нет прогресса»: %v", err)
 	}
 
 	tasks, terr := store.ListTasks(ctx)
@@ -84,10 +93,39 @@ func TestKanbanTaskLoopFailsInsteadOfMarkingDone(t *testing.T) {
 	if len(tasks) == 0 {
 		t.Fatal("задача должна существовать на доске")
 	}
+	audited := false
 	for _, task := range tasks {
 		if task.Status == board.StatusDone {
 			t.Fatalf("задача %s не должна считаться выполненной при зацикливании: %+v", task.TaskID, task.Status)
 		}
+		if task.Escalations == 0 {
+			continue
+		}
+		audited = true
+		// Задача остановлена на паузе (не терминальный статус: вернуть в
+		// очередь можно), с требованием сильной модели и разбором петли.
+		if task.Status != board.StatusPaused {
+			t.Fatalf("задача %s: статус %s, ожидалась пауза", task.TaskID, task.Status)
+		}
+		if task.ModelTier != board.ModelTierLarge {
+			t.Fatalf("задача %s: model_tier=%q, ожидался %q", task.TaskID, task.ModelTier, board.ModelTierLarge)
+		}
+		if task.Escalations != 2 {
+			t.Fatalf("задача %s: эскалаций %d, ожидалось 2 (бюджет)", task.TaskID, task.Escalations)
+		}
+		if len(task.Injections) == 0 {
+			t.Fatalf("задача %s: после петли должна остаться инъекция с разбором", task.TaskID)
+		}
+	}
+	if !audited {
+		t.Fatalf("ни одна задача не эскалировалась: %+v", tasks)
+	}
+	if len(audit) == 0 {
+		t.Fatal("аудит (SetStatusNotifier) должен получать решения оркестратора")
+	}
+	joined := strings.Join(audit, "\n")
+	if !strings.Contains(joined, "эскалация") {
+		t.Fatalf("в аудите нет эскалации: %v", audit)
 	}
 }
 

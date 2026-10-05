@@ -327,6 +327,12 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// архитектором (KanbanStart с текстом задачи).
 	runner.SetBoardOnly(boardOnly)
 	runner.SetStandbyNotifier(sess.setStandby)
+	// Ф-6 (этап 4.6): аудит решений оркестратора — эскалация модели, исчерпание
+	// бюджета автономии, возврат зависших задач — в чат проекта, а не в Redis:
+	// это разговор с человеком, а не состояние доски.
+	runner.SetStatusNotifier(func(msg string) {
+		sess.append(chat.RoleStatus, msg, "", "", nil)
+	})
 	// Ф-3: git-проекты — специалист работает в своём worktree ветки задачи
 	// (OutputDir = worktree), поэтому авто-коммит на done соберёт его правки.
 	runner.SetOutputDir(sess.srv.taskOutputDir)

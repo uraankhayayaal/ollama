@@ -16,6 +16,8 @@ import (
 	"ai/forges"
 	"ai/gitops"
 	"ai/workspace"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 type orderedGitExecutor struct{ events *[]string }
@@ -41,12 +43,32 @@ func (f orderedForge) CreateMergeRequest(_ forges.MergeRequestOptions) (string, 
 	return f.url, nil
 }
 
-func TestTaskWorktreeCommitsNestedSubmoduleIntoProjectBranch(t *testing.T) {
+// submoduleTaskFixture — готовая связка «родитель с сабмодулем»: клон родителя,
+// worktree задачи в нём и worktree задачи сабмодуля (вложенный), с
+// зарегистрированными ветками задачи в обоих репозиториях.
+type submoduleTaskFixture struct {
+	reg       *workspace.Registry
+	store     *board.Store
+	srv       *Server
+	task      *board.Task
+	parentWT  string
+	childWT   string
+	childName string
+	childRoot string
+	childBase string
+	childRepo string
+	parentOrg string
+	childOrg  string
+}
+
+// newSubmoduleTaskFixture собирает фикстуру и СРАЗУ создаёт worktree задачи
+// (taskWorktree): дальше тест работает с готовыми деревьями.
+func newSubmoduleTaskFixture(t *testing.T) *submoduleTaskFixture {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git недоступен")
 	}
 	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
-	ctx := context.Background()
 	base := t.TempDir()
 	childOrigin := filepath.Join(base, "child-origin")
 	initSubmoduleFixtureRepo(t, childOrigin)
@@ -57,7 +79,7 @@ func TestTaskWorktreeCommitsNestedSubmoduleIntoProjectBranch(t *testing.T) {
 	gitFixtureRun(t, parentOrigin, "commit", "-m", "add submodule")
 
 	cloneRoot := filepath.Join(base, "clone")
-	parentRepo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
+	parentRepo, err := gitops.Clone(context.Background(), gitops.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +87,10 @@ func TestTaskWorktreeCommitsNestedSubmoduleIntoProjectBranch(t *testing.T) {
 	for _, sub := range parentRepo.Submodules {
 		setGitUserReal(t, sub.Root)
 	}
-	if err := parentRepo.CreateBranch(ctx, "ai/epic/e1", parentRepo.Base); err != nil {
+	if err := parentRepo.CreateBranch(context.Background(), "ai/epic/e1", parentRepo.Base); err != nil {
 		t.Fatal(err)
 	}
-	if err := parentRepo.CreateBranch(ctx, "ai/task/t1", "ai/epic/e1"); err != nil {
+	if err := parentRepo.CreateBranch(context.Background(), "ai/task/t1", "ai/epic/e1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -95,34 +117,206 @@ func TestTaskWorktreeCommitsNestedSubmoduleIntoProjectBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := &Server{reg: reg, gitExec: gitops.CLIExecutor{}, mergeLocks: map[string]*sync.Mutex{}}
+	srv := &Server{reg: reg, gitExec: gitops.CLIExecutor{}, mergeLocks: map[string]*sync.Mutex{}, sessions: map[string]*Session{}}
 	task := &board.Task{TaskSpec: board.TaskSpec{TaskID: "t1"}}
-	srv.taskWorktree(ctx, "app", task, nil)
+	mr := miniredis.RunT(t)
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "app"})
+	if err := store.CreateEpic(context.Background(), &board.Epic{TaskSpec: board.TaskSpec{TaskID: "e1", Title: "epic"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTask(context.Background(), &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1},
+		EpicID:   "e1",
+		Status:   board.StatusInProgress,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.taskWorktree(context.Background(), "app", task, store)
 	ref, err := reg.TaskBranch("app", "t1")
 	if err != nil || ref.Worktree == "" {
 		t.Fatalf("task worktree ref=%+v err=%v", ref, err)
 	}
 	childRef, err := reg.TaskBranch(childName, childTaskKey("app", "t1"))
-	if err != nil {
-		t.Fatalf("submodule task branch: %v", err)
+	if err != nil || childRef.Worktree == "" {
+		t.Fatalf("submodule task branch: ref=%+v err=%v", childRef, err)
 	}
-	if err := os.WriteFile(filepath.Join(childRef.Worktree, "task.go"), []byte("package auth\n// task change\n"), 0o644); err != nil {
+	return &submoduleTaskFixture{
+		reg: reg, srv: srv, task: task, store: store,
+		parentWT: ref.Worktree, childWT: childRef.Worktree,
+		childName: childName, childRoot: sub.Root,
+		childBase: sub.Branch, childRepo: sub.Remote,
+		parentOrg: parentOrigin, childOrg: childOrigin,
+	}
+}
+
+// TestGitStatusExposesTaskWorktreeAndSubmodules — этап 5.3: снимок доски
+// должен говорить, что задачу ещё можно откатить (worktree жив) и какие
+// вложенные сабмодули вернутся к состоянию откатываемого коммита. Иначе
+// кнопка отката обещает действие, которого нет (worktree удалён).
+func TestGitStatusExposesTaskWorktreeAndSubmodules(t *testing.T) {
+	f := newSubmoduleTaskFixture(t)
+	ctx := context.Background()
+	epics, err := f.store.ListEpics(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	srv.commitTaskWorktree(ctx, "app", task, ref.Worktree)
-	parentGitlink := gitFixtureRun(t, ref.Worktree, "rev-parse", "HEAD:packages/auth")
-	childHead := gitFixtureRun(t, sub.Root, "rev-parse", "HEAD")
+	tasks, err := f.store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view := f.srv.gitStatus(ctx, "app", epics, tasks)
+	if view == nil {
+		t.Fatal("gitStatus вернул nil для git-проекта")
+	}
+	link, ok := view.Tasks["t1"]
+	if !ok {
+		t.Fatalf("в снимке нет ветки задачи: %+v", view.Tasks)
+	}
+	if !link.Worktree {
+		t.Fatalf("worktree задачи есть на диске (%s), но снимок этого не говорит", f.parentWT)
+	}
+	if len(link.Submodules) != 1 || link.Submodules[0] != "packages/auth" {
+		t.Fatalf("submodules=%v, ожидался [packages/auth]", link.Submodules)
+	}
+
+	// После удаления worktree (задача выполнена) откат недоступен — кнопка на
+	// доске прячется вместо того, чтобы упасть с 404 по клику.
+	f.srv.removeTaskWorktree("app", "t1", f.parentWT)
+	view = f.srv.gitStatus(ctx, "app", epics, tasks)
+	if view.Tasks["t1"].Worktree {
+		t.Fatalf("worktree удалён, но снимок всё ещё предлагает откат: %+v", view.Tasks["t1"])
+	}
+	if len(view.Tasks["t1"].Submodules) != 0 {
+		t.Fatalf("submodules=%v после удаления worktree", view.Tasks["t1"].Submodules)
+	}
+}
+
+// TestTaskWorktreeRecordsBaseSHA — точка отката «снести всё» (Ф-6, этап 2)
+// снимается при создании worktree задачи и не перетирается при повторном
+// вызове хука (иначе после отката кода «база» уехала бы вперёд).
+func TestTaskWorktreeRecordsBaseSHA(t *testing.T) {
+	f := newSubmoduleTaskFixture(t)
+	base, err := f.store.GetTask(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	head := gitFixtureRun(t, f.parentWT, "rev-parse", "HEAD")
+	if base.Checkpoint == nil || base.Checkpoint.BaseSHA != head {
+		t.Fatalf("base_sha=%+v, HEAD worktree=%s", base.Checkpoint, head)
+	}
+	// Ветка задачи уехала вперёд — «база» остаётся прежней.
+	if err := os.WriteFile(filepath.Join(f.parentWT, "a.go"), []byte("package app\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitFixtureRun(t, f.parentWT, "add", "-A")
+	gitFixtureRun(t, f.parentWT, "commit", "-m", "round 1")
+	if got := gitFixtureRun(t, f.parentWT, "rev-parse", "HEAD"); got == head {
+		t.Fatal("тест не сдвинул ветку задачи")
+	}
+	f.srv.taskWorktree(context.Background(), "app", f.task, f.store)
+	after, _ := f.store.GetTask(context.Background(), "t1")
+	if after.Checkpoint.BaseSHA != head {
+		t.Fatalf("base_sha перетёрт: %s, ожидалось %s", after.Checkpoint.BaseSHA, head)
+	}
+}
+
+func TestTaskWorktreeBootstrapsGitignore(t *testing.T) {
+	f := newSubmoduleTaskFixture(t)
+	for _, root := range []string{f.parentWT, f.childWT} {
+		data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+		if err != nil {
+			t.Fatalf("%s: .gitignore: %v", root, err)
+		}
+		body := string(data)
+		for _, want := range []string{"node_modules/", "__pycache__/", ".venv/"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s: .gitignore без %q: %q", root, want, body)
+			}
+		}
+		if strings.Contains(body, "vendor/") {
+			t.Fatalf("%s: vendor/ в списке не должен быть: %q", root, body)
+		}
+	}
+	// Свой .gitignore репозитория не трогаем: решения проекта важнее списка.
+	if err := os.WriteFile(filepath.Join(f.parentWT, ".gitignore"), []byte("custom/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := gitFixtureRun(t, f.parentWT, "rev-parse", "HEAD")
+	f.srv.taskWorktree(context.Background(), "app", f.task, nil)
+	if body, err := os.ReadFile(filepath.Join(f.parentWT, ".gitignore")); err != nil || string(body) != "custom/\n" {
+		t.Fatalf("существующий .gitignore перезаписан: %q err=%v", body, err)
+	}
+	if after := gitFixtureRun(t, f.parentWT, "rev-parse", "HEAD"); after != before {
+		t.Fatalf("повторный taskWorktree пересоздал worktree: %s -> %s", before, after)
+	}
+}
+
+// TestCommitTaskWorktreePublishesSubmoduleAfterWIPCommit — регрессия Ф-6: с
+// промежуточными коммитами worktree сабмодуля на `done` ЧИСТЫЙ. Публикация его
+// ветки (merge в базовую + push + обновление gitlink) всё равно обязана
+// выполниться, иначе gitlink родителя указал бы на неопубликованный коммит.
+func TestCommitTaskWorktreePublishesSubmoduleAfterWIPCommit(t *testing.T) {
+	f := newSubmoduleTaskFixture(t)
+	ctx := context.Background()
+	// Промежуточный коммит раунда в сабмодуле: правка есть, дерево чистое.
+	if err := os.WriteFile(filepath.Join(f.childWT, "wip.go"), []byte("package auth\n// wip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitFixtureRun(t, f.childWT, "add", "-A")
+	gitFixtureRun(t, f.childWT, "commit", "-m", "wip")
+	if out := gitFixtureRun(t, f.childWT, "status", "--porcelain"); out != "" {
+		t.Fatalf("дерево сабмодуля должно быть чистым, получено: %q", out)
+	}
+	wipSHA := gitFixtureRun(t, f.childWT, "rev-parse", "HEAD")
+
+	f.srv.commitTaskWorktree(ctx, "app", f.task, f.parentWT)
+
+	// Коммит раунда опубликован в origin сабмодуля.
+	published := gitFixtureRun(t, f.childOrg, "rev-parse", f.childBase)
+	if !gitFixtureContains(t, f.childOrg, published, wipSHA) {
+		t.Fatalf("коммит %s не попал в %s сабмодуля (%s)", wipSHA, f.childBase, published)
+	}
+	// Gitlink родителя указывает на опубликованный коммит, дерево родителя чистое.
+	if link := gitFixtureRun(t, f.parentWT, "rev-parse", "HEAD:packages/auth"); link != published {
+		t.Fatalf("gitlink=%s, опубликованный коммит=%s", link, published)
+	}
+	if out := gitFixtureRun(t, f.parentWT, "status", "--porcelain"); out != "" {
+		t.Fatalf("дерево worktree задачи не закоммичено: %q", out)
+	}
+	// Повторный вызов (следующий прогон/повторный done) — no-op без ошибок.
+	f.srv.commitTaskWorktree(ctx, "app", f.task, f.parentWT)
+	if link := gitFixtureRun(t, f.parentWT, "rev-parse", "HEAD:packages/auth"); link != published {
+		t.Fatalf("повторный вызов сменил gitlink: %s != %s", link, published)
+	}
+}
+
+// gitFixtureContains сообщает, достижим ли commit из head в репозитории dir.
+func gitFixtureContains(t *testing.T, dir, head, commit string) bool {
+	t.Helper()
+	_, err := exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", commit, head).CombinedOutput()
+	return err == nil
+}
+
+func TestTaskWorktreeCommitsNestedSubmoduleIntoProjectBranch(t *testing.T) {
+	f := newSubmoduleTaskFixture(t)
+	if err := os.WriteFile(filepath.Join(f.childWT, "task.go"), []byte("package auth\n// task change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.commitTaskWorktree(context.Background(), "app", f.task, f.parentWT)
+	parentGitlink := gitFixtureRun(t, f.parentWT, "rev-parse", "HEAD:packages/auth")
+	childHead := gitFixtureRun(t, f.childRoot, "rev-parse", "HEAD")
 	if parentGitlink != childHead {
 		t.Fatalf("parent gitlink=%s child HEAD=%s", parentGitlink, childHead)
 	}
-	if !strings.Contains(gitFixtureRun(t, sub.Root, "show", "--stat", "--oneline", "HEAD"), "task.go") {
+	if !strings.Contains(gitFixtureRun(t, f.childRoot, "show", "--stat", "--oneline", "HEAD"), "task.go") {
 		t.Fatal("submodule task commit missing")
 	}
-	srv.removeTaskWorktree("app", "t1", ref.Worktree)
-	if _, err := os.Stat(ref.Worktree); !os.IsNotExist(err) {
+	f.srv.removeTaskWorktree("app", "t1", f.parentWT)
+	if _, err := os.Stat(f.parentWT); !os.IsNotExist(err) {
 		t.Fatalf("parent task worktree remains: %v", err)
 	}
-	if _, err := reg.TaskBranch(childName, childTaskKey("app", "t1")); err == nil {
+	if _, err := f.reg.TaskBranch(f.childName, childTaskKey("app", "t1")); err == nil {
 		t.Fatal("submodule task branch registry ref remains")
 	}
 }

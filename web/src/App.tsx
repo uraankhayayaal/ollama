@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
+import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, rollbackTask, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, LogStream, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -619,6 +619,33 @@ export function App() {
     await createEpicBranch(BASE, project.project_name, epic.task_id);
   };
 
+  // Ф-6 (этап 3): откат кода задачи. Ошибку показываем в общей плашке (fail),
+  // успех — обновлением доски: сервер сам вернул задачу в очередь и снял
+  // ошибку проверки отменённого кода.
+  const onTaskRollback = async (task: TaskRow, to: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const next = await rollbackTask(BASE, project.project_name, task.task_id, to);
+      // Перечитываем задачу: сервер снял ошибку проверки отменённого кода,
+      // сдвинул чекпойнт на точку отката и (для in_progress) вернул задачу в
+      // очередь — локальная копия доски без этого показывала бы старое.
+      const fresh = await updateTask(BASE, project.project_name, task.task_id, {});
+      setBoard((prev) =>
+        prev
+          ? {
+              ...prev,
+              tasks: prev.tasks.map((x) => (x.task_id === next.task_id ? fresh : x)),
+            }
+          : prev,
+      );
+    } catch (e) {
+      fail(e);
+      throw e;
+    }
+  };
+
   const onTaskBranch = async (task: TaskRow) => {
     if (!project) {
       return;
@@ -871,6 +898,7 @@ export function App() {
                 onTaskBranch={onTaskBranch}
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
+                onTaskRollback={onTaskRollback}
                 onShowDiff={setDiffContext}
                 onTaskAutoResolve={onTaskAutoResolve}
                 onEpicAutoResolve={onEpicAutoResolve}
@@ -892,6 +920,7 @@ export function App() {
                 onTaskBranch={onTaskBranch}
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
+                onTaskRollback={onTaskRollback}
                 onShowDiff={setDiffContext}
                 onTaskAutoResolve={onTaskAutoResolve}
                 onEpicAutoResolve={onEpicAutoResolve}

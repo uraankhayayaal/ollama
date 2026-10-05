@@ -82,6 +82,27 @@ export interface TaskRow {
   tokens_out?: number;
   tokens_total?: number;
   token_estimate?: number;
+  // Ф-6 State Tracking: живое состояние задачи по ходу раундов агента —
+  // чем занят прогон, где последняя рабочая точка для отката и чем
+  // закончилась последняя упавшая проверка. Пустые поля сервер не отдаёт.
+  agent_state?: AgentState;
+  active_agent?: string;
+  checkpoint?: TaskCheckpoint;
+  attempts?: number;
+  last_error?: string;
+  heartbeat_at?: string;
+}
+
+// Состояния агента на доске (зеркалят board/entity.go).
+export type AgentState = "writing_code" | "running_tests" | "fixing_errors" | "idle";
+
+// Опорные точки ветки задачи для ручного отката (Ф-6): base — код на старте
+// задачи, last — последний промежуточный коммит, last_good — тот, после
+// которого проверка была зелёной.
+export interface TaskCheckpoint {
+  base_sha: string;
+  last_sha?: string;
+  last_good_sha?: string;
 }
 
 export interface BugRow {
@@ -176,6 +197,11 @@ export interface GitLinkView {
   // has_commits — в ветке есть свои коммиты (Ф-2). Не вычислено/ошибка git —
   // undefined; false — коммитов ещё нет, кнопку «Создать MR» скрываем.
   has_commits?: boolean;
+  // worktree — рабочая копия задачи есть на диске (Ф-6). Только тогда возможен
+  // откат кода: после выполнения задачи worktree удалён.
+  worktree?: boolean;
+  // submodules — вложенные сабмодули внутри worktree: откат вернёт и их.
+  submodules?: string[];
 }
 
 // git-статус всего проекта в снимке доски (Ф-5).

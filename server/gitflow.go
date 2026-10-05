@@ -26,7 +26,9 @@ const (
 	// epicBranchPrefix — префикс релизной ветки эпика (база = main).
 	epicBranchPrefix = "ai/epic/"
 	// taskBranchPrefix — префикс фича-ветки задачи (база = ветка эпика).
-	taskBranchPrefix = "ai/task/"
+	// Источник правды — gitops: тем же префиксом проверяется принадлежность
+	// рабочей копии задаче (промежуточные коммиты, ручной откат).
+	taskBranchPrefix = gitops.TaskBranchPrefix
 )
 
 // boardStore открывает хранилище доски проекта, привязывая авто-действия
@@ -506,6 +508,13 @@ func (s *Server) attachGitHooks(project string, store *board.Store) {
 		s.autoCommitAndMergeTask(ctx, project, task, store)
 	}
 
+	// Ф-6 (инцидент FEL-04): до перехода в done — проверка, что работа реально
+	// есть (свои коммиты в ветке задачи или правки в worktree). Иначе fallback
+	// оркестратора закрывает пустую задачу, а статус done терминален.
+	store.TaskDoneGuard = func(ctx context.Context, task *board.Task, from board.Status) error {
+		return s.guardTaskDone(ctx, project, task)
+	}
+
 	// Ф-1: эпик добавлен на доску — авто-создание релизной ветки.
 	store.EpicCreatedHook = func(ctx context.Context, epic *board.Epic) {
 		s.autoCreateEpicBranch(ctx, project, epic, store)
@@ -521,6 +530,14 @@ func (s *Server) attachGitHooks(project string, store *board.Store) {
 	// Ф-3: задача пошла «в работу» — worktree её ветки для специалиста.
 	store.TaskInProgressHook = func(ctx context.Context, task *board.Task, _ board.Status) {
 		s.taskWorktree(ctx, project, task, store)
+	}
+
+	// Ф-6 (этап 2): State Tracking пишет состояние раунда точечными
+	// обновлениями (PatchTask). Без этого снимок доски в UI обновлялся бы
+	// только по смене статусов, а «чем занят агент» осталось бы невидимым
+	// ровно тогда, когда это и нужно видеть.
+	store.TaskStateHook = func(_ context.Context, task *board.Task) {
+		s.srvEmitBoard(project, "состояние задачи: "+task.TaskID)
 	}
 
 	// Ф-4: эпик переведён в done — авто-синхрон релизной ветки с main.

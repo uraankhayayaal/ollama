@@ -40,6 +40,13 @@ func llmAlwaysHeavy() bool {
 	return strings.TrimSpace(os.Getenv("LLM_ALWAYS_HEAVY")) == "1"
 }
 
+// heavyForContext — требование сильной модели из контекста (models.WithHeavyModel).
+// Источник — запись задачи доски (model_tier), накопленная за прошлые прогоны:
+// внутри одного вызова Generate её нет, а переживать рестарт она обязана.
+func heavyForContext(ctx context.Context) bool {
+	return HeavyModelFor(ctx)
+}
+
 // NewLayeredProvider собирает двухслойный провайдер. Если large не задан —
 // возвращается small без обёртки (поведение не меняется).
 func NewLayeredProvider(small, large LLMProvider) LLMProvider {
@@ -87,7 +94,10 @@ func agentName(agent agents.Agent) string {
 // с чистой историей (runner.WithoutResumeState), потому что продолжение того же
 // застрявшего диалога воспроизвело бы ту же петлю.
 func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
-	if l.heavyFor(agent) {
+	// Требование задачи из контекста сильнее эвристики по агенту: если доска
+	// помнит, что задача не осилилась на дешёвой модели, берём большой слой с
+	// первого раунда, а не тратим цикл на заведомо слабую попытку.
+	if l.heavyFor(agent) || heavyForContext(ctx) {
 		logging.Detailf("[Layered] агент %T: тяжёлая модель (LARGE)", agent)
 		return l.Large.Generate(ctx, agent)
 	}
@@ -160,7 +170,7 @@ func mergeModelLimits(small, large LLMProvider) runner.ModelLimits {
 // когда провайдера зовут напрямую как ChatProvider.
 func (l *LayeredProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
 	layer := l.Small
-	if l.heavyFor(agent) {
+	if l.heavyFor(agent) || heavyForContext(ctx) {
 		layer = l.Large
 	}
 	cp, ok := layer.(runner.ChatProvider)
@@ -174,7 +184,7 @@ func (l *LayeredProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs
 // если тот поддерживает стриминг, иначе fallback на разовый ChatOnce.
 func (l *LayeredProvider) ChatStream(ctx context.Context, agent agents.Agent, msgs []runner.Message, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
 	layer := l.Small
-	if l.heavyFor(agent) {
+	if l.heavyFor(agent) || heavyForContext(ctx) {
 		layer = l.Large
 	}
 	if sp, ok := layer.(runner.StreamChatProvider); ok {

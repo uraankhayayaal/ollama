@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -119,6 +120,15 @@ func remoteOf(ctx context.Context, ex Executor, root string) (string, error) {
 // message — сообщение коммита; author при необходимости можно задать через
 // env (AI_GIT_AUTHOR_NAME/EMAIL), иначе используется конфиг git по умолчанию.
 func (r *Repo) Commit(ctx context.Context, message string) error {
+	return r.commitTracked(ctx, message)
+}
+
+// commitTracked — тело Commit: грязные сабмодули фиксируются ДО родителя
+// (remote родителя ссылается на gitlink, поэтому SHA сабмодуля обязан лечь на
+// remote раньше), затем индекс родителя обновляется целиком (`add -A`) и
+// создаётся коммит. Пустое дерево здесь — ошибка git: без --allow-empty
+// коммит не создаётся (для этого есть CommitAllowEmpty).
+func (r *Repo) commitTracked(ctx context.Context, message string) error {
 	if r == nil || r.Root == "" {
 		return fmt.Errorf("gitops: пустой Repo")
 	}
@@ -140,10 +150,183 @@ func (r *Repo) Commit(ctx context.Context, message string) error {
 	if _, err := r.ex.Exec(ctx, r.Root, "git", "add", "-A"); err != nil {
 		return fmt.Errorf("gitops: git add: %w", err)
 	}
+	// Гард объёма (Ф-6): `git add -A` не фильтрует ничего, кроме .gitignore,
+	// поэтому в коммит задачи попадает всё, что агент положил в рабочее дерево.
+	// Живой случай (mytrip, FEL-05): без npm в образе песочницы агент скачал
+	// Node в корень проекта, и в коммит раунда уехало 4287 файлов тулчейна и
+	// архив на 46 МБ — под заголовком «wip: раунд 14 (файлов: 4)». Теперь
+	// такой коммит не создаётся: агент получает требование убрать мусор (или
+	// объяснить его в .gitignore) вместо молчаливого раздувания репозитория.
+	if err := r.checkStagedVolume(ctx, msg); err != nil {
+		// Снимаем индексацию, чтобы следующий `git add -A` снова видел ровно
+		// то же состояние: с half-staged деревом проверка агента ведёт себя
+		// иначе, чем ожидает.
+		_, _ = r.ex.Exec(ctx, r.Root, "git", "reset", "-q")
+		return err
+	}
 	if _, err := r.ex.Exec(ctx, r.Root, "git", "commit", "-m", msg); err != nil {
 		return fmt.Errorf("gitops: git commit: %w", err)
 	}
 	return nil
+}
+
+// envInt64 читает положительный целый лимит из окружения.
+func envInt64(name string, def int64) int64 {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
+// checkStagedVolume проверяет проиндексированные файлы: один гигантский файл
+// (скачанный архив/тулчейн) и общий объём. Возвращает ошибку с конкретным
+// виновником, иначе nil.
+func (r *Repo) checkStagedVolume(ctx context.Context, msg string) error {
+	out, err := r.ex.Exec(ctx, r.Root, "git", "diff", "--cached", "--name-only", "-z")
+	if err != nil {
+		return fmt.Errorf("gitops: git diff --cached: %w", err)
+	}
+	var files []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p = strings.TrimSpace(p); p != "" {
+			files = append(files, p)
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	// Пороги читаем здесь, а не в переменной пакета: окружение может быть
+	// задано после старта процесса (и в тестах — на каждый случай свой).
+	maxFile := wipMaxFileBytes()
+	maxTotal := wipMaxTotalBytes()
+	var total int64
+	for _, rel := range files {
+		info, serr := os.Stat(filepath.Join(r.Root, filepath.FromSlash(rel)))
+		if serr != nil || info.IsDir() {
+			continue // удалённый файл: на диске его уже нет
+		}
+		total += info.Size()
+		if maxFile > 0 && info.Size() > maxFile {
+			return fmt.Errorf("gitops: коммит не создан: %s (%s) больше лимита %s — это похоже на скачанный архив или распакованный тулчейн, а не на результат задачи: убери его из рабочего дерева или добавь в .gitignore (лимит настраивается KANBAN_WIP_COMMIT_MAX_FILE_BYTES)",
+				rel, humanBytes(info.Size()), humanBytes(maxFile))
+		}
+	}
+	if maxTotal > 0 && total > maxTotal {
+		return fmt.Errorf("gitops: коммит не создан: в проиндексированном наборе %d файлов на %s — больше лимита %s (KANBAN_WIP_COMMIT_MAX_BYTES): похоже на скачанный тулчейн или артефакты сборки, убери их или добавь в .gitignore",
+			len(files), humanBytes(total), humanBytes(maxTotal))
+	}
+	return nil
+}
+
+// humanBytes — компактный размер для сообщений агенту.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f ГБ", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f МБ", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f КБ", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%d Б", n)
+}
+
+// CommitIfDirty фиксирует изменения рабочего дерева, только если они есть.
+// Раунд агента без мутаций не должен оставлять коммит, поэтому пустое дерево
+// — не ошибка (в отличие от Commit, который на нём падает).
+//
+// Промежуточные коммиты задачи (единица ручного отката, см.
+// PLAN-2026-10-05-todo-kanban-rollback.md, Р-1) опираются на этот метод:
+// возвращённый SHA — цель отката. Проверки Dirty достаточно и для случая
+// «изменился только сабмодуль»: `git status --porcelain` показывает
+// модифицированный gitlink сабмодуля, поэтому родитель тоже считается грязным.
+//
+// Лимиты объёма промежуточного коммита (Ф-6). Обоснование и последствия — в
+// checkStagedVolume: без них `git add -A` коммитит скачанные агенту
+// тулчейны целиком.
+const (
+	// wipMaxFileBytesEnv/wipMaxTotalBytesEnv — переопределение порогов.
+	wipMaxFileBytesEnv  = "KANBAN_WIP_COMMIT_MAX_FILE_BYTES"
+	wipMaxTotalBytesEnv = "KANBAN_WIP_COMMIT_MAX_BYTES"
+)
+
+func wipMaxFileBytes() int64  { return envInt64(wipMaxFileBytesEnv, 8<<20) }   // 8 МБ
+func wipMaxTotalBytes() int64 { return envInt64(wipMaxTotalBytesEnv, 32<<20) } // 32 МБ
+
+// ok=false означает «дерево было чистым, коммит не создавался» (SHA пустой).
+func (r *Repo) CommitIfDirty(ctx context.Context, message string) (sha string, ok bool, err error) {
+	if r == nil || r.Root == "" {
+		return "", false, fmt.Errorf("gitops: пустой Repo")
+	}
+	dirty, err := r.Dirty(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	if !dirty {
+		return "", false, nil
+	}
+	if err := r.commitTracked(ctx, message); err != nil {
+		return "", false, err
+	}
+	sha, err = r.HeadSHA(ctx)
+	if err != nil {
+		// Коммит создан, но SHA не прочитали: откатываться будет некуда —
+		// ошибку поднимаем, но ok остаётся true (изменения зафиксированы).
+		return "", true, err
+	}
+	return sha, true, nil
+}
+
+// HeadSHA возвращает полный SHA текущего HEAD рабочего дерева.
+func (r *Repo) HeadSHA(ctx context.Context) (string, error) {
+	if r == nil || r.Root == "" {
+		return "", fmt.Errorf("gitops: пустой Repo")
+	}
+	return r.revParse(ctx, "HEAD")
+}
+
+// TaskBranchPrefix — префикс фича-ветки задачи (ai/task/<id>). Единственный
+// источник правды: сервер строит по нему ветки, а InTaskBranch проверяет по
+// нему, что рабочая копия принадлежит задаче.
+const TaskBranchPrefix = "ai/task/"
+
+// CurrentBranch возвращает имя ветки, на которой стоит рабочее дерево.
+func (r *Repo) CurrentBranch(ctx context.Context) (string, error) {
+	if r == nil || r.Root == "" {
+		return "", fmt.Errorf("gitops: пустой Repo")
+	}
+	out, err := r.ex.Exec(ctx, r.Root, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("gitops: git rev-parse --abbrev-ref HEAD: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// InTaskBranch сообщает, стоит ли рабочее дерево на ветке задачи.
+//
+// Это гард области для промежуточных коммитов и ручного отката (Ф-6, см.
+// PLAN-2026-10-05-todo-kanban-rollback.md, этап 1.4): коммитить и откатывать
+// можно только изолированную копию задачи. Общий клон проекта temp/<проект>,
+// где агент пишет в режиме `plan`, стоит на ветке ai/<проект> — он под
+// гард не попадает, и коммит там не создаётся (там же пропадает и
+// авто-коммит на done — см. server/gitflow_auto.go).
+//
+// Проверка идёт по ветке, а не по имени каталога: имя worktree — конвенция
+// уровня сервера, а ветка задаёт принадлежность кода самой задаче и
+// переживает перенос каталога. Detached HEAD и пустой репозиторий (ошибка
+// rev-parse) дают false вместе с ошибкой — вызывающий деградирует в «не
+// наша ветка».
+func (r *Repo) InTaskBranch(ctx context.Context) (bool, error) {
+	branch, err := r.CurrentBranch(ctx)
+	if err != nil {
+		return false, err
+	}
+	return strings.HasPrefix(branch, TaskBranchPrefix), nil
 }
 
 // CommitAllowEmpty фиксирует изменения, даже если индекс пуст (рабочая копия
@@ -399,14 +582,42 @@ func RepoFromState(ex Executor, root, remote, branch, base string) *Repo {
 // (git status --porcelain непустой). Используется приёмкой (accept/ПМР),
 // чтобы не коммитить пустое состояние.
 func (r *Repo) Dirty(ctx context.Context) (bool, error) {
+	paths, err := r.DirtyPaths(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(paths) > 0, nil
+}
+
+// DirtyPaths возвращает незакоммиченные изменения по одному пути на строку
+// (git status --porcelain). Нужен гарду «phantom done» (Ф-6): отличить работу
+// агента от служебного мусора, который положил сам оркестратор (например
+// .gitignore, который ensureTaskGitignore пишет в worktree задачи).
+func (r *Repo) DirtyPaths(ctx context.Context) ([]string, error) {
 	if r == nil || r.Root == "" {
-		return false, fmt.Errorf("gitops: пустой Repo")
+		return nil, fmt.Errorf("gitops: пустой Repo")
 	}
 	out, err := r.ex.Exec(ctx, r.Root, "git", "status", "--porcelain")
 	if err != nil {
-		return false, fmt.Errorf("gitops: git status: %w", err)
+		return nil, fmt.Errorf("gitops: git status: %w", err)
 	}
-	return strings.TrimSpace(out) != "", nil
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if len(line) < 4 {
+			continue
+		}
+		// Порядок XY + пробел: " M путь", "?? путь", "R  старый -> новый".
+		entry := strings.TrimSpace(line[2:])
+		if entry == "" {
+			continue
+		}
+		if i := strings.Index(entry, " -> "); i >= 0 {
+			entry = entry[i+4:]
+		}
+		paths = append(paths, strings.TrimSpace(entry))
+	}
+	return paths, nil
 }
 
 // RejectBranch удаляет фича-ветку: на remote (если он есть) и локально,

@@ -144,6 +144,12 @@ type loopRoundCall struct {
 	stateSample string
 	// stateLabel — команда проверки (для сообщений модели).
 	stateLabel string
+	// verify/verifyCmd — вызов был проверкой и какой была её команда. state
+	// пуст у ПРОШЕДШЕЙ проверки, поэтому признак «проверка была» держим
+	// отдельно: он нужен State Tracking (agent_state=running_tests и сдвиг
+	// last_good_sha), который не заглядывает в содержимое вывода.
+	verify    bool
+	verifyCmd string
 	// blocked — вызов не выполнялся: харнес его заблокировал (verify guard).
 	blocked bool
 }
