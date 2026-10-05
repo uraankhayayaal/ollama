@@ -1032,6 +1032,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			Debugf("RUNNER: результат инструмента %q: %s", j.tc.Name, Truncate(string(result), 500))
 			failed := toolResultFailed(j.tc.Name, result)
 			state, stateSample, stateLabel := loopStateFromCall(j.tc.Name, j.args, result)
+			vcmd := verifyCommandOf(j.tc.Name, j.args)
 			loopCalls = append(loopCalls, loopRoundCall{
 				name:        j.tc.Name,
 				sig:         sig,
@@ -1041,6 +1042,8 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				state:       state,
 				stateSample: stateSample,
 				stateLabel:  stateLabel,
+				verify:      vcmd != "" && loopIsVerificationCommand(vcmd),
+				verifyCmd:   vcmd,
 				blocked:     blocked,
 			})
 			if !failed {
@@ -1101,8 +1104,16 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		autofixOn := autoFixEnabled()
 		reindexOn := reindexEnabled()
 		wipOn := wipCommitEnabled()
+		// Результаты раунда для State Tracking (Ф-6, этап 2): что менял агент и
+		// чем закончился промежуточный коммит. Вне блока хуков, потому что
+		// состояние задачи пишется каждый раунд, даже когда файлы не менялись
+		// (агент гоняет проверки).
+		var roundTouched []string
+		var roundSHA string
+		var roundCommitted bool
 		if af, ok := agent.(AutoFixer); ok && (autofixOn || reindexOn || wipOn) {
-			touched := af.TakeTouched()
+			roundTouched = af.TakeTouched()
+			touched := roundTouched
 
 			// Ф-6: промежуточный коммит раунда — единица ручного отката задачи.
 			// Идёт ПЕРВЫМ, до авто-лечения и реиндексации, чтобы в коммит
@@ -1113,6 +1124,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 						rep.OnToolStart("WipCommit", "промежуточный коммит правок раунда")
 					}
 					sha, committed, cerr := wc.CommitRoundTouched(touched, round+1)
+					roundSHA, roundCommitted = sha, committed
 					switch {
 					case cerr != nil:
 						// Коммит — вспомогательная фиксация: недоступный git не
@@ -1189,6 +1201,14 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 					messages = append(messages, Message{Role: "user", Content: autoFixMessage(fresh, autoFixUsed, autoFixMaxRounds())})
 				}
 			}
+		}
+
+		// Ф-6 (этап 2): State Tracking. Агент, умеющий писать состояние на доску
+		// (RoundStateReporter), узнаёт, чем занят раунд: проверка упала / идёт /
+		// пишет код, плюс SHA промежуточного коммита — точку, к которой потом
+		// вернёт ручной откат.
+		if rs, ok := agent.(RoundStateReporter); ok {
+			rs.ReportRoundState(newRoundState(round+1, loopCalls, roundTouched, roundSHA, roundCommitted))
 		}
 
 		// Ф-2: логи рантайма в цикл самокоррекции. Хук НЕ зависит от того,

@@ -27,6 +27,103 @@ func (s *Server) taskWorktreePath(repoRoot, project, taskID string) string {
 		".wt-task-"+project+"-"+gitops.SanitizeBranchName(taskID))
 }
 
+// taskGitignorePatterns — артефакты, которые не должны попасть в историю
+// задачи. Промежуточные коммиты (Ф-6) делают `git add -A` на каждом раунде, а
+// без списка он тащит в коммит всё, что появилось в рабочем дереве.
+//
+// `vendor/` в список НЕ входит: для Go его коммитят осознанно.
+//
+// Последние две группы добавлены после живого случая (mytrip, FEL-05): агент
+// без npm в образе песочницы скачал Node в корень проекта, и `git add -A`
+// закоммитил 46 МБ архива + 4287 файлов распакованного тулчейна.
+//   - `*.tar.gz`/`*.tgz`/`*.zip`/`*.tar.*` — скачанные дистрибутивы;
+//   - `node-v*/` — распакованный тулчейн Node (то, что агент распаковывает рядом
+//     с архивом); версионный префикс отличает его от каталогов приложения.
+var taskGitignorePatterns = []string{
+	"node_modules/",
+	"dist/",
+	"build/",
+	"__pycache__/",
+	".venv/",
+	"target/",
+	"*.tsbuildinfo",
+	"*.tar.gz",
+	"*.tgz",
+	"*.tar.xz",
+	"*.tar.bz2",
+	"*.zip",
+	"node-v*/",
+}
+
+// taskGitignoreHeader — маркер нашего блока в .gitignore: по нему видно, что
+// дописывала система, а что проект.
+const taskGitignoreHeader = "# артефакты сборки и скачанные тулчейны (дописано оркестратором, Ф-6)"
+
+// gitIgnoreFileName — имя служебного .gitignore оркестратора (используется
+// гардом «phantom done»: он не считается доказательством работы агента).
+const gitIgnoreFileName = ".gitignore"
+
+// taskGitignore — полный файл для случая «.gitignore не было».
+func taskGitignore() string {
+	return taskGitignoreHeader + "\n" + strings.Join(taskGitignorePatterns, "\n") + "\n"
+}
+
+// ensureTaskGitignore создаёт .gitignore в корне worktree задачи (в т.ч.
+// вложенного worktree сабмодуля) либо ДОПИСЫВАЕТ в существующий недостающие
+// паттерны.
+//
+// Раньше файл создавался только когда его не было, и этого было мало: у
+// mytrip .gitignore свой (frontend/node_modules/, pgdata/…) — корневого
+// `node_modules/` в нём нет, а скачанный тулчейн под `node-v*/` не покрыт
+// вообще. Дописывание ничего не удаляет и не переставляет: решения проекта
+// остаются в силе, недостающие артефакты перестают попадать в `git add -A`.
+// Идемпотентно (повторный вызов ничего не меняет). Файл коммитится вместе с
+// веткой задачи — обычная правка, не хак.
+func ensureTaskGitignore(project, taskID, root string) {
+	if strings.TrimSpace(root) == "" {
+		return
+	}
+	path := filepath.Join(root, gitIgnoreFileName)
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		logging.For(project).Warnf("gitflow: чтение .gitignore в worktree задачи %s: %v", taskID, err)
+		return
+	}
+	existing := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			existing[t] = true
+		}
+	}
+	var missing []string
+	for _, p := range taskGitignorePatterns {
+		if !existing[p] {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	block := taskGitignoreHeader + "\n" + strings.Join(missing, "\n") + "\n"
+	if len(raw) == 0 {
+		if err := os.WriteFile(path, []byte(block), 0o644); err != nil {
+			logging.For(project).Warnf("gitflow: .gitignore в worktree задачи %s: %v", taskID, err)
+		}
+		return
+	}
+	body := string(raw)
+	if !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	body += "\n" + block
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		logging.For(project).Warnf("gitflow: дополнение .gitignore в worktree задачи %s: %v", taskID, err)
+		return
+	}
+	logging.For(project).Infof("gitflow: задача %s: в .gitignore добавлены паттерны артефактов (было %d, добавил %d)",
+		taskID, len(existing), len(missing))
+}
+
 // taskWorktree — Ф-3: при переводе задачи «в работу» создаёт постоянный
 // worktree её ветки (ai/task/<id>), в который специалист получает OutputDir.
 // Перед созданием worktree: синхронизация релизной ветки эпика с main и
@@ -110,6 +207,7 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 		logging.For(project).Warnf("gitflow: worktree задачи %s: %v", task.TaskID, err)
 		return
 	}
+	ensureTaskGitignore(project, task.TaskID, wtPath)
 	if subs, err := gitops.EnsureSubmodules(ctx, s.gitExec, wt.Root); err != nil {
 		_ = wt.RemoveWorktree(ctx, wtPath)
 		logging.For(project).Warnf("gitflow: submodule worktree задачи %s: %v", task.TaskID, err)
@@ -138,6 +236,7 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 				logging.For(project).Warnf("gitflow: worktree сабмодуля %s задачи %s: %v", sub.Path, task.TaskID, err)
 				return
 			}
+			ensureTaskGitignore(project, task.TaskID, sub.Root)
 			if err := s.reg.SetTaskBranch(childName, childTaskKey(project, task.TaskID), workspace.BranchRef{
 				Branch: branch, Base: strings.TrimSpace(base), Worktree: sub.Root,
 			}); err != nil {
@@ -155,6 +254,9 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 		return
 	}
 	s.invalidateDiffs(project)
+	// Ф-6 (этап 2): точка отката «снести всё» — HEAD только что созданного
+	// worktree задачи.
+	s.recordTaskBaseSHA(ctx, project, task.TaskID, wtPath, store)
 	// Индекс ветки задачи: worktree только что пересобран (rebase на релизную
 	// ветку эпика, а эпик синхронизирован с main), а точки ветки задачи в
 	// индексе ещё нет. Индексируем ИЗМЕНЕНИЯ ветки относительно main (остальное
@@ -164,6 +266,32 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 	s.refreshRagTaskBranch(project, taskRef.Branch, inf.GitBase)
 	logging.For(project).Infof("gitflow: задача %s → worktree %s (%s)", task.TaskID, wtPath, taskRef.Branch)
 	s.srvEmitBoard(project, "gitflow: worktree задачи")
+}
+
+// recordTaskBaseSHA запоминает HEAD worktree задачи как checkpoint.base_sha —
+// точку ручного отката «снести всё» (Ф-6, этап 2). Значение не перетирается,
+// если уже есть: база задачи — это код на момент её старта, а не текущий HEAD
+// очередного прогона (после отката кода и повторного запуска).
+func (s *Server) recordTaskBaseSHA(ctx context.Context, project, taskID, worktree string, store *board.Store) {
+	if store == nil {
+		return
+	}
+	head, err := gitops.RepoFromState(s.gitExec, worktree, "", "", "").HeadSHA(ctx)
+	if err != nil {
+		logging.For(project).Detailf("gitflow: base_sha задачи %s: %v", taskID, err)
+		return
+	}
+	if err := store.PatchTask(ctx, taskID, func(t *board.Task) error {
+		if t.Checkpoint == nil {
+			t.Checkpoint = &board.TaskCheckpoint{}
+		}
+		if t.Checkpoint.BaseSHA == "" {
+			t.Checkpoint.BaseSHA = head
+		}
+		return nil
+	}); err != nil {
+		logging.For(project).Warnf("gitflow: запись base_sha задачи %s: %v", taskID, err)
+	}
 }
 
 // taskOutputDir возвращает каталог работы специалиста по задаче: для
@@ -179,8 +307,11 @@ func (s *Server) taskOutputDir(project, taskID string) string {
 }
 
 // commitTaskWorktree фиксирует незакоммиченные изменения специалиста в
-// worktree ветки задачи (git add -A + commit). Пустой worktree (специалист
-// ничего не менял/работал в общей копии) — no-op. Ошибки логируются.
+// worktree ветки задачи (git add -A + commit) и публикует ветки worktree'ов
+// сабмодулей (merge в базовую ветку сабмодуля + push + обновление gitlink).
+// С Ф-6 промежуточными коммитами дерево на `done` обычно ЧИСТОЕ — тогда коммита
+// нет (пустой коммит не создаём), но публикация веток сабмодулей всё равно
+// выполняется. Ошибки логируются.
 func (s *Server) commitTaskWorktree(ctx context.Context, project string, task *board.Task, worktree string) {
 	wt := gitops.RepoFromState(s.gitExec, worktree, "", "", "")
 	message := fmt.Sprintf("задача %s: работа специалиста (авто-коммит)", task.TaskID)
@@ -206,12 +337,18 @@ func (s *Server) commitTaskWorktree(ctx context.Context, project string, task *b
 			logging.For(project).Warnf("gitflow: status сабмодуля %s: %v", sub.Path, err)
 			return
 		}
-		if !dirty {
-			continue
-		}
-		if err := taskRepo.Commit(ctx, message); err != nil {
-			logging.For(project).Warnf("gitflow: commit сабмодуля %s: %v", sub.Path, err)
-			return
+		// Коммит — только по грязному дереву. А вот публикация ветки сабмодуля
+		// (merge в его базовую ветку + push + обновление gitlink) нужна ВСЕГДА:
+		// промежуточные коммиты (Ф-6) оставляют worktree сабмодуля чистым, хотя
+		// ветка задачи уехала вперёд. Раньше чистое дерево давало continue, и
+		// gitlink родителя указывал бы на коммит, которого нет в origin
+		// сабмодуля, — MR с битым сабмодулем.
+		if dirty {
+			if err := taskRepo.Commit(ctx, message); err != nil {
+				logging.For(project).Warnf("gitflow: commit сабмодуля %s: %v", sub.Path, err)
+				return
+			}
+			logging.For(project).Infof("gitflow: задача %s: авто-коммит сабмодуля %s в %s", task.TaskID, sub.Path, subRoot)
 		}
 		if child.GitBranch != "" && ref.Branch != child.GitBranch {
 			childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)

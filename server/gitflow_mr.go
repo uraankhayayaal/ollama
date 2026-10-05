@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -58,6 +59,14 @@ type gitLinkView struct {
 	// HasCommits — в ветке есть свои коммиты (Ф-2). nil — не вычислено/ошибка
 	// git; false — коммитов ещё нет (кнопка «Создать MR» на фронте прячется).
 	HasCommits *bool `json:"has_commits,omitempty"`
+	// Worktree — рабочая копия задачи существует (Ф-6, этап 5.3). Только тогда
+	// откат вообще возможен: у выполненной задачи worktree удалён, и кнопка
+	// отката на доске не показывается, чтобы не обещать несуществующее действие.
+	Worktree bool `json:"worktree,omitempty"`
+	// Submodules — пути вложенных сабмодулей внутри worktree задачи: откат
+	// коммита вернёт и их к состоянию на момент этого коммита (Ф-6, 5.1).
+	// Пусто — вложенных сабмодулей нет.
+	Submodules []string `json:"submodules,omitempty"`
 }
 
 // gitView — git-статус всего проекта в снимке доски (заполняется только для
@@ -400,6 +409,19 @@ func (s *Server) gitStatus(ctx context.Context, project string, epics []*board.E
 			BranchURL:  branchWebURL(inf.GitRemote, ref.Branch),
 			Target:     ref.Base,
 			HasCommits: count(ref.Base, ref.Branch),
+		}
+		// Ф-6 (5.3): что именно можно откатить. Worktree — на диске или уже
+		// удалён (после done), список сабмодулей — тоже из worktree: в основном
+		// клоне пути другие, и показывать их в подтверждении отката нельзя.
+		if wt := strings.TrimSpace(ref.Worktree); wt != "" {
+			if info, serr := os.Stat(wt); serr == nil && info.IsDir() {
+				lv.Worktree = true
+				if subs, suberr := gitops.ListSubmodules(ctx, s.gitExec, wt); suberr == nil {
+					for _, sub := range subs {
+						lv.Submodules = append(lv.Submodules, sub.Path)
+					}
+				}
+			}
 		}
 		if mr, merr := s.reg.TaskMR(project, t.TaskID); merr == nil {
 			lv.MRURL, lv.MRState = mr.URL, mr.State

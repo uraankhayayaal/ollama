@@ -67,6 +67,74 @@
     font-size: 11px;
     color: #b91c1c;
   }
+
+  // Ф-6 State Tracking: опорные точки отката мелким шрифтом и вывод упавшей
+  // проверки — последнее, что человек открывает модалку посмотреть.
+  .checkpoint {
+    margin-top: 2px;
+    font-family: var(--mono, monospace);
+    font-size: 10px;
+    color: var(--muted, #8a94a6);
+  }
+
+  .last-error {
+    font-family: var(--mono, monospace);
+    font-size: 11px;
+    color: #b91c1c;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  // Ф-6 (этап 3): ручной откат кода. Кнопки — приглушённые, показывают
+  // необратимость; подтверждение отдельной строкой.
+  .rollback {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    button {
+      font-size: 12px;
+      padding: 4px 9px;
+      border: 1px solid var(--line, #e2e8f0);
+      border-radius: 6px;
+      background: var(--btn, #f1f5f9);
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        background: var(--btn-hover, #e2e8f0);
+      }
+
+      &:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+    }
+
+    .rollback-choices,
+    .rollback-confirm {
+      display: flex;
+      gap: 6px;
+    }
+
+    .rollback-cancel {
+      background: transparent;
+    }
+
+    .rollback-warn {
+      font-size: 11px;
+      color: #b45309;
+    }
+
+    .rollback-err {
+      font-size: 11px;
+      color: #b91c1c;
+    }
+  }
+
+  .rollback-note {
+    font-size: 11px;
+    color: #6b7280;
+  }
 }
 
 .section {

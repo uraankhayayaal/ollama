@@ -466,20 +466,78 @@ func firstEnv(names ...string) string {
 	return ""
 }
 
-// detectSandboxStack — минимальное определение стека по манифестам в корне
-// проекта. Отдельная копия acceptor.detectKind, а не импорт: tools не должен
-// зависеть от агентов (acceptor сам импортирует tools), иначе получается цикл.
+// stackManifests — манифест → стек. Порядок фиксирован: обход map в Go
+// недетерминирован, а при двух манифестах в корне (go.mod + package.json)
+// проект получал то golang, то node — в зависимости от запуска.
+var stackManifests = []struct{ name, stack string }{
+	{"go.mod", "go"},
+	{"package.json", "node"},
+	{"requirements.txt", "python"},
+	{"pyproject.toml", "python"},
+	{"composer.json", "php"},
+}
+
+// detectSandboxStack — стек проекта по манифестам. Отдельная копия
+// acceptor.detectKind, а не импорт: tools не должен зависеть от агентов
+// (acceptor сам импортирует tools), иначе получается цикл.
+//
+// Смотрим корень И первый уровень вглубь: монорепозиторий (Go-бэкенд +
+// Node-фронтенд в frontend/) держит манифесты в подкаталогах, и раньше
+// подбирался образ по корневому go.mod — golang без npm. Агент закономерно
+// скачивал Node в /workspace (живой случай: mytrip, FEL-05 — 46 МБ
+// node.tar.gz и 4287 файлов тулчейна в коммите задачи). Несколько стеков →
+// "" → ai-sandbox:latest (dev-образ с go+node+python), который для монорепо и
+// предназначен. Пустой стек по-прежнему даёт dev-образ.
 func detectSandboxStack(dir string) string {
-	for name, stack := range map[string]string{
-		"go.mod":           "go",
-		"package.json":     "node",
-		"requirements.txt": "python",
-		"pyproject.toml":   "python",
-		"composer.json":    "php",
-	} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return stack
+	stacks := detectSandboxStacks(dir, 1)
+	if len(stacks) == 1 {
+		for s := range stacks {
+			return s
 		}
 	}
 	return ""
+}
+
+// detectSandboxStacks — множество стеков на глубине не глубже depth
+// (0 = только корень).
+func detectSandboxStacks(dir string, depth int) map[string]bool {
+	stacks := map[string]bool{}
+	for _, m := range stackManifests {
+		if _, err := os.Stat(filepath.Join(dir, m.name)); err == nil {
+			stacks[m.stack] = true
+		}
+	}
+	if depth <= 0 {
+		return stacks
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return stacks
+	}
+	for _, e := range entries {
+		if !e.IsDir() || skipStackDir(e.Name()) {
+			continue
+		}
+		sub := filepath.Join(dir, e.Name())
+		for _, m := range stackManifests {
+			if _, err := os.Stat(filepath.Join(sub, m.name)); err == nil {
+				stacks[m.stack] = true
+			}
+		}
+	}
+	return stacks
+}
+
+// skipStackDir — каталоги, которые не имеют смысла обходить: служебные и уже
+// установленные зависимости (там манифесты лежат всегда и ничего не говорят о
+// стеке проекта).
+func skipStackDir(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	switch name {
+	case "node_modules", "vendor", "dist", "build", "target", "tmp", "temp":
+		return true
+	}
+	return false
 }

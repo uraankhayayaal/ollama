@@ -32,6 +32,7 @@ func TestCommitIfDirtyCommitsWhenDirty(t *testing.T) {
 	}
 	want := `/w | git status --porcelain
 /w | git add -A
+/w | git diff --cached --name-only -z
 /w | git commit -m wip: раунд 3
 /w | git rev-parse HEAD`
 	if got := strings.Join(ex.calls, "\n"); got != want {
@@ -94,6 +95,7 @@ func TestCommitIfDirtySubmoduleCommittedFirst(t *testing.T) {
 /w/vendor/lib | git add -A
 /w/vendor/lib | git commit -m wip: раунд 5
 /w | git add -A
+/w | git diff --cached --name-only -z
 /w | git commit -m wip: раунд 5
 /w | git rev-parse HEAD`
 	if got := strings.Join(ex.calls, "\n"); got != want {

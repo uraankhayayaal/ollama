@@ -79,7 +79,7 @@ func (s Status) Valid() bool {
 //	новая         -> в анализе, на паузе, отменена
 //	в анализе     -> готова к работе, на паузе, отменена
 //	готова к работе -> в работе, на паузе, отменена
-//	в работе      -> выполнена, на паузе, отменена
+//	в работе      -> готова к работе (откат кода, см. ниже), выполнена, на паузе, отменена
 //	на паузе      -> готова к работе (возобновление), отмена
 //	(терминальные: выполнена/отменена переходов не имеют)
 //
@@ -105,7 +105,12 @@ func ValidateTransition(from, to Status) error {
 			return nil
 		}
 	case StatusInProgress:
-		if to == StatusDone || to == StatusPaused || to == StatusCancelled {
+		// Возврат в ready — ручной откат кода задачи к опорной точке
+		// (Ф-6, этап 3): ветка задачи переводится назад (gitops.RollbackWorktree),
+		// а задача должна автоматически вернуться в очередь на новый прогон.
+		// Считаем это безопасным, потому что откат делает только человек
+		// (POST .../tasks/{id}/rollback) и только по явному подтверждению в UI.
+		if to == StatusReady || to == StatusDone || to == StatusPaused || to == StatusCancelled {
 			return nil
 		}
 	case StatusPaused:
@@ -286,6 +291,60 @@ type Task struct {
 	// списка видна модели со СЛЕДУЮЩЕГО запроса — в том числе в середине уже
 	// идущего агентского цикла. Тип и правила — board/injection.go.
 	Injections []Injection `json:"injections,omitempty"`
+	// Ф-6 State Tracking: живое состояние задачи. Заполняется по ходу раундов
+	// агента (runner → доска), поэтому переживает рестарт сервера: по полям
+	// видно, чем занят прогон, где последняя рабочая точка и каким проверочным
+	// выводом закончился последний раунд.
+	AgentState string `json:"agent_state,omitempty"`
+	// ActiveAgent — специалист, работающий с задачей сейчас (роль/имя).
+	ActiveAgent string `json:"active_agent,omitempty"`
+	// Checkpoint — опорные точки git-истории ветки задачи для ручного отката
+	// (см. POST .../tasks/{id}/rollback). nil — откатываться не к чему.
+	Checkpoint *TaskCheckpoint `json:"checkpoint,omitempty"`
+	// Attempts — сколько раз задача бралась в работу (in_progress).
+	Attempts int `json:"attempts,omitempty"`
+	// LastError — стадия и усечённый нормализованный вывод последней
+	// упавшей проверки (для диалога с человеком и разбора в UI).
+	LastError string `json:"last_error,omitempty"`
+	// HeartbeatAt — время последнего раунда агента. Watchdog по нему, а не по
+	// догадкам, понимает, жива ли задача после рестарта сервера.
+	HeartbeatAt string `json:"heartbeat_at,omitempty"`
+	// ModelTier — требование к модели, накопленное по ходу прогона. Сейчас
+	// единственное значение — ModelTierLarge: «эта задача не осиливается на
+	// дешёвой модели». Требование живёт в записи задачи, а не внутри одного
+	// вызова Generate: после эскалации следующий прогон (и любой рестарт
+	// сервера) продолжает на сильной модели, а не начинает заново с дешёвой.
+	ModelTier string `json:"model_tier,omitempty"`
+	// Escalations — сколько раз задача уже получила эскалацию (сильная модель
+	// + инъекция с диагнозом) после зацикливания. Служит бюджетом автономии:
+	// исчерпанный бюджет — это остановка и эскалация человеку, а не бесконечные
+	// повторы (см. агент-оркестратор, KANBAN_MAX_ESCALATIONS).
+	Escalations int `json:"escalations,omitempty"`
+}
+
+// Требования к модели задачи (model_tier).
+const (
+	// ModelTierLarge — работать на большой модели (сильный слой).
+	ModelTierLarge = "large"
+)
+
+// Состояния агента на доске (agent_state).
+const (
+	AgentStateWritingCode  = "writing_code"  // правит код
+	AgentStateRunningTests = "running_tests" // гоняет проверку
+	AgentStateFixingErrors = "fixing_errors" // проверка упала, разбирает вывод
+	AgentStateIdle         = "idle"          // ничего не менял
+)
+
+// TaskCheckpoint — опорные точки ветки задачи для ручного отката (Ф-6).
+// Заполняется по ходу прогона: base_sha — HEAD в момент создания worktree
+// задачи, last_sha — последний промежуточный коммит раунда, last_good_sha —
+// коммит, после которого проверка была зелёной («снести всё» и «вернуться к
+// рабочему» — два разных отката).
+type TaskCheckpoint struct {
+	BaseSHA     string `json:"base_sha"`
+	LastSHA     string `json:"last_sha,omitempty"`
+	LastGoodSHA string `json:"last_good_sha,omitempty"`
 }
 
 // UnmarshalJSON для Epic с безопасным дефолтом Ф-8: записи, где поле

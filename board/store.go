@@ -58,6 +58,16 @@ type Store struct {
 	// (значение по умолчанию, поведение прежних вызовов не меняется).
 	TaskDoneHook func(ctx context.Context, task *Task, from Status)
 
+	// TaskDoneGuard — опциональная ПРОВЕРКА до перевода в StatusDone: вернуть
+	// ошибку и не менять статус. Живой повод (mytrip, FEL-04): задача без
+	// единого коммита и без правок в worktree получила done от fallback'а
+	// оркестратора («агент не сменил статус») — в MR уехала пустая ветка, а
+	// доска показала выполненную работу. Назначение: сервер внедряет сюда
+	// проверку «в ветке задачи есть свои коммиты ИЛИ worktree непуст».
+	// Ошибка гарда возвращается вызывающему (UI/API/агент), статус не
+	// меняется. nil — гарда нет (поведение прежних вызовов не меняется).
+	TaskDoneGuard func(ctx context.Context, task *Task, from Status) error
+
 	// TaskInProgressHook — опциональный обратный вызов при переводе задачи в
 	// StatusInProgress (Ф-3). Вызывается из SetTaskStatus вне блокировок, после
 	// успешного сохранения. Назначение: сервер внедряет сюда создание worktree
@@ -89,6 +99,12 @@ type Store struct {
 	// <= 0 — оценки нет (история мала/прогноз не считается). nil — доска
 	// просто не проставляет оценки (консольный режим).
 	TokenEstimate func(ctx context.Context, e *Epic, t *Task) int64
+
+	// TaskStateHook — опциональный обратный вызов после точечного обновления
+	// задачи через PatchTask (Ф-6, State Tracking). Назначение: сервер
+	// публикует обновлённый снимок доски, иначе «чем занят агент» было бы
+	// видно только после смены статуса. nil — хука нет.
+	TaskStateHook func(ctx context.Context, t *Task)
 }
 
 // key возвращает полный ключ Redis для относительного имени.
@@ -555,6 +571,33 @@ func (s *Store) RemoveTaskInjection(ctx context.Context, taskID, injID string) (
 	return out, true, nil
 }
 
+// PatchTask читает задачу, применяет mutate к её полям и сохраняет результат.
+// Точечное обновление вместо SaveTask вызывающего: State Tracking пишет задачу
+// каждый раунд (агент), а статус меняют человек и оркестратор — общая запись
+// целого объекта теряла бы поля одного из писателей.
+func (s *Store) PatchTask(ctx context.Context, taskID string, mutate func(*Task) error) error {
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("board: task_id обязателен")
+	}
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if mutate == nil {
+		return nil
+	}
+	if err := mutate(t); err != nil {
+		return err
+	}
+	if err := s.SaveTask(ctx, t); err != nil {
+		return err
+	}
+	if s.TaskStateHook != nil {
+		s.TaskStateHook(ctx, t)
+	}
+	return nil
+}
+
 // SaveTask сохраняет изменения задачи (обновляет и добавляет в индекс).
 func (s *Store) SaveTask(ctx context.Context, t *Task) error {
 	if t.TaskID == "" {
@@ -625,7 +668,21 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 		return err
 	}
 	from := t.Status
+	// Ф-6 (инцидент FEL-04): переход в done проверяется ДО применения, иначе
+	// задача без результата (пустая ветка, чистый worktree) успевает стать
+	// выполненной, а откатить её потом нечем — статус терминальный. Гард
+	// видит задачу в прежнем статусе.
+	if st == StatusDone && s.TaskDoneGuard != nil {
+		if err := s.TaskDoneGuard(ctx, t, from); err != nil {
+			return err
+		}
+	}
 	t.Status = st
+	// Ф-6 State Tracking: «взята в работу» — попытка номер N. Счётчик переживает
+	// рестарт сервера (лежит на доске) и нужен бюджету автономии этапа 4.
+	if st == StatusInProgress && from != StatusInProgress {
+		t.Attempts++
+	}
 	if err := s.SaveTask(ctx, t); err != nil {
 		return err
 	}

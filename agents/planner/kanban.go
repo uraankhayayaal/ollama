@@ -18,7 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -80,6 +83,79 @@ type KanbanRunner struct {
 	// фиксации итогов задачи/эпика. nil — учёта нет (консольный режим):
 	// вызовы Generate идут без атрибуции, счётчики не трогаются.
 	tokens *tokens.Store
+	// onStatus — аудит решений оркестратора в чат проекта (Ф-6, этап 4.6):
+	// эскалация модели, исчерпание бюджета автономности, возврат зависших
+	// задач. Человек должен видеть, почему система что-то сделала сама.
+	// nil — консольный режим, пишем только в лог.
+	onStatus func(string)
+	// stopReason — причина, по которой работа остановлена и нужен человек
+	// (исчерпан бюджет автономии после зацикливания). Хранится отдельно от
+	// ошибок запуска: цикл без прогресса сам по себе не объясняет человеку,
+	// ЧТО случилось, и без этого поля он увидел бы «нет прогресса».
+	stopReason string
+	stopMu     sync.Mutex
+	// active — задачи, которые ЭТОТ раннер сейчас выполняет. Между фазами их
+	// быть не может, поэтому «в работе» вне этого множества — брошенная
+	// задача (павший запуск, рестарт сервера, чужой процесс). Это точнее
+	// угадывания по времени: чужой живой прогон виден по heartbeat (Ф-6, 4.1).
+	active   map[string]bool
+	activeMu sync.Mutex
+}
+
+// SetStatusNotifier подключает аудит решений оркестратора (эскалация модели,
+// возврат зависшей задачи). Сервер транслирует вызовы в чат проекта.
+func (k *KanbanRunner) SetStatusNotifier(fn func(string)) *KanbanRunner {
+	k.onStatus = fn
+	return k
+}
+
+// status пишет строку в лог проекта и, если подключён, в чат (Ф-6, 4.6).
+func (k *KanbanRunner) status(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if k.log != nil {
+		k.log.Infof("%s", msg)
+	}
+	if k.onStatus != nil {
+		k.onStatus(msg)
+	}
+}
+
+// markActive помечает задачу выполняемой этим раннером (окно, в котором её
+// in_progress не считается брошенной).
+func (k *KanbanRunner) markActive(taskID string) {
+	k.activeMu.Lock()
+	defer k.activeMu.Unlock()
+	if k.active == nil {
+		k.active = map[string]bool{}
+	}
+	k.active[taskID] = true
+}
+
+func (k *KanbanRunner) unmarkActive(taskID string) {
+	k.activeMu.Lock()
+	defer k.activeMu.Unlock()
+	delete(k.active, taskID)
+}
+
+// setStopReason запоминает причину остановки работы по вине человека.
+func (k *KanbanRunner) setStopReason(msg string) {
+	k.stopMu.Lock()
+	defer k.stopMu.Unlock()
+	if k.stopReason == "" {
+		k.stopReason = msg
+	}
+}
+
+func (k *KanbanRunner) needHuman() string {
+	k.stopMu.Lock()
+	defer k.stopMu.Unlock()
+	return k.stopReason
+}
+
+func (k *KanbanRunner) isActive(taskID string) bool {
+	k.activeMu.Lock()
+	defer k.activeMu.Unlock()
+	return k.active[taskID]
 }
 
 // standbyPoll — период опроса доски в режиме ожидания: раз в 5 с runner
@@ -290,15 +366,12 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 	}
 
 	// Задачи, зависшие «в работе» после остановленной/прерванной сессии,
-	// возвращаем в «готова к работе». Иначе их никто не исполняет (phaseExecute
-	// берёт только готовые), а незавершённая задача блокирует и pipeline
-	// (phaseLeads: очередь лидов не продвигается), и финализацию эпиков
-	// (phaseComplete) — цикл падал бы с «нет прогресса». В этом раунде других
-	// in_progress-задач ещё нет, поэтому сброс безопасен.
-	if n, err := k.resetStaleInProgress(ctx); err != nil {
+	// возвращаем в «готова к работе» (Ф-6, этап 4.1–4.2): по heartbeat, а не
+	// «сбросить всё подряд» — чужой живой прогон трогать нельзя.
+	if n, err := k.recoverStuckTasks(ctx); err != nil {
 		return err
 	} else if n > 0 {
-		k.log.Infof("[Kanban] зависших «в работе» задач сброшено в «готова к работе»: %d", n)
+		k.status("[Kanban] зависших «в работе» задач возвращено в очередь: %d", n)
 	}
 
 	if k.boardOnly {
@@ -315,6 +388,16 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 			return nil
 		}
 
+		// Watchdog и в начале КАЖДОГО раунда: задача, оставшаяся «в работе»
+		// после упавшей фазы (агент/провайдер упал), иначе осталась бы висеть
+		// навсегда и уронила бы цикл с «нет прогресса». Между раундами ничего
+		// не выполняется, поэтому своих in_progress здесь не бывает.
+		if n, err := k.recoverStuckTasks(ctx); err != nil {
+			return err
+		} else if n > 0 {
+			k.status("[Kanban] зависших «в работе» задач возвращено в очередь: %d", n)
+		}
+
 		progress, err := k.runPhases(ctx)
 		if err != nil {
 			return err
@@ -323,11 +406,20 @@ func (k *KanbanRunner) Run(ctx context.Context, projectName, taskText string) er
 		// Ни один этап цикла не сделал работу: на доске остались только
 		// отменённые записи или неразрешимые зависимости — дальше бессмысленно.
 		if !progress {
+			// Если работу остановили мы сами (бюджет автономии), сообщаем
+			// ЭТУ причину: «нет прогресса» звучало бы как сбой системы, а
+			// человек должен знать, что задача ждёт его решения.
+			if stop := k.needHuman(); stop != "" {
+				return fmt.Errorf("%s", stop)
+			}
 			return fmt.Errorf("Kanban-цикл %d: нет прогресса (остались отменённые/заблокированные эпики и задачи), доска: %s",
 				round, k.boardSummary(ctx))
 		}
 	}
 
+	if stop := k.needHuman(); stop != "" {
+		return fmt.Errorf("%s", stop)
+	}
 	return fmt.Errorf("исчерпан бюджет Kanban-раундов (%d), задача не решена", maxKanbanRounds)
 }
 
@@ -344,6 +436,13 @@ func (k *KanbanRunner) runBoardOnly(ctx context.Context) error {
 		if round > maxKanbanRounds {
 			return fmt.Errorf("исчерпан бюджет Kanban-раундов (%d), работа по доске не завершена, доска: %s",
 				maxKanbanRounds, k.boardSummary(ctx))
+		}
+		// Watchdog по heartbeat (Ф-6, 4.1): после «в режиме ожидания» на доске
+		// могли остаться задачи «в работе» — их тоже нужно вернуть в очередь.
+		if n, err := k.recoverStuckTasks(ctx); err != nil {
+			return err
+		} else if n > 0 {
+			k.status("[Kanban] зависших «в работе» задач возвращено в очередь: %d", n)
 		}
 		progress, err := k.runPhases(ctx)
 		if err != nil {
@@ -948,28 +1047,72 @@ func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// resetStaleInProgress возвращает задачи, зависшие в статусе «в работе» после
-// остановленной/прерванной сессии, обратно в «готова к работе», чтобы их снова
-// выдал phaseExecute. Используется прямая запись статуса (SaveTask в обход
-// ValidateTransition): перевод «в работе» → «готова к работе» конечным автоматом
-// не предусмотрен (только → «выполнена»/«отменена»), но для восстановления он
-// необходим. Вызывается один раз в начале Run — своего in_progress в тот момент
-// ещё нет.
-func (k *KanbanRunner) resetStaleInProgress(ctx context.Context) (int, error) {
+// staleTaskMinDefault — сколько ждать пульса задачи, прежде чем считать прогон
+// брошенным. Heartbeat обновляет агент каждый раунд (Ф-6, этап 2), поэтому
+// порог — «заметно дольше одного раунда», а не точное время. Перекрывается
+// переменной KANBAN_STALE_TASK_MIN; 0 отключает порог (тогда брошенной
+// считается любая задача вне active).
+const staleTaskMinDefault = 30
+
+func staleTaskAfter() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("KANBAN_STALE_TASK_MIN")); v != "" {
+		if mins, err := strconv.Atoi(v); err == nil && mins >= 0 {
+			return time.Duration(mins) * time.Minute
+		}
+	}
+	return staleTaskMinDefault * time.Minute
+}
+
+// recoverStuckTasks возвращает в «готова к работе» задачи, зависшие «в работе».
+// Иначе их никто не исполнит (phaseExecute берёт только готовые), а
+// незавершённая задача блокирует и pipeline (очередь лидов), и финализацию
+// эпиков — цикл падал бы с «нет прогресса».
+//
+// Решение принимается по двум сигналам, а не «сбросить всё подряд» (Ф-6,
+// этап 4.1):
+//
+//   - задача, которую выполняет ЭТОТ раннер (k.active), жива по определению;
+//   - задача со СВЕЖИМ heartbeat принадлежит живому прогону (другой процесс
+//     оркестрации, ещё работающий агент) — её не трогаем. Прежний код
+//     полагался на «в этом раунде своих in_progress ещё нет», из-за чего два
+//     запуска одного проекта мешали друг другу.
+//
+// Всё остальное — брошено: пульс старше порога либо его нет вовсе (задача
+// старше State Tracking или агент не отчитывался). Переход «в работе» →
+// «готова к работе» теперь разрешён конечным автоматом (см. board/entity.go),
+// поэтому статус идёт через SetTaskStatus, а не в обход валидации.
+func (k *KanbanRunner) recoverStuckTasks(ctx context.Context) (int, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
 		return 0, err
 	}
+	stale := staleTaskAfter()
 	reset := 0
 	for _, t := range tasks {
 		if t.Status != board.StatusInProgress {
 			continue
 		}
-		t.Status = board.StatusReady
-		if err := k.store.SaveTask(ctx, t); err != nil {
-			return 0, fmt.Errorf("задача %s: сброс «в работе» → «готова к работе»: %w", t.TaskID, err)
+		if k.isActive(t.TaskID) {
+			continue
 		}
-		k.log.Infof("[задача %s] перезапуск: «в работе» → «готова к работе»", t.TaskID)
+		reason := "пульса не было"
+		if hb := strings.TrimSpace(t.HeartbeatAt); hb != "" {
+			age, err := time.Parse(time.RFC3339, hb)
+			switch {
+			case err != nil:
+				reason = fmt.Sprintf("нечитаемый пульс %q", hb)
+			case stale > 0 && time.Since(age) < stale:
+				k.log.Detailf("[задача %s] «в работе», пульс %s назад — не трогаем (живой прогон)",
+					t.TaskID, time.Since(age).Truncate(time.Second))
+				continue
+			default:
+				reason = fmt.Sprintf("пульс %s назад", time.Since(age).Truncate(time.Second))
+			}
+		}
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
+			return 0, fmt.Errorf("задача %s: возврат «в работе» → «готова к работе»: %w", t.TaskID, err)
+		}
+		k.status("[задача %s] возврат в очередь: была «в работе», но %s", t.TaskID, reason)
 		reset++
 	}
 	return reset, nil
@@ -1224,6 +1367,11 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				sn.SetProjectName(k.store.Project())
 			}
 		}
+		// Ф-6 (этап 2): id своей задачи — агенту нужен, чтобы писать
+		// состояние раунда (State Tracking) в нужную запись доски.
+		if ti, ok := specialist.(interface{ SetTaskID(string) }); ok {
+			ti.SetTaskID(t.TaskID)
+		}
 
 		k.log.Infof("[задача %s] специалист %s выполняет: %s",
 			t.TaskID, t.Assignee, truncateText(t.Title, 60))
@@ -1255,16 +1403,35 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			TaskID:  t.TaskID,
 			Role:    t.Assignee,
 		})
-		resp, err := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
-		if err != nil {
-			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
+		// Требование «эта задача тяжёлая» из доски (Ф-6, этап 4.3): смена модели
+		// переживает рестарт сервера, потому что живёт в записи задачи, а не
+		// внутри одного вызова Generate.
+		if t.ModelTier == board.ModelTierLarge {
+			taskCtx = models.WithHeavyModel(taskCtx)
+			k.log.Detailf("[задача %s] модель: LARGE (требование задачи)", t.TaskID)
+		}
+
+		k.markActive(t.TaskID)
+		resp, genErr := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
+		k.unmarkActive(t.TaskID)
+		if genErr != nil {
+			return false, fmt.Errorf("задача %s: %w", t.TaskID, genErr)
 		}
 		// Специалист зациклился: разрыв петли не помог, модель не поняла свою
-		// ошибку и повторяет то же самое. Задачу НЕ помечаем выполненной
-		// (fallback ниже этого не достигает) — роняем запуск с понятной
-		// причиной, чтобы задачу взяли с другой стороны.
-		if err := resp.LoopError(fmt.Sprintf("задача %s", t.TaskID)); err != nil {
-			return false, err
+		// ошибку и повторяет то же самое. Задачу НЕ помечаем выполненной, но и
+		// запуск НЕ роняем (Ф-6, этап 4.4): эскалируем — сильная модель плюс
+		// инъекция с диагнозом — и возвращаем задачу в очередь на новый прогон.
+		// Отката кода здесь нет намеренно (Р-2): отменённый прогон не
+		// «улучшает» задачу, он просто тратит токены.
+		if resp != nil && resp.Looped {
+			done, err := k.escalateLoop(ctx, t, resp.LoopReason)
+			if err != nil {
+				return false, err
+			}
+			// Ни успеха, ни провала раунда: следующий раунд подхватит задачу
+			// снова (фаза исполнит её с требованием LARGE).
+			progress = progress || done
+			continue
 		}
 		if resp != nil && resp.Truncated {
 			return false, fmt.Errorf("задача %s: цикл остановлен по лимиту раундов", t.TaskID)
@@ -1280,12 +1447,39 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		}
 		if current.Status == board.StatusDone {
 			k.log.Infof("[задача %s] в работе → выполнена (агент подтвердил сам)", t.TaskID)
-		} else {
-			if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
-				return false, fmt.Errorf("задача %s: в работе -> выполнена: %w", t.TaskID, err)
+			// Ф-3: факт расхода токенов задачи фиксируется сразу после выполнения.
+			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
+				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
 			}
-			k.log.Infof("[задача %s] в работе → выполнена (fallback: агент не сменил статус)", t.TaskID)
+			progress = true
+			continue
 		}
+		// Ф-6 (инцидент FEL-04): fallback закрывает задачу, которую агент
+		// фактически не сделал, только если серверный гард «phantom done»
+		// подтвердил наличие работы (свои коммиты ветки или правки в
+		// worktree). Отказ гарда — не ошибка раунда: задача остаётся «в
+		// работе», остальные задачи раунда продолжают выполняться, а
+		// детектор петли (этап 4) поднимет диагноз и эскалирует модель или,
+		// исчерпав бюджет, поставит задачу на паузу для человека.
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
+			k.log.Warnf("[задача %s] fallback в done отклонён гардом: %v — задача остаётся в работе (инцидент FEL-04: пустая задача не должна закрываться)", t.TaskID, err)
+			if perr := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
+				inj := board.Injection{
+					Name:    "работа не сделана: задача остаётся в работе",
+					Scope:   board.InjectionScopeTask,
+					Target:  board.InjectionTargetUserLast,
+					Content: fmt.Sprintf("Предыдущая попытка не дала результата: %s. Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом; задача закроется только когда в её ветке появится свой коммит или в worktree будут правки.", truncateText(err.Error(), 400)),
+				}
+				inj.Normalize()
+				cur.Injections = append(cur.Injections, inj)
+				return nil
+			}); perr != nil {
+				k.log.Warnf("[задача %s] запись инъекции о пустом результате: %v", t.TaskID, perr)
+			}
+			progress = true
+			continue
+		}
+		k.log.Infof("[задача %s] в работе → выполнена (fallback: агент не сменил статус)", t.TaskID)
 		// Ф-3: факт расхода токенов задачи фиксируется сразу после выполнения.
 		if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
 			k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
@@ -1293,6 +1487,77 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		progress = true
 	}
 	return progress, nil
+}
+
+// maxEscalationsDefault — бюджет автономии: сколько раз задача может получить
+// эскалацию (сильная модель + инъекция с диагнозом петли), прежде чем работа
+// будет остановлена и отдана человеку. Без конечного бюджета «зациклился»
+// превращается в бесконечный цикл дорогих прогонов. Перекрывается
+// KANBAN_MAX_ESCALATIONS.
+const maxEscalationsDefault = 3
+
+func maxEscalations() int {
+	if v := strings.TrimSpace(os.Getenv("KANBAN_MAX_ESCALATIONS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return maxEscalationsDefault
+}
+
+// escalateLoop реагирует на зацикливание специалиста (Ф-6, этапы 4.4–4.5).
+// Возвращает true, если работа продвинулась (задача поставлена в очередь на
+// новый прогон с эскалацией) — это честный «прогресс» раунда, иначе цикл
+// решил бы, что прогресса нет, и упал.
+//
+// Пока бюджет не исчерпан: пишем в задачу требование большой модели
+// (model_tier), инъекцию с причиной петли (диагноз виден модели с первого
+// запроса нового прогона) и возвращаем задачу в очередь. Откат кода при этом
+// НЕ делается (Р-2).
+//
+// Исчерпали бюджет: останавливаем работу задачи и зовём человека — пауза
+// (не терминальный статус: вернуть в очередь можно одной кнопкой) плюс
+// явное сообщение в чат. Никаких «выполнено»/фиктивного успеха.
+func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason string) (bool, error) {
+	budget := maxEscalations()
+	if t.Escalations >= budget {
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusPaused); err != nil {
+			return false, fmt.Errorf("задача %s: остановка исчерпанием бюджета: %w", t.TaskID, err)
+		}
+		stop := fmt.Sprintf("задача %s: зациклилась %d раз(а) подряд, бюджет автономии исчерпан — работа остановлена, нужен человек (последняя причина петли: %s)",
+			t.TaskID, t.Escalations+1, truncateText(reason, 160))
+		k.setStopReason(stop)
+		k.status("[задача %s] зациклилась %d раз(а) подряд (последняя причина: %s) — бюджет автономии исчерпан, работа остановлена, нужен человек",
+			t.TaskID, t.Escalations+1, truncateText(reason, 160))
+		return true, nil
+	}
+
+	escalation := t.Escalations + 1
+	if err := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
+		cur.ModelTier = board.ModelTierLarge
+		cur.Escalations = escalation
+		// Диагноз петли как инъекция: новая модель/новый прогон видят причину
+		// сразу, а не заново наступают на тот же грабли. Инъекция уходит в
+		// конец блока сообщений (append) — как требование «что делать дальше»,
+		// а не как подмена системного промпта.
+		inj := board.Injection{
+			Name:    fmt.Sprintf("эскалация %d/%d: разбор петли", escalation, budget),
+			Scope:   board.InjectionScopeTask,
+			Target:  board.InjectionTargetUserLast,
+			Content: fmt.Sprintf("Предыдущая попытка этой задачи зациклилась (эскалация %d/%d): %s. Не повторяй те же действия: перечитай задачу, измени подход и проверь результат.", escalation, budget, truncateText(reason, 400)),
+		}
+		inj.Normalize()
+		cur.Injections = append(cur.Injections, inj)
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("задача %s: запись эскалации: %w", t.TaskID, err)
+	}
+	if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
+		return false, fmt.Errorf("задача %s: возврат в очередь после эскалации: %w", t.TaskID, err)
+	}
+	k.status("[задача %s] зациклилась (%s) — эскалация %d/%d: продолжаем на большой модели с разбором причины",
+		t.TaskID, truncateText(reason, 160), escalation, budget)
+	return true, nil
 }
 
 // phaseBugs: конвейер багрепортов. QA-специалисты публикуют багрепорты
