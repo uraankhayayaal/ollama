@@ -219,6 +219,9 @@ func (a *Assistant) GetInjections() []board.Injection {
 	return a.Injections
 }
 
+// GetInjectionRole — роль агента для условий when промпт-инъекций.
+func (a *Assistant) GetInjectionRole() string { return "assistant" }
+
 // GetToolsForOllama возвращает определения инструментов в формате Ollama.
 func (a *Assistant) GetToolsForOllama() []api.Tool {
 	return tools.ToOllama(a.GetTools())

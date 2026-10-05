@@ -1227,10 +1227,35 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 
 		k.log.Infof("[задача %s] специалист %s выполняет: %s",
 			t.TaskID, t.Assignee, truncateText(t.Title, 60))
-		// Пропускаем инъекции задачи в контекст — runner будет применять их
-		// при сборке system+user messages (runner/runner.go:585-621).
-		ctx = board.NewInjectionContext(ctx, t.Injections)
-		resp, err := k.generate(ctx, tokens.ScopeTask(t.TaskID), specialist)
+		// Промпт-инъекции задачи: снапшот на старте + ЖИВОЙ источник, который
+		// перечитывает задачу перед каждым запросом к модели. Благодаря живому
+		// источнику правка инъекций (REST/инструмент доски) видна модели со
+		// следующего раунда, даже если цикл уже идёт.
+		//
+		// Контекст собирается в taskCtx, а не в ctx: присваивание в ctx внутри
+		// цикла по ready оставляло бы инъекции ПРЕДЫДУЩЕЙ задачи в контексте
+		// следующей (инъекция задачи попадала в чужую задачу).
+		taskCtx := board.NewInjectionContext(ctx, t.Injections)
+		if k.store != nil {
+			taskCtx = board.WithInjectionSource(taskCtx, func(ctx context.Context) ([]board.Injection, error) {
+				fresh, err := k.store.GetTask(ctx, t.TaskID)
+				if err != nil {
+					return nil, err // доска недоступна — работаем со снапшотом
+				}
+				if fresh == nil {
+					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
+				}
+				// Пустой список — честный ответ «инъекций у задачи больше нет»:
+				// удаление с доски действует немедленно.
+				return fresh.Injections, nil
+			})
+		}
+		taskCtx = board.WithInjectionScope(taskCtx, board.InjectionScope{
+			Project: k.store.Project(),
+			TaskID:  t.TaskID,
+			Role:    t.Assignee,
+		})
+		resp, err := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
 		if err != nil {
 			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
 		}
@@ -1308,12 +1333,12 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("фаза триажа багрепортов: %w", err)
 		}
-if err := resp.LoopError("фаза триажа багрепортов"); err != nil {
-		return false, err
-	}
-	if resp != nil && resp.Truncated {
-		return false, fmt.Errorf("фаза триажа багрепортов: цикл остановлен по лимиту раундов")
-	}
+		if err := resp.LoopError("фаза триажа багрепортов"); err != nil {
+			return false, err
+		}
+		if resp != nil && resp.Truncated {
+			return false, fmt.Errorf("фаза триажа багрепортов: цикл остановлен по лимиту раундов")
+		}
 		k.log.Infof("[QA Lead] триаж %d багрепортов", len(newBugs))
 		progress = true
 	}
@@ -1327,12 +1352,12 @@ if err := resp.LoopError("фаза триажа багрепортов"); err !=
 		if err != nil {
 			return false, fmt.Errorf("фаза экспертизы багрепортов: %w", err)
 		}
-if err := resp.LoopError("фаза экспертизы багрепортов"); err != nil {
-		return false, err
-	}
-	if resp != nil && resp.Truncated {
-		return false, fmt.Errorf("фаза экспертизы багрепортов: цикл остановлен по лимиту раундов")
-	}
+		if err := resp.LoopError("фаза экспертизы багрепортов"); err != nil {
+			return false, err
+		}
+		if resp != nil && resp.Truncated {
+			return false, fmt.Errorf("фаза экспертизы багрепортов: цикл остановлен по лимиту раундов")
+		}
 		k.log.Infof("[Системный архитектор] экспертиза %d багрепортов", len(confirmedBugs))
 		progress = true
 	}

@@ -2,6 +2,10 @@
 // модели. Собирает инъекции из всех источников (global → assistant → session
 // → runtime), фильтрует по условиям when, сортирует по scope и priority,
 // применяет к system/messages с учётом target и position.
+//
+// Инъекции применяются к СЛЕДУЮЩЕМУ запросу к модели: runner вызывает
+// ApplyInjections перед каждым обращением, поэтому правка доски видна модели
+// без перезапуска агентского цикла.
 package injections
 
 import (
@@ -12,7 +16,8 @@ import (
 	"ai/board"
 )
 
-// MergeContext — контекст для применения инъекций.
+// MergeContext — контекст для применения инъекций: что сейчас в промпте и
+// параметры прогона (для условий when и шаблонов).
 type MergeContext struct {
 	System    string
 	Messages  []Message
@@ -20,6 +25,7 @@ type MergeContext struct {
 	Provider  string
 	Role      string
 	Project   string
+	TaskID    string
 	Turn      int
 	User      string
 	Tools     []string
@@ -42,6 +48,8 @@ type Message struct {
 }
 
 // AppliedInjection — метаданные применённой инъекции (для логов/отладки).
+// Содержимое инъекции НЕ логируется: в промпте могут быть чувствительные
+// строки, в логах им не место.
 type AppliedInjection struct {
 	ID       string
 	Name     string
@@ -50,23 +58,33 @@ type AppliedInjection struct {
 	Position string
 }
 
+// SkippedInjection — метаданные инъекции, которую пропустили (выключена,
+// условие when ложно, не прошла валидацию).
+type SkippedInjection struct {
+	ID     string
+	Name   string
+	Reason string
+}
+
 // MergeResult — результат применения инъекций.
 type MergeResult struct {
 	System         string
 	Messages       []Message
 	Applied        []AppliedInjection
+	Skipped        []SkippedInjection
 	ReplaceWarning string
 }
 
 // MaxContentSize — максимальный размер контента одной инъекции (байт).
-const MaxContentSize = 10 * 1024
+const MaxContentSize = board.MaxInjectionContentSize
 
 // MaxTotalSize — максимальный суммарный размер всех инъекций (байт).
 const MaxTotalSize = 50 * 1024
 
 // ApplyInjections применяет инъекции к базовому system и messages.
-// Порядок: global → assistant → session → runtime.
+// Порядок: global → assistant → session → runtime (task).
 // Внутри scope: по priority (убывание), при равенстве — порядок объявления.
+// Инъекции с одинаковым id схлопываются: последняя перекрывает (DeduplicateByID).
 func ApplyInjections(baseSystem string, baseMessages []Message, injections []board.Injection, ctx MergeContext) (*MergeResult, error) {
 	if len(injections) == 0 {
 		return &MergeResult{
@@ -75,11 +93,16 @@ func ApplyInjections(baseSystem string, baseMessages []Message, injections []boa
 		}, nil
 	}
 
-	filtered := filterInjections(injections, ctx)
+	// Дедупликация до фильтрации: перекрытая инъекция не должна даже
+	// «сработать» в when-условии, иначе её влияние зависит от порядка.
+	injections = DeduplicateByID(injections)
+
+	filtered, skipped := filterInjections(injections, ctx)
 	if len(filtered) == 0 {
 		return &MergeResult{
 			System:   baseSystem,
 			Messages: baseMessages,
+			Skipped:  skipped,
 		}, nil
 	}
 
@@ -94,14 +117,22 @@ func ApplyInjections(baseSystem string, baseMessages []Message, injections []boa
 	totalSize := 0
 
 	for _, inj := range filtered {
+		// Валидация на лету: запись могла прийти из доски, отредактированной
+		// вручную, — мусор в промпт не попадает, а попадает в Skipped.
+		if err := inj.Validate(); err != nil {
+			skipped = append(skipped, SkippedInjection{
+				ID:     inj.ID,
+				Name:   inj.Name,
+				Reason: err.Error(),
+			})
+			continue
+		}
+
 		content := inj.Content
 		if ctx.RenderFn != nil {
 			content = ctx.RenderFn(content, ctx)
 		}
-
-		if len(content) > MaxContentSize {
-			content = content[:MaxContentSize] + "\n... [truncated]"
-		}
+		content = TruncateContent(content, MaxContentSize)
 		totalSize += len(content)
 		if totalSize > MaxTotalSize {
 			replaceWarning = fmt.Sprintf("превышен лимит суммарного размера инъекций (%d байт), остальные пропущены", MaxTotalSize)
@@ -109,17 +140,25 @@ func ApplyInjections(baseSystem string, baseMessages []Message, injections []boa
 		}
 
 		switch inj.Target {
-		case "system":
+		case board.InjectionTargetSystem:
 			system = applyToSystem(system, content, inj)
-		case "messages", "user_last", "assistant_last":
+		case board.InjectionTargetMessages, board.InjectionTargetUserLast, board.InjectionTargetAssistantLast:
 			messages = applyToMessages(messages, content, inj)
-		case "before_tools", "after_tools":
+		default:
+			// Неизвестный target отсеян Validate выше; на всякий случай не
+			// записываем такую инъекцию в Applied.
+			skipped = append(skipped, SkippedInjection{
+				ID:     inj.ID,
+				Name:   inj.Name,
+				Reason: "неизвестный target " + inj.Target,
+			})
+			continue
 		}
 
 		applied = append(applied, AppliedInjection{
 			ID:       inj.ID,
 			Name:     inj.Name,
-			Scope:    inj.Scope,
+			Scope:    inj.EffectiveScope(),
 			Target:   inj.Target,
 			Position: inj.Position,
 		})
@@ -129,30 +168,36 @@ func ApplyInjections(baseSystem string, baseMessages []Message, injections []boa
 		System:         system,
 		Messages:       messages,
 		Applied:        applied,
+		Skipped:        skipped,
 		ReplaceWarning: replaceWarning,
 	}, nil
 }
 
-func filterInjections(injs []board.Injection, ctx MergeContext) []board.Injection {
+// filterInjections отсеивает выключенные инъекции и те, чьё условие when
+// ложно. Отсеянные возвращаются вторым значением — для наблюдаемости.
+func filterInjections(injs []board.Injection, ctx MergeContext) ([]board.Injection, []SkippedInjection) {
 	out := make([]board.Injection, 0, len(injs))
+	var skipped []SkippedInjection
 	for _, inj := range injs {
 		if !inj.IsEnabled() {
+			skipped = append(skipped, SkippedInjection{ID: inj.ID, Name: inj.Name, Reason: "выключена (enabled=false)"})
 			continue
 		}
 		if inj.When != "" && ctx.EvalFn != nil {
 			if !ctx.EvalFn(inj.When, ctx) {
+				skipped = append(skipped, SkippedInjection{ID: inj.ID, Name: inj.Name, Reason: "условие when ложно: " + inj.When})
 				continue
 			}
 		}
 		out = append(out, inj)
 	}
-	return out
+	return out, skipped
 }
 
 func sortInjections(injs []board.Injection) {
 	sort.SliceStable(injs, func(i, j int) bool {
-		si := scopePriority(injs[i].Scope)
-		sj := scopePriority(injs[j].Scope)
+		si := scopePriority(injs[i].EffectiveScope())
+		sj := scopePriority(injs[j].EffectiveScope())
 		if si != sj {
 			return si < sj
 		}
@@ -165,13 +210,13 @@ func sortInjections(injs []board.Injection) {
 
 func scopePriority(scope string) int {
 	switch scope {
-	case "global":
+	case board.InjectionScopeGlobal:
 		return 0
-	case "assistant":
+	case board.InjectionScopeAssistant:
 		return 1
-	case "session":
+	case board.InjectionScopeSession:
 		return 2
-	case "runtime":
+	case board.InjectionScopeRuntime:
 		return 3
 	default:
 		return 4
@@ -180,32 +225,45 @@ func scopePriority(scope string) int {
 
 func applyToSystem(system, content string, inj board.Injection) string {
 	switch inj.Position {
-	case "prepend":
-		return content + "\n\n" + system
-	case "append":
-		return system + "\n\n" + content
-	case "replace":
-		return content
-	case "inject_at_index":
-		if inj.Index == 0 {
-			return content + "\n\n" + system
+	case board.InjectionPosPrepend:
+		if strings.TrimSpace(system) == "" {
+			return content
 		}
-		return system + "\n\n" + content
-	default:
-		return system + "\n\n" + content
+		return content + "\n\n" + system
+	case board.InjectionPosReplace:
+		return content
+	case board.InjectionPosInjectAtIndex:
+		if inj.Index == 0 {
+			return prependToSystem(system, content)
+		}
+		return appendToSystem(system, content)
+	default: // append
+		return appendToSystem(system, content)
 	}
+}
+
+func prependToSystem(system, content string) string {
+	if strings.TrimSpace(system) == "" {
+		return content
+	}
+	return content + "\n\n" + system
+}
+
+func appendToSystem(system, content string) string {
+	if strings.TrimSpace(system) == "" {
+		return content
+	}
+	return system + "\n\n" + content
 }
 
 func applyToMessages(messages []Message, content string, inj board.Injection) []Message {
 	switch inj.Target {
-	case "user_last":
+	case board.InjectionTargetUserLast:
 		return applyToLastMessage(messages, content, inj, "user")
-	case "assistant_last":
+	case board.InjectionTargetAssistantLast:
 		return applyToLastMessage(messages, content, inj, "assistant")
-	case "messages":
-		return applyToMessagesGeneric(messages, content, inj)
 	default:
-		return messages
+		return applyToMessagesGeneric(messages, content, inj)
 	}
 }
 
@@ -222,41 +280,45 @@ func applyToLastMessage(messages []Message, content string, inj board.Injection,
 	}
 
 	switch inj.Position {
-	case "prepend":
-		messages[idx].Content = content + "\n\n" + messages[idx].Content
-	case "append":
-		messages[idx].Content = messages[idx].Content + "\n\n" + content
-	case "replace":
+	case board.InjectionPosPrepend:
+		messages[idx].Content = prependToSystem(messages[idx].Content, content)
+	case board.InjectionPosReplace:
 		messages[idx].Content = content
-	default:
-		messages[idx].Content = messages[idx].Content + "\n\n" + content
+	case board.InjectionPosInjectAtIndex:
+		messages[idx].Content = appendToSystem(messages[idx].Content, content)
+	default: // append
+		messages[idx].Content = appendToSystem(messages[idx].Content, content)
 	}
 	return messages
 }
 
+// applyToMessagesGeneric работает с target=messages. Новые сообщения
+// получают роль user (обычное продолжение диалога, которое модель ожидает
+// увидеть), а не system: роль system допустима лишь в начале истории, и
+// системный блок, который приходит на середину, ломает некоторые провайдеры.
 func applyToMessagesGeneric(messages []Message, content string, inj board.Injection) []Message {
+	newMsg := Message{Role: "user", Content: content}
 	switch inj.Position {
-	case "prepend":
-		newMsg := Message{Role: "system", Content: content}
+	case board.InjectionPosPrepend:
 		return append([]Message{newMsg}, messages...)
-	case "append":
-		newMsg := Message{Role: "system", Content: content}
-		return append(messages, newMsg)
-	case "replace":
-		return []Message{{Role: "system", Content: content}}
-	case "inject_at_index":
+	case board.InjectionPosReplace:
+		// replace у messages оставляет саму инъекцию: история диалога без
+		// исходных сообщений бессмысленна.
+		return []Message{newMsg}
+	case board.InjectionPosInjectAtIndex:
 		idx := inj.Index
 		if idx > len(messages) {
 			idx = len(messages)
 		}
-		newMsg := Message{Role: "system", Content: content}
+		if idx < 0 {
+			idx = 0
+		}
 		out := make([]Message, 0, len(messages)+1)
 		out = append(out, messages[:idx]...)
 		out = append(out, newMsg)
 		out = append(out, messages[idx:]...)
 		return out
-	default:
-		newMsg := Message{Role: "system", Content: content}
+	default: // append
 		return append(messages, newMsg)
 	}
 }
@@ -298,13 +360,39 @@ func TruncateContent(content string, max int) string {
 
 // ScopeOrder возвращает порядок scope для отладки.
 func ScopeOrder() []string {
-	return []string{"global", "assistant", "session", "runtime"}
+	return []string{
+		board.InjectionScopeGlobal,
+		board.InjectionScopeAssistant,
+		board.InjectionScopeSession,
+		board.InjectionScopeRuntime,
+	}
 }
 
-// ValidateMergeContext проверяет контекст перед применением.
-func ValidateMergeContext(ctx MergeContext) error {
-	if strings.TrimSpace(ctx.System) == "" && len(ctx.Messages) == 0 {
-		return fmt.Errorf("injections: пустой system и messages")
+// DescribeApplied собирает компактную строку метаданных применённых инъекций
+// для debug-лога: «id/name[scope/target/position]». Содержимое не попадает.
+func DescribeApplied(applied []AppliedInjection) string {
+	if len(applied) == 0 {
+		return ""
 	}
-	return nil
+	parts := make([]string, 0, len(applied))
+	for _, a := range applied {
+		id := a.ID
+		if id == "" {
+			id = "-"
+		}
+		parts = append(parts, fmt.Sprintf("%s/%s[%s→%s/%s]", id, a.Name, a.Scope, a.Target, a.Position))
+	}
+	return strings.Join(parts, " ")
+}
+
+// DescribeSkipped собирает строку метаданных пропущенных инъекций.
+func DescribeSkipped(skipped []SkippedInjection) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(skipped))
+	for _, s := range skipped {
+		parts = append(parts, fmt.Sprintf("%s: %s", s.Name, s.Reason))
+	}
+	return strings.Join(parts, "; ")
 }

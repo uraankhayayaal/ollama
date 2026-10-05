@@ -652,8 +652,8 @@ func TestChatAssistantLeavesBoardUntouched(t *testing.T) {
 	})
 }
 
-// TestSessionInjectionHotApply: AddSessionInjection → SessionInjections()
-// возвращает добавленную; Add → Get → Remove → Get возвращает пусто.
+// TestSessionInjectionHotApply: Upsert → SessionInjections возвращает
+// добавленную; Remove по id возвращает признак наличия записи.
 func TestSessionInjectionHotApply(t *testing.T) {
 	t.Run("CRUD", func(t *testing.T) {
 		var sess Session
@@ -662,7 +662,7 @@ func TestSessionInjectionHotApply(t *testing.T) {
 			t.Fatalf("expected empty initially, got %d", len(got))
 		}
 
-		// Добавляем инъекцию.
+		// Добавляем инъекцию (id выдаётся на записи — иначе её не удалить).
 		inj := board.Injection{
 			Name:     "hot-test",
 			Scope:    "session",
@@ -670,7 +670,13 @@ func TestSessionInjectionHotApply(t *testing.T) {
 			Position: "prepend",
 			Content:  "ТЕСТОВАЯ ИНЪЕКЦИЯ",
 		}
-		sess.AddSessionInjection(inj)
+		inj.Normalize()
+		if inj.ID == "" {
+			t.Fatal("Normalize не выдал id")
+		}
+		if err := sess.UpsertSessionInjection(inj); err != nil {
+			t.Fatalf("UpsertSessionInjection: %v", err)
+		}
 
 		// Получаем — одна инъекция.
 		got := sess.SessionInjections()
@@ -681,11 +687,31 @@ func TestSessionInjectionHotApply(t *testing.T) {
 			t.Fatalf("got name %q, want 'hot-test'", got[0].Name)
 		}
 
-		// Удаляем — пусто.
-		sess.RemoveSessionInjection(got[0].ID)
-		got2 := sess.SessionInjections()
-		if len(got2) != 0 {
+		// Повторный Upsert с тем же id правит запись, а не дублирует её.
+		inj.Content = "ОБНОВЛЁННАЯ ИНЪЕКЦИЯ"
+		if err := sess.UpsertSessionInjection(inj); err != nil {
+			t.Fatalf("UpsertSessionInjection (повторный): %v", err)
+		}
+		got = sess.SessionInjections()
+		if len(got) != 1 || got[0].Content != "ОБНОВЛЁННАЯ ИНЪЕКЦИЯ" {
+			t.Fatalf("после повторного Upsert = %+v, want одна обновлённая запись", got)
+		}
+
+		// Upsert без id — ошибка, а не запись, которую нельзя удалить.
+		if err := sess.UpsertSessionInjection(board.Injection{Name: "без-id"}); err == nil {
+			t.Error("UpsertSessionInjection принял запись без id")
+		}
+
+		// Удаление по реальному id.
+		if !sess.RemoveSessionInjection(got[0].ID) {
+			t.Fatal("RemoveSessionInjection не нашёл запись по выданному id")
+		}
+		if got2 := sess.SessionInjections(); len(got2) != 0 {
 			t.Fatalf("expected 0 after remove, got %d", len(got2))
+		}
+		// Повторное удаление того же id — «не найдено», а не «успех».
+		if sess.RemoveSessionInjection(got[0].ID) {
+			t.Error("повторный RemoveSessionInjection вернул true")
 		}
 	})
 

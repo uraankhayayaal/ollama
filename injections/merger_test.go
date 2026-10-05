@@ -9,7 +9,7 @@ import (
 )
 
 func testRenderFn(content string, _ MergeContext) string { return content }
-func testEvalFn(when string, _ MergeContext) bool       { return when == "true" }
+func testEvalFn(when string, _ MergeContext) bool        { return when == "true" }
 
 func TestApplyInjections_Empty(t *testing.T) {
 	result, err := ApplyInjections("base system", []Message{{Role: "user", Content: "hello"}}, nil, MergeContext{})
@@ -247,8 +247,9 @@ func TestApplyInjections_AssistantLastPrepend(t *testing.T) {
 }
 
 func TestApplyInjections_DisabledSkipped(t *testing.T) {
+	off := false
 	injs := []board.Injection{
-		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED", Disabled: true},
+		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED", Enabled: &off},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
 	if err != nil {
@@ -256,6 +257,112 @@ func TestApplyInjections_DisabledSkipped(t *testing.T) {
 	}
 	if result.System != "base" {
 		t.Errorf("system = %q, want base (disabled injection skipped)", result.System)
+	}
+	if len(result.Applied) != 0 {
+		t.Errorf("applied = %d, want 0", len(result.Applied))
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Name != "inj1" {
+		t.Errorf("skipped = %+v, want запись inj1", result.Skipped)
+	}
+}
+
+// Запись без поля enabled активна: обратная совместимость (старые записи
+// доски, где фла не было вовсе).
+func TestApplyInjections_EnabledDefaultsTrue(t *testing.T) {
+	injs := []board.Injection{
+		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED"},
+	}
+	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.System, "INJECTED") {
+		t.Errorf("system = %q, want INJECTED (nil enabled = активна)", result.System)
+	}
+}
+
+// Некорректная запись (её могли принести правкой доски вручную) не должна
+// попасть в промпт молча: она уезжает в Skipped с причиной.
+func TestApplyInjections_InvalidSkipped(t *testing.T) {
+	injs := []board.Injection{
+		{Name: "bad-target", Scope: "global", Target: "before_tools", Position: "append", Content: "X"},
+		{Name: "no-content", Scope: "global", Target: "system", Position: "append"},
+		{Name: "bad-scope", Scope: "мистика", Target: "system", Position: "append", Content: "Y"},
+		{Name: "bad-position", Scope: "global", Target: "system", Position: "куда-то", Content: "Z"},
+		{Name: "neg-index", Scope: "global", Target: "system", Position: "inject_at_index", Index: -1, Content: "W"},
+	}
+	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.System != "base" {
+		t.Errorf("system = %q, want base (все записи невалидны)", result.System)
+	}
+	if len(result.Applied) != 0 {
+		t.Errorf("applied = %d, want 0", len(result.Applied))
+	}
+	if len(result.Skipped) != 5 {
+		t.Fatalf("skipped = %d, want 5: %+v", len(result.Skipped), result.Skipped)
+	}
+	for _, s := range result.Skipped {
+		if s.Reason == "" {
+			t.Errorf("пустая причина пропуска для %q", s.Name)
+		}
+	}
+}
+
+// Один id в двух источниках — перекрытие: применяется последняя запись.
+func TestApplyInjections_DedupAcrossSources(t *testing.T) {
+	off := false
+	injs := CollectInjections(
+		[]board.Injection{{ID: "x", Name: "из global", Scope: "global", Target: "system", Position: "append", Content: "OLD", Enabled: &off}},
+		nil,
+		nil,
+		[]board.Injection{{ID: "x", Name: "из runtime", Scope: "runtime", Target: "system", Position: "append", Content: "NEW"}},
+	)
+	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(result.System, "OLD") || !strings.Contains(result.System, "NEW") {
+		t.Errorf("system = %q, want только NEW (last-wins по id)", result.System)
+	}
+	if len(result.Applied) != 1 || result.Applied[0].Name != "из runtime" {
+		t.Errorf("applied = %+v, want одна запись «из runtime»", result.Applied)
+	}
+}
+
+// Сообщения, добавленные инъекцией в середину истории, должны иметь роль
+// user: системный блок на середине диалога ломает некоторые провайдеры.
+func TestApplyInjections_MessagesUseUserRole(t *testing.T) {
+	injs := []board.Injection{
+		{Name: "m1", Scope: "runtime", Target: "messages", Position: "append", Content: "ХОД"},
+	}
+	base := []Message{{Role: "user", Content: "задача"}}
+	result, err := ApplyInjections("sys", base, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last := result.Messages[len(result.Messages)-1]
+	if last.Role != "user" || last.Content != "ХОД" {
+		t.Errorf("последнее сообщение = %+v, want {user ХОД}", last)
+	}
+}
+
+// Пустой системный промпт: prepend/append не оставляют «висячих» переводов
+// строк, чтобы не начинать сообщение с пустых строк.
+func TestApplyInjections_EmptySystemNoSeparators(t *testing.T) {
+	for _, pos := range []string{"prepend", "append"} {
+		injs := []board.Injection{
+			{Name: "s", Scope: "runtime", Target: "system", Position: pos, Content: "INJECTED"},
+		}
+		result, err := ApplyInjections("", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", pos, err)
+		}
+		if result.System != "INJECTED" {
+			t.Errorf("%s: system = %q, want INJECTED", pos, result.System)
+		}
 	}
 }
 
@@ -307,28 +414,51 @@ func TestApplyInjections_TemplateVars(t *testing.T) {
 	}
 }
 
-func TestApplyInjections_ContentTruncation(t *testing.T) {
-	longContent := strings.Repeat("x", MaxContentSize+100)
+// Обрезка на применении: запись прошла валидацию, но ШАБЛОН раздул её за
+// лимит (например, {{env.X}} вставил мегабайт). Такое тоже режется.
+func TestApplyInjections_ContentTruncationAfterRender(t *testing.T) {
 	injs := []board.Injection{
-		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: longContent},
+		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "начало"},
+	}
+	// Рендерер раздувает контент за лимит одной инъекции.
+	blowUp := func(content string, _ MergeContext) string { return strings.Repeat("x", MaxContentSize+100) }
+	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: blowUp, EvalFn: testEvalFn})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.System, "[truncated]") {
+		t.Errorf("system должен содержать [truncated], got %d байт", len(result.System))
+	}
+}
+
+// Запись БОЛЬШЕ лимита отсекается валидацией (на записи её бы отвергли) —
+// в промпт мусор не попадает.
+func TestApplyInjections_OversizedRejected(t *testing.T) {
+	injs := []board.Injection{
+		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: strings.Repeat("x", MaxContentSize+100)},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result.System, "[truncated]") {
-		t.Errorf("system = %q, want to contain [truncated]", result.System)
+	if result.System != "base" {
+		t.Errorf("system = %q, want base", result.System)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("skipped = %d, want 1: %+v", len(result.Skipped), result.Skipped)
 	}
 }
 
 func TestApplyInjections_TotalSizeLimit(t *testing.T) {
-	contentSize := MaxContentSize + 100 // slightly over limit so truncation triggers
-	injs := []board.Injection{
-		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: strings.Repeat("a", contentSize)},
-		{Name: "inj2", Scope: "global", Target: "system", Position: "append", Content: strings.Repeat("b", contentSize)},
-		{Name: "inj3", Scope: "global", Target: "system", Position: "append", Content: strings.Repeat("c", contentSize)},
-		{Name: "inj4", Scope: "global", Target: "system", Position: "append", Content: strings.Repeat("d", contentSize)},
-		{Name: "inj5", Scope: "global", Target: "system", Position: "append", Content: strings.Repeat("e", contentSize)},
+	// Каждая запись в пределах лимита, но вместе превышают MaxTotalSize:
+	// лимит суммы проверяется на применении, а не валидацией записи.
+	chunk := strings.Repeat("a", MaxContentSize)
+	var injs []board.Injection
+	for i := 0; i < 6; i++ { // 6 × 10240 = 61440 > 51200
+		injs = append(injs, board.Injection{
+			Name: fmt.Sprintf("inj%d", i), Scope: "global", Target: "system",
+			Position: "append", Content: chunk,
+		})
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
 	if err != nil {
@@ -336,6 +466,10 @@ func TestApplyInjections_TotalSizeLimit(t *testing.T) {
 	}
 	if result.ReplaceWarning == "" {
 		t.Errorf("expected ReplaceWarning for total size limit")
+	}
+	// Часть инъекций применилась, остальные отброшены по лимиту суммы.
+	if len(result.Applied) == 0 || len(result.Applied) >= len(injs) {
+		t.Errorf("applied = %d, хотим часть из %d", len(result.Applied), len(injs))
 	}
 }
 

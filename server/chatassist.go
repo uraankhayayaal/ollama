@@ -100,6 +100,20 @@ func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider model
 		// поверх ragClient и LSP-оглавления проекта. Флаги CODEGEN_HISTORY_*
 		// из окружения; выключено по умолчанию.
 		rctx = runctx.WithCompression(rctx, sess.project, dir, ragClient)
+		// Рамка прогона для промпт-инъекций: проект и роль заполняют переменные
+		// when ({{project.*}}, `when: "role == \"assistant\""`) и шаблоны. Без неё
+		// эти условия никогда не срабатывали бы.
+		rctx = board.WithInjectionScope(rctx, board.InjectionScope{
+			Project: sess.project,
+			Role:    "assistant",
+		})
+		// Сессионные инъекции — не только через asst.Injections (снапшот на старте
+		// хода): живой источник перечитывает их перед КАЖДЫМ запросом к модели, так
+		// что добавленная посреди стрима инъекция попадёт в следующий раунд того же
+		// хода, а не только в следующий ход.
+		rctx = board.WithInjectionSource(rctx, func(context.Context) ([]board.Injection, error) {
+			return sess.SessionInjections(), nil
+		})
 		rep, err := provider.Generate(rctx, asst)
 		if err != nil {
 			sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)

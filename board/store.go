@@ -487,6 +487,74 @@ func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
 	return &t, nil
 }
 
+// SetTaskInjections заменяет список инъекций задачи. Единственная точка
+// записи Task.Injections: список нормализуется и валидируется (вызывающий
+// отвечает пользователю 400, а не молча пишет мусор в промпт), после чего
+// сохраняется вместе с задачей. Пустой список удаляет все инъекции.
+func (s *Store) SetTaskInjections(ctx context.Context, taskID string, injs []Injection) error {
+	if len(injs) > 0 {
+		if err := ValidateInjections(injs); err != nil {
+			return err
+		}
+	}
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	t.Injections = injs
+	return s.SaveTask(ctx, t)
+}
+
+// AddTaskInjection добавляет инъекцию к задаче (запись с тем же id
+// перезаписывается) и возвращает итоговый список.
+func (s *Store) AddTaskInjection(ctx context.Context, taskID string, inj Injection) ([]Injection, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	inj.Normalize()
+	if err := inj.Validate(); err != nil {
+		return nil, err
+	}
+	out := make([]Injection, 0, len(t.Injections)+1)
+	for _, existing := range t.Injections {
+		if inj.ID != "" && existing.ID == inj.ID {
+			continue
+		}
+		out = append(out, existing)
+	}
+	out = append(out, inj)
+	if err := s.SetTaskInjections(ctx, taskID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RemoveTaskInjection удаляет инъекцию задачи по id. Возвращает оставшийся
+// список и признак «инъекция была» (вызывающий отвечает 404).
+func (s *Store) RemoveTaskInjection(ctx context.Context, taskID, injID string) ([]Injection, bool, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]Injection, 0, len(t.Injections))
+	found := false
+	for _, existing := range t.Injections {
+		if existing.ID == injID {
+			found = true
+			continue
+		}
+		out = append(out, existing)
+	}
+	if !found {
+		return t.Injections, false, nil
+	}
+	if err := s.SetTaskInjections(ctx, taskID, out); err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
 // SaveTask сохраняет изменения задачи (обновляет и добавляет в индекс).
 func (s *Store) SaveTask(ctx context.Context, t *Task) error {
 	if t.TaskID == "" {
