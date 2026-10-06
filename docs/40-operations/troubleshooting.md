@@ -453,6 +453,29 @@ git'а главного клона (`tools/sandbox.go:sandboxGitMounts`).
 `CODEGEN_SANDBOX_NETWORK=none` отключает сеть. Верните `default` либо
 запасите локальные кэши (`vendor/`, `GOMODCACHE`, `node_modules`, `.venv`).
 
+### `go get` → `invalid version: git ls-remote …` / `could not read Username`
+
+Симптом похож на сетевую проблему песочницы, но сеть здесь ни при чём: так
+отвечает **несуществующий** репозиторий — GitHub по HTTPS просит логин, а git
+в контейнере работает без интерактива. Живой случай (QAL-02): модель вызывала
+`go get github.com/testcontainers-go/testcontainers-go@…` вместо
+`github.com/testcontainers/testcontainers-go`, и обе ошибки появились
+дословно. Проверка на хосте:
+
+```bash
+git ls-remote -q --end-of-options https://github.com/<org>/<repo> HEAD
+```
+
+- exit 128 «could not read Username» → неверный import path (или приватный
+  репозиторий — тогда нужны креды, а не сеть);
+- exit 0 → путь верный; у контейнеров с `CODEGEN_SANDBOX_NETWORK=default`
+  (режим `container`) наружу открыто: `git ls-remote` к github.com и
+  `https://proxy.golang.org` отвечают, `GOTOOLCHAIN` внутри прогона сам
+  скачивает тулчейн — тогда смотрите на GOPROXY/кэш (см. предыдущий пункт).
+
+`vendor/` для этого не нужен: проекты в `temp/` работают в обычном модульном
+режиме (`go.mod`/`go.sum`), песочница шарит модульный кэш только в tmpfs.
+
 ### `rm -rf node_modules` отклонено
 
 Так и задумано: ложное срабатывание хуже пропуска. Если команда
