@@ -1328,8 +1328,8 @@ func finishRunResult(result map[string]string, command string, timedOut bool, ru
 // shell, docker и тем более проекты агентов.
 func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]string, error) {
 	// Отбраковка разрушительных команд ДО любого запуска: в контейнере
-	// `rm -rf /workspace` уничтожит файлы проекта на хосте (том смонтирован
-	// без копии), а на хосте тем более.
+	// `rm -rf` рабочего каталога уничтожит файлы проекта на хосте (том
+	// смонтирован без копии), а на хосте тем более.
 	if reason, unsafe := destructiveCommandReason(command); unsafe {
 		return map[string]string{
 			"command":    command,

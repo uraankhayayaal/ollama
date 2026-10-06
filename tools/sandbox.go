@@ -21,7 +21,8 @@ package tools
 //     же, как к бинарям из apt. Для своего кода образ — доверенный;
 //   - ПРОМЕНТЫ: рабочий каталог монтируется на ЗАПИСЬ, потому что агент по
 //     заданию правит файлы проекта (тесты, артефакты сборки, gofmt). «Стена»
-//     песочницы не спасла бы от `rm -rf /workspace` — том это файлы проекта.
+//     песочницы не спасла бы от `rm -rf` смонтированного каталога — том это
+//     файлы проекта.
 //     Защита здесь не в изоляции, а в отбраковке DESTRUCTIVE-команд до запуска
 //     и в ревью диффа;
 //   - сеть: по умолчанию она ЕСТЬ (go mod download, npm ci без этого не
@@ -46,7 +47,11 @@ import (
 	"ai/sandbox"
 )
 
-// sandboxWorkspace — точка монтирования рабочего каталога внутри контейнера.
+// sandboxWorkspace — точка монтирования рабочего каталога в ручном
+// compose-контейнере (sandbox/compose.yaml, «тот же образ, что и у
+// sandboxCommand»). Эфемерный режим сюда НЕ идёт: он монтирует каталог по его
+// хостовому пути — см. sandboxSpecFor (иначе cd <путь из result["workdir"] и
+// git-worktree внутри контейнера не работают).
 const sandboxWorkspace = "/workspace"
 
 // sandboxTmp — каталог для HOME и всех кэшей (Go/npm/pip) внутри контейнера.
@@ -70,9 +75,13 @@ const sandboxFallbackReason = "песочница недоступна: кома
 
 // sandboxSpec — параметры запуска команды в контейнере.
 type sandboxSpec struct {
-	Image   string
-	Dir     string
-	Mount   string // аргумент --volume: <dir>:/workspace:rw либо :ro
+	Image string
+	Dir   string
+	// Mounts — аргументы --volume «<хост>:<контейнер>:rw|ro». Первый — сам
+	// рабочий каталог по его ХОСТОВОМУ пути, дальше — тома git-worktree
+	// (sandboxGitMounts). Пустого монтирования не бывает: без него команда
+	// стартует в контейнере, где нет ни одного файла проекта.
+	Mounts  []string
 	Workdir string
 	Network string
 	// ReadOnly — read-only корневая ФС контейнера. Рабочий каталог при этом
@@ -261,22 +270,30 @@ func sandboxSpecFor(command, workdir string, cfg sandboxConfig) (sandboxSpec, er
 	spec := sandboxSpec{
 		Image: image,
 		Dir:   dir,
-		// Рабочий каталог монтируется ВСЕГДА. Раньше здесь стоял -w
-		// (working directory) вместо -v (bind mount): контейнер стартовал с
-		// несуществующим workdir и не видел ни одного файла проекта.
-		Mount:    dir + ":" + sandboxWorkspace + sandboxMountMode(cfg.WorkdirReadOnly),
-		Workdir:  sandboxWorkspace,
+		// Рабочий каталог монтируется ВСЕГДА и — это главное — по его
+		// ХОСТОВОМУ пути, а не в /workspace. Раньше здесь стоял -w вместо -v
+		// (контейнер стартовал без файлов проекта), а затем монтаж ушёл в
+		// /workspace: тогда `cd <путь>` из result["workdir"] внутри контейнера
+		// отвечал «can't cd», а git-worktree не находил репозиторий (живой
+		// случай: QAL-01). С хостовым путём контейнер видит проект там же,
+		// где его видят модель и инструменты ReadFiles/Run.
+		Mounts:   []string{dir + ":" + dir + sandboxMountMode(cfg.WorkdirReadOnly)},
+		Workdir:  dir,
 		Network:  cfg.Network,
 		Memory:   cfg.Memory,
 		CPUs:     cfg.CPUs,
 		ReadOnly: cfg.ReadOnly,
-		// Файлы в /workspace создаёт процесс с UID/GID хоста, иначе артефакты
-		// сборки получат чужого владельца и следующий запуск агента (или
-		// обычный rm) упрётся в права. Пользователь по умолчанию образа
-		// (node/ubuntu) хосту не равен, поэтому --user подставляется всегда.
+		// Файлы в смонтированном каталоге создаёт процесс с UID/GID хоста,
+		// иначе артефакты сборки получат чужого владельца и следующий запуск
+		// агента (или обычный rm) упрётся в права. Пользователь по умолчанию
+		// образа (node/ubuntu) хосту не равен, поэтому --user подставляется
+		// всегда.
 		User: sandboxHostUser(),
 		Env:  sandboxEnv(),
 	}
+	// git-worktree задачи: .git внутри него — файл со ссылкой на каталог в
+	// главном клоне, поэтому объекты и refs нужно монтировать отдельно.
+	spec.Mounts = append(spec.Mounts, sandboxGitMounts(dir, cfg.WorkdirReadOnly)...)
 	if spec.Network == "none" {
 		// Без сети go mod download/npm ci не пройдут — это ожидаемо, но
 		// модель должна знать про кэш, иначе она будет перебирать команды.
@@ -304,6 +321,71 @@ func sandboxMountMode(readOnly bool) string {
 	return ":rw"
 }
 
+// sandboxGitMounts — дополнительный том для git-worktree (пусто, если он не
+// нужен).
+//
+// Worktree задачи — не самостоятельный репозиторий: его `.git` это ФАЙЛ
+// `gitdir: <путь>` на каталог в главном клоне, а объекты, refs и config живут
+// в общем каталоге (`commondir`, обычно `../..` от gitdir). Эфемерная
+// песочница монтирует только рабочий каталог, поэтому git внутри контейнера
+// отвечал «not a git repository», а модель уходила в цикл
+// «сделай git status/git init» (живой случай: QAL-01, mytrip). Поэтому в
+// контейнер дополнительно идёт общий каталог git'а — по тому же хостовому
+// пути, что и в `.git`-файле.
+//
+// Скрытость сознательная: главный клон ЦЕЛИКОМ (его рабочее дерево) не
+// монтируется — агенту нужны объекты и refs, а не чужая ветка; а от
+// монтирования родительского каталога (как делает сессионный контейнер)
+// отказались, потому что эфемерный режим зовётся и для произвольных
+// рабочих каталогов, и родитель мог бы оказаться домашним каталогом.
+func sandboxGitMounts(dir string, readOnly bool) []string {
+	raw, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return nil // обычный клон (.git — каталог) либо не-git каталог
+	}
+	gitdir := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "gitdir:"); ok {
+			gitdir = strings.TrimSpace(v)
+			break
+		}
+	}
+	if gitdir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(dir, gitdir)
+	}
+	gitdir = filepath.Clean(gitdir)
+	// worktree: внутри gitdir лежит commondir (относительно gitdir) — общий
+	// каталог со всеми объектами. Без него gitdir и есть репозиторий
+	// (git init --separate-git-dir).
+	common := gitdir
+	if b, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
+		if rel := strings.TrimSpace(string(b)); rel != "" {
+			if !filepath.IsAbs(rel) {
+				rel = filepath.Join(gitdir, rel)
+			}
+			common = filepath.Clean(rel)
+		}
+	}
+	// Уже виден (каталог git'а внутри рабочего каталога) или отсутствует на
+	// хосте: docker создал бы пустой каталог, и git упал бы иначе, но так же
+	// бессмысленно.
+	if common == dir || strings.HasPrefix(common, dir+string(filepath.Separator)) {
+		return nil
+	}
+	if st, err := os.Stat(common); err != nil || !st.IsDir() {
+		return nil
+	}
+	// Та же проверка пути, что и для рабочего каталога: двоеточие/запятая
+	// ломают разбор --volume «src:dst:opts».
+	if strings.ContainsAny(common, ":,") {
+		return nil
+	}
+	return []string{common + ":" + common + sandboxMountMode(readOnly)}
+}
+
 // sandboxEnv — окружение внутри контейнера. Обёртка над sandbox.BaseEnv:
 // оно совпадает с sandbox/Dockerfile и sandbox/compose.yaml (HOME и все кэши
 // в /tmp, чтобы рабочий каталог был единственным местом записи, а
@@ -325,7 +407,10 @@ func dockerArgs(spec sandboxSpec, command string) []string {
 	args = append(args, spec.Extra...)
 	// --volume, а НЕ -w: -w задаёт рабочий каталог ВНУТРИ контейнера, монтаж
 	// хоста делает только --volume. С -w проект не попадал в контейнер вовсе.
-	args = append(args, "--volume", spec.Mount)
+	// Каждый том — отдельная пара --volume: docker так их и принимает.
+	for _, m := range spec.Mounts {
+		args = append(args, "--volume", m)
+	}
 	if spec.ReadOnly {
 		args = append(args, "--read-only")
 	}

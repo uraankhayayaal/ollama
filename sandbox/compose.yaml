@@ -44,8 +44,10 @@ services:
     mem_limit: "${CODEGEN_SANDBOX_MEMORY:-2g}"
     cpus: "${CODEGEN_SANDBOX_CPUS:-2}"
     network_mode: "${CODEGEN_SANDBOX_NETWORK:-default}"
-    # Рабочий каталог проекта: точка монтирования совпадает с /workspace из
-    # sandbox.go, иначе «тот же образ» окажется в другом каталоге.
+    # Рабочий каталог проекта. Точка монтирования — /workspace: compose нужен
+    # для ручного прогона образа человеком, а эфемерный режим (sandbox.go)
+    # монтирует каталог по его хостовому пути, чтобы работали cd и
+    # git-worktree. Разница осознанная и только в точке назначения.
     volumes:
       - "${PROJECT_DIR:-..}:/workspace:rw"
     # HOME и кэши — в tmpfs: файлы не должны попадать ни в образ, ни в хостовую

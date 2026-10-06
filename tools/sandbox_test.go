@@ -78,31 +78,178 @@ func TestSandboxWriteAllowedByDefault(t *testing.T) {
 	}
 }
 
-// Ровно так же, но на уровне аргументов docker: проект смонтирован всегда, а
-// режим монтирования переключается между :rw и :ro.
+// Ровно так же, но на уровне аргументов docker: проект смонтирован всегда,
+// по ХОСТОВОМУ пути (иначе cd <путь из workdir> и git-worktree в контейнере не
+// работают), а режим монтирования переключается между :rw и :ro.
 func TestSandboxMountsWorkdirReadWriteByDefault(t *testing.T) {
 	dir := goProject(t)
 	spec, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default", Memory: "1g", CPUs: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := dir + ":" + sandboxWorkspace + ":rw"
-	if spec.Mount != want {
-		t.Errorf("монтирование рабочего каталога: ожидалось %q, получено %q", want, spec.Mount)
+	want := dir + ":" + dir + ":rw"
+	if len(spec.Mounts) != 1 || spec.Mounts[0] != want {
+		t.Errorf("монтирование рабочего каталога: ожидался ровно [%q], получено %q", want, spec.Mounts)
 	}
-	if strings.Contains(strings.Join(dockerArgs(spec, "go test ./..."), " "), "-w "+dir) {
-		t.Error("docker run не должен получать -w <dir>:/workspace:rw: -w задаёт workdir, а не монтаж, и проект в контейнер не попадает")
+	// workdir контейнера обязан совпадать с путём, который модели сообщает
+	// result["workdir"]: иначе cd из полученного пути отвечает «can't cd».
+	if spec.Workdir != dir {
+		t.Errorf("workdir контейнера: ожидался %q, получен %q", dir, spec.Workdir)
 	}
-	if !strings.Contains(strings.Join(dockerArgs(spec, "go test ./..."), " "), "--volume "+want) {
+	joined := strings.Join(dockerArgs(spec, "go test ./..."), " ")
+	if strings.Contains(joined, "-w "+dir+":"+dir) {
+		t.Error("docker run не должен получать -w с аргументом монтажа: -w задаёт workdir, а не том")
+	}
+	if !strings.Contains(joined, "--volume "+want) {
 		t.Errorf("ожидался --volume %q", want)
+	}
+	if !strings.Contains(joined, "--workdir "+dir) {
+		t.Errorf("ожидался --workdir %q", dir)
 	}
 
 	ro, err := sandboxSpecFor("go test ./...", dir, sandboxConfig{Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default", Memory: "1g", CPUs: "1", WorkdirReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wantRO := dir + ":" + sandboxWorkspace + ":ro"; ro.Mount != wantRO {
-		t.Errorf("при запрете записи ожидалось %q, получено %q", wantRO, ro.Mount)
+	if wantRO := dir + ":" + dir + ":ro"; len(ro.Mounts) != 1 || ro.Mounts[0] != wantRO {
+		t.Errorf("при запрете записи ожидался [%q], получено %q", wantRO, ro.Mounts)
+	}
+}
+
+// worktreeLayout раскладывает «главный клон + worktree задачи» без git:
+// sandboxGitMounts читает только файлы .git и commondir, поэтому настоящий
+// репозиторий не нужен — тест остаётся hermetic (без git, без Docker).
+//
+// Возвращает каталог worktree (рабочий каталог задачи) и общий каталог git'а
+// главного клона.
+func worktreeLayout(t *testing.T, mode string) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "proj")
+	common := filepath.Join(mainDir, ".git")
+	gitdir := filepath.Join(common, "worktrees", "wt1")
+	if err := os.MkdirAll(gitdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(root, ".wt-proj-QAL-01")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// gitdir в файле .git — как пишет git worktree add: абсолютный путь.
+	target := gitdir
+	if mode == "relative" {
+		rel, err := filepath.Rel(wt, gitdir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target = rel
+	}
+	gitfile := "gitdir: " + target + "\n"
+	if mode == "sep-inside" {
+		// git init --separate-git-dir, указывающий внутрь самого каталога:
+		// монтировать отдельно нечего.
+		target = filepath.Join(wt, "mygit")
+		gitfile = "gitdir: " + target + "\n"
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mode == "missing" {
+		gitfile = "gitdir: " + filepath.Join(root, "gone", ".git") + "\n"
+	}
+	if mode == "colon" {
+		// Путь с двоеточием не переносится в --volume: каталог существует
+		// (иначе сработала бы более ранняя проверка на существование), но том
+		// не добавляется.
+		target = filepath.Join(root, "main:clone", ".git")
+		gitfile = "gitdir: " + target + "\n"
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte(gitfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// commondir — только у worktree; у отдельного gitdir его нет, и тогда
+	// gitdir сам является репозиторием.
+	if mode != "sep-inside" && mode != "missing" && mode != "colon" {
+		if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return wt, common
+}
+
+// Worktree задачи — это чужой каталог git'а: .git внутри него файл со ссылкой,
+// а объекты и refs живут в главном клоне. Песочница монтирует и то, и другое,
+// иначе git внутри контейнера отвечает «not a git repository» (живой случай:
+// QAL-01). Обычный клон и битая ссылка лишних томов не получают: docker
+// создал бы по пути пустой каталог.
+func TestSandboxWorktreeMountsGitCommonDir(t *testing.T) {
+	specFor := func(t *testing.T, dir string, readOnly bool) sandboxSpec {
+		t.Helper()
+		spec, err := sandboxSpecFor("git status", dir, sandboxConfig{
+			Mode: SandboxModeContainer, Image: "golang:1.24", Network: "default",
+			Memory: "1g", CPUs: "1", WorkdirReadOnly: readOnly,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return spec
+	}
+
+	t.Run("worktree", func(t *testing.T) {
+		wt, common := worktreeLayout(t, "abs")
+		spec := specFor(t, wt, false)
+		want := []string{wt + ":" + wt + ":rw", common + ":" + common + ":rw"}
+		if strings.Join(spec.Mounts, "\n") != strings.Join(want, "\n") {
+			t.Errorf("ожидались тома %q, получено %q", want, spec.Mounts)
+		}
+		joined := strings.Join(dockerArgs(spec, "git status"), " ")
+		for _, m := range want {
+			if !strings.Contains(joined, "--volume "+m) {
+				t.Errorf("docker run без --volume %q: %s", m, joined)
+			}
+		}
+	})
+
+	t.Run("worktree relative gitdir", func(t *testing.T) {
+		wt, common := worktreeLayout(t, "relative")
+		spec := specFor(t, wt, false)
+		if len(spec.Mounts) != 2 || spec.Mounts[1] != common+":"+common+":rw" {
+			t.Errorf("относительный gitdir должен разрешаться к %q, получено %q", common, spec.Mounts)
+		}
+	})
+
+	t.Run("read-only", func(t *testing.T) {
+		wt, common := worktreeLayout(t, "abs")
+		spec := specFor(t, wt, true)
+		want := wt + ":" + wt + ":ro"
+		if len(spec.Mounts) != 2 || spec.Mounts[0] != want || spec.Mounts[1] != common+":"+common+":ro" {
+			t.Errorf("запрет записи должен покрыть оба тома, получено %q", spec.Mounts)
+		}
+	})
+
+	t.Run("обычный клон", func(t *testing.T) {
+		dir := goProject(t)
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		spec := specFor(t, dir, false)
+		want := dir + ":" + dir + ":rw"
+		if len(spec.Mounts) != 1 || spec.Mounts[0] != want {
+			t.Errorf("у обычного клона .git — каталог, лишний том не нужен: %q", spec.Mounts)
+		}
+	})
+
+	for _, mode := range []string{"sep-inside", "missing", "colon"} {
+		t.Run("без лишнего тома: "+mode, func(t *testing.T) {
+			wt, _ := worktreeLayout(t, mode)
+			spec := specFor(t, wt, false)
+			if len(spec.Mounts) != 1 {
+				t.Errorf("ожидался только монтаж рабочего каталога, получено %q", spec.Mounts)
+			}
+		})
 	}
 }
 
@@ -234,8 +381,8 @@ func TestDockerArgsContainIsolationFlags(t *testing.T) {
 		"--cpus 2",       // лимит CPU
 		"--cap-drop ALL", // без привилегированных возможностей
 		"--security-opt no-new-privileges",
-		"--volume " + spec.Dir + ":/workspace:rw", // проект ВИДЕН контейнеру
-		"--workdir /workspace",
+		"--volume " + spec.Dir + ":" + spec.Dir + ":rw", // проект ВИДЕН контейнеру
+		"--workdir " + spec.Dir,                         // и по тому же пути
 		"golang:1.24",
 		"sh -c go test ./...",
 	} {
@@ -306,7 +453,7 @@ func TestDockerArgsReadOnlyMode(t *testing.T) {
 		t.Errorf("ожидался --read-only: %s", args)
 	}
 	// Проект остаётся доступен НА ЗАПИСЬ: это файлы, которые агент правит.
-	if !strings.Contains(args, "--volume "+dir+":"+sandboxWorkspace+":rw") {
+	if !strings.Contains(args, "--volume "+dir+":"+dir+":rw") {
 		t.Errorf("read-only корня не должен отнимать запись в рабочий каталог: %s", args)
 	}
 	if !strings.Contains(args, "--tmpfs "+sandboxTmp+":exec") {
@@ -325,7 +472,7 @@ func TestDockerArgsReadOnlyMode(t *testing.T) {
 	if strings.Contains(roArgs, ":rw") {
 		t.Errorf("CODEGEN_SANDBOX_ALLOW_WRITE=false обязан дать монтаж :ro: %s", roArgs)
 	}
-	if !strings.Contains(roArgs, "--volume "+dir+":"+sandboxWorkspace+":ro") {
+	if !strings.Contains(roArgs, "--volume "+dir+":"+dir+":ro") {
 		t.Errorf("проект должен остаться видимым и на чтение: %s", roArgs)
 	}
 }
@@ -383,13 +530,17 @@ func TestSandboxRealContainer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), []byte("sandbox-ok\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Изоляция рабочего каталога: файл из /workspace должен быть виден.
-	res, err := runCommand("cat marker.txt", dir, "")
+	// Изоляция рабочего каталога: файл из рабочего каталога должен быть виден
+	// (и по хостовому пути — модель делает cd именно по нему).
+	res, err := runCommand("cat marker.txt && pwd", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res["status"] != "success" || !strings.Contains(res["stdout"], "sandbox-ok") {
 		t.Errorf("песочница не видит рабочий каталог: %+v", res)
+	}
+	if !strings.Contains(res["stdout"], dir) {
+		t.Errorf("pwd контейнера должен совпадать с хостовым путём %q: %+v", dir, res)
 	}
 	// Изоляция сети и прав: пользователь контейнера — не root.
 	res, err = runCommand("id -u", dir, "")
@@ -487,6 +638,77 @@ func TestSandboxRealContainerWriteModes(t *testing.T) {
 	}
 	if res["status"] != "success" || !strings.Contains(res["stdout"], "root-fs-writable-enough") {
 		t.Errorf("read-only корень не должен ломать запись в рабочий каталог: %+v", res)
+	}
+}
+
+// Живая проверка worktree: git в контейнере обязан видеть репозиторий и
+// коммитить в него. Регрессия выглядит как «not a git repository» на каждой
+// команде агента (живой случай: QAL-01, mytrip) — hermetic-тесты выше
+// проверяют только форму томов, а тут важна реальная связка.
+func TestSandboxRealContainerWorktree(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("Docker недоступен — hermetic-проверки покрывают песочницу")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git недоступен — hermetic-проверки покрывают песочницу")
+	}
+	image := firstEnv("CODEGEN_SANDBOX_IMAGE", "CODEGEN_SANDBOX_TEST_IMAGE")
+	if image == "" {
+		image = "ai-sandbox:latest"
+	}
+	if err := exec.Command("docker", "image", "inspect", image).Run(); err != nil {
+		t.Skipf("образ %s не собран локально (соберите его через compose.yaml песочницы)", image)
+	}
+	t.Setenv("CODEGEN_SANDBOX", "container")
+	t.Setenv("CODEGEN_SANDBOX_IMAGE", image)
+	t.Setenv("CODEGEN_RUN_TIMEOUT", "60s")
+
+	gitArgs := func(dir string, args ...string) string {
+		t.Helper()
+		full := append([]string{"-C", dir, "-c", "user.email=sandbox@test", "-c", "user.name=sandbox"}, args...)
+		out, err := exec.Command("git", full...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v на хосте: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "proj")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitArgs(mainDir, "init", "-q", "-b", "main")
+	gitArgs(mainDir, "commit", "-q", "--allow-empty", "-m", "base")
+	wt := filepath.Join(root, ".wt-proj-QAL-01")
+	gitArgs(mainDir, "worktree", "add", "-q", wt, "-b", "feature-x")
+
+	// git видит worktree и работает по хостовому пути (путь берётся из .git).
+	res, err := runCommand("git status --short --branch && git rev-parse --show-toplevel", wt, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["status"] != "success" || !strings.Contains(res["stdout"], "feature-x") {
+		t.Fatalf("git внутри песочницы не видит worktree: %+v", res)
+	}
+	if !strings.Contains(res["stdout"], wt) {
+		t.Errorf("git должен работать по хостовому пути %q: %+v", wt, res)
+	}
+
+	// Коммит из контейнера — настоящий: объекты лежат в главном клоне и видны
+	// хосту (иначе приёмка не увидит артефактов работы агента).
+	res, err = runCommand("echo in-container > c.txt && git add c.txt && git commit -q -m from-container", wt, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["status"] != "success" {
+		t.Fatalf("коммит из песочницы должен работать: %+v", res)
+	}
+	if got := gitArgs(wt, "log", "-1", "--pretty=%s"); got != "from-container" {
+		t.Errorf("коммит из контейнера не виден на хосте: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "c.txt")); err != nil {
+		t.Errorf("файл из коммита не появился в worktree на хосте: %v", err)
 	}
 }
 

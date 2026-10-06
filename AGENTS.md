@@ -96,6 +96,42 @@ LSP/структурированных инструментах они дубл�
 `npm test -- --silent`), git-контекст через `Run`, точечный `grep` через `Run`
 только при `status skipped` у LSP/`CodeSearch`.
 
+Состояние последней сессии (эфемерная песочница чинит `cd`/git в worktree,
+жалоба QAL-01): при `CODEGEN_SANDBOX=container` команда `cd <хостовый путь
+worktree>` падала с `can't cd`, а `git status` — `fatal: not a git repository:
+…/temp/mytrip/.git/worktrees/…`, и агент уходил в петлю «сделай git init».
+Причина: контейнер монтировал проект только в `/workspace` (хостового пути не
+было), а `.git` worktree — это файл `gitdir:` на главный клон, которого в
+контейнере тоже не было. `tools/sandbox.go`: `sandboxSpec.Mount` →
+`Mounts []string`, рабочий каталог монтируется по ХОСТОВОМУ пути и workdir =
+dir (теперь `result["workdir"]` совпадает с путём контейнера), плюс
+`sandboxGitMounts(dir, readOnly)` — если `.git` — файл, отдельным томом идёт
+общий каталог git'а (через файл `commondir`, обычно `../..` от gitdir) по тому
+же пути; пропуски — gitdir уже внутри каталога, не существует на хосте (docker
+создал бы пустой каталог) или путь с `:`/`,`. Родительский каталог в отличие от
+сессионного контейнера НЕ монтируется: эфемерный режим зовётся и для
+произвольных рабочих каталогов, а родитель мог бы оказаться домашним каталогом.
+`sandbox/compose.yaml` и константа `sandboxWorkspace` остались на `/workspace`
+(ручная точка входа для человека, не путь агента). Тесты hermetic:
+`TestSandboxWorktreeMountsGitCommonDir` (раскладка «клон + worktree» без git:
+абсолютный/относительный gitdir, `:ro`, обычный клон, `sep-inside`/`missing`/
+`colon` без лишнего тома) + обновлены `TestSandboxMountsWorkdirReadWriteByDefault`,
+`TestDockerArgsContainIsolationFlags`, `TestDockerArgsReadOnlyMode`; живой
+`TestSandboxRealContainerWorktree` (git status + коммит из контейнера виден на
+хосте; `pwd` = хостовому пути в `TestSandboxRealContainer`). Верификация
+зелёная: `go build`/`go vet`/`go test` по перечню выше, `-race` на новых
+тестах, плюс живой прогон на реальном `temp/.wt-task-mytrip-QAL-01`
+(`ai-sandbox:latest`, оба тома): `pwd` = хостовый путь, `git status` →
+`## ai/task/QAL-01`. Документация: раздел «Монтирование» в
+`docs/20-features/sandbox.md` (таблица томов + почему хостовый путь и отдельный
+git-том), запись «`cd: can't cd to …` / `fatal: not a git repository`» в
+`docs/40-operations/troubleshooting.md`, обновлены line-ссылки на
+`tools/sandbox.go` и `sandbox/destructive.go`. ОТЛОЖЕНО (пункты б/в из
+предыдущего разбора): зависимость задач от существования `internal/service`
+(QAL-01 стартовала раньше, чем модуль появился) и включение
+`RequiredToolFirstRound` для QA — write-инструменты у QA уже есть
+(`agents/qaengineer/agent.go:20-23`), поэтому чинить надо сам тайминг задачи.
+
 Состояние последней сессии (петля FEL-02 на живом прогоне, отпечаток состояния
 по проверке): агент 20+ раундов гонял одну и ту же падающую проверку, меняя
 ТОЛЬКО фильтр вывода (`npm test src/pages/Login.test.tsx 2>&1 | grep -A5` →
