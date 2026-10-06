@@ -27,9 +27,16 @@
 Рабочая сборка (обходит известный блокер в `temp/`):
 
 ```
-go build . ./agents/... ./tools/ ./board/
-go vet . ./agents/... ./tools/ ./board/
-go test . ./agents/... ./tools/ ./board/
+go build . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+go vet . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+```
+
+Живая проверка сессионной песочницы (нужен Docker; вне рабочего набора,
+по образцу `E2E_LIVE`):
+
+```
+SANDBOX_LIVE=1 go test ./sandbox/ -run TestLiveSession -v
 ```
 
 Известные нюансы:

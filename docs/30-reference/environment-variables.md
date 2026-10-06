@@ -266,10 +266,11 @@ Go его коммитят осознанно.
 
 | Переменная | Дефолт | Смысл |
 |---|---|---|
-| `CODEGEN_SANDBOX` | пусто (хост) | `container` / `auto` / пусто |
+| `CODEGEN_SANDBOX` | пусто (хост) | `session` / `container` / `auto` / пусто; `session` без контейнера → строгая ошибка |
 | `CODEGEN_SANDBOX_IMAGE` | по стеку | Образ |
 | `CODEGEN_IMAGE` | — | Legacy-алиас образа |
-| `CODEGEN_SANDBOX_NETWORK` | `default` | `default` / `none` / `bridge` |
+| `CODEGEN_SANDBOX_NETWORK` | `default` (`none`/`whitelist` у session) | `default` / `none` / `bridge` / `whitelist`; явный флаг отменяет изоляцию сессии |
+| `CODEGEN_SANDBOX_ALLOW_DOMAINS` | — | Белый список исходящего (`,`/`;`): `example.com`, `*.example.com`; задан → сеть `whitelist`; на Docker Desktop прокси-часть живёт в gateway-контейнере (сборка из исходников, нужен go toolchain) |
 | `CODEGEN_SANDBOX_MEMORY` | `2g` | `--memory` |
 | `CODEGEN_SANDBOX_CPUS` | `2` | `--cpus` |
 | `CODEGEN_SANDBOX_RO` | `false` | Read-only корень контейнера |

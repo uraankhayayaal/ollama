@@ -132,7 +132,7 @@ func (ops *FileOps) LspCheck(args map[string]any) ([]byte, error) {
 		if cerr != nil {
 			return nil, ck, "", false, cerr.Error()
 		}
-		res, runErr := runCommand(cmd, proj)
+		res, runErr := runCommand(cmd, proj, "")
 		if runErr != nil {
 			return nil, ck, "", true, "команда не запустилась: " + runErr.Error()
 		}

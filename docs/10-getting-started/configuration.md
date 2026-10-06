@@ -103,8 +103,9 @@ AI_WEB_PASSWORD=...          # пусто — вход без пароля
 ### Безопасность выполнения
 
 ```bash
-CODEGEN_SANDBOX=container    # container | auto | "" (хост)
-CODEGEN_SANDBOX_NETWORK=none # без сети
+CODEGEN_SANDBOX=container    # container | session | auto | "" (хост)
+CODEGEN_SANDBOX_NETWORK=none # без сети (для session — по умолчанию)
+CODEGEN_SANDBOX_ALLOW_DOMAINS=proxy.golang.org,*.npmjs.org  # белый список (session)
 CODEGEN_SANDBOX_RO=1         # read-only корень контейнера
 ```
 

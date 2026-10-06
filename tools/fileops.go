@@ -3,6 +3,7 @@ package tools
 import (
 	"ai/forges"
 	"ai/logging"
+	"ai/sandbox"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -1214,14 +1215,112 @@ func runTimeout() time.Duration {
 // агент запустил дев-сервер), процесс и его группа убиваются, а в результате
 // появляется понятное сообщение о таймауте — шаг продолжается, а не виснет.
 //
-// Исполнитель выбирает песочница (Ф-4): контейнер с рабочим каталогом,
-// non-root, без host-сети по умолчанию, либо хост при CODEGEN_SANDBOX=local или
-// если Docker недоступен — тогда в результате появляется sandbox-метка, чтобы
-// «изоляция» не осталась только в документации. Контракт инструмента Run не
-// меняется: {command, workdir, stdout, stderr, status, exit_error} + новые
-// необязательные поля sandbox/hint.
-func runCommand(command, workdir string) (map[string]string, error) {
-	return runCommandSandbox(command, workdir, loadSandboxConfig())
+// Исполнитель выбирается в три шага (Ф-4 + Этап 1):
+//  1. активный сессионный контейнер (sandbox.Lookup): проектная сессия
+//     поднимается сервером до старта runner'а, и тогда команда идёт в него;
+//  2. при CODEGEN_SANDBOX=session без активной сессии — строгая ошибка, НЕ
+//     тихий запуск на хосте: изоляция либо есть, либо об этом сказано прямо;
+//  3. иначе прежние режимы: ephemeral docker run (container) или хост.
+//
+// project — имя проекта (ops.ProjectName), когда оно известно: точное имя
+// важнее совпадения по пути. Пустое имя (ЛСП-чекер) работает как раньше.
+func runCommand(command, workdir, project string) (map[string]string, error) {
+	if ws := sandbox.Lookup(project, workdir); ws != nil {
+		return runCommandWorkspace(command, workdir, ws)
+	}
+	cfg := loadSandboxConfig()
+	if cfg.Mode == SandboxModeSession {
+		// Сессионный режим объявлен, но контейнера нет: сервер не поднял
+		// сессию (старый процесс, ошибка старта). Молчаливый хост здесь
+		// означал бы «песочница есть» там, где её нет.
+		return map[string]string{
+			"command":    command,
+			"workdir":    workdir,
+			"exit_error": "песочница не активна",
+			"status":     "error",
+			"sandbox":    string(SandboxModeSession),
+			"message": "CODEGEN_SANDBOX=session задан, но сессионный контейнер проекта не активен: " +
+				"команда НЕ выполнена (без тихого запуска на хосте). " +
+				"Перезапусти сессию проекта или выполни задачу в новой сессии сервера.",
+		}, nil
+	}
+	return runCommandSandbox(command, workdir, cfg)
+}
+
+// runCommandWorkspace — выполнение команды через активный сессионный
+// контейнер (sandbox.Workspace). Контракт результата неотличим от
+// runCommandSandbox: те же поля, санитайзинг, подсказки и обрезка вывода.
+func runCommandWorkspace(command, workdir string, ws sandbox.Workspace) (map[string]string, error) {
+	// Отбраковка разрушительных команд ДО запуска — общий гейт со всеми
+	// путями (в контейнере rm -rf уничтожит файлы проекта на хосте: том
+	// смонтирован без копии).
+	if reason, unsafe := destructiveCommandReason(command); unsafe {
+		return map[string]string{
+			"command":    command,
+			"workdir":    workdir,
+			"exit_error": "заблокировано политикой безопасности",
+			"status":     "error",
+			"message":    reason,
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout())
+	defer cancel()
+
+	res, err := ws.Run(ctx, workdir, command)
+	if err != nil {
+		// Инфраструктурный сбой (нет демона, каталог вне монтирования) —
+		// как и падение cmd.Start в host-пути: ошибка вызывающего, а не
+		// результат команды.
+		return nil, err
+	}
+
+	result := map[string]string{
+		"command":    command,
+		"workdir":    workdir,
+		"exit_error": "",
+		"stdout":     SanitizeToolOutput(res.Stdout),
+		"stderr":     SanitizeToolOutput(res.Stderr),
+		// Явно сообщаем модели, где выполнялась команда.
+		"sandbox": string(SandboxModeSession),
+	}
+	if nws, ok := ws.(interface{ SandboxNetwork() string }); ok && nws.SandboxNetwork() == "none" {
+		result["hint"] = sandboxNetworkHelp()
+	}
+	finishRunResult(result, command, res.TimedOut, res.ExitErr)
+	return result, nil
+}
+
+// finishRunResult — общий хвост упаковки результата: статус, текст ошибки,
+// подсказки (недостающий тулчейн) и обрезка вывода до runOutputLimit.
+// timedOut=true приоритетнее runErr: таймаут — это своя история для модели
+// («команда виснет», а не «упала»), и ExitErr там — ctx.Err().
+func finishRunResult(result map[string]string, command string, timedOut bool, runErr error) {
+	if timedOut {
+		result["exit_error"] = "signal: killed (timeout)"
+		result["status"] = "error"
+		result["message"] = fmt.Sprintf("команда не завершилась за %s и была остановлена (timeout)", runTimeout())
+	} else if runErr != nil {
+		result["exit_error"] = runErr.Error()
+		result["status"] = "error"
+		if h := missingToolHint(command, result["stdout"]+"\n"+result["stderr"], runErr); h != "" {
+			result["hint"] = h
+		}
+	} else {
+		result["status"] = "success"
+	}
+	// Обрезка потоков вывода до лимита (см. runOutputLimit): маркер в тексте
+	// и флаг truncated — модель понимает, что хвост отброшен. Статус и код
+	// выхода обрезка не трогает: гейты остаются честными.
+	limit := runOutputLimit()
+	if out, trunc := truncateRunOutput(result["stdout"], limit); trunc {
+		result["stdout"] = out
+		result["stdout_truncated"] = "true"
+	}
+	if out, trunc := truncateRunOutput(result["stderr"], limit); trunc {
+		result["stderr"] = out
+		result["stderr_truncated"] = "true"
+	}
 }
 
 // runCommandSandbox — реализация запуска с явной конфигурацией песочницы.
@@ -1345,32 +1444,7 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 	} else if sb.Network == "none" {
 		result["hint"] = sandboxNetworkHelp()
 	}
-	if timedOut {
-		result["exit_error"] = "signal: killed (timeout)"
-		result["status"] = "error"
-		result["message"] = fmt.Sprintf("команда не завершилась за %s и была остановлена (timeout)", runTimeout())
-	} else if runErr != nil {
-		result["exit_error"] = runErr.Error()
-		result["status"] = "error"
-		if h := missingToolHint(command, SanitizeToolOutput(stdout.String())+"\n"+SanitizeToolOutput(stderr.String()), runErr); h != "" {
-			result["hint"] = h
-		}
-	} else {
-		result["status"] = "success"
-	}
-
-	// Обрезка потоков вывода до лимита (см. runOutputLimit): маркер в тексте
-	// и флаг truncated — модель понимает, что хвост отброшен. Статус и код
-	// выхода обрезка не трогает: гейты остаются честными.
-	limit := runOutputLimit()
-	if out, trunc := truncateRunOutput(result["stdout"], limit); trunc {
-		result["stdout"] = out
-		result["stdout_truncated"] = "true"
-	}
-	if out, trunc := truncateRunOutput(result["stderr"], limit); trunc {
-		result["stderr"] = out
-		result["stderr_truncated"] = "true"
-	}
+	finishRunResult(result, command, timedOut, runErr)
 	return result, nil
 }
 
@@ -1386,7 +1460,10 @@ func missingToolHint(command, output string, runErr error) string {
 		strings.Contains(lower, "no module named") ||
 		strings.Contains(lower, "not recognized as an internal or external command")
 	if !missing {
-		if ee, ok := runErr.(*exec.ExitError); ok && ee.ExitCode() == 127 {
+		// Любой носитель кода выхода: *exec.ExitError (хост/эфемерный
+		// контейнер) и sandbox.exitStatusError (сессионный контейнер) —
+		// 127 значит «команда не найдена» в обоих.
+		if ec, ok := runErr.(interface{ ExitCode() int }); ok && ec.ExitCode() == 127 {
 			missing = true
 		}
 	}
@@ -1430,7 +1507,7 @@ func (ops *FileOps) Run(args map[string]any) ([]byte, error) {
 		return resultJSON, nil
 	}
 
-	result, err := runCommand(params.Command, ops.OutputDir)
+	result, err := runCommand(params.Command, ops.OutputDir, ops.ProjectName())
 	if err != nil {
 		return nil, err
 	}

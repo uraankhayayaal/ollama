@@ -7,6 +7,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"ai/sandbox"
 )
 
 // runCommand запускает команду через sh -c в указанной директории и собирает
@@ -16,6 +18,11 @@ import (
 // Ненулевой код выхода НЕ превращается в ошибку: он отдаётся через exitCode,
 // чтобы приёмщик мог отличать «процесс упал» от «процесс не стартовал».
 //
+// Если каталог покрыт активной сессионной песочницей (Этап 1), команда идёт
+// в контейнер сессии; имя проекта приёмщик не знает, поэтому матчинг по пути
+// (пустое имя в Lookup = наилучшее покрытие). Нет сессии — прежний хостовый
+// путь: приёмка не должна падать из-за отсутствия контейнера.
+//
 // Команда исполняется в собственной группе процессов (Setpgid), а по таймауту
 // завершается ВСЯ группа: многие запуски порождают дочерние процессы
 // (например «go run .» — скомпилированный бинарь), которые наследуют каналы
@@ -24,6 +31,23 @@ import (
 func runCommand(dir, command string, timeout time.Duration) (output string, exitCode int, timedOut bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	// Сессионный контейнер — приоритетный исполнитель (см. шапку).
+	if ws := sandbox.Lookup("", dir); ws != nil {
+		res, runErr := ws.Run(ctx, dir, command)
+		if runErr != nil {
+			return res.Stdout, -1, false, runErr
+		}
+		if res.TimedOut {
+			// Таймаут контейнера может сработать чуть раньше клиентского
+			// дедлайна — ошибка таймаута обязана быть непустой в обоих случаях.
+			if ctx.Err() != nil {
+				return res.Stdout, -1, true, ctx.Err()
+			}
+			return res.Stdout, -1, true, context.DeadlineExceeded
+		}
+		return res.Stdout + res.Stderr, res.ExitCode, false, res.ExitErr
+	}
 
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir

@@ -15,7 +15,7 @@ func TestRunCommandTimeout(t *testing.T) {
 	t.Setenv("CODEGEN_RUN_TIMEOUT", "300ms")
 
 	start := time.Now()
-	out, err := runCommand("sleep 5", t.TempDir())
+	out, err := runCommand("sleep 5", t.TempDir(), "")
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -38,7 +38,7 @@ func TestRunCommandTimeout(t *testing.T) {
 // TestRunCommandSuccess — быстрая команда завершается успешно и без артефактов
 // таймаута (сообщения timeout быть не должно).
 func TestRunCommandSuccess(t *testing.T) {
-	out, err := runCommand("echo hello", t.TempDir())
+	out, err := runCommand("echo hello", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestLongRunningHintBlocked(t *testing.T) {
 // в результате появляется подсказка выполнять проверки в окружении проекта
 // (контейнер), иначе агент тратит раунды на which/find/pip install.
 func TestRunCommandMissingToolHint(t *testing.T) {
-	out, err := runCommand("definitely-not-installed-xyz build", t.TempDir())
+	out, err := runCommand("definitely-not-installed-xyz build", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestRunCommandMissingToolHint(t *testing.T) {
 	}
 
 	// Успешная команда подсказки не получает.
-	ok, err := runCommand("echo hi", t.TempDir())
+	ok, err := runCommand("echo hi", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestRunCommandOutputTruncated(t *testing.T) {
 // TestRunCommandShortOutputUntouched — короткий вывод не обрезается и флага
 // truncated не получает.
 func TestRunCommandShortOutputUntouched(t *testing.T) {
-	res, err := runCommand("echo hi", t.TempDir())
+	res, err := runCommand("echo hi", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}

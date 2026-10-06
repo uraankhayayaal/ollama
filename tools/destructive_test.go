@@ -95,7 +95,7 @@ func TestRunBlocksDestructiveBeforeExec(t *testing.T) {
 	// Если команда выполнилась бы, остался бы файл-след.
 	marker := dir + "/pwned.txt"
 	start := time.Now()
-	res, err := runCommand("rm -rf / && touch "+marker, dir)
+	res, err := runCommand("rm -rf / && touch "+marker, dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}

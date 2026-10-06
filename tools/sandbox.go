@@ -39,8 +39,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
+
+	"ai/sandbox"
 )
 
 // sandboxWorkspace — точка монтирования рабочего каталога внутри контейнера.
@@ -50,13 +51,14 @@ const sandboxWorkspace = "/workspace"
 // Именно tmpfs: он существует в ЛЮБОМ образе (в том числе в стоковых
 // golang:1.24/node:22/python:3.12), не переживает конец запуска и не оставляет
 // в проекте мусор вида ~/.npmrc, который иначе попал бы в git diff.
-const sandboxTmp = "/tmp"
+// Источник истины — sandbox.Tmp (общий с сессионным контейнером).
+const sandboxTmp = sandbox.Tmp
 
 // defaultSandboxImage — dev-образ песочницы по умолчанию. Собирается из
 // sandbox/Dockerfile (docker compose -f sandbox/compose.yaml build) и содержит
 // тулчейн для монорепо. Для проекта одного известного стека дешевле стоковый
 // образ — его выбирает sandboxImageFor.
-const defaultSandboxImage = "ai-sandbox:latest"
+const defaultSandboxImage = sandbox.DefaultImage
 
 // sandboxFallbackReason — результат без container/auto, когда Docker
 // недоступен: агент должен знать, что команда шла на хосте, иначе «изоляция
@@ -81,16 +83,25 @@ type sandboxSpec struct {
 	Env      map[string]string
 }
 
-// SandboxMode — выбранный исполнитель команд: хост или контейнер.
-type SandboxMode string
+// SandboxMode — выбранный исполнитель команд: хост, эфемерный контейнер или
+// сессионный контейнер (алиасы sandbox.Mode — один тип на весь пакет).
+type SandboxMode = sandbox.Mode
 
 const (
-	SandboxModeLocal     SandboxMode = "local"
-	SandboxModeContainer SandboxMode = "container"
+	SandboxModeLocal     = sandbox.ModeLocal
+	SandboxModeContainer = sandbox.ModeContainer
+	// SandboxModeSession — контейнер на сессию оркестрации (Этап 1): команды
+	// идут через активный sandbox.Workspace, а не через docker run на команду.
+	SandboxModeSession = sandbox.ModeSession
+	// SandboxModeUnset — режим не определён: значит, определение само упало
+	// и звать исполнитель рано.
+	SandboxModeUnset = sandbox.ModeUnset
 )
 
 // sandboxConfig — разобранная конфигурация песочницы (тесты подменяют поля
 // напрямую, поэтому здесь всё в одном месте и без скрытых глобалок).
+// Алиас sandbox.Config: парсер один (sandbox.LoadConfig), эфемерный путь и
+// сервер читают одни и те же поля.
 //
 // Ноль-значения безопасны: конфигурация без флагов (тест, ручной вызов) даёт
 // работающую песочницу — проект смонтирован на запись, корень контейнера
@@ -98,21 +109,7 @@ const (
 // конфигурация даёт контейнер, в котором агент не видит ни одного файла
 // проекта, и это выглядит как «песочница сломалась», а не как «нечего было
 // запускать».
-type sandboxConfig struct {
-	Mode     SandboxMode
-	Image    string
-	Network  string
-	Memory   string
-	CPUs     string
-	ReadOnly bool // read-only корневая ФС контейнера (CODEGEN_SANDBOX_RO)
-	// WorkdirReadOnly — рабочий каталог монтируется только на чтение
-	// (CODEGEN_SANDBOX_ALLOW_WRITE=false).
-	WorkdirReadOnly bool
-	// LocalCommand — исполнитель на хосте. Продакшн всегда nil (тогда
-	// exec.Command), в тестах подменяется заглушкой: hermetic-тесты не должны
-	// дёргать shell.
-	LocalCommand func(command, workdir string) (*exec.Cmd, error)
-}
+type sandboxConfig = sandbox.Config
 
 // loadSandboxConfig читает CODEGEN_SANDBOX* и определяет исполнитель.
 //
@@ -123,77 +120,24 @@ type sandboxConfig struct {
 // чекера нет. Молчаливый перенос ВСЕГО исполнения (сборка, тесты, LSP) в
 // контейнер — поведенческое изменение, ломающее проекты по неочевидной причине
 // и бьющее по тем, кто Docker не просил. Поэтому песочница включается явно
-// (CODEGEN_SANDBOX=container/auto), а пустое значение означает прежнее поведение.
+// (CODEGEN_SANDBOX=container/session/auto), а пустое значение означает прежнее
+// поведение.
 //
-// auto отличается от container тем, что при недоступном Docker не падает, а
-// возвращается на хост с явной пометкой sandbox-полями в результате.
+// Разбор общий (sandbox.LoadConfig). Отличие этого гейта — ветка auto:
+// здесь она определяется по CLI-бинарю (dockerAvailable, читает
+// CODEGEN_SANDBOX_DOCKER и PATH), а не по Engine API: прежнее поведение и
+// TestSandboxDisabledByDefault завязаны на «бинаря docker нет → хост».
 func loadSandboxConfig() sandboxConfig {
-	cfg := sandboxConfig{Mode: SandboxModeLocal}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX"))) {
-	case "1", "on", "true", "yes", "container", "docker":
-		cfg.Mode = SandboxModeContainer
-	case "auto":
+	cfg := sandbox.LoadConfig()
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX")), "auto") {
 		if dockerAvailable() {
 			cfg.Mode = SandboxModeContainer
 		} else {
 			cfg.Mode = SandboxModeLocal
 		}
-	case "", "0", "off", "false", "no", "local", "host":
-		cfg.Mode = SandboxModeLocal
-	default:
-		// Неизвестное значение — не угадываем: хост с честной пометкой.
-		cfg.Mode = SandboxModeLocal
-	}
-	cfg.Image = firstEnv("CODEGEN_SANDBOX_IMAGE", "CODEGEN_IMAGE")
-	// Образ по умолчанию НЕ подставляется здесь: sandboxSpecFor сначала
-	// спрашивает стек проекта, и лишь для нераспознанного (или вовсе
-	// безманифестного — как у ЛСП-чекера) берёт dev-образ. Раньше дефолт
-	// ставился здесь, и из-за этого ветка выбора образа по стеку была
-	// недостижимой: sandboxImageFor не вызывался никогда.
-	cfg.Network = firstEnv("CODEGEN_SANDBOX_NETWORK", "CODEGEN_SANDBOX_NET")
-	switch cfg.Network {
-	case "", "default", "host":
-		cfg.Network = "default"
-	case "none":
-		cfg.Network = "none"
-	case "bridge":
-		cfg.Network = "bridge"
-	}
-	cfg.Memory = firstEnv("CODEGEN_SANDBOX_MEMORY", "CODEGEN_MEMORY")
-	if cfg.Memory == "" {
-		cfg.Memory = "2g"
-	}
-	cfg.CPUs = firstEnv("CODEGEN_SANDBOX_CPUS", "CODEGEN_CPUS")
-	if cfg.CPUs == "" {
-		cfg.CPUs = "2"
-	}
-	// Два независимых уровня записи, по умолчанию оба разрешены:
-	//   - CODEGEN_SANDBOX_RO=true — read-only корень контейнера. Рабочий
-	//     каталог при этом всё равно доступен на запись (это файлы проекта,
-	//     которые агент правит по заданию), зато тулчейн не может писать в слои
-	//     образа. Режим для приёмки и «только посмотреть»;
-	//   - CODEGEN_SANDBOX_ALLOW_WRITE=false — рабочий каталог монтируется
-	//     :ro. Команда, которая пишет в проект, упадёт с error, а не сделает
-	//     вид, что отработала.
-	// Значение по умолчанию — «можно писать»: неинвертированное, иначе
-	// пустая переменная выдавала запрет записи и песочница запускалась с
-	// неработающим /workspace.
-	if v := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_RO")); v != "" {
-		if ro, err := strconv.ParseBool(v); err == nil {
-			cfg.ReadOnly = ro
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("CODEGEN_SANDBOX_ALLOW_WRITE")); v != "" {
-		if w, err := strconv.ParseBool(v); err == nil {
-			cfg.WorkdirReadOnly = !w
-		}
 	}
 	return cfg
 }
-
-// sandboxModeUnset — «режим не определён»: значит, определение само упало и
-// звать исполнитель рано.
-const SandboxModeUnset SandboxMode = ""
 
 // sandboxDockerBin — путь к клиенту docker. CODEGEN_SANDBOX_DOCKER читается
 // ДО LookPath: в CI и в тестах бинаря нет в PATH, а путь задан явно, и старая
@@ -250,29 +194,10 @@ func dockerEnv() []string {
 	return env
 }
 
-// sandboxImageFor — образ по стеку проекта: тот же список, что у
-// acceptor.detectKind и ReadAppLogs, иначе песочница и остальной конвейер
-// будут считать один и тот же проект разными.
-//
-// Здесь учитываются и CODEGEN_SANDBOX_IMAGE, и его алиас CODEGEN_IMAGE:
-// loadSandboxConfig читает оба, и расхождение означало бы, что образ из
-// CODEGEN_IMAGE работает, а из sandboxImageFor — нет.
-func sandboxImageFor(dir string) string {
-	if v := firstEnv("CODEGEN_SANDBOX_IMAGE", "CODEGEN_IMAGE"); v != "" {
-		return v
-	}
-	switch detectSandboxStack(dir) {
-	case "go":
-		return "golang:1.24"
-	case "node":
-		return "node:22"
-	case "python":
-		return "python:3.12"
-	case "php":
-		return "php:8.3-cli"
-	}
-	return ""
-}
+// sandboxImageFor — образ по стеку проекта. Обёртка над sandbox.ImageFor:
+// источник один для эфемерного пути и сессионного контейнера. Здесь
+// учитываются и CODEGEN_SANDBOX_IMAGE, и его алиас CODEGEN_IMAGE.
+func sandboxImageFor(dir string) string { return sandbox.ImageFor(dir) }
 
 // sandboxSpecFor собирает параметры docker run для команды агента. Чистая
 // функция (без запуска): тесты проверяют именно её — что не утекает
@@ -354,30 +279,11 @@ func sandboxMountMode(readOnly bool) string {
 	return ":rw"
 }
 
-// sandboxEnv — окружение внутри контейнера. Совпадает с sandbox/Dockerfile и
-// sandbox/compose.yaml: HOME и все кэши в /tmp, чтобы рабочий каталог был
-// единственным местом записи, а read-only-режим работал на любом образе.
-func sandboxEnv() map[string]string {
-	return map[string]string{
-		"HOME":                     sandboxTmp,
-		"XDG_CACHE_HOME":           sandboxTmp + "/.cache",
-		"GOCACHE":                  sandboxTmp + "/.cache/go-build",
-		"GOMODCACHE":               sandboxTmp + "/go/pkg/mod",
-		"GOPATH":                   sandboxTmp + "/go",
-		"npm_config_cache":         sandboxTmp + "/.npm",
-		"PIP_CACHE_DIR":            sandboxTmp + "/.cache/pip",
-		"PLAYWRIGHT_BROWSERS_PATH": sandboxTmp + "/ms-playwright",
-		"CI":                       "true",
-		// Коммит из песочницы (через make-цели приёмки) не должен падать из-за
-		// отсутствия ~/.gitconfig: HOME — tmpfs, глобального конфига в ней нет,
-		// а без него git не может определить автора коммита.
-		"GIT_CONFIG_GLOBAL":   sandboxTmp + "/.gitconfig",
-		"GIT_AUTHOR_NAME":     "AI Sandbox",
-		"GIT_AUTHOR_EMAIL":    "sandbox@localhost",
-		"GIT_COMMITTER_NAME":  "AI Sandbox",
-		"GIT_COMMITTER_EMAIL": "sandbox@localhost",
-	}
-}
+// sandboxEnv — окружение внутри контейнера. Обёртка над sandbox.BaseEnv:
+// оно совпадает с sandbox/Dockerfile и sandbox/compose.yaml (HOME и все кэши
+// в /tmp, чтобы рабочий каталог был единственным местом записи, а
+// read-only-режим работал на любом образе).
+func sandboxEnv() map[string]string { return sandbox.BaseEnv() }
 
 // dockerArgs — аргументы docker run для spec и команды агента. Порядок и
 // значения зафиксированы тестом: регрессия здесь (забытый --network, лишний
@@ -435,18 +341,11 @@ func sandboxCommand(command, workdir string, cfg sandboxConfig) (string, []strin
 }
 
 // sandboxHostUser — идентификаторы текущего пользователя хоста в формате
-// uid:gid для --user. Берутся из os.Getuid/Getgid, а НЕ из `id -u`: это тот же
-// идентификатор, что и у процесса Go, без четырёх лишних подпроцессов на
-// каждый вызов sandboxSpecFor (а он зовётся дважды на команду — пре-флайт и
-// сам запуск). На Windows идентификаторов нет — возвращаем пустую строку, и
-// dockerAvailable там всё равно всегда false.
-func sandboxHostUser() string {
-	uid, gid := os.Getuid(), os.Getgid()
-	if uid < 0 || gid < 0 {
-		return ""
-	}
-	return strconv.Itoa(uid) + ":" + strconv.Itoa(gid)
-}
+// uid:gid для --user. Обёртка над sandbox.HostUser: os.Getuid/Getgid, а НЕ
+// `id -u` (тот же идентификатор, что и у процесса Go, без четырёх лишних
+// подпроцессов на каждый вызов sandboxSpecFor — а он зовётся дважды на
+// команду: пре-флайт и сам запуск).
+func sandboxHostUser() string { return sandbox.HostUser() }
 
 // sandboxNetworkHelp — подсказка модели для режима без сети: что делать с
 // зависимостями, чтобы не перебирать команды.
@@ -456,88 +355,16 @@ func sandboxNetworkHelp() string {
 		"Если нужен модуль из сети — не повторяй команду, а укажи в отчёте, какой именно пакет недоступен офлайн."
 }
 
-// firstEnv — первый непустой env из списка имён.
-func firstEnv(names ...string) string {
-	for _, n := range names {
-		if v := strings.TrimSpace(os.Getenv(n)); v != "" {
-			return v
-		}
-	}
-	return ""
-}
+// firstEnv — первый непустой env из списка имён (обёртка sandbox.FirstEnv).
+func firstEnv(names ...string) string { return sandbox.FirstEnv(names...) }
 
-// stackManifests — манифест → стек. Порядок фиксирован: обход map в Go
-// недетерминирован, а при двух манифестах в корне (go.mod + package.json)
-// проект получал то golang, то node — в зависимости от запуска.
-var stackManifests = []struct{ name, stack string }{
-	{"go.mod", "go"},
-	{"package.json", "node"},
-	{"requirements.txt", "python"},
-	{"pyproject.toml", "python"},
-	{"composer.json", "php"},
-}
-
-// detectSandboxStack — стек проекта по манифестам. Отдельная копия
-// acceptor.detectKind, а не импорт: tools не должен зависеть от агентов
-// (acceptor сам импортирует tools), иначе получается цикл.
-//
-// Смотрим корень И первый уровень вглубь: монорепозиторий (Go-бэкенд +
-// Node-фронтенд в frontend/) держит манифесты в подкаталогах, и раньше
-// подбирался образ по корневому go.mod — golang без npm. Агент закономерно
-// скачивал Node в /workspace (живой случай: mytrip, FEL-05 — 46 МБ
-// node.tar.gz и 4287 файлов тулчейна в коммите задачи). Несколько стеков →
-// "" → ai-sandbox:latest (dev-образ с go+node+python), который для монорепо и
-// предназначен. Пустой стек по-прежнему даёт dev-образ.
-func detectSandboxStack(dir string) string {
-	stacks := detectSandboxStacks(dir, 1)
-	if len(stacks) == 1 {
-		for s := range stacks {
-			return s
-		}
-	}
-	return ""
-}
+// detectSandboxStack — стек проекта по манифестам (обёртка sandbox.DetectStack):
+// тот же список манифестов, что у acceptor.detectKind и ReadAppLogs, иначе
+// песочница и остальной конвейер считали бы один проект разными.
+func detectSandboxStack(dir string) string { return sandbox.DetectStack(dir) }
 
 // detectSandboxStacks — множество стеков на глубине не глубже depth
-// (0 = только корень).
+// (0 = только корень; обёртка sandbox.DetectStacks).
 func detectSandboxStacks(dir string, depth int) map[string]bool {
-	stacks := map[string]bool{}
-	for _, m := range stackManifests {
-		if _, err := os.Stat(filepath.Join(dir, m.name)); err == nil {
-			stacks[m.stack] = true
-		}
-	}
-	if depth <= 0 {
-		return stacks
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return stacks
-	}
-	for _, e := range entries {
-		if !e.IsDir() || skipStackDir(e.Name()) {
-			continue
-		}
-		sub := filepath.Join(dir, e.Name())
-		for _, m := range stackManifests {
-			if _, err := os.Stat(filepath.Join(sub, m.name)); err == nil {
-				stacks[m.stack] = true
-			}
-		}
-	}
-	return stacks
-}
-
-// skipStackDir — каталоги, которые не имеют смысла обходить: служебные и уже
-// установленные зависимости (там манифесты лежат всегда и ничего не говорят о
-// стеке проекта).
-func skipStackDir(name string) bool {
-	if strings.HasPrefix(name, ".") {
-		return true
-	}
-	switch name {
-	case "node_modules", "vendor", "dist", "build", "target", "tmp", "temp":
-		return true
-	}
-	return false
+	return sandbox.DetectStacks(dir, depth)
 }

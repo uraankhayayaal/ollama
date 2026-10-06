@@ -288,6 +288,22 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.cancel = func() { cancel() }
 	sess.mu.Unlock()
 
+	// Сессионная песочница (Этап 1, п. 1.5): контейнер поднимается ДО первого
+	// агента и снимается defer'ом горутины-раннера. Блокирующий шаг (pull
+	// образа) — вне sess.mu. Ошибка старта = отказ запуска: при
+	// CODEGEN_SANDBOX=session тихий переход на хост запрещён (п. 1.3).
+	if err := sess.srv.startProjectSandbox(cctx, sess.project); err != nil {
+		cancel()
+		sess.mu.Lock()
+		sess.running = false
+		sess.stopped = false
+		sess.mu.Unlock()
+		sess.log.Warnf("=== Оркестрация не началась: %v", err)
+		sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)
+		sess.broadcastStatus("error", err.Error())
+		return err
+	}
+
 	sess.log.Infof("=== Оркестрация запущена: %s", truncateText(taskText, 120))
 	sess.broadcastStatus("running", "")
 
@@ -343,6 +359,10 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.wg.Add(1)
 	go func() {
 		defer sess.wg.Done()
+		// П. 1.7: контейнер песочницы живёт ровно столько, сколько оркестрация
+		// (defer срабатывает и при отмене стопом — StopSession отвязывает
+		// контекст сам).
+		defer sess.srv.stopProjectSandbox(sess.project)
 		err := runner.Run(cctx, sess.project, taskText)
 		sess.mu.Lock()
 		sess.running = false

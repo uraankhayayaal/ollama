@@ -182,7 +182,7 @@ func TestSandboxEnvKeepsHomeOutOfWorkdir(t *testing.T) {
 func TestRunCommandLocalReportsNoSandbox(t *testing.T) {
 	t.Setenv("CODEGEN_SANDBOX", "local")
 	t.Setenv("CODEGEN_RUN_TIMEOUT", "10s")
-	res, err := runCommand("echo sandbox-check", t.TempDir())
+	res, err := runCommand("echo sandbox-check", t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestRunCommandLocalReportsNoSandbox(t *testing.T) {
 func TestRunCommandContainerRefusesBadWorkdir(t *testing.T) {
 	t.Setenv("CODEGEN_SANDBOX", "container")
 	t.Setenv("CODEGEN_SANDBOX_IMAGE", "ai-sandbox:test")
-	res, err := runCommand("echo hi", filepath.Join(t.TempDir(), "нет-такого-каталога"))
+	res, err := runCommand("echo hi", filepath.Join(t.TempDir(), "нет-такого-каталога"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestSandboxRealContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Изоляция рабочего каталога: файл из /workspace должен быть виден.
-	res, err := runCommand("cat marker.txt", dir)
+	res, err := runCommand("cat marker.txt", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ func TestSandboxRealContainer(t *testing.T) {
 		t.Errorf("песочница не видит рабочий каталог: %+v", res)
 	}
 	// Изоляция сети и прав: пользователь контейнера — не root.
-	res, err = runCommand("id -u", dir)
+	res, err = runCommand("id -u", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestSandboxRealContainer(t *testing.T) {
 	}
 	// Кэши и HOME не должны оседать в проекте: иначе ~/.gitconfig и ~/.npmrc
 	// попадают в diff, который потом ревьюит человек.
-	res, err = runCommand("git init -q . && echo ok", dir)
+	res, err = runCommand("git init -q . && echo ok", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestSandboxRealContainer(t *testing.T) {
 		}
 	}
 	// Явно: HOME внутри контейнера указывает на tmpfs, а не на проект.
-	res, err = runCommand("echo $HOME", dir)
+	res, err = runCommand("echo $HOME", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +453,7 @@ func TestSandboxRealContainerWriteModes(t *testing.T) {
 
 	// Дефолт: проект виден И доступен на запись, иначе агент ничего не может
 	// сделать — это был исходный дефект (нет монтирования вовсе).
-	res, err := runCommand("touch written.txt && echo wrote", dir)
+	res, err := runCommand("touch written.txt && echo wrote", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +466,7 @@ func TestSandboxRealContainerWriteModes(t *testing.T) {
 
 	// CODEGEN_SANDBOX_ALLOW_WRITE=false: проект виден, но запись запрещена.
 	t.Setenv("CODEGEN_SANDBOX_ALLOW_WRITE", "false")
-	res, err = runCommand("cat go.mod >/dev/null 2>&1; ls >/dev/null && touch denied.txt; echo exit=$?", dir)
+	res, err = runCommand("cat go.mod >/dev/null 2>&1; ls >/dev/null && touch denied.txt; echo exit=$?", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func TestSandboxRealContainerWriteModes(t *testing.T) {
 	// CODEGEN_SANDBOX_RO=true: корень контейнера read-only, но тулчейн обязан
 	// работать (кэши в tmpfs), а проект — остаться на запись.
 	t.Setenv("CODEGEN_SANDBOX_RO", "true")
-	res, err = runCommand("touch root-ok.txt && echo root-fs-writable-enough", dir)
+	res, err = runCommand("touch root-ok.txt && echo root-fs-writable-enough", dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
