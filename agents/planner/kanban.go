@@ -1454,27 +1454,44 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			progress = true
 			continue
 		}
+		// Специалист сам вывел задачу из работы: paused (задача невыполнима —
+		// нет исходного кода/зависимостей, блокер) или cancelled (снята с
+		// работы). Это осознанный шаг агента, а не «пустая попытка»: уважаем
+		// статус, сообщаем человеку и НЕ страхуем fallback-ом в done — гард
+		// всё равно бы отказал, а эскалация (ниже) затёрла бы решение
+		// специалиста: пауза/отмена нетерминальны, вернуть задачу в очередь
+		// можно одной кнопкой (или докомандой лиду).
+		if current.Status == board.StatusPaused || current.Status == board.StatusCancelled {
+			reason := truncateText(current.PauseReason, 400)
+			if reason == "" {
+				reason = "причина не указана"
+			}
+			what := "поставил на паузу"
+			if current.Status == board.StatusCancelled {
+				what = "снял с работы (cancelled)"
+			}
+			k.log.Warnf("[задача %s] специалист %s: %s", t.TaskID, what, reason)
+			k.status("[задача %s] специалист %s — задача ждёт решения человека: %s", t.TaskID, what, reason)
+			progress = true
+			continue
+		}
 		// Ф-6 (инцидент FEL-04): fallback закрывает задачу, которую агент
 		// фактически не сделал, только если серверный гард «phantom done»
 		// подтвердил наличие работы (свои коммиты ветки или правки в
-		// worktree). Отказ гарда — не ошибка раунда: задача остаётся «в
-		// работе», остальные задачи раунда продолжают выполняться, а
-		// детектор петли (этап 4) поднимет диагноз и эскалирует модель или,
-		// исчерпав бюджет, поставит задачу на паузу для человека.
+		// worktree). Отказ гарда — не ошибка раунда, но и не бесплатная
+		// попытка: работа без результата съедает бюджет автономии так же,
+		// как петля, иначе FEL-04 превращается в бесконечное сжигание
+		// токенов (задача возвращается в очередь и гоняется заново). По
+		// бюджету (KANBAN_MAX_ESCALATIONS) задача встаёт на паузу, а
+		// запуск сообщает, что нужен человек.
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
-			k.log.Warnf("[задача %s] fallback в done отклонён гардом: %v — задача остаётся в работе (инцидент FEL-04: пустая задача не должна закрываться)", t.TaskID, err)
-			if perr := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
-				inj := board.Injection{
-					Name:    "работа не сделана: задача остаётся в работе",
-					Scope:   board.InjectionScopeTask,
-					Target:  board.InjectionTargetUserLast,
-					Content: fmt.Sprintf("Предыдущая попытка не дала результата: %s. Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом; задача закроется только когда в её ветке появится свой коммит или в worktree будут правки.", truncateText(err.Error(), 400)),
-				}
-				inj.Normalize()
-				cur.Injections = append(cur.Injections, inj)
-				return nil
-			}); perr != nil {
-				k.log.Warnf("[задача %s] запись инъекции о пустом результате: %v", t.TaskID, perr)
+			k.log.Warnf("[задача %s] fallback в done отклонён гардом (инцидент FEL-04: пустая задача не должна закрываться): %v", t.TaskID, err)
+			if _, escErr := k.escalate(ctx, current, escalationDiag{
+				event:  "работа не сделана",
+				detail: err.Error(),
+				action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом: задача закроется только когда в её ветке появится свой коммит или в worktree будут правки. Если же задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в paused инструментом BoardSetTaskStatus с обязательной причиной (reason): это честный выход, задача уйдёт человеку вместо повторов без результата.",
+			}); escErr != nil {
+				return false, fmt.Errorf("задача %s: эскалация пустой работы: %w", t.TaskID, escErr)
 			}
 			progress = true
 			continue
@@ -1490,9 +1507,10 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 }
 
 // maxEscalationsDefault — бюджет автономии: сколько раз задача может получить
-// эскалацию (сильная модель + инъекция с диагнозом петли), прежде чем работа
-// будет остановлена и отдана человеку. Без конечного бюджета «зациклился»
-// превращается в бесконечный цикл дорогих прогонов. Перекрывается
+// эскалацию (сильная модель + инъекция с диагнозом), прежде чем работа будет
+// остановлена и отдана человеку. Считаются и зацикливания, и «пустые»
+// отклонения гарда phantom-done (FEL-04): без конечного бюджета оба
+// превращаются в бесконечный цикл дорогих прогонов. Перекрывается
 // KANBAN_MAX_ESCALATIONS.
 const maxEscalationsDefault = 3
 
@@ -1505,30 +1523,45 @@ func maxEscalations() int {
 	return maxEscalationsDefault
 }
 
-// escalateLoop реагирует на зацикливание специалиста (Ф-6, этапы 4.4–4.5).
-// Возвращает true, если работа продвинулась (задача поставлена в очередь на
-// новый прогон с эскалацией) — это честный «прогресс» раунда, иначе цикл
-// решил бы, что прогресса нет, и упал.
+// escalationDiag — диагноз одной автономной эскалации задачи. Общий для
+// зацикливания (Ф-6, этап 4.4) и «пустой работы» (инцидент FEL-04: гард
+// отклонил done, правок/коммитов нет): у обоих одна цель — конечный бюджет
+// попыток вместо бесконечного сжигания токенов.
+type escalationDiag struct {
+	// event — событие одной фразой («зациклилась», «работа не сделана»):
+	// участвует во всех сообщениях (инъекция, аудит, причина остановки).
+	event string
+	// detail — причина (диагноз): видна и модели в новом прогоне, и человеку.
+	detail string
+	// action — что делать модели в новом прогоне.
+	action string
+}
+
+// escalate реагирует на неудачную попытку задачи (зацикливание или работа
+// без результата) в рамках бюджета автономии. Возвращает true, если работа
+// продвинулась (задача поставлена в очередь на новый прогон с эскалацией) —
+// это честный «прогресс» раунда, иначе цикл решил бы, что прогресса нет, и
+// упал.
 //
 // Пока бюджет не исчерпан: пишем в задачу требование большой модели
-// (model_tier), инъекцию с причиной петли (диагноз виден модели с первого
-// запроса нового прогона) и возвращаем задачу в очередь. Откат кода при этом
-// НЕ делается (Р-2).
+// (model_tier), инъекцию с диагнозом (причина видна модели с первого запроса
+// нового прогона) и возвращаем задачу в очередь. Откат кода при этом НЕ
+// делается (Р-2).
 //
 // Исчерпали бюджет: останавливаем работу задачи и зовём человека — пауза
 // (не терминальный статус: вернуть в очередь можно одной кнопкой) плюс
 // явное сообщение в чат. Никаких «выполнено»/фиктивного успеха.
-func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason string) (bool, error) {
+func (k *KanbanRunner) escalate(ctx context.Context, t *board.Task, diag escalationDiag) (bool, error) {
 	budget := maxEscalations()
 	if t.Escalations >= budget {
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusPaused); err != nil {
 			return false, fmt.Errorf("задача %s: остановка исчерпанием бюджета: %w", t.TaskID, err)
 		}
-		stop := fmt.Sprintf("задача %s: зациклилась %d раз(а) подряд, бюджет автономии исчерпан — работа остановлена, нужен человек (последняя причина петли: %s)",
-			t.TaskID, t.Escalations+1, truncateText(reason, 160))
+		stop := fmt.Sprintf("задача %s: %s — попытка %d, бюджет автономии исчерпан: работа остановлена, нужен человек (последняя причина: %s)",
+			t.TaskID, diag.event, t.Escalations+1, truncateText(diag.detail, 160))
 		k.setStopReason(stop)
-		k.status("[задача %s] зациклилась %d раз(а) подряд (последняя причина: %s) — бюджет автономии исчерпан, работа остановлена, нужен человек",
-			t.TaskID, t.Escalations+1, truncateText(reason, 160))
+		k.status("[задача %s] %s %d раз(а) подряд (последняя причина: %s) — бюджет автономии исчерпан, работа остановлена, нужен человек",
+			t.TaskID, diag.event, t.Escalations+1, truncateText(diag.detail, 160))
 		return true, nil
 	}
 
@@ -1536,15 +1569,16 @@ func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason s
 	if err := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
 		cur.ModelTier = board.ModelTierLarge
 		cur.Escalations = escalation
-		// Диагноз петли как инъекция: новая модель/новый прогон видят причину
+		// Диагноз как инъекция: новая модель/новый прогон видят причину
 		// сразу, а не заново наступают на тот же грабли. Инъекция уходит в
 		// конец блока сообщений (append) — как требование «что делать дальше»,
 		// а не как подмена системного промпта.
 		inj := board.Injection{
-			Name:    fmt.Sprintf("эскалация %d/%d: разбор петли", escalation, budget),
-			Scope:   board.InjectionScopeTask,
-			Target:  board.InjectionTargetUserLast,
-			Content: fmt.Sprintf("Предыдущая попытка этой задачи зациклилась (эскалация %d/%d): %s. Не повторяй те же действия: перечитай задачу, измени подход и проверь результат.", escalation, budget, truncateText(reason, 400)),
+			Name:   fmt.Sprintf("%s (эскалация %d/%d)", diag.event, escalation, budget),
+			Scope:  board.InjectionScopeTask,
+			Target: board.InjectionTargetUserLast,
+			Content: fmt.Sprintf("Предыдущая попытка: %s (эскалация %d/%d). Причина: %s. %s",
+				diag.event, escalation, budget, truncateText(diag.detail, 400), diag.action),
 		}
 		inj.Normalize()
 		cur.Injections = append(cur.Injections, inj)
@@ -1555,9 +1589,18 @@ func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason s
 	if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
 		return false, fmt.Errorf("задача %s: возврат в очередь после эскалации: %w", t.TaskID, err)
 	}
-	k.status("[задача %s] зациклилась (%s) — эскалация %d/%d: продолжаем на большой модели с разбором причины",
-		t.TaskID, truncateText(reason, 160), escalation, budget)
+	k.status("[задача %s] %s (%s) — эскалация %d/%d: продолжаем на большой модели с разбором причины",
+		t.TaskID, diag.event, truncateText(diag.detail, 160), escalation, budget)
 	return true, nil
+}
+
+// escalateLoop реагирует на зацикливание специалиста (Ф-6, этапы 4.4–4.5).
+func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason string) (bool, error) {
+	return k.escalate(ctx, t, escalationDiag{
+		event:  "зациклилась",
+		detail: reason,
+		action: "Не повторяй те же действия: перечитай задачу, измени подход и проверь результат.",
+	})
 }
 
 // phaseBugs: конвейер багрепортов. QA-специалисты публикуют багрепорты

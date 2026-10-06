@@ -118,6 +118,12 @@ cancelled    cancelled      cancelled              │
 - Неизвестный статус → `StatusError`.
 - `paused` **замораживает** ревизию: `phaseArchitectReview` пропускает
   эпики на паузе (`agents/planner/kanban.go:710`).
+- Специалист сам переводит свою задачу в `paused` инструментом
+  `BoardSetTaskStatus` с обязательным `reason` (задача невыполнима: кода или
+  зависимостей нет, блокер) — причина оседает в `pause_reason` и видна в
+  карточке; оркестратор уважает паузу/отмену от агента и не затирает их
+  fallback'ом в `done` (`agents/planner/kanban.go`, ветка после
+  «агент подтвердил сам»).
 
 ### Багрепорты (`board/entity.go:313-394`)
 

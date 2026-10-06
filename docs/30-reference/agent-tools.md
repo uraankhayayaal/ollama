@@ -95,7 +95,7 @@
 | `BoardCreateTask` | Создать задачу | — |
 | `BoardUpdateTask` | Обновить задачу | — |
 | `BoardDeleteTask` | Удалить задачу | **да** |
-| `BoardSetTaskStatus` | Сменить статус задачи | — |
+| `BoardSetTaskStatus` | Сменить статус задачи (в т.ч. `paused` — обязательный аргумент `reason`: причина оседает в `pause_reason`) | — |
 
 ### Баги
 

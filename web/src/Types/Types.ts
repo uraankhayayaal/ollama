@@ -90,6 +90,9 @@ export interface TaskRow {
   checkpoint?: TaskCheckpoint;
   attempts?: number;
   last_error?: string;
+  // Причина паузы, указанная самим специалистом (BoardSetTaskStatus → paused:
+  // задача невыполнима, нужен человек). Очищается при выходе из паузы.
+  pause_reason?: string;
   heartbeat_at?: string;
 }
 

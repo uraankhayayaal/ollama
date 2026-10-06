@@ -368,7 +368,7 @@ func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {
 	// вызывать отсутствующие функции (BoardSetTaskStatus not in tool set → фатал).
 	kanbanStep := ""
 	if d.Store != nil {
-		kanbanStep = "6. При работе с Kanban-доской: когда задача полностью выполнена и проверки зелёные — переведи её в статус done инструментом BoardSetTaskStatus.\n"
+		kanbanStep = "6. При работе с Kanban-доской: когда задача полностью выполнена и проверки зелёные — переведи её в статус done инструментом BoardSetTaskStatus. Если же выполнить задачу невозможно (нужного кода или зависимостей в проекте нет, есть внешний блокер) — переведи её в статус paused с обязательной причиной (reason): это остановит задачу и передаст её человеку вместо повторов без результата.\n"
 	}
 
 	return []agents.Message{

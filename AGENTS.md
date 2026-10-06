@@ -96,6 +96,54 @@ LSP/структурированных инструментах они дубл�
 `npm test -- --silent`), git-контекст через `Run`, точечный `grep` через `Run`
 только при `status skipped` у LSP/`CodeSearch`.
 
+Состояние последней сессии (петля QAL-01: «пустая» работа съедает бюджет
+автономии, специалист может честно поставить paused; верификация зелёная,
+коммита нет — правки в рабочем дереве вместе с песочницей): диагноз — ветка
+«fallback в done отклонён гардом» (`agents/planner/kanban.go`, сейчас ~:1457)
+оставляла задачу `in_progress` без heartbeat, `recoverStuckTasks` (~:1115)
+возвращал её в очередь через ~40 мс, и тот же цикл гонял прогон заново: у
+QAL-01 набежало `attempts=24`, токены росли с каждым кругом, а комментарий
+обещал эскалацию, которую давал только детектор петли (`resp.Looped` — QA его
+не триггерит). Фикс: общий `escalate(ctx, t, escalationDiag{event, detail,
+action})` — `escalateLoop` теперь тонкая обёртка («зациклилась»), гард-ветка
+зовёт его с `event: "работа не сделана"` и action «внеси правки + коммит; если
+задача невыполнима — paused с причиной»; исчерпание `KANBAN_MAX_ESCALATIONS`
+(общий счётчик с петлями) → `StatusPaused` + `setStopReason` «бюджет автономии
+исчерпан … нужен человек», запуск падает с этой причиной, а не с «нет
+прогресса». Оркестратор теперь УВАЖАЕТ `paused`/`cancelled` от специалиста до
+fallback-а (раньше `cancelled→done` ронял Run: переход запрещён FSM, а эскалация
+пыталась сделать `ready` из `cancelled`), причина уходит в чат статусным
+сообщением. Инструмент: `BoardSetTaskStatus` принимает `paused` с
+обязательным `reason` (`tools/board_tools.go`) → новое поле
+`board.Task.PauseReason` (`json:"pause_reason"`, очищается при выходе из
+паузы); промпты: `developer.kanbanStep` и новый `kanbanRule` у QA
+(`agents/qaengineer/agent.go` — добавляется только при `Store != nil`,
+по образцу разработчика) объясняют done/paused. Web UI: `pause_reason` в
+`web/src/Types/Types.ts` + блок «Причина паузы» в `TaskModal.tsx`,
+`npm run typecheck`/`npm run build` (dist пересобран: `index-qIdXu1th.js`).
+Тесты: `TestGuardRejectionEscalatesWithinBudget` (бюджет 1 → пауза, ошибка
+«бюджет автономии исчерпан»/«нужен человек», инъекция с причиной),
+`TestAgentPauseRespectedByFallback` (provider сам ставит paused+reason; гард
+на месте доказывает, что fallback не затирает паузу; `Escalations=0`),
+`TestBoardSetTaskStatusPausedReason` (reason обязателен, оседает в задаче,
+чистится на `ready`); существующие `TestPhantomDoneNotClosedByFallback`
+(теперь останавливается по бюджету, а не на 100-м раунде),
+`TestKanbanTaskLoopEscalatesThenAsksHuman`, `TestEscalationBudgetStopsAndAsksHuman`
+— зелёные. Верификация: `go build`/`go vet`/`go test` по перечню выше зелёные
+(в т.ч. `agents/acceptor`), `-race` на новых тестах, `gofmt -l` по своим файлам
+чист. Документация: секция «Задача без результата крутится заново: «fallback в
+done отклонён гардом»» в `docs/40-operations/troubleshooting.md` (симптом из
+лога QAL-01, три шага «что делать по существу»), правки `KANBAN_MAX_ESCALATIONS`
+в `docs/30-reference/environment-variables.md`, пункты 6–7 в «Эскалация
+зациклившейся задачи» `docs/20-features/agents-and-roles.md`. Пункты (б)/(в)
+предыдущего разбора закрыты исследованием: QA-задачи ссылаются на
+несуществующий `internal/service`/`internal/repo` (бэкенд собрал
+`internal/api|config|domain`) — корневая причина за человеком (перепланировать
+задачи или вынести модуль отдельной задачей), write-инструменты у QA были
+(`qaBoardToolNames`), `RequiredToolFirstRound` не виноват. НЕ сделано:
+коммит (спросить пользователя) и перезапуск живого сервера (`./ai serve`,
+порт 8090 — прервёт текущую оркестрацию mytrip).
+
 Состояние последней сессии (эфемерная песочница чинит `cd`/git в worktree,
 жалоба QAL-01): при `CODEGEN_SANDBOX=container` команда `cd <хостовый путь
 worktree>` падала с `can't cd`, а `git status` — `fatal: not a git repository:

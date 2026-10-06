@@ -785,12 +785,13 @@ func (t *boardSetTaskStatusTool) Name() string { return BoardSetTaskStatus }
 func (t *boardSetTaskStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetTaskStatus,
-		Description: "Перевести задачу в новый статус: new, analysis, ready, in_progress, done, cancelled. Используется специалистами (выполнил -> done) и лидами (перепланирование).",
+		Description: "Перевести задачу в новый статус: new, analysis, ready, in_progress, done, cancelled, paused. Специалисты отмечают done по завершении работы; paused (с обязательной причиной reason) — если задачу невозможно выполнить: нет исходного кода/зависимостей, есть блокер; это останавливает задачу и передаёт её человеку вместо повторов без результата. Лиды используют инструмент для перепланирования.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | in_progress | done | cancelled"},
+				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | in_progress | done | cancelled | paused"},
+				"reason":  map[string]any{"type": "string", "description": "Причина: обязателен для paused (что именно блокирует выполнение — человек должен понять, зачем задача встала), для остальных статусов необязателен."},
 			},
 			"required":             []string{"task_id", "status"},
 			"additionalProperties": false,
@@ -804,12 +805,39 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 	ctx := context.Background()
 	id := strArg(args, "task_id")
 	st := board.Status(strArg(args, "status"))
+	reason := strings.TrimSpace(strArg(args, "reason"))
+	// Пауза без причины — загадочный простой: модель обязана объяснить
+	// блокер, иначе человек не поймёт, что ей делать (и зачем вообще
+	// останавливать задачу).
+	if st == board.StatusPaused && reason == "" {
+		return boardErr(BoardSetTaskStatus, fmt.Errorf("для paused обязателен reason: опиши, что блокирует задачу (нет исходного кода/зависимостей, внешний блокер и т.п.)"))
+	}
 	tk, err := t.b.GetTask(ctx, id)
 	if err != nil {
 		return boardErrStore(BoardSetTaskStatus, t.b, err)
 	}
 	if err := t.b.SetTaskStatus(ctx, id, st); err != nil {
 		return boardErrStore(BoardSetTaskStatus, t.b, err)
+	}
+	// Причина паузы живёт в записи задачи (карточка в UI) и очищается при
+	// выходе из паузы — иначе в карточке висела бы причина прошлого простоя.
+	if st == board.StatusPaused || tk.Status == board.StatusPaused {
+		if perr := t.b.PatchTask(ctx, id, func(cur *board.Task) error {
+			cur.PauseReason = ""
+			if st == board.StatusPaused {
+				if r := []rune(reason); len(r) > 500 {
+					reason = string(r[:500])
+				}
+				cur.PauseReason = reason
+			}
+			return nil
+		}); perr != nil {
+			return boardErrStore(BoardSetTaskStatus, t.b, perr)
+		}
+	}
+	if st == board.StatusPaused && reason != "" {
+		logging.For(t.b.Project()).Warnf("[задача %s] статус: %s → %s — причина: %s", id, tk.Status.Label(), st.Label(), reason)
+		return boardOK(map[string]any{"task_id": id, "status": string(st), "reason": reason})
 	}
 	logging.For(t.b.Project()).Infof("[задача %s] статус: %s → %s", id, tk.Status.Label(), st.Label())
 	return boardOK(map[string]any{"task_id": id, "status": string(st)})
