@@ -33,6 +33,7 @@ package tools
 // Docker, иначе хост с пометкой, =local/0 — хост (поведение по умолчанию).
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,6 +41,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"ai/sandbox"
 )
@@ -198,6 +200,29 @@ func dockerEnv() []string {
 // источник один для эфемерного пути и сессионного контейнера. Здесь
 // учитываются и CODEGEN_SANDBOX_IMAGE, и его алиас CODEGEN_IMAGE.
 func sandboxImageFor(dir string) string { return sandbox.ImageFor(dir) }
+
+// ensureSandboxImageTimeout — лимит автосборки dev-образа. Отдельная граница,
+// а не CODEGEN_RUN_TIMEOUT: сборка на холодном кэше (базовый образ + apt)
+// длится дольше минутного командного шага, и таймаут сборки не должен
+// зависеть от конфигурации шага.
+const ensureSandboxImageTimeout = 10 * time.Minute
+
+// ensureSandboxImage — гарантия наличия выбранного образа в кэше демона до
+// docker run. Образ выбирается теми же правилами, что в sandboxSpecFor
+// (явный → по стеку → dev-образ); автосборку делает sandbox.EnsureImage и
+// только для локального dev-образа — реестровые образы docker тянет сам.
+func ensureSandboxImage(workdir string, sb sandboxConfig) error {
+	image := sb.Image
+	if image == "" {
+		image = sandboxImageFor(workdir)
+	}
+	if image == "" {
+		image = defaultSandboxImage
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ensureSandboxImageTimeout)
+	defer cancel()
+	return sandbox.EnsureImage(ctx, image)
+}
 
 // sandboxSpecFor собирает параметры docker run для команды агента. Чистая
 // функция (без запуска): тесты проверяют именно её — что не утекает

@@ -115,7 +115,7 @@ func ensureProxyImage(ctx context.Context, eng *Engine) (string, error) {
 		return "", err
 	}
 	logging.For("").Infof("[sandbox] собираю образ egress-прокси %s", proxyImageName)
-	if err := eng.BuildImage(ctx, proxyImageName, tarData); err != nil {
+	if err := eng.BuildImage(ctx, proxyImageName, tarData, nil); err != nil {
 		return "", err
 	}
 	return proxyImageName, nil

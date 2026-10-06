@@ -102,6 +102,13 @@ func StartSession(ctx context.Context, opts SessionOptions) (*DockerWorkspace, e
 		image = DefaultImage
 	}
 
+	// Локальный dev-образ (DefaultImage) в реестре нет: если он ещё не собран,
+	// неявный pull при create упадёт с «pull access denied». Собираем ДО сети
+	// и прокси — ошибка автосборки должна вернуться до создания ресурсов.
+	if err := ensureDevImage(ctx, eng, image); err != nil {
+		return nil, err
+	}
+
 	// Монтирования: те же хостовые пути внутри контейнера. Колонка/запятая
 	// ломают синтаксис binds — ошибка конфигурации до запуска.
 	for _, m := range opts.Mounts {

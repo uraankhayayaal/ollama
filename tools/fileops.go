@@ -1360,6 +1360,20 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 				"message":    err.Error(),
 			}, nil
 		}
+		// Образ до docker run: локальный dev-образ (ai-sandbox:latest) в
+		// реестре отсутствует — если он не собран, первая же команда упадёт
+		// с «pull access denied». Автосборка — только для него (EnsureImage —
+		// no-op для реестровых образов, их docker тянет неявно при run).
+		if err := ensureSandboxImage(workdir, sb); err != nil {
+			return map[string]string{
+				"command":    command,
+				"workdir":    workdir,
+				"exit_error": "песочница не настроена",
+				"status":     "error",
+				"sandbox":    "container",
+				"message":    err.Error(),
+			}, nil
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout())

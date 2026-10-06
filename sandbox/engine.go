@@ -398,8 +398,19 @@ func (e *Engine) HasImage(ctx context.Context, ref string) (bool, error) {
 // помечает тегом. Ответ демона — NDJSON-поток событий; ошибка сборки может
 // прийти и при HTTP 200 (в поле error/errorDetail), поэтому парсится
 // каждая строка, а не только статус.
-func (e *Engine) BuildImage(ctx context.Context, tag string, tarData []byte) error {
-	u := e.base + "/build?t=" + url.QueryEscape(tag)
+//
+// buildArgs — значения ARG сборки (видны в Dockerfile), передаются демону
+// как buildargs; пустой map аргументы не добавляет.
+func (e *Engine) BuildImage(ctx context.Context, tag string, tarData []byte, buildArgs map[string]string) error {
+	q := "t=" + url.QueryEscape(tag)
+	if len(buildArgs) > 0 {
+		raw, err := json.Marshal(buildArgs)
+		if err != nil {
+			return fmt.Errorf("sandbox: аргументы сборки: %w", err)
+		}
+		q += "&buildargs=" + url.QueryEscape(string(raw))
+	}
+	u := e.base + "/build?" + q
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(tarData))
 	if err != nil {
 		return fmt.Errorf("sandbox: запрос сборки образа: %w", err)
