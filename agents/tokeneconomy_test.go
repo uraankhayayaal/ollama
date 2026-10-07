@@ -128,8 +128,10 @@ func TestTokenEconomyFragmentMentionsOnlyAvailableTools(t *testing.T) {
 }
 
 // TestRunFragmentAbsentWithoutRunTool — агенты без инструмента Run (лиды,
-// архитектор, чат-ассистент) не получают фрагмент про команды: упоминать Run
-// в их промпте бессмысленно и провоцирует вызов несуществующего инструмента.
+// чат-ассистент) не получают фрагмент про команды: упоминать Run в их промпте
+// бессмысленно и провоцирует вызов несуществующего инструмента. Агент с Run
+// (архитектор после Этапа 4 плана harness-rework: git в ветке эпика) из этой
+// проверки выходит — фрагмент ему уместен.
 func TestRunFragmentAbsentWithoutRunTool(t *testing.T) {
 	dir := t.TempDir()
 
@@ -168,7 +170,10 @@ func TestRunFragmentAbsentWithoutRunTool(t *testing.T) {
 	}
 	for _, c := range cases {
 		if c.tools["Run"] {
-			t.Fatalf("%s: в наборе появился Run — тест невалиден", c.name)
+			// Этап 4 дал архитектору инструмент Run (команды git в ветке
+			// эпика): он больше не из этой выборки. Здесь проверяется только
+			// инвариант «нет Run в наборе — нет и фрагмента про Run».
+			continue
 		}
 		if strings.Contains(c.system, runFragmentMarker) || strings.Contains(c.system, agents.RunTokenEconomy) {
 			t.Errorf("%s: фрагмент про Run попал в промпт агента без инструмента Run", c.name)

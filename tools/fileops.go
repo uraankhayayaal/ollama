@@ -45,6 +45,15 @@ type FileOps struct {
 	Scope []string
 	// scopeMatch — скомпилированный matcher областей; nil — без ограничений.
 	scopeMatch *forges.ScopeMatcher
+	// WriteAllowlist — allowlist ЗАПИСИ (отдельно от Scope): разрешённые пути
+	// для мутаций (Write/Append/Delete/Patch). Scope ограничивает и чтение,
+	// а архитектору (этап 4.2 плана) нужен свободный доступ к чтению кода при
+	// жёстко сжатой области записи — поэтому проверка раздельная. Пустой —
+	// без ограничений (запись определяется Scope, как раньше).
+	WriteAllowlist []string
+	// writeAllowMatch — скомпилированный allowlist записи; nil/пусто — без
+	// ограничений.
+	writeAllowMatch *forges.ScopeMatcher
 	// WriteReadmeOnly — true: записывающие инструменты (Write/Append/Delete)
 	// разрешены ТОЛЬКО для файлов readme* в корне OutputDir. Чтение (ReadFiles,
 	// List) не ограничивается. Ставится лидам, чтобы они могли вести план
@@ -66,6 +75,16 @@ type FileOps struct {
 func (ops *FileOps) SetScope(scope []string) {
 	ops.Scope = scope
 	ops.scopeMatch = forges.CompileScope(scope)
+}
+
+// SetWriteAllowlist задаёт allowlist записи: разрешённые пути мутаций
+// (Write/Append/Delete/Patch), независимых от Scope. Пустой/nil-слайс снимает
+// ограничение (запись определяется Scope). Гард области (этап 4.2 плана) живёт
+// в инструменте, а не только в промпте: модель, выйдшая за allowlist, получает
+// ошибку, а не молчаливое отклонение.
+func (ops *FileOps) SetWriteAllowlist(paths []string) {
+	ops.WriteAllowlist = paths
+	ops.writeAllowMatch = forges.CompileScope(paths)
 }
 
 // SetOutputDir переключает рабочую директорию инструментов на лету. Используется
@@ -125,7 +144,8 @@ func (ops *FileOps) dirHasScope(rel string) bool {
 // writeAllowed проверяет, разрешена ли ЗАПИСЬ файла (относительный
 // slash-путь). В режиме «только readme» (WriteReadmeOnly) разрешены ТОЛЬКО
 // файлы readme* в корне OutputDir независимо от Scope (чтение при этом
-// продолжает ограничиваться Scope). Иначе применяется обычная область работы.
+// продолжает ограничиваться Scope). Иначе — allowlist записи (WriteAllowlist,
+// если задан) И область работы: обе проверки должны пройти.
 func (ops *FileOps) writeAllowed(rel string) bool {
 	if ops.WriteReadmeOnly {
 		// Разрешён только файл readme* в корне проекта (без вложенных
@@ -136,7 +156,21 @@ func (ops *FileOps) writeAllowed(rel string) bool {
 		}
 		return strings.HasPrefix(strings.ToLower(slug), "readme")
 	}
+	if ops.writeAllowMatch != nil && !ops.writeAllowMatch.Empty() && !ops.writeAllowMatch.Allow(rel) {
+		return false
+	}
 	return ops.allowed(rel)
+}
+
+// writeDenyMsg — точная причина отказа записи (для модели): при гарде allowlist
+// (этап 4.2 плана) перечисляет разрешённые пути — модель видит границы и может
+// исправиться, а не наступать на них вслепую. Без allowlist — прежнее сообщение
+// про scope (обратная совместимость).
+func (ops *FileOps) writeDenyMsg(name string) string {
+	if ops.writeAllowMatch != nil && !ops.writeAllowMatch.Empty() {
+		return fmt.Sprintf("файл %q вне allowlist записи (разрешено: %s)", name, strings.Join(ops.WriteAllowlist, ", "))
+	}
+	return fmt.Sprintf("файл %q вне области работы (scope: %v)", name, ops.Scope)
 }
 
 // relPath возвращает относительный slash-путь файла внутри OutputDir.
@@ -181,7 +215,7 @@ func (ops *FileOps) writeLocked(name, content string) error {
 		return err
 	}
 	if !ops.writeAllowed(ops.relPath(full)) {
-		return fmt.Errorf("файл %q вне области работы (scope: %v)", name, ops.Scope)
+		return fmt.Errorf("%s", ops.writeDenyMsg(name))
 	}
 
 	if ops.MaxFiles > 0 && ops.written >= ops.MaxFiles {
@@ -221,7 +255,7 @@ func (ops *FileOps) appendToLocked(name, content string) error {
 		return err
 	}
 	if !ops.writeAllowed(ops.relPath(full)) {
-		return fmt.Errorf("файл %q вне области работы (scope: %v)", name, ops.Scope)
+		return fmt.Errorf("%s", ops.writeDenyMsg(name))
 	}
 	if err := ensureParentDirs(full); err != nil {
 		return err
@@ -332,7 +366,7 @@ func (ops *FileOps) removeLocked(name string) (map[string]string, error) {
 		return nil, err
 	}
 	if !ops.writeAllowed(ops.relPath(full)) {
-		return map[string]string{"path": name, "status": "error", "message": "файл вне области работы (scope)"}, nil
+		return map[string]string{"path": name, "status": "error", "message": ops.writeDenyMsg(name)}, nil
 	}
 	if _, err := os.Stat(full); os.IsNotExist(err) {
 		return map[string]string{"path": name, "status": "error", "message": "файл или папка не существует"}, nil
