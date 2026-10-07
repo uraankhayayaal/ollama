@@ -137,6 +137,10 @@ func (s *Server) handleEpicRebase(w http.ResponseWriter, r *http.Request) {
 	wtPath := filepath.Join(filepath.Dir(repo.Root),
 		".conflict-"+project+"-"+gitops.SanitizeBranchName(epicID))
 
+	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
+	// checked-out — конфликтный worktree не смог бы её получить.
+	s.dropEpicWorktreeLocked(r.Context(), project, epicID)
+
 	// Чистим остатки прерванного процесса (каталог существует, но реестр пуст).
 	if _, err := os.Stat(wtPath); err == nil {
 		logging.For(project).Warnf("gitflow: удаляю осиротевший конфликтный worktree %s", wtPath)

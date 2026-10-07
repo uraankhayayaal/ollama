@@ -200,6 +200,10 @@ func (a *Architect) GetSystemMessages(_ []agents.Message) []agents.Message {
 	case a.ReviewMode:
 		prompt = bugExpertSystemPrompt
 	}
+	// Этап 4 дал архитектору Run (git add/commit/push структуры в ветку эпика)
+	// и LSP/CodeSearch (чтение кода проекта) — общие фрагменты компактного
+	// вывода и LSP-фолбэка уместны, как у разработчика.
+	prompt += agents.RunTokenEconomy + agents.LSPGrepFallback
 	if blk := a.ragContextBlock(); blk != "" {
 		prompt += "\n\n" + blk
 	}

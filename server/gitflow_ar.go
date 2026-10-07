@@ -472,6 +472,10 @@ func (s *Server) tryTaskLLMResolve(ctx context.Context, project string, task *bo
 	}
 
 	wtPath := filepath.Join(filepath.Dir(repo.Root), ".resolve-"+project+"-"+gitops.SanitizeBranchName(task.TaskID))
+	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
+	// checked-out — резолвный worktree не смог бы её получить. Вызов под
+	// mergeLock: оба вызывателя (handleTaskLLMResolve, авто-мёрдж) берут лок.
+	s.dropEpicWorktreeLocked(ctx, project, task.EpicID)
 	if _, err := os.Stat(wtPath); err == nil {
 		_ = repo.RemoveWorktree(ctx, wtPath)
 	}
@@ -624,6 +628,9 @@ func (s *Server) handleEpicLLMResolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wtPath := filepath.Join(filepath.Dir(repo.Root), ".conflict-"+project+"-"+gitops.SanitizeBranchName(epicID))
+	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
+	// checked-out — резолвный worktree не смог бы её получить (лок взят выше).
+	s.dropEpicWorktreeLocked(r.Context(), project, epicID)
 	if _, err := os.Stat(wtPath); err == nil {
 		_ = repo.RemoveWorktree(r.Context(), wtPath)
 	}

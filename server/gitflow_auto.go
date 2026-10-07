@@ -306,6 +306,136 @@ func (s *Server) taskOutputDir(project, taskID string) string {
 	return projects.ProjectDir(project)
 }
 
+// epicWorktreePath — каталог постоянного worktree ветки эпика (4.1): сосед
+// основного клона, как worktree задачи.
+func (s *Server) epicWorktreePath(repoRoot, project, epicID string) string {
+	return filepath.Join(filepath.Dir(repoRoot),
+		".wt-epic-"+project+"-"+gitops.SanitizeBranchName(epicID))
+}
+
+// epicWorktree — Этап 4.1: ленивое создание (и повторное подключение)
+// worktree релизной ветки эпика ai/epic/<id> — рабочей точки системного
+// архитектора: он выстраивает структуру проекта 1-го уровня и коммитит её
+// в ветку эпика (см. «ВЕТКА ЭПИКА И СТРУКТУРА ПРОЕКТА» в его промпте).
+//
+// Резолвер задаётся KanbanRunner через SetEpicOutputDir и вызывается
+// архитектором ВНУТРИ submit_architecture_backlog — после публикации бэклога,
+// когда EpicCreatedHook уже создал ветки эпиков. Возвращает "" — degrade
+// (не-git-проект, ветки нет, git-ошибка): архитектор получит note и структуру
+// не напишет, публикация бэклога при этом не срывается.
+func (s *Server) epicWorktree(ctx context.Context, project, epicID string) string {
+	if strings.TrimSpace(epicID) == "" {
+		return ""
+	}
+	inf, err := s.reg.Get(project)
+	if err != nil || inf.Kind != workspace.KindGit {
+		return ""
+	}
+	ref, err := s.reg.EpicBranch(project, epicID)
+	if err != nil || strings.TrimSpace(ref.Branch) == "" {
+		logging.For(project).Detailf("gitflow: worktree эпика %s: ветки нет: %v — пропуск", epicID, err)
+		return ""
+	}
+	if wt := strings.TrimSpace(ref.Worktree); wt != "" {
+		if _, err := os.Stat(wt); err == nil {
+			return wt
+		}
+	}
+	repo, err := s.repoOf(ctx, project)
+	if err != nil {
+		return ""
+	}
+	wtPath := s.epicWorktreePath(repo.Root, project, epicID)
+
+	// Под локом: параллельные merge-операции снимают worktree перед checkout
+	// релизной ветки — создание и снятие не должны гоняться.
+	lock := s.mergeLock(project)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Повторная проверка: пока ждали мьютекс, worktree мог создать другой поток.
+	if ref, err := s.reg.EpicBranch(project, epicID); err == nil {
+		if wt := strings.TrimSpace(ref.Worktree); wt != "" {
+			if _, err := os.Stat(wt); err == nil {
+				return wt
+			}
+		}
+	}
+	// Осиротевший каталог прошлого (прерванного) цикла: снимаем и создаём заново.
+	if _, err := os.Stat(wtPath); err == nil {
+		logging.For(project).Warnf("gitflow: удаляю осиротевший worktree эпика %s (%s)", epicID, wtPath)
+		_ = repo.RemoveWorktree(ctx, wtPath)
+		// git worktree remove отвечает ошибкой, если каталог не является
+		// worktree (ручной остаток) — убираем его иначе worktree add упрётся
+		// в «уже существует».
+		_ = os.RemoveAll(wtPath)
+	}
+	// Основной клон может держать ветку эпика (после rebase/merge) —
+	// переключаем его на ветку агента, иначе git worktree add откажется.
+	if inf.GitBranch != "" {
+		if err := repo.Checkout(ctx, inf.GitBranch); err != nil {
+			logging.For(project).Warnf("gitflow: worktree эпика %s: checkout %s: %v", epicID, inf.GitBranch, err)
+		}
+	}
+	wt, err := repo.AddWorktree(ctx, wtPath, ref.Branch)
+	if err != nil {
+		logging.For(project).Warnf("gitflow: worktree эпика %s: %v", epicID, err)
+		return ""
+	}
+	ensureTaskGitignore(project, epicID, wtPath)
+	if err := s.reg.SetEpicBranch(project, epicID, workspace.BranchRef{
+		Branch: ref.Branch, Base: ref.Base, Worktree: wtPath,
+	}); err != nil {
+		_ = wt.RemoveWorktree(ctx, wtPath)
+		logging.For(project).Warnf("gitflow: worktree эпика %s: реестр: %v", epicID, err)
+		return ""
+	}
+	logging.For(project).Infof("gitflow: эпик %s → worktree %s (%s)", epicID, wtPath, ref.Branch)
+	return wtPath
+}
+
+// dropEpicWorktreeLocked снимает worktree ветки эпика (4.1), если он создан:
+// операциям, которым нужен СВОБОДНЫЙ checkout релизной ветки (MergeFeature и
+// конфликтные worktree резолвов делают `git worktree add <путь> <ветка>`),
+// иначе git отказывается: «ai/epic/… is already checked out at …».
+// Незакоммиченные правки архитектора (промпт требует коммитить, но модель могла
+// не успеть) фиксируются автокоммитом — структура проекта не теряется.
+// Идемпотентно; вызывается ПОД mergeLock (свой лок здесь брать нельзя).
+func (s *Server) dropEpicWorktreeLocked(ctx context.Context, project, epicID string) {
+	if strings.TrimSpace(epicID) == "" {
+		return
+	}
+	ref, err := s.reg.EpicBranch(project, epicID)
+	if err != nil {
+		return
+	}
+	wtPath := strings.TrimSpace(ref.Worktree)
+	if wtPath == "" {
+		return
+	}
+	if repo, rerr := s.repoOf(ctx, project); rerr == nil {
+		if _, serr := os.Stat(wtPath); serr == nil {
+			wt := gitops.RepoFromState(s.gitExec, wtPath, ref.Branch, ref.Base, "")
+			if _, _, cerr := wt.CommitIfDirty(ctx,
+				fmt.Sprintf("эпик %s: структура проекта (авто-коммит)", epicID)); cerr != nil {
+				logging.For(project).Warnf("gitflow: worktree эпика %s: автокоммит перед снятием: %v", epicID, cerr)
+			}
+			if werr := repo.RemoveWorktree(ctx, wtPath); werr != nil {
+				logging.For(project).Warnf("gitflow: снятие worktree эпика %s: %v — удаляю каталог", epicID, werr)
+				_ = os.RemoveAll(wtPath)
+			}
+		}
+	} else {
+		logging.For(project).Warnf("gitflow: worktree эпика %s: клон недоступен: %v", epicID, rerr)
+	}
+	if werr := s.reg.SetEpicBranch(project, epicID, workspace.BranchRef{
+		Branch: ref.Branch, Base: ref.Base,
+	}); werr != nil {
+		logging.For(project).Warnf("gitflow: worktree эпика %s: запись в реестр: %v", epicID, werr)
+	}
+	logging.For(project).Detailf("gitflow: worktree эпика %s снят (%s)", epicID, wtPath)
+}
+
 // commitTaskWorktree фиксирует незакоммиченные изменения специалиста в
 // worktree ветки задачи (git add -A + commit) и публикует ветки worktree'ов
 // сабмодулей (merge в базовую ветку сабмодуля + push + обновление gitlink).
@@ -503,7 +633,13 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 			logging.For(project).Warnf("gitflow: авто-мёрдж %s: конфликт в %s — пробуем LLM-авторезолвинг",
 				task.TaskID, strings.Join(ce.Files, ", "))
 			// Попытка авторезолвина через LLM: worktree релизной ветки + merge задачи.
-			if resolved := s.tryTaskLLMResolve(ctx, project, task, ce.Files); resolved {
+			// LLM-резолв живёт под mergeLock (как в handleTaskLLMResolve): внутри он
+			// снимает worktree эпика (4.1) перед checkout релизной ветки.
+			lock := s.mergeLock(project)
+			lock.Lock()
+			resolved := s.tryTaskLLMResolve(ctx, project, task, ce.Files)
+			lock.Unlock()
+			if resolved {
 				logging.For(project).Infof("gitflow: авто-мёрдж %s: конфликт разрешён LLM", task.TaskID)
 				if len(task.MergeConflictFiles) > 0 {
 					task.MergeConflictFiles = nil
@@ -603,6 +739,10 @@ func (s *Server) syncEpicMainOnce(ctx context.Context, project string, epic *boa
 	lock.Lock()
 	defer lock.Unlock()
 
+	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
+	// checked-out — MergeFeature не смог бы поставить её во временный worktree.
+	s.dropEpicWorktreeLocked(ctx, project, epic.TaskID)
+
 	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, gitops.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: синхрон релизной ветки %s с main", epic.TaskID, epicRef.Branch),
 		PushURL: remotePushURL(inf),
@@ -636,6 +776,9 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 		logging.For(project).Warnf("gitflow: удаляю осиротевший конфликтный worktree %s", wtPath)
 		_ = repo.RemoveWorktree(ctx, wtPath)
 	}
+	// 4.1: релизную ветку эпика перед checkout освобождаем от worktree
+	// архитектора (см. dropEpicWorktreeLocked).
+	s.dropEpicWorktreeLocked(ctx, project, epic.TaskID)
 	wt, err := repo.AddWorktree(ctx, wtPath, epicRef.Branch)
 	if err != nil {
 		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: worktree: %v", epic.TaskID, err)
@@ -719,12 +862,16 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 // syncEpicMainForTask — синхронизация релизной ветки эпика с main перед стартом
 // задачи (без требования done). Задача всегда стартует от свежего кода.
 // Конфликты main ↔ релизная ветка не блокируют старт — они видны на доске.
+// Вызывается под mergeLock (из taskWorktree) — dropEpicWorktreeLocked требует лока.
 func (s *Server) syncEpicMainForTask(ctx context.Context, project, epicID string, inf workspace.Info, repo *gitops.Repo, epicRef workspace.BranchRef) {
 	main := strings.TrimSpace(inf.GitBase)
 	if main == "" {
 		return
 	}
 
+	// 4.1: worktree ветки эпика (архитектор) мешает MergeFeature поставить
+	// релизную ветку во временный worktree — снимаем (автокоммит правок).
+	s.dropEpicWorktreeLocked(ctx, project, epicID)
 	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, gitops.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: синхрон с main перед стартом задачи", epicID),
 		PushURL: remotePushURL(inf),

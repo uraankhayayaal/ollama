@@ -352,6 +352,13 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	// Ф-3: git-проекты — специалист работает в своём worktree ветки задачи
 	// (OutputDir = worktree), поэтому авто-коммит на done соберёт его правки.
 	runner.SetOutputDir(sess.srv.taskOutputDir)
+	// 4.1: worktree ветки эпика для системного архитектора — лениво создаётся
+	// при публикации бэклога (резолвер вызывается архитектором внутри
+	// submit_architecture_backlog, после EpicCreatedHook) и снимается перед
+	// merge-операциями, которым нужен свободный checkout релизной ветки.
+	runner.SetEpicOutputDir(func(project, epicID string) string {
+		return sess.srv.epicWorktree(cctx, project, epicID)
+	})
 	sess.mu.Lock()
 	sess.runner = runner
 	sess.mu.Unlock()

@@ -450,6 +450,10 @@ func (s *Server) mergeTaskBranch(ctx context.Context, project string, t *board.T
 	lock.Lock()
 	defer lock.Unlock()
 
+	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
+	// checked-out — MergeFeature не смог бы поставить её во временный worktree.
+	s.dropEpicWorktreeLocked(ctx, project, t.EpicID)
+
 	res, err := repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, gitops.MergeFeatureOptions{
 		Message: fmt.Sprintf("задача %s: влитие в релиз эпика %s", t.TaskID, t.EpicID),
 		PushURL: remotePushURL(inf),

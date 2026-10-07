@@ -54,10 +54,15 @@ func runAgents(t *testing.T) []withRunAgent {
 	if err != nil {
 		t.Fatalf("DevOps-инженер: %v", err)
 	}
+	// Архитектор получил Run и LSP/CodeSearch на Этапе 4 (git и чтение кода
+	// в ветке эпика) — фрагменты компактного вывода ему уместны.
+	arch := architect.NewArchitectWithStore("tokeneconomy-arch-test", "задание", nil)
+	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-arch-test"))
 	return []withRunAgent{
 		{"backend-разработчик", backend.GetSystemMessages(nil)[0].Message, setOf(backend.GetTools()), true},
 		{"QA-инженер", qa.GetSystemMessages(nil)[0].Message, setOf(qa.GetTools()), false},
 		{"DevOps-инженер", dev.GetSystemMessages(nil)[0].Message, setOf(dev.GetTools()), false},
+		{"Системный архитектор", arch.GetSystemMessages(nil)[0].Message, setOf(arch.GetTools()), true},
 	}
 }
 
