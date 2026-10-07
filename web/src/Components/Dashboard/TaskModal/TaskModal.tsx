@@ -42,7 +42,7 @@ export function TaskModal({
   onRollback?: (t: TaskRow, to: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const m = MOVES[task.status] ?? { prev: null, next: null };
+  const m = MOVES[task.status] ?? { prev: [], next: [] };
   const taskGit = git?.tasks?.[task.task_id];
   const taskBranch = taskGit?.branch;
   // Ф-6 (5.3): откат — только пока рабочая копия задачи жива; сабмодули
@@ -255,8 +255,16 @@ export function TaskModal({
       <p className="desc">{task.description || "—"}</p>
 
       <div className="actions">
-        {m.prev && <button onClick={() => onTaskUpdate(task, { status: m.prev! })}>← {STATUS_LABEL[m.prev]}</button>}
-        {m.next && <button onClick={() => onTaskUpdate(task, { status: m.next! })}>{STATUS_LABEL[m.next]} →</button>}
+        {m.prev.map((s) => (
+          <button key={"p" + s} onClick={() => onTaskUpdate(task, { status: s })}>
+            ← {STATUS_LABEL[s]}
+          </button>
+        ))}
+        {m.next.map((s) => (
+          <button key={"n" + s} onClick={() => onTaskUpdate(task, { status: s })}>
+            {STATUS_LABEL[s]} →
+          </button>
+        ))}
       </div>
 
       <div className="meta">

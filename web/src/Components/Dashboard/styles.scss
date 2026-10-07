@@ -76,17 +76,18 @@
     .status-filters button.active.new { color: var(--st-todo, #64748b); }
     .status-filters button.active.analysis { color: var(--st-analysis, #7c3aed); }
     .status-filters button.active.ready { color: var(--st-ready, #0891b2); }
+    .status-filters button.active.human_help { color: var(--st-human-help, #b45309); }
     .status-filters button.active.in_progress { color: var(--st-in-progress, #2563eb); }
+    .status-filters button.active.testing { color: var(--st-testing, #0f766e); }
     .status-filters button.active.done { color: var(--st-done, #15803d); }
-    .status-filters button.active.paused { color: var(--st-paused, #b45309); }
     .match-count { margin-left: auto; color: var(--muted, #8a94a6); font-size: 11px; white-space: nowrap; }
   }
 
   .boardgrid {
     display: grid;
-    // 7 колонок статусов (Ф-6: добавлена «На паузе»); минимум сужен, чтобы
+    // 8 колонок статусов (Этап 2: human_help и testing); минимум сужен, чтобы
     // матрица влезала в панель доски без горизонтального скролла.
-    grid-template-columns: minmax(170px, 190px) repeat(7, minmax(108px, 1fr));
+    grid-template-columns: minmax(170px, 190px) repeat(8, minmax(108px, 1fr));
     gap: 7px;
     align-items: start;
     min-width: 0;
@@ -141,9 +142,10 @@
     .grid-head.new { color: var(--st-todo, #64748b); }
     .grid-head.analysis { color: var(--st-analysis, #7c3aed); }
     .grid-head.ready { color: var(--st-ready, #0891b2); }
+    .grid-head.human_help { color: var(--st-human-help, #b45309); }
     .grid-head.in_progress { color: var(--st-in-progress, #2563eb); }
+    .grid-head.testing { color: var(--st-testing, #0f766e); }
     .grid-head.done { color: var(--st-done, #15803d); }
-    .grid-head.paused { color: var(--st-paused, #b45309); }
 
     .epic-bugs {
       grid-column: 1 / -1;
@@ -287,17 +289,20 @@
         &.ready {
           color: var(--st-ready, #0891b2);
         }
+        &.human_help {
+          color: var(--st-human-help, #b45309);
+        }
         &.in_progress {
           color: var(--st-in-progress, #2563eb);
+        }
+        &.testing {
+          color: var(--st-testing, #0f766e);
         }
         &.done {
           color: var(--st-done, #15803d);
         }
         &.cancelled {
           color: var(--muted, #8a94a6);
-        }
-        &.paused {
-          color: var(--st-paused, #b45309);
         }
       }
 

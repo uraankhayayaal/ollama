@@ -141,20 +141,20 @@
 
 ## Этап 2: Фронтенд — колонки и статусы
 
-- [ ] 2.1. `web/src/Components/Dashboard/board.ts`: `STATUS_ORDER:8` —
+- [x] 2.1. `web/src/Components/Dashboard/board.ts`: `STATUS_ORDER:8` —
       порядок Р-6; `STATUS_LABEL:18`; `MOVES:32` →
       `Record<Status, {prev: Status[]; next: Status[]}>` (или два списка) —
       ручной перенос карточки проверяется по списку.
-- [ ] 2.2. `web/src/Types/Types.ts:7-14` — union типов статусов.
-- [ ] 2.3. `Dashboard/styles.scss`: фильтры (`:76-81`), шапка таблицы
+- [x] 2.2. `web/src/Types/Types.ts:7-14` — union типов статусов.
+- [x] 2.3. `Dashboard/styles.scss`: фильтры (`:76-81`), шапка таблицы
       (`:141-146`), карточка (вместо `&.paused:299` — `&.human_help` и
       `&.testing:290`-семейство), цвета колонок.
-- [ ] 2.4. `Cell.tsx:40` (проверка дропа по `MOVES`), `TaskCard.tsx:19`,
+- [x] 2.4. `Cell.tsx:40` (проверка дропа по `MOVES`), `TaskCard.tsx:19`,
       `TaskModal.tsx:45,258-259` (кнопки ←/→), `Dashboard.tsx:90,187,204`
       (фильтр `!== "paused"` → `!== "human_help"`), `App.tsx:544-574`
       (каскад паузы эпика), `EpicActionBar.tsx:63-64`,
       `EpicModal.tsx:44-45`, `GateBanner.tsx:5` (локальный `STATUS_LABEL`).
-- [ ] 2.5. Сборка фронта: `cd web && npm run build` (`tsc -b && vite
+- [x] 2.5. Сборка фронта: `cd web && npm run build` (`tsc -b && vite
       build`); веб-тестов нет.
 
 ## Этап 3: Сущность «комментарии» (вместо инъекций)

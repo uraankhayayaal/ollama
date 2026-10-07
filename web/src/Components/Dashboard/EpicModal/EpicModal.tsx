@@ -41,8 +41,8 @@ export function EpicModal({
     !!onPause &&
     epic.status !== "done" &&
     epic.status !== "cancelled" &&
-    epic.status !== "paused";
-  const canResume = !!onResume && epic.status === "paused";
+    epic.status !== "human_help";
+  const canResume = !!onResume && epic.status === "human_help";
   const canCancel =
     !!onCancel && epic.status !== "done" && epic.status !== "cancelled";
   const epicBranch = git?.epics?.[epic.task_id]?.branch;

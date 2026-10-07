@@ -46,6 +46,7 @@ export function EpicActionBar({
   const canDelete = tasks.every(
     (t) =>
       t.status !== "in_progress" &&
+      t.status !== "testing" &&
       t.status !== "done" &&
       t.status !== "cancelled",
   );
@@ -54,14 +55,15 @@ export function EpicActionBar({
   // Подсказка вместо кнопки — только для git-проектов (hasBranch === false),
   // где ветка ещё не создана; для не-git проектов hasBranch === undefined.
   const noBranchHint = epic.status === "done" && hasBranch === false;
-  // Пауза — у активного (не терминального, не приостановленного) эпика;
-  // возобновление — только у эпика «на паузе».
+  // Пауза — у активного (не терминального, не приостановленного) эпика:
+  // эпик уходит в human_help («помощь человека»); возобновление — только
+  // у эпика в human_help.
   const canPause =
     !!onPause &&
     epic.status !== "done" &&
     epic.status !== "cancelled" &&
-    epic.status !== "paused";
-  const canResume = !!onResume && epic.status === "paused";
+    epic.status !== "human_help";
+  const canResume = !!onResume && epic.status === "human_help";
   // Отмена — у любого не завершённого эпика (в т.ч. приостановленного).
   const canCancel =
     !!onCancel && epic.status !== "done" && epic.status !== "cancelled";

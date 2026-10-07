@@ -529,8 +529,10 @@ export function App() {
   // Перевод эпика в новый статус (кнопки «Пауза»/«Продолжить»/«Отменить»,
   // Ф-6): эпики изолированы в своих git-ветках, поэтому пауза/отмена НЕ
   // откатывают код — ветка остаётся, работа просто приостанавливается.
-  // Сервер каскадом переводит и задачи эпика (пауза/отмена/возобновление) —
-  // зеркалим каскад локально, WS-событие board сверит окончательно.
+  // Кнопка «Пауза» переводит эпик в human_help («помощь человека»): сервер
+  // каскадом уводит туда же не взятые в работу задачи, возобновление вернёт
+  // их на прежнее место цепочки. Зеркалим каскад локально, WS-событие board
+  // сверит окончательно.
   const applyEpicStatus = async (epic: EpicRow, status: Status) => {
     if (!project) {
       return;
@@ -541,23 +543,30 @@ export function App() {
         return prev;
       }
       let tasks = prev.tasks;
-      if (status === "paused" || status === "cancelled") {
-        // Каскад сервера: не взятые в работу задачи уходят вместе с эпиком;
-        // для паузы запоминаем исходный статус (возобновление вернёт туда же).
+      if (status === "human_help" || status === "cancelled") {
+        // Каскад сервера: pauseEpicTasks уводит в human_help задачи
+        // new/analysis/ready (исходный статус — в resume_status); отмена
+        // забирает каскадом ещё и human_help-задачи и resume_status сбрасывает.
+        tasks = tasks.map((t) => {
+          if (t.epic_id !== next.task_id) {
+            return t;
+          }
+          if (status === "human_help") {
+            return t.status === "new" || t.status === "analysis" || t.status === "ready"
+              ? { ...t, status, resume_status: t.status }
+              : t;
+          }
+          return t.status === "new" || t.status === "analysis" || t.status === "ready" || t.status === "human_help"
+            ? { ...t, status, resume_status: undefined }
+            : t;
+        });
+      } else if (status === "ready" || status === "in_progress") {
+        // Возобновление (resumeEpicTasks): возвращаются только
+        // human_help-задачи с resume_status; остальные «помощь человека»
+        // ждут ручного возврата.
         tasks = tasks.map((t) =>
-          t.epic_id === next.task_id &&
-          (t.status === "new" || t.status === "analysis" || t.status === "ready")
-            ? {
-                ...t,
-                status,
-                resume_status: status === "paused" ? t.status : undefined,
-              }
-            : t,
-        );
-      } else if (status === "ready") {
-        tasks = tasks.map((t) =>
-          t.epic_id === next.task_id && t.status === "paused"
-            ? { ...t, status: t.resume_status ?? "ready", resume_status: undefined }
+          t.epic_id === next.task_id && t.status === "human_help" && t.resume_status
+            ? { ...t, status: t.resume_status, resume_status: undefined }
             : t,
         );
       }
@@ -571,7 +580,7 @@ export function App() {
 
   const onEpicPause = async (epic: EpicRow) => {
     try {
-      await applyEpicStatus(epic, "paused");
+      await applyEpicStatus(epic, "human_help");
     } catch (e) {
       fail(e);
     }

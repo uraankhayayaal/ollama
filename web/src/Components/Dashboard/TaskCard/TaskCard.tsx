@@ -1,8 +1,8 @@
 // Карточка задачи: drag&drop, ручные переходы по соседним статусам (←/→).
 // Клик по карточке → модалка с подробностями; кнопки управления помечают
 // событие, чтобы клик не всплывал.
-import type { TaskRow } from "@/Types";
-import { MOVES } from "../board";
+import type { Status, TaskRow } from "@/Types";
+import { MOVES, STATUS_LABEL } from "../board";
 import { tokenLabel, tokenTitle } from "../tokens";
 import { setDragID } from "../dnd";
 import "./styles.scss";
@@ -16,7 +16,20 @@ export function TaskCard({
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onOpen: () => void;
 }) {
-  const m = MOVES[task.status] ?? { prev: null, next: null };
+  const m = MOVES[task.status] ?? { prev: [], next: [] };
+  // На узкой карточке кнопки-стрелки без подписей — цель подсказкой (title).
+  const moveBtn = (s: Status, arrow: string) => (
+    <button
+      key={s}
+      title={STATUS_LABEL[s]}
+      onClick={(e) => {
+        e.stopPropagation();
+        onTaskUpdate(task, { status: s });
+      }}
+    >
+      {arrow}
+    </button>
+  );
 
   return (
     <li
@@ -33,26 +46,8 @@ export function TaskCard({
         </div>
       )}
       <div className="controls">
-        {m.prev && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onTaskUpdate(task, { status: m.prev! });
-            }}
-          >
-            ←
-          </button>
-        )}
-        {m.next && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onTaskUpdate(task, { status: m.next! });
-            }}
-          >
-            →
-          </button>
-        )}
+        {m.prev.map((s) => moveBtn(s, "←"))}
+        {m.next.map((s) => moveBtn(s, "→"))}
       </div>
     </li>
   );

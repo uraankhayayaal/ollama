@@ -35,10 +35,11 @@
   &.new { border-top-color: var(--st-todo, #64748b); }
   &.analysis { border-top-color: var(--st-analysis, #7c3aed); }
   &.ready { border-top-color: var(--st-ready, #0891b2); }
+  &.human_help { border-top-color: var(--st-human-help, #b45309); }
   &.in_progress { border-top-color: var(--st-in-progress, #2563eb); }
+  &.testing { border-top-color: var(--st-testing, #0f766e); }
   &.done { border-top-color: var(--st-done, #15803d); }
   &.cancelled { border-top-color: var(--muted, #8a94a6); }
-  &.paused { border-top-color: var(--st-paused, #b45309); }
 
   &.collapsed {
     min-height: 0;

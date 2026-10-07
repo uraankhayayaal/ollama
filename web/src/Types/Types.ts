@@ -1,17 +1,19 @@
 // Типы контракта REST/SSE Web UI. Зеркалят server/session.go и board/entity.go.
 
 // Статусы зеркалят board/entity.go: единая цепочка для эпиков и задач
-// (new -> analysis -> ready -> in_progress -> done; cancelled — терминальный).
+// (new -> analysis -> ready -> in_progress -> testing -> done; human_help —
+// боковая «помощь человека», cancelled — терминальный).
 // Важно: сервер валидирует переходы (ValidateTransition), поэтому в UI
 // переводы между колонками ограничены соседними статусами.
 export type Status =
   | "new"
   | "analysis"
   | "ready"
+  | "human_help"
   | "in_progress"
+  | "testing"
   | "done"
-  | "cancelled"
-  | "paused";
+  | "cancelled";
 
 // Совместимые алиасы (ретро): некоторые файлы импортируют Epic/Task/
 // BoardSnapshot вместо EpicRow/TaskRow/BoardView — это одно и то же.
@@ -72,7 +74,7 @@ export interface TaskRow {
   // Конфликтующие файлы мёрджа ветки задачи ↔ релиз эпика (Ф-4/Ф-5). Непусто —
   // ветка не влилась, нужен резолв (ResolveGitConflicts / ручной rebase).
   merge_conflict_files?: string[];
-  // Статус, из которого задача приостановлена (пауза эпика, Ф-6):
+  // Статус, из которого задача ушла в «помощь человека» при паузе эпика:
   // возобновление возвращает её на прежнее место цепочки.
   resume_status?: Status;
   // Учёт расхода LLM-токенов (Ф-1

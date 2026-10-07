@@ -6,7 +6,9 @@ const STATUS_LABEL: Record<string, string> = {
   new: "Новые",
   analysis: "В анализе",
   ready: "Готовы к работе",
+  human_help: "Помощь человека",
   in_progress: "В работе",
+  testing: "На тестировании",
   done: "Готово",
   cancelled: "Отменены",
 };
