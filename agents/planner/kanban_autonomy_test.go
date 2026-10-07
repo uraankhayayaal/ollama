@@ -17,6 +17,7 @@ import (
 	"ai/models"
 	"ai/projects"
 	"ai/runner"
+	"ai/tools"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -228,7 +229,10 @@ func (p *heavyProbeProvider) Generate(ctx context.Context, agent agents.Agent) (
 		if models.HeavyModelFor(ctx) {
 			p.note("large")
 			// Сильная модель доводит задачу до конца.
-			return &runner.AgentResponse{Content: "готово"}, nil
+			return &runner.AgentResponse{
+				Content:   "готово",
+				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`}},
+			}, nil
 		}
 		p.note("small")
 		return &runner.AgentResponse{

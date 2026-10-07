@@ -545,6 +545,13 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 	}
 	progress = progress || p
 
+	// Фаза «На тестирование»: задачи в testing доводит тестировщик/специалист.
+	p, err = k.phaseTesting(ctx)
+	if err != nil {
+		return false, err
+	}
+	progress = progress || p
+
 	// Багрепорты и финализация эпиков.
 	p, err = k.phaseBugs(ctx)
 	if err != nil {
@@ -1526,6 +1533,14 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			progress = true
 			continue
 		}
+		if current.Status == board.StatusTesting {
+			k.log.Infof("[задача %s] в работе → на тестирование (агент подтвердил сам)", t.TaskID)
+			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
+				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
+			}
+			progress = true
+			continue
+		}
 		// Специалист сам вывел задачу из работы: human_help (задача
 		// невыполнима — нет исходного кода/зависимостей, блокер, зацикливание)
 		// или cancelled (снята с работы). Это осознанный шаг агента, а не
@@ -1547,29 +1562,30 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			progress = true
 			continue
 		}
-		// Ф-6 (инцидент FEL-04): fallback закрывает задачу, которую агент
-		// фактически не сделал, только если серверный гард «phantom done»
-		// подтвердил наличие работы (свои коммиты ветки или правки в
-		// worktree). Отказ гарда — не ошибка раунда, но и не бесплатная
-		// попытка: работа без результата съедает бюджет автономии так же,
-		// как петля, иначе FEL-04 превращается в бесконечное сжигание
-		// токенов (задача возвращается в очередь и гоняется заново). По
-		// бюджету (KANBAN_MAX_ESCALATIONS) задача уходит в «помощь
-		// человека», а запуск сообщает, что нужен человек.
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
-			k.log.Warnf("[задача %s] fallback в done отклонён гардом (инцидент FEL-04: пустая задача не должна закрываться): %v", t.TaskID, err)
+		// Разработчик завершил раунд, но не сменил статус (непонятный исход) —
+		// по Этапу 6: переводим задачу в «На тестирование» (testing).
+		// «Отказ гарда» (переход отклонён) трактуем как невозможность сдать задачу:
+		// эскалируем в human_help с комментарием и постановкой причины.
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusTesting); err != nil {
+			k.log.Warnf("[задача %s] переход в testing отклонён: %v", t.TaskID, err)
+			if _, perr := k.store.AddTaskComment(ctx, t.TaskID, board.Comment{
+				Author: "system",
+				Type:   board.CommentTypeSystem,
+				Body:   fmt.Sprintf("Авто-фолбэк: не удалось перевести задачу в «На тестирование» (testing). Причина: %s", truncateText(err.Error(), 400)),
+			}); perr != nil {
+				k.log.Warnf("[задача %s] комментарий к задаче: %v", t.TaskID, perr)
+			}
 			if _, escErr := k.escalate(ctx, current, escalationDiag{
 				event:  "работа не сделана",
 				detail: err.Error(),
-				action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом: задача закроется только когда в её ветке появится свой коммит или в worktree будут правки. Если же задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason): это честный выход, задача уйдёт человеку вместо повторов без результата.",
+				action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
 			}); escErr != nil {
 				return false, fmt.Errorf("задача %s: эскалация пустой работы: %w", t.TaskID, escErr)
 			}
 			progress = true
 			continue
 		}
-		k.log.Infof("[задача %s] в работе → выполнена (fallback: агент не сменил статус)", t.TaskID)
-		// Ф-3: факт расхода токенов задачи фиксируется сразу после выполнения.
+		k.log.Infof("[задача %s] в работе → на тестирование (fallback: агент не сменил статус)", t.TaskID)
 		if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
 			k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
 		}
@@ -1628,8 +1644,10 @@ func (k *KanbanRunner) escalate(ctx context.Context, t *board.Task, diag escalat
 	if t.Escalations >= budget {
 		// Причина остановки оседает в задаче (карточка в UI): человек должен
 		// увидеть, ЧТО именно не получилось, а не «загадочный простой».
+		reasonFull := fmt.Sprintf("Бюджет автономии исчерпан (%d эскалаций): %s. %s. Действие: %s",
+			t.Escalations, diag.event, truncateText(diag.detail, 400), diag.action)
 		if err := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
-			cur.PauseReason = truncateText(diag.detail, 500)
+			cur.PauseReason = truncateText(reasonFull, 800)
 			return nil
 		}); err != nil {
 			return false, fmt.Errorf("задача %s: запись причины остановки: %w", t.TaskID, err)
@@ -1637,6 +1655,11 @@ func (k *KanbanRunner) escalate(ctx context.Context, t *board.Task, diag escalat
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusHumanHelp); err != nil {
 			return false, fmt.Errorf("задача %s: остановка исчерпанием бюджета: %w", t.TaskID, err)
 		}
+		_, _ = k.store.AddTaskComment(ctx, t.TaskID, board.Comment{
+			Author: "system",
+			Type:   board.CommentTypeSystem,
+			Body:   fmt.Sprintf("Форсмажор: %s\n\nДиагноз: %s\n\nАнализ/рекомендация: %s", diag.event, diag.detail, diag.action),
+		})
 		stop := fmt.Sprintf("задача %s: %s — попытка %d, бюджет автономии исчерпан: работа остановлена, нужен человек (последняя причина: %s)",
 			t.TaskID, diag.event, t.Escalations+1, truncateText(diag.detail, 160))
 		k.setStopReason(stop)
@@ -1701,10 +1724,16 @@ func (k *KanbanRunner) forceMajeure(ctx context.Context, taskID, reason string) 
 		if _, err := k.store.AddTaskComment(ctx, taskID, board.Comment{
 			Author: "system",
 			Type:   board.CommentTypeSystem,
-			Body:   msg + ". Нужно решение человека: разбери причину (логи проекта, вывод проверок) и верни задачу в работу.",
+			Body:   "Форсмажор (непредвиденный случай): " + reason + ". Нужно решение человека: разбери причину (логи проекта, вывод проверок) и верни задачу в работу.",
 		}); err != nil {
 			k.log.Warnf("[доска] форс-мажор задачи %s: комментарий: %v", taskID, err)
 		}
+		_ = k.store.PatchTask(ctx, taskID, func(cur *board.Task) error {
+			if cur.PauseReason == "" {
+				cur.PauseReason = truncateText(reason, 800)
+			}
+			return nil
+		})
 		if err := k.store.SetTaskStatus(ctx, taskID, board.StatusHumanHelp); err != nil {
 			k.log.Warnf("[доска] форс-мажор задачи %s: статус human_help: %v", taskID, err)
 		}
@@ -2211,7 +2240,7 @@ func (k *KanbanRunner) taskPrompt(t *board.Task) string {
 	b.WriteString("- Описание задачи — это отсылки к файлам («контракт в ./server/..., см. ./docs/...»), а не полный текст кода или структуры: читай перечисленные файлы из ветки эпика и не вставляй их содержимое в ответы/комментарии.\n")
 	b.WriteString("- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n")
 	b.WriteString("- Не выходи за пределы своей части монорепозитория (роль задана промптом).\n")
-	fmt.Fprintf(&b, "- Если у тебя есть инструменты доски: идентификатор задачи %s. Ты можешь читать её контракт (BoardGetTask); когда работа полностью выполнена (сборка и проверки зелёные) — ОБЯЗАТЕЛЬНО переведи задачу в статус done вызовом BoardSetTaskStatus.\n", t.TaskID)
+	fmt.Fprintf(&b, "- Если у тебя есть инструменты доски: идентификатор задачи %s. Ты можешь читать её контракт (BoardGetTask) и комментарии к ней; ОБЯЗАТЕЛЬНО учти описание и комментарии задачи при выполнении. Когда работа полностью выполнена (сборка и проверки зелёные) — ОБЯЗАТЕЛЬНО переведи задачу в статус testing вызовом BoardSetTaskStatus («На тестирование»).\n", t.TaskID)
 	b.WriteString("- Если ты QA-инженер и нашёл дефект по контракту — оформи багрепорт инструментом BoardCreateBugReport (статус new), его разберут QA Lead и архитектор.")
 	return b.String()
 }
@@ -2274,6 +2303,118 @@ func leadName(epic *board.Epic) string {
 }
 
 // truncateText обрезает длинный текст для логов.
+
+// phaseTesting доводит задачи в статусе "на тестирование" (StatusTesting)
+// до "выполнено". QA (или назначенный специалист) берёт задачу из testing,
+// доводит до done, либо возвращает замечаниями в работу/human_help.
+func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
+	tasks, err := k.store.ListTasks(ctx)
+	if err != nil {
+		return false, err
+	}
+	progress := false
+	busy := map[string]bool{}
+	for _, t := range tasks {
+		if t.Status != board.StatusTesting {
+			continue
+		}
+		if busy[t.Assignee] {
+			continue
+		}
+		busy[t.Assignee] = true
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusInProgress); err != nil {
+			return false, fmt.Errorf("задача %s: testing -> in_progress: %w", t.TaskID, err)
+		}
+		k.noteEpicProgress(ctx, t.EpicID)
+		specialist, err := k.specialistFor(t)
+		if err != nil {
+			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
+		}
+		if sb, ok := specialist.(interface{ SetBoardStore(*board.Store) }); ok {
+			sb.SetBoardStore(k.store)
+		}
+		if k.outputDir != nil {
+			if dir := k.outputDir(k.store.Project(), t.TaskID); dir != "" {
+				if so, ok := specialist.(interface{ SetOutputDir(string) }); ok {
+					so.SetOutputDir(dir)
+				}
+			}
+		}
+		if k.store != nil {
+			if sn, ok := specialist.(interface{ SetProjectName(string) }); ok {
+				sn.SetProjectName(k.store.Project())
+			}
+			if ti, ok := specialist.(interface{ SetTaskID(string) }); ok {
+				ti.SetTaskID(t.TaskID)
+			}
+		}
+		taskCtx := board.NewInjectionContext(ctx, t.Injections)
+		taskCtx = board.NewCommentContext(taskCtx, t.Comments)
+		if k.store != nil {
+			taskCtx = board.WithInjectionSource(taskCtx, func(ctx context.Context) ([]board.Injection, error) {
+				fresh, err := k.store.GetTask(ctx, t.TaskID)
+				if err != nil {
+					return nil, err
+				}
+				if fresh == nil {
+					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
+				}
+				return fresh.Injections, nil
+			})
+			taskCtx = board.WithCommentSource(taskCtx, func(ctx context.Context) (board.Comments, error) {
+				fresh, err := k.store.GetTask(ctx, t.TaskID)
+				if err != nil {
+					return nil, err
+				}
+				if fresh == nil {
+					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
+				}
+				return fresh.Comments, nil
+			})
+		}
+		taskCtx = board.WithInjectionScope(taskCtx, board.InjectionScope{Project: k.store.Project(), TaskID: t.TaskID, Role: t.Assignee})
+		if t.ModelTier == board.ModelTierLarge {
+			taskCtx = models.WithHeavyModel(taskCtx)
+		}
+		k.markActive(t.TaskID)
+		resp, genErr := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
+		k.unmarkActive(t.TaskID)
+		if genErr != nil {
+			return false, fmt.Errorf("задача %s: %w", t.TaskID, genErr)
+		}
+		if resp != nil && resp.Looped {
+			done, err := k.escalateLoop(ctx, t, resp.LoopReason)
+			if err != nil {
+				return false, err
+			}
+			progress = progress || done
+			continue
+		}
+		if resp != nil && resp.Truncated {
+			return false, fmt.Errorf("задача %s: цикл остановлен по лимиту раундов", t.TaskID)
+		}
+		current, err := k.store.GetTask(ctx, t.TaskID)
+		if err != nil {
+			return false, fmt.Errorf("задача %s: чтение статуса после работы: %w", t.TaskID, err)
+		}
+		switch current.Status {
+		case board.StatusDone:
+			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
+				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
+			}
+			progress = true
+			continue
+		case board.StatusHumanHelp, board.StatusCancelled, board.StatusTesting:
+			progress = true
+			continue
+		default:
+			progress = true
+			continue
+		}
+	}
+	return progress, nil
+}
+
 func truncateText(s string, n int) string {
 	if len(s) <= n {
 		return strings.TrimSpace(s)

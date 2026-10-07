@@ -50,7 +50,12 @@ func (p *askFirstProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
+		return &runner.AgentResponse{
+			Content: "Задача выполнена.",
+			ToolCalls: []tools.ToolCall{
+				{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+			},
+		}, nil
 	default:
 		a, ok := agent.(*architect.Architect)
 		if !ok || a.ReviewMode || a.ReviewerMode {
@@ -130,7 +135,12 @@ func (p *autonomyProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
+		return &runner.AgentResponse{
+			Content: "Задача выполнена.",
+			ToolCalls: []tools.ToolCall{
+				{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+			},
+		}, nil
 	default:
 		a, ok := agent.(*architect.Architect)
 		if !ok || a.ReviewMode || a.ReviewerMode {

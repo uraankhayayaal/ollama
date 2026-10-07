@@ -37,7 +37,12 @@ func (p *kanbanProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
+		return &runner.AgentResponse{
+			Content: "Задача выполнена.",
+			ToolCalls: []tools.ToolCall{
+				{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+			},
+		}, nil
 	default:
 		// Системный архитектор: реально публикуем бэклог вызовом инструмента.
 		if a, ok := agent.(*architect.Architect); ok {
@@ -341,7 +346,10 @@ func (p *bugFlowProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 				return nil, err
 			}
 		}
-		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
+		return &runner.AgentResponse{
+			Content:   "Задача выполнена.",
+			ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`}},
+		}, nil
 	case strings.HasPrefix(umsg, "Проведи триаж"):
 		if a, ok := agent.(*qalead.QALead); ok {
 			_, err := a.CallFunction(tools.BoardSetBugStatus, map[string]any{
@@ -662,7 +670,12 @@ func (p *queueProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 		p.decomposeOrder = append(p.decomposeOrder, "ARCH-BE")
 		return &runner.AgentResponse{Content: backendQueueDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
+		return &runner.AgentResponse{
+			Content: "Задача выполнена.",
+			ToolCalls: []tools.ToolCall{
+				{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+			},
+		}, nil
 	default:
 		if a, ok := agent.(*architect.Architect); ok {
 			_, err := a.CallFunction(architect.SubmitBacklogToolName, queueArchitectBacklogArgs)

@@ -11,6 +11,7 @@ import (
 	"ai/board"
 	"ai/projects"
 	"ai/runner"
+	"ai/tools"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -40,7 +41,12 @@ func (p *reviewFlowProvider) Generate(_ context.Context, agent agents.Agent) (*r
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
+		return &runner.AgentResponse{
+			Content: "Задача выполнена.",
+			ToolCalls: []tools.ToolCall{
+				{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+			},
+		}, nil
 	}
 	return &runner.AgentResponse{Content: ""}, nil
 }
