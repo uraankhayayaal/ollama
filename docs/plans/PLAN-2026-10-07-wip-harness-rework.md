@@ -103,38 +103,38 @@
 
 ## Этап 1: Статусы `human_help` и `testing`
 
-- [ ] 1.1. `board/entity.go`: константы `StatusHumanHelp = "human_help"` и
+- [x] 1.1. `board/entity.go`: константы `StatusHumanHelp = "human_help"` и
       `StatusTesting = "testing"`; `Label` («Помощь человека», «На
       тестирование»); `Valid`; `Terminal` не меняется (`done|cancelled`).
-- [ ] 1.2. `ValidateTransition:87-123`: `human_help` — **боковая ветка**:
+- [x] 1.2. `ValidateTransition:87-123`: `human_help` — **боковая ветка**:
       вход из любого нетерминального статуса, выход в `ready` (помощь
       получена, задача в очередь) и `in_progress` (продолжаем). Ключевые
       рёбра: `in_progress → testing`, `testing → done` (только тестировщик),
       `testing → in_progress` (замечания). Соседность сохраняем по
       Р-6: `ready → human_help → in_progress`, `in_progress → testing →
       done`. Обновить комментарий `:79-84`.
-- [ ] 1.3. `board/store.go`: `SetTaskStatus`-хуки (`:661-698`) —
+- [x] 1.3. `board/store.go`: `SetTaskStatus`-хуки (`:661-698`) —
       `TaskDoneGuard`/`TaskDoneHook` остаются на `done` (их выполняет
       тестировщик: автокоммит его тестов + мёрдж задачи в эпик),
       `TaskInProgressHook` — на вход в `in_progress`; `attempts++` считать
       по-прежнему по входу в `in_progress` (возврат с testing — новая
       попытка).
-- [ ] 1.4. Каскад паузы (`store.go:315-406`): `pauseEpicTasks`/
+- [x] 1.4. Каскад паузы (`store.go:315-406`): `pauseEpicTasks`/
       `resumeEpicTasks`/`setEpicTasksStatus` + `ResumeStatus` перевести с
       `paused` на `human_help`; `paused` удалить из `Valid`.
-- [ ] 1.5. `agents/planner/kanban.go`: `hasWork:610,655`,
+- [x] 1.5. `agents/planner/kanban.go`: `hasWork:610,655`,
       `pipelineIdle:1041`, `epicWorkable:701`, `recoverStuckTasks:1092`
       (`human_help` **не** трогать автоматически — только ручной выход),
       `blockingDependencyEpic:1182-1187`, `nextLeadEpic:1211`,
       `phaseArchitectReview:812`, `readyTasks:1730`,
       `noteEpicProgress:1718`, `phaseComplete:1647` (цепочка `:1663-1665`),
       баг-фильтры `phaseBugs:1569`.
-- [ ] 1.6. `escalateLoop:1521` и `setStopReason:141-152`: отказ бюджета
+- [x] 1.6. `escalateLoop:1521` и `setStopReason:141-152`: отказ бюджета
       эскалации → `StatusHumanHelp` + комментарий (этап 3) вместо
       `StatusPaused`; при непустом бюджете — как сейчас (`model_tier=large`
       + продолжение в `ready`).
-- [ ] 1.7. `server/chatassist.go:397` — список статусов ассистента.
-- [ ] 1.8. Тесты: `board/entity_test.go:145-174` (FSM), `board/store_test.go:
+- [x] 1.7. `server/chatassist.go:397` — список статусов ассистента.
+- [x] 1.8. Тесты: `board/entity_test.go:145-174` (FSM), `board/store_test.go:
       251-362`, `server/epicstatus_test.go`, `kanban_pause_test.go` (→
       переименовать логику в human-help), `kanban_loop_test.go:107`,
       `kanban_autonomy_test.go:363`.

@@ -546,12 +546,12 @@ func (t *boardSetEpicStatusTool) Name() string { return BoardSetEpicStatus }
 func (t *boardSetEpicStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetEpicStatus,
-		Description: "Перевести эпик в новый статус: new, analysis, ready, in_progress, done, cancelled. Переходы валидируются конечным автоматом доски.",
+		Description: "Перевести эпик в новый статус: new, analysis, ready, human_help, in_progress, testing, done, cancelled. Переходы валидируются конечным автоматом доски.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"epic_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | in_progress | done | cancelled"},
+				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | human_help | in_progress | testing | done | cancelled"},
 			},
 			"required":             []string{"epic_id", "status"},
 			"additionalProperties": false,
@@ -785,12 +785,12 @@ func (t *boardSetTaskStatusTool) Name() string { return BoardSetTaskStatus }
 func (t *boardSetTaskStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetTaskStatus,
-		Description: "Перевести задачу в новый статус: new, analysis, ready, in_progress, done, cancelled. Используется специалистами (выполнил -> done) и лидами (перепланирование).",
+		Description: "Перевести задачу в новый статус: new, analysis, ready, human_help, in_progress, testing, done, cancelled. Используется специалистами (сдача работы) и лидами (перепланирование).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | in_progress | done | cancelled"},
+				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | human_help | in_progress | testing | done | cancelled"},
 			},
 			"required":             []string{"task_id", "status"},
 			"additionalProperties": false,

@@ -335,7 +335,8 @@ func TestEscalatedRequirementSurvivesNextRun(t *testing.T) {
 }
 
 // TestEscalationBudgetStopsAndAsksHuman — исчерпание бюджета: работа задачи
-// останавливается (пауза), счётчик не растёт дальше, причина доходит до чата.
+// останавливается («помощь человека»), счётчик не растёт дальше, причина
+// доходит до чата.
 func TestEscalationBudgetStopsAndAsksHuman(t *testing.T) {
 	t.Setenv("KANBAN_MAX_ESCALATIONS", "1")
 	store := autonomyStore(t, "escalate-budget")
@@ -360,8 +361,8 @@ func TestEscalationBudgetStopsAndAsksHuman(t *testing.T) {
 		t.Fatalf("escalateLoop 2: %v", err)
 	}
 	got, _ := store.GetTask(ctx, "T-1")
-	if got.Status != board.StatusPaused {
-		t.Fatalf("после исчерпания бюджета статус %s, ожидалась пауза", got.Status)
+	if got.Status != board.StatusHumanHelp {
+		t.Fatalf("после исчерпания бюджета статус %s, ожидалась «помощь человека»", got.Status)
 	}
 	if got.Escalations != 1 {
 		t.Fatalf("эскалаций %d, ожидался бюджет 1", got.Escalations)

@@ -218,11 +218,11 @@ func TestMeta(t *testing.T) {
 	}
 }
 
-// TestStoreEpicPauseResumeCascade — пауза эпика (Ф-6) каскадом приостанавливает
-// его задачи, которые ещё не взял в работу специалист, запоминая исходный
-// статус; «в работе» доводит текущий раунд оркестратора. Возобновление
-// возвращает задачи на прежнее место цепочки.
-func TestStoreEpicPauseResumeCascade(t *testing.T) {
+// TestStoreEpicHumanHelpCascade — «помощь человека» эпика (Р-4) каскадом
+// останавливает его задачи, которые ещё не взял в работу специалист,
+// запоминая исходный статус; «в работе» доводит текущий раунд оркестратора.
+// Возобновление возвращает задачи на прежнее место цепочки.
+func TestStoreEpicHumanHelpCascade(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
@@ -247,8 +247,8 @@ func TestStoreEpicPauseResumeCascade(t *testing.T) {
 	mustTask("T-01", StatusAnalysis, StatusReady, StatusInProgress)
 	mustTask("T-02", StatusAnalysis, StatusReady)
 
-	// Эпик доводится до «в работе», затем приостанавливается.
-	for _, st := range []Status{StatusAnalysis, StatusReady, StatusInProgress, StatusPaused} {
+	// Эпик доводится до «в работе», затем останавливается (помощь человека).
+	for _, st := range []Status{StatusAnalysis, StatusReady, StatusInProgress, StatusHumanHelp} {
 		if err := s.SetEpicStatus(ctx, "ARC-01", st); err != nil {
 			t.Fatalf("эпик -> %s: %v", st, err)
 		}
@@ -266,9 +266,9 @@ func TestStoreEpicPauseResumeCascade(t *testing.T) {
 		}
 	}
 	assertTasks(map[string]Status{
-		"T-01": StatusInProgress, // «в работе» пауза эпика не трогает
-		"T-02": StatusPaused,
-		"T-03": StatusPaused,
+		"T-01": StatusInProgress, // «в работе» остановка эпика не трогает
+		"T-02": StatusHumanHelp,
+		"T-03": StatusHumanHelp,
 	})
 	// Исходные статусы запомнены — возобновление вернёт задачи на место.
 	for _, id := range []string{"T-02", "T-03"} {
@@ -285,9 +285,9 @@ func TestStoreEpicPauseResumeCascade(t *testing.T) {
 		}
 	}
 
-	// Возобновление: эпик paused -> ready, задачи возвращаются в свои статусы.
+	// Возобновление: эпик human_help -> ready, задачи возвращаются в свои статусы.
 	if err := s.SetEpicStatus(ctx, "ARC-01", StatusReady); err != nil {
-		t.Fatalf("эпик paused -> ready: %v", err)
+		t.Fatalf("эпик human_help -> ready: %v", err)
 	}
 	assertTasks(map[string]Status{
 		"T-01": StatusInProgress,
@@ -306,7 +306,7 @@ func TestStoreEpicPauseResumeCascade(t *testing.T) {
 }
 
 // TestStoreEpicCancelCascade — отмена эпика (Ф-6) помечает отменёнными его
-// незавершённые задачи (включая приостановленные), не удаляя записи: ветки и
+// незавершённые задачи (включая остановленные), не удаляя записи: ветки и
 // код остаются как артефакт, хронология доски сохраняется.
 func TestStoreEpicCancelCascade(t *testing.T) {
 	ctx := context.Background()
@@ -324,12 +324,12 @@ func TestStoreEpicCancelCascade(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Эпик приостановлен (T-01/T-02 — «на паузе»), затем отменён.
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusPaused); err != nil {
-		t.Fatalf("эпик new -> paused: %v", err)
+	// Эпик остановлен (T-01/T-02 — «помощь человека»), затем отменён.
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusHumanHelp); err != nil {
+		t.Fatalf("эпик new -> human_help: %v", err)
 	}
 	if err := s.SetEpicStatus(ctx, "ARC-01", StatusCancelled); err != nil {
-		t.Fatalf("эпик paused -> cancelled: %v", err)
+		t.Fatalf("эпик human_help -> cancelled: %v", err)
 	}
 	for _, id := range []string{"T-01", "T-02"} {
 		got, err := s.GetTask(ctx, id)
@@ -350,24 +350,24 @@ func TestStoreEpicCancelCascade(t *testing.T) {
 	}
 }
 
-// TestStoreEpicPauseDoesNotBlockAllDone — приостановленный эпик не считается
-// выполненным: задача пользователя не решена, пока эпик на паузе.
-func TestStoreEpicPauseDoesNotBlockAllDone(t *testing.T) {
+// TestStoreEpicHumanHelpDoesNotBlockAllDone — остановленный эпик не считается
+// выполненным: задача пользователя не решена, пока эпик на «помощи человека».
+func TestStoreEpicHumanHelpDoesNotBlockAllDone(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
 	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "ARC-01"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusPaused); err != nil {
-		t.Fatalf("new -> paused: %v", err)
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusHumanHelp); err != nil {
+		t.Fatalf("new -> human_help: %v", err)
 	}
 	done, err := s.AllDone(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if done {
-		t.Fatal("эпик на паузе не даёт успешного решения задачи")
+		t.Fatal("эпик на «помощи человека» не даёт успешного решения задачи")
 	}
 }
 

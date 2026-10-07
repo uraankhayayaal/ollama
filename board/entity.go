@@ -10,7 +10,10 @@
 //     эпик (Task.EpicID).
 //
 // Статусы эпиков и задач единые: новая -> в анализе -> готова к работе ->
-// в работе -> выполнена (или отменена). Переходы валидируются (ValidateTransition).
+// [помощь человека] -> в работе -> на тестирование -> выполнена (или
+// отменена). «Помощь человека» — боковая ветка (эскалации, форсмажоры),
+// «на тестирование» — сдача разработчиком и приёмка тестировщиком.
+// Переходы валидируются (ValidateTransition).
 package board
 
 import (
@@ -22,18 +25,18 @@ import (
 // Status — статус эпика или задачи на общей доске.
 type Status string
 
-// Статусы, общие для эпиков и задач (Kanban-доска).
+// Статусы, общие для эпиков и задач (Kanban-доска). Порядок колонок доски
+// (Р-6 PLAN-2026-10-07-wip-harness-rework.md): new → analysis → ready →
+// human_help → in_progress → testing → done → cancelled.
 const (
 	StatusNew        Status = "new"         // новая
 	StatusAnalysis   Status = "analysis"    // в анализе
 	StatusReady      Status = "ready"       // готова к работе
+	StatusHumanHelp  Status = "human_help"  // помощь человека
 	StatusInProgress Status = "in_progress" // в работе
+	StatusTesting    Status = "testing"     // на тестирование
 	StatusDone       Status = "done"        // выполнена
 	StatusCancelled  Status = "cancelled"   // отменена
-	// StatusPaused — «на паузе»: запись приостановлена (работа не ведётся), но
-	// не отменена — ветки/код остаются, позже можно возобновить (ready).
-	// Не терминальный статус.
-	StatusPaused Status = "paused"
 )
 
 // Label возвращает человекочитаемое название статуса (для логов/UI).
@@ -45,14 +48,16 @@ func (s Status) Label() string {
 		return "в анализе"
 	case StatusReady:
 		return "готова к работе"
+	case StatusHumanHelp:
+		return "помощь человека"
 	case StatusInProgress:
 		return "в работе"
+	case StatusTesting:
+		return "на тестирование"
 	case StatusDone:
 		return "выполнена"
 	case StatusCancelled:
 		return "отменена"
-	case StatusPaused:
-		return "на паузе"
 	default:
 		return string(s)
 	}
@@ -67,7 +72,8 @@ func (s Status) Terminal() bool {
 // Valid проверяет, что статус известен системе.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusNew, StatusAnalysis, StatusReady, StatusInProgress, StatusDone, StatusCancelled, StatusPaused:
+	case StatusNew, StatusAnalysis, StatusReady, StatusHumanHelp,
+		StatusInProgress, StatusTesting, StatusDone, StatusCancelled:
 		return true
 	}
 	return false
@@ -76,12 +82,21 @@ func (s Status) Valid() bool {
 // ValidateTransition проверяет допустимость перехода from -> to по конечному
 // автомату статусов Kanban-доски:
 //
-//	новая         -> в анализе, на паузе, отменена
-//	в анализе     -> готова к работе, на паузе, отменена
-//	готова к работе -> в работе, на паузе, отменена
-//	в работе      -> готова к работе (откат кода, см. ниже), выполнена, на паузе, отменена
-//	на паузе      -> готова к работе (возобновление), отмена
+//	новая           -> в анализе, помощь человеку, отменена
+//	в анализе       -> готова к работе, помощь человеку, отменена
+//	готова к работе -> в работе, помощь человеку, отменена
+//	помощь человека -> готова к работе (помощь получена, задача в очередь),
+//	                   в работе (продолжаем), отмена
+//	в работе        -> готова к работе (откат кода, см. ниже), на
+//	                   тестирование, помощь человеку, выполнена, отменена
+//	на тестирование -> в работе (замечания тестировщика), выполнена
+//	                   (приёмка), помощь человеку, отмена
 //	(терминальные: выполнена/отменена переходов не имеют)
+//
+// «Помощь человека» — боковая ветка (Р-6): вход из любого нетерминального
+// статуса, выход только обратно в работу. Отмена — тоже доступна из любого
+// нетерминального статуса. Соседность колонок: ready → human_help →
+// in_progress → testing → done.
 //
 // Одинаковый статус не считается переходом (допускается для идемпотентности).
 func ValidateTransition(from, to Status) error {
@@ -91,17 +106,28 @@ func ValidateTransition(from, to Status) error {
 	if !from.Valid() || !to.Valid() {
 		return &StatusError{From: from, To: to, Reason: "неизвестный статус"}
 	}
+	// Боковые переходы: из любого нетерминального статуса — в «помощь
+	// человека» (эскалация/форсмажор) или в «отменена».
+	if !from.Terminal() && (to == StatusHumanHelp || to == StatusCancelled) {
+		return nil
+	}
 	switch from {
 	case StatusNew:
-		if to == StatusAnalysis || to == StatusPaused || to == StatusCancelled {
+		if to == StatusAnalysis {
 			return nil
 		}
 	case StatusAnalysis:
-		if to == StatusReady || to == StatusPaused || to == StatusCancelled {
+		if to == StatusReady {
 			return nil
 		}
 	case StatusReady:
-		if to == StatusInProgress || to == StatusPaused || to == StatusCancelled {
+		if to == StatusInProgress {
+			return nil
+		}
+	case StatusHumanHelp:
+		// Помощь получена: задача возвращается в очередь на новый прогон
+		// (ready) либо продолжается на месте (in_progress).
+		if to == StatusReady || to == StatusInProgress {
 			return nil
 		}
 	case StatusInProgress:
@@ -110,12 +136,13 @@ func ValidateTransition(from, to Status) error {
 		// а задача должна автоматически вернуться в очередь на новый прогон.
 		// Считаем это безопасным, потому что откат делает только человек
 		// (POST .../tasks/{id}/rollback) и только по явному подтверждению в UI.
-		if to == StatusReady || to == StatusDone || to == StatusPaused || to == StatusCancelled {
+		if to == StatusReady || to == StatusTesting || to == StatusDone {
 			return nil
 		}
-	case StatusPaused:
-		// Возобновление возвращает эпик/задачу к работе; пауза не терминальна.
-		if to == StatusReady || to == StatusCancelled {
+	case StatusTesting:
+		// Сдача разработчиком в работу (in_progress) при замечаниях
+		// тестировщика либо приёмка (done) по итогам тестирования.
+		if to == StatusInProgress || to == StatusDone {
 			return nil
 		}
 	}
@@ -281,10 +308,12 @@ type Task struct {
 	// список = «ветка не влилась, ждёт резолва». Очищается успешным мёрджем.
 	// Пусто — конфликта нет (поле не сериализуется).
 	MergeConflictFiles []string `json:"merge_conflict_files,omitempty"`
-	// ResumeStatus — статус, из которого задача была приостановлена (пауза
-	// эпика, Ф-6). Возобновление возвращает задачу именно в него: оркестратор
-	// заново проверит зависимости и фазовые гейты на прежнем месте цепочки.
-	// Пусто, если задача не на паузе.
+	// ResumeStatus — статус, из которого задача была остановлена каскадом
+	// остановки эпика («помощь человека», Ф-6). Возобновление возвращает
+	// задачу именно в него: оркестратор заново проверит зависимости и
+	// фазовые гейты на прежнем месте цепочки. Пусто, если каскадной
+	// остановки не было (в т.ч. «помощь человека» по эскалации/форсмажору —
+	// такая задача возвращается в работу только вручную).
 	ResumeStatus Status `json:"resume_status,omitempty"`
 	// Injections — промпт-инъекции, привязанные к задаче. Применяются к
 	// работающей модели в рамках этой задачи (runtime injections): правка

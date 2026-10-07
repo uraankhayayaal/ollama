@@ -102,10 +102,11 @@ func TestKanbanTaskLoopEscalatesThenAsksHuman(t *testing.T) {
 			continue
 		}
 		audited = true
-		// Задача остановлена на паузе (не терминальный статус: вернуть в
-		// очередь можно), с требованием сильной модели и разбором петли.
-		if task.Status != board.StatusPaused {
-			t.Fatalf("задача %s: статус %s, ожидалась пауза", task.TaskID, task.Status)
+		// Задача остановлена на «помощи человека» (не терминальный статус:
+		// вернуть в очередь можно вручную), с требованием сильной модели и
+		// разбором петли.
+		if task.Status != board.StatusHumanHelp {
+			t.Fatalf("задача %s: статус %s, ожидалась «помощь человека»", task.TaskID, task.Status)
 		}
 		if task.ModelTier != board.ModelTierLarge {
 			t.Fatalf("задача %s: model_tier=%q, ожидался %q", task.TaskID, task.ModelTier, board.ModelTierLarge)

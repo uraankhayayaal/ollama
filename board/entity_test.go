@@ -140,15 +140,24 @@ func TestValidateTransition(t *testing.T) {
 		{StatusInProgress, StatusDone},
 		{StatusInProgress, StatusCancelled},
 		{StatusDone, StatusDone},
-		// Пауза (Ф-6): любой активный статус можно приостановить, возобновление
-		// возвращает запись в «готова к работе», отмена из паузы допустима.
-		{StatusNew, StatusPaused},
-		{StatusAnalysis, StatusPaused},
-		{StatusReady, StatusPaused},
-		{StatusInProgress, StatusPaused},
-		{StatusPaused, StatusPaused},
-		{StatusPaused, StatusReady},
-		{StatusPaused, StatusCancelled},
+		// «Помощь человека» — боковая ветка (Р-6): вход из любого
+		// нетерминального статуса, выход только обратно в работу; отмена
+		// из боковой ветки допустима.
+		{StatusNew, StatusHumanHelp},
+		{StatusAnalysis, StatusHumanHelp},
+		{StatusReady, StatusHumanHelp},
+		{StatusInProgress, StatusHumanHelp},
+		{StatusTesting, StatusHumanHelp},
+		{StatusHumanHelp, StatusHumanHelp},
+		{StatusHumanHelp, StatusReady},
+		{StatusHumanHelp, StatusInProgress},
+		{StatusHumanHelp, StatusCancelled},
+		// «На тестирование»: сдача разработчиком, замечания тестировщика,
+		// приёмка, отмена.
+		{StatusInProgress, StatusTesting},
+		{StatusTesting, StatusInProgress},
+		{StatusTesting, StatusDone},
+		{StatusTesting, StatusCancelled},
 	}
 	for _, c := range valid {
 		if err := ValidateTransition(c.from, c.to); err != nil {
@@ -165,13 +174,18 @@ func TestValidateTransition(t *testing.T) {
 		{StatusDone, StatusNew},
 		{StatusCancelled, StatusNew},
 		{StatusNew, "unknown"},
-		// Терминальные статусы не приостанавливаются; из паузы — только
-		// возобновление или отмена.
-		{StatusDone, StatusPaused},
-		{StatusCancelled, StatusPaused},
-		{StatusPaused, StatusInProgress},
-		{StatusPaused, StatusDone},
-		{StatusPaused, StatusAnalysis},
+		// Терминальные статусы не «останавливаются» и не переводятся в
+		// помощь человека.
+		{StatusDone, StatusHumanHelp},
+		{StatusCancelled, StatusHumanHelp},
+		// Из боковой ветки — только обратно в работу (и отмена);
+		// терминальные статусы из неё недостижимы.
+		{StatusHumanHelp, StatusDone},
+		{StatusHumanHelp, StatusAnalysis},
+		{StatusHumanHelp, StatusNew},
+		// «На тестирование» — только из работы; мимо работы недостижимо.
+		{StatusReady, StatusTesting},
+		{StatusNew, StatusTesting},
 	}
 	for _, c := range invalid {
 		if err := ValidateTransition(c.from, c.to); err == nil {
