@@ -661,6 +661,22 @@ func (t *boardUpdateTaskTool) Definition() ToolDefinition {
 			"additionalProperties": false,
 		},
 	}
+	props["comments"] = map[string]any{
+		"type":        "array",
+		"description": "Комментарии задачи: заменяют весь список комментариев. Используется тестировщиком для замечаний (type=qa).",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":         map[string]any{"type": "string"},
+				"author":     map[string]any{"type": "string"},
+				"type":       map[string]any{"type": "string", "enum": []string{"qa", "user", "system"}},
+				"body":       map[string]any{"type": "string"},
+				"created_at": map[string]any{"type": "string"},
+			},
+			"required":             []string{"author", "type", "body"},
+			"additionalProperties": false,
+		},
+	}
 	return ToolDefinition{
 		Name:        BoardUpdateTask,
 		Description: "Обновить задачу доски: переприоритетизировать (sequence_order), изменить описание/контракты, роль, зависимости, перенести в другой эпик или задать промпт-инъекции задачи. Используется лидами направлений.",
@@ -739,6 +755,21 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 		tk.Injections = list
 		injectionsChanged = true
 	}
+	commentsChanged := false
+	if raw, ok := args["comments"]; ok {
+		cms, err := board.DecodeComments(toCommentsRaw(raw))
+		if err != nil {
+			return boardErr(BoardUpdateTask, fmt.Errorf("comments: %w", err))
+		}
+		for i := range cms {
+			cms[i].TaskID = tk.TaskID
+			if err := cms[i].Validate(); err != nil {
+				return boardErr(BoardUpdateTask, fmt.Errorf("comments: %w", err))
+			}
+		}
+		tk.Comments = cms
+		commentsChanged = true
+	}
 	if err := t.b.SaveTask(ctx, tk); err != nil {
 		return boardErrStore(BoardUpdateTask, t.b, err)
 	}
@@ -746,8 +777,52 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 		logging.For(t.b.Project()).Infof("[задача %s] промпт-инъекции обновлены: %d (применятся со следующего запроса к модели)",
 			tk.TaskID, len(tk.Injections))
 	}
+	if commentsChanged {
+		logging.For(t.b.Project()).Infof("[задача %s] комментарии обновлены: %d", tk.TaskID, len(tk.Comments))
+	}
 	logging.For(t.b.Project()).Infof("[задача %s] обновлена: %s", tk.TaskID, boardTitle(tk.Title))
-	return boardOK(map[string]any{"task_id": tk.TaskID, "injections": len(tk.Injections)})
+	return boardOK(map[string]any{"task_id": tk.TaskID, "injections": len(tk.Injections), "comments": len(tk.Comments)})
+}
+
+const BoardAddComment = "BoardAddComment"
+
+type boardAddCommentTool struct{ b *board.Store }
+
+func (t *boardAddCommentTool) Name() string { return BoardAddComment }
+func (t *boardAddCommentTool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name:        BoardAddComment,
+		Description: "Добавить комментарий к задаче. Автор — роль агента, тип можно задать qa/user/system.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id": map[string]any{"type": "string"},
+				"author":  map[string]any{"type": "string"},
+				"type":    map[string]any{"type": "string", "enum": []string{"qa", "user", "system"}},
+				"body":    map[string]any{"type": "string"},
+			},
+			"required":             []string{"task_id", "author", "type", "body"},
+			"additionalProperties": false,
+		},
+	}
+}
+func (t *boardAddCommentTool) Execute(args map[string]any) ([]byte, error) {
+	if t.b == nil {
+		return boardErr(BoardAddComment, fmt.Errorf("доска не подключена"))
+	}
+	ctx := context.Background()
+	taskID := strArg(args, "task_id")
+	cm := board.Comment{
+		Author: strArg(args, "author"),
+		Type:   strArg(args, "type"),
+		Body:   strArg(args, "body"),
+	}
+	list, err := t.b.AddTaskComment(ctx, taskID, cm)
+	if err != nil {
+		return boardErrStore(BoardAddComment, t.b, err)
+	}
+	logging.For(t.b.Project()).Infof("[задача %s] добавлен комментарий (%d всего)", taskID, len(list))
+	return boardOK(map[string]any{"task_id": taskID, "comments": len(list)})
 }
 
 type boardDeleteTaskTool struct{ b *board.Store }
@@ -1032,4 +1107,19 @@ func flexBoolVal(v any) (bool, error) {
 		return b != 0, nil
 	}
 	return false, fmt.Errorf("не булев: %v", v)
+}
+
+func toCommentsRaw(v any) []byte {
+	switch x := v.(type) {
+	case []byte:
+		return x
+	case string:
+		return []byte(x)
+	case []any:
+		b, _ := json.Marshal(x)
+		return b
+	default:
+		b, _ := json.Marshal(v)
+		return b
+	}
 }

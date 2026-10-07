@@ -1389,12 +1389,13 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// Промпт-инъекции задачи: снапшот на старте + ЖИВОЙ источник, который
 		// перечитывает задачу перед каждым запросом к модели. Благодаря живому
 		// источнику правка инъекций (REST/инструмент доски) видна модели со
-		// следующего раунда, даже если цикл уже идёт.
+		// следующего раунда, даже если цикл уже идёт. Также передаём комментарии
+		// в контекст для будущей доставки в модель.
 		//
 		// Контекст собирается в taskCtx, а не в ctx: присваивание в ctx внутри
-		// цикла по ready оставляло бы инъекции ПРЕДЫДУЩЕЙ задачи в контексте
-		// следующей (инъекция задачи попадала в чужую задачу).
+		// цикла по ready оставляло бы контекст предыдущей задачи следующей.
 		taskCtx := board.NewInjectionContext(ctx, t.Injections)
+		taskCtx = board.NewCommentContext(taskCtx, t.Comments)
 		if k.store != nil {
 			taskCtx = board.WithInjectionSource(taskCtx, func(ctx context.Context) ([]board.Injection, error) {
 				fresh, err := k.store.GetTask(ctx, t.TaskID)
@@ -1404,9 +1405,17 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				if fresh == nil {
 					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
 				}
-				// Пустой список — честный ответ «инъекций у задачи больше нет»:
-				// удаление с доски действует немедленно.
 				return fresh.Injections, nil
+			})
+			taskCtx = board.WithCommentSource(taskCtx, func(ctx context.Context) (board.Comments, error) {
+				fresh, err := k.store.GetTask(ctx, t.TaskID)
+				if err != nil {
+					return nil, err
+				}
+				if fresh == nil {
+					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
+				}
+				return fresh.Comments, nil
 			})
 		}
 		taskCtx = board.WithInjectionScope(taskCtx, board.InjectionScope{

@@ -573,6 +573,74 @@ func (s *Store) RemoveTaskInjection(ctx context.Context, taskID, injID string) (
 	return out, true, nil
 }
 
+// SetTaskComments заменяет список комментариев задачи.
+func (s *Store) SetTaskComments(ctx context.Context, taskID string, cms Comments) error {
+	if len(cms) > 0 {
+		for i := range cms {
+			cms[i].Normalize()
+			cms[i].TaskID = taskID
+			if err := cms[i].Validate(); err != nil {
+				return err
+			}
+		}
+	}
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	t.Comments = cms
+	return s.SaveTask(ctx, t)
+}
+
+// AddTaskComment добавляет комментарий к задаче (с тем же id перезаписывается).
+func (s *Store) AddTaskComment(ctx context.Context, taskID string, cm Comment) (Comments, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	cm.Normalize()
+	cm.TaskID = taskID
+	if err := cm.Validate(); err != nil {
+		return nil, err
+	}
+	out := make(Comments, 0, len(t.Comments)+1)
+	for _, existing := range t.Comments {
+		if cm.ID != "" && existing.ID == cm.ID {
+			continue
+		}
+		out = append(out, existing)
+	}
+	out = append(out, cm)
+	if err := s.SetTaskComments(ctx, taskID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RemoveTaskComment удаляет комментарий задачи по id.
+func (s *Store) RemoveTaskComment(ctx context.Context, taskID, cmID string) (Comments, bool, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(Comments, 0, len(t.Comments))
+	found := false
+	for _, existing := range t.Comments {
+		if existing.ID == cmID {
+			found = true
+			continue
+		}
+		out = append(out, existing)
+	}
+	if !found {
+		return t.Comments, false, nil
+	}
+	if err := s.SetTaskComments(ctx, taskID, out); err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
 // PatchTask читает задачу, применяет mutate к её полям и сохраняет результат.
 // Точечное обновление вместо SaveTask вызывающего: State Tracking пишет задачу
 // каждый раунд (агент), а статус меняют человек и оркестратор — общая запись

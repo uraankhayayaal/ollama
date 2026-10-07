@@ -9,6 +9,7 @@ import { fmtTokens, tokenTitle } from "../tokens";
 import { Modal } from "../Modal";
 import { GitBlock } from "../GitBlock";
 import "./styles.scss";
+import { useState as useStateReact } from "react";
 
 // Ф-6 State Tracking: чем агент занят прямо сейчас.
 const AGENT_STATE_LABEL: Record<AgentState, string> = {
@@ -57,6 +58,10 @@ export function TaskModal({
   const [rollbackTo, setRollbackTo] = useState("");
   const [rolling, setRolling] = useState(false);
   const [rollbackErr, setRollbackErr] = useState("");
+
+  const [newComment, setNewComment] = useStateReact({ type: "user" as const, body: "" });
+  const [sending, setSending] = useStateReact(false);
+  const [error, setError] = useStateReact("");
 
   const rollback = (to: string) => {
     setRolling(true);
@@ -253,6 +258,54 @@ export function TaskModal({
 
       <h4 className="section">Описание</h4>
       <p className="desc">{task.description || "—"}</p>
+
+      <h4 className="section">Комментарии</h4>
+      <div className="comments">
+        {(task.comments ?? []).length === 0 && <div className="empty">Комментариев нет</div>}
+        {(task.comments ?? []).map((c) => (
+          <div className="comment" key={c.id}>
+            <div className="meta">
+              <span className="author">{c.author}</span>
+              <span className="type">{c.type}</span>
+              <span className="date">{c.created_at}</span>
+            </div>
+            <div className="body">{c.body}</div>
+          </div>
+        ))}
+        <div className="add-comment">
+          <select value={newComment.type} onChange={(e) => setNewComment({ ...newComment, type: e.target.value as any })}>
+            <option value="user">user</option>
+            <option value="qa">qa</option>
+            <option value="system">system</option>
+          </select>
+          <textarea
+            value={newComment.body}
+            onChange={(e) => setNewComment({ ...newComment, body: e.target.value })}
+            placeholder="Добавить комментарий..."
+          />
+          <button
+            disabled={sending || !newComment.body.trim()}
+            onClick={() => {
+              setSending(true);
+              setError("");
+              onTaskUpdate(task, {
+                comments: [...(task.comments ?? []), {
+                  id: `tmp-${Date.now()}`,
+                  author: "user",
+                  type: newComment.type,
+                  body: newComment.body,
+                  created_at: new Date().toISOString(),
+                }],
+              });
+              setNewComment({ type: "user", body: "" });
+              setSending(false);
+            }}
+          >
+            Добавить
+          </button>
+        </div>
+        {error && <div className="err">{error}</div>}
+      </div>
 
       <div className="actions">
         {m.prev.map((s) => (

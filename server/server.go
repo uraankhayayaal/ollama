@@ -230,6 +230,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/injections", s.handleAddTaskInjection)
 	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}/injections/{injID}", s.handleRemoveTaskInjection)
 
+	// Комментарии задачи: привязаны к задаче доски (замечания QA, пользовательские, системные).
+	mux.HandleFunc("GET /api/projects/{id}/tasks/{tid}/comments", s.handleListTaskComments)
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/comments", s.handleAddTaskComment)
+	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}/comments/{cmID}", s.handleUpdateTaskComment)
+	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}/comments/{cmID}", s.handleRemoveTaskComment)
+
 	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
 	mux.HandleFunc("GET /api/projects/{id}/diff", s.handleGetDiff)
 	mux.HandleFunc("POST /api/projects/{id}/accept", s.handleAccept)
@@ -1604,4 +1610,110 @@ func (s *Server) handleRemoveTaskInjection(w http.ResponseWriter, r *http.Reques
 	logging.For(project).Infof("[задача %s] удалена промпт-инъекция %s (осталось %d)", taskID, injID, len(list))
 	s.srvEmitBoard(project, "REST: инъекция задачи удалена")
 	writeJSON(w, http.StatusOK, map[string]any{"injections": list})
+}
+
+// handleListTaskComments возвращает комментарии задачи.
+func (s *Server) handleListTaskComments(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	taskID := r.PathValue("tid")
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	t, err := store.GetTask(r.Context(), taskID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "задача не найдена: "+taskID)
+		return
+	}
+	if t.Comments == nil {
+		t.Comments = board.Comments{}
+	}
+	writeJSON(w, http.StatusOK, t.Comments)
+}
+
+// handleAddTaskComment добавляет комментарий к задаче.
+func (s *Server) handleAddTaskComment(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	taskID := r.PathValue("tid")
+
+	var cm board.Comment
+	if err := decodeBodyStrict(r, &cm); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON: "+err.Error())
+		return
+	}
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	list, err := store.AddTaskComment(r.Context(), taskID, cm)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "задача "+taskID+": "+err.Error())
+		return
+	}
+	s.srvEmitBoard(project, "REST: комментарий задачи добавлен")
+	writeJSON(w, http.StatusCreated, map[string]any{"comments": list})
+}
+
+// handleUpdateTaskComment обновляет комментарий по ID (полная замена содержимого).
+func (s *Server) handleUpdateTaskComment(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	taskID := r.PathValue("tid")
+	cmID := r.PathValue("cmID")
+
+	var cm board.Comment
+	if err := decodeBodyStrict(r, &cm); err != nil {
+		writeErr(w, http.StatusBadRequest, "некорректный JSON: "+err.Error())
+		return
+	}
+	cm.ID = cmID
+	cm.TaskID = taskID
+	cm.Normalize()
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	list, err := store.AddTaskComment(r.Context(), taskID, cm)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "задача "+taskID+": "+err.Error())
+		return
+	}
+	s.srvEmitBoard(project, "REST: комментарий задачи обновлён")
+	writeJSON(w, http.StatusOK, map[string]any{"comments": list})
+}
+
+// handleRemoveTaskComment удаляет комментарий задачи по id.
+func (s *Server) handleRemoveTaskComment(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	taskID := r.PathValue("tid")
+	cmID := r.PathValue("cmID")
+
+	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer store.Close()
+
+	list, found, err := store.RemoveTaskComment(r.Context(), taskID, cmID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "задача "+taskID+": "+err.Error())
+		return
+	}
+	if !found {
+		writeErr(w, http.StatusNotFound, "комментарий не найден: "+cmID)
+		return
+	}
+	s.srvEmitBoard(project, "REST: комментарий задачи удалён")
+	writeJSON(w, http.StatusOK, map[string]any{"comments": list})
 }

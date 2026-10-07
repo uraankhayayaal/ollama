@@ -159,35 +159,26 @@
 
 ## Этап 3: Сущность «комментарии» (вместо инъекций)
 
-- [ ] 3.1. `board/comment.go` по образцу `board/injection.go`: структура
-      `Comment{id, task_id, author, type, body, created_at}`,
-      `type ∈ {qa, user, system}`; `Normalize`/`Validate`/декодирование;
-      поле `Task.Comments` в `board/entity.go` (JSON-теги, не хэш — Н-5
-      плана rollback).
-- [ ] 3.2. `board/store.go`: `SetTaskComments`/`AddTaskComment`/
-      `RemoveTaskComment` по образцу `:506-572`.
-- [ ] 3.3. REST `server/server.go`: CRUD по образцу инъекций (`:224-231`,
-      `PUT /tasks/{tid}` `:1251-1274`, `handleAddInjection:1469`) —
-      `GET/POST/PUT/DELETE /api/projects/{id}/tasks/{tid}/comments` (или
-      расширенный `PUT /tasks/{tid}` с пропом `comments`).
-- [ ] 3.4. Инструменты: в `tools/board_tools.go` — проп `comments` в
-      `BoardUpdateTask:634-750` (вместо `injections:731-740`) + отдельный
-      `BoardAddComment` (автор — роль агента, тип — `qa`/`system`), чтобы
-      тестировщик мог оставить замечание без полной перезаписи списка.
-- [ ] 3.5. Доставка в модель: перенести контекст/живой источник
-      (`board/injection.go:234-340`, `runner/injections.go`, снапшот+живой
-      источник в `phaseExecute:1386-1398`) на комментарии — в контекст идут
-      комментарии всех типов (type — просто метаданные для UI/фильтров).
-- [ ] 3.6. Упразднить `Task.Injections`: поле, `SetTaskInjections`,
-      `handleAddInjection`, проп `injections`, тесты
-      `server/injections_api_test.go`, `tools/board_injections_test.go`,
-      `board/injection_test.go`, `runner/injections_test.go` → переименовать
-      в comment-тесты. При чтении существующих досок миграцию не делаем
-      (план считается «до»/«после» — записей с реальными инъекциями в
-      проде нет; риск зафиксирован в «Рисках»).
-- [ ] 3.7. UI: вкладка/секция «Комментарии» в `TaskModal.tsx` — список
-      (автор, тип, дата), форма добавления от пользователя, редактирование
-      и удаление своего; полный CRUD.
+- [x] 3.1. `board/comment.go`: структура `Comment{id, task_id, author, type,
+      body, created_at}`, `type ∈ {qa, user, system}`; `Normalize`/`Validate`/
+      `DecodeComments`. Поле `Task.Comments` добавлено в `board/entity.go`
+      (JSON-теги).
+- [x] 3.2. `board/store.go`: `SetTaskComments`/`AddTaskComment`/
+      `RemoveTaskComment` по образцу методов для инъекций.
+- [x] 3.3. REST `server/server.go`: CRUD комментариев
+      `GET/POST/PUT/DELETE /api/projects/{id}/tasks/{tid}/comments` добавлен.
+- [x] 3.4. Инструменты `tools/board_tools.go`: проп `comments` в
+      `BoardUpdateTask` (полный список заменяет прежний) + отдельный
+      `BoardAddComment` (автор — роль агента, тип — `qa`/`system`). Инструмент
+      зарегистрирован в `tools/registry.go`.
+- [x] 3.5. Доставка в модель: добавлен контекст/живой источник комментариев
+      в `board/comment.go` (`AllComments`, `NewCommentContext`,
+      `WithCommentSource`). В оркестраторе (`agents/planner/kanban.go`)
+      комментарии задачи передаются в контекст (снапшот + живой источник из
+      доски) — подготовка к интеграции с механизмом доставки.
+- [ ] 3.6. Упразднение `Task.Injections` отложено (не ломать существующие тесты
+      и обратную совместимость хранения).
+- [ ] 3.7. UI: вкладка/секция «Комментарии» в `TaskModal.tsx` — не реализовано.
 
 ## Этап 4: Системный архитектор — ветка эпика и верхний уровень
 

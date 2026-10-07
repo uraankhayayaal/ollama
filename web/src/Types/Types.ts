@@ -93,6 +93,18 @@ export interface TaskRow {
   attempts?: number;
   last_error?: string;
   heartbeat_at?: string;
+  // Комментарии к задаче (замечания QA, пользовательские, системные).
+  comments?: Comment[];
+}
+
+// Комментарий к задаче.
+export interface Comment {
+  id: string;
+  task_id?: string;
+  author: string;
+  type: "qa" | "user" | "system";
+  body: string;
+  created_at: string;
 }
 
 // Состояния агента на доске (зеркалят board/entity.go).

@@ -184,6 +184,8 @@ func newTool(name string, deps Deps) Tool {
 		return &boardSetBugStatusTool{b: deps.Board}
 	case BoardReviewBug:
 		return &boardReviewBugReportTool{b: deps.Board}
+	case BoardAddComment:
+		return &boardAddCommentTool{b: deps.Board}
 	}
 	// Неизвестное имя — ошибка на этапе конструирования агента (fail-fast).
 	panic(fmt.Sprintf("tools: инструмент %q не зарегистрирован в реестре", name))
