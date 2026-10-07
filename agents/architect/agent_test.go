@@ -39,12 +39,14 @@ func TestToolsIncludeSubmitBacklog(t *testing.T) {
 	for _, td := range got {
 		names[td.Name] = true
 	}
-	for _, want := range []string{"List", "ReadFiles", SubmitBacklogToolName} {
+	for _, want := range []string{"List", "ReadFiles", SubmitBacklogToolName, "WriteFiles", "Run"} {
 		if !names[want] {
 			t.Errorf("агент не включает инструмент %q", want)
 		}
 	}
-	for _, disallowed := range []string{"WriteFiles", "AppendFile", "DeleteFiles", "Run"} {
+	// Этап 4.2: архитектор пишет структуру в ветке эпика, но деструктивные
+	// инструменты (append/delete) ему не выдаются.
+	for _, disallowed := range []string{"AppendFile", "DeleteFiles"} {
 		if names[disallowed] {
 			t.Errorf("архитектор не должен включать инструмент %q", disallowed)
 		}
@@ -175,11 +177,12 @@ func TestSubmitBacklogRejectsBadSchema(t *testing.T) {
 		t.Fatalf("ожидался JSON-результат с ошибкой, получили ошибку: %v", err)
 	}
 
-	// Неизвестный инструмент — ошибка на стороне агента.
-	if _, err := a.CallFunction("WriteFiles", map[string]any{
+	// Неизвестный инструмент — ошибка на стороне агента (WriteFiles после
+	// Этапа 4.2 разрешён, поэтому проверяем на отсутствующем имени).
+	if _, err := a.CallFunction("NoSuchTool", map[string]any{
 		"files": []map[string]string{{"filename": "x", "content": "y"}},
 	}); err == nil {
-		t.Fatal("архитектор не должен уметь вызывать WriteFiles")
+		t.Fatal("архитектор не должен уметь вызывать неизвестный инструмент")
 	}
 }
 

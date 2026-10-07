@@ -63,6 +63,11 @@ type KanbanRunner struct {
 	// и правки агента падают в ВЕТКУ ЗАДАЧИ — авто-коммит на done соберёт именно
 	// их. nil — общая проектная копия temp/<проект>.
 	outputDir func(project, taskID string) string
+	// epicOutputDir — резолвер worktree ветки эпика для архитектора (4.1):
+	// (project, epicID) → каталог worktree `ai/epic/<id>` либо "" (нельзя
+	// создать). Задаётся сервером (SetEpicOutputDir); nil — структуру
+	// эпик-ветки архитектор не пишет (консольный режим/тесты).
+	epicOutputDir func(project, epicID string) string
 	// wake — канал событийного побуждения из standby (см. Wake): буфер 1
 	// поглощает сигналы, когда runner не ждёт работу.
 	wake chan struct{}
@@ -202,6 +207,14 @@ func (k *KanbanRunner) SetStandbyNotifier(fn func(bool)) { k.onStandby = fn }
 // (project, taskID) (Ф-3): worktree ветки задачи для git, temp/<проект> —
 // стандартно. nil возвращает поведение по умолчанию.
 func (k *KanbanRunner) SetOutputDir(fn func(project, taskID string) string) { k.outputDir = fn }
+
+// SetEpicOutputDir задаёт функцию рабочей директории ветки эпика (4.1):
+// (project, epicID) → worktree ветки `ai/epic/<id>` для git-проектов, "" —
+// если worktree создать нельзя (не-git проект, ветки нет). nil (консоль/тесты)
+// — структура эпика архитектором не пишется (degrade).
+func (k *KanbanRunner) SetEpicOutputDir(fn func(project, epicID string) string) {
+	k.epicOutputDir = fn
+}
 
 // SetTokens подключает счётчик токенов проекта (Ф-2/Ф-3): раунды Generate
 // начинают атрибутироваться единицей работы (scope), а по завершении задачи или
@@ -775,23 +788,48 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 
 	arch := architect.NewArchitectWithStore(k.store.Project(), meta.Task, k.store)
 	arch = k.prepareArchitect(arch)
+	// 4.1: резолвер worktree ветки эпика. Вызывается архитектором ВНУТРИ
+	// submitBacklog — после публикации бэклога, когда эпики уже на доске и их
+	// ветки созданы хуком EpicCreatedHook. Основной (первый по порядку) эпик
+	// получает структуру проекта; без worktree (консоль/не-git) архитектор
+	// получит note и структуру не напишет.
+	arch.SetEpicWorkdir(func() (string, string) {
+		if k.epicOutputDir == nil {
+			return "", ""
+		}
+		eps, err := k.store.ListEpics(ctx)
+		if err != nil || len(eps) == 0 {
+			return "", ""
+		}
+		primary := eps[0]
+		for _, e := range eps[1:] {
+			if epicLess(e, primary) {
+				primary = e
+			}
+		}
+		dir := k.epicOutputDir(k.store.Project(), primary.TaskID)
+		if dir == "" {
+			return "", ""
+		}
+		return dir, primary.GitBranch
+	})
 	resp, err := k.generate(ctx, tokens.ScopeArchitecture, arch)
 	if err != nil {
-		return false, fmt.Errorf("фаза архитектора: %w", err)
+		return false, k.architectFail(ctx, fmt.Errorf("фаза архитектора: %w", err))
 	}
 	if err := resp.LoopError("фаза архитектора"); err != nil {
-		return false, err
+		return false, k.architectFail(ctx, err)
 	}
 	if resp != nil && resp.Truncated {
-		return false, fmt.Errorf("фаза архитектора: цикл остановлен по лимиту раундов")
+		return false, k.architectFail(ctx, fmt.Errorf("фаза архитектора: цикл остановлен по лимиту раундов"))
 	}
 
 	epics, err = k.store.ListEpics(ctx)
 	if err != nil {
-		return false, err
+		return false, k.architectFail(ctx, err)
 	}
 	if len(epics) == 0 {
-		return false, fmt.Errorf("фаза архитектора: модель не опубликовала эпики (submit_architecture_backlog не вызван)")
+		return false, k.architectFail(ctx, fmt.Errorf("фаза архитектора: модель не опубликовала эпики (submit_architecture_backlog не вызван)"))
 	}
 	k.log.Infof("[Системный архитектор] опубликованы эпики: %s", epicList(epics))
 	return true, nil
@@ -1580,6 +1618,56 @@ func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason s
 	return true, nil
 }
 
+// forceMajeure — форсмажор фазы (4.5): «Помощь человека» + запись причины.
+// В отличие от эскалации петли (escalateLoop) здесь нет задачи для повторного
+// прогона: работа архитектора не состоялась, и человек должен решить, что
+// делать. Если taskID задан — комментарий с причиной крепится к задаче и её
+// статус уходит в human_help; без taskID (фаза архитектора работает до
+// появления задач — комментарий требует TaskID) помечается мета-задача
+// доски. Ошибки записи не маскируют исходный сбой: только логируются.
+//
+// human_help не терминален: ensureMeta/touchMeta снимут пометку при следующем
+// запуске, а ручной кнопкой доска возвращается в работу.
+func (k *KanbanRunner) forceMajeure(ctx context.Context, taskID, reason string) {
+	msg := fmt.Sprintf("форс-мажор: %s", truncateText(reason, 400))
+	k.setStopReason(msg)
+
+	if taskID != "" {
+		if _, err := k.store.AddTaskComment(ctx, taskID, board.Comment{
+			Author: "system",
+			Type:   board.CommentTypeSystem,
+			Body:   msg + ". Нужно решение человека: разбери причину (логи проекта, вывод проверок) и верни задачу в работу.",
+		}); err != nil {
+			k.log.Warnf("[доска] форс-мажор задачи %s: комментарий: %v", taskID, err)
+		}
+		if err := k.store.SetTaskStatus(ctx, taskID, board.StatusHumanHelp); err != nil {
+			k.log.Warnf("[доска] форс-мажор задачи %s: статус human_help: %v", taskID, err)
+		}
+	} else if meta, err := k.store.GetMeta(ctx); err == nil && meta != nil && !meta.Status.Terminal() {
+		meta.Status = board.StatusHumanHelp
+		if err := k.store.SaveMeta(ctx, meta); err != nil {
+			k.log.Warnf("[доска] форс-мажор: статус meta human_help: %v", err)
+		}
+	}
+	k.status("[доска] %s — работа остановлена, нужна помощь человека", msg)
+}
+
+// architectFail — завершение фазы архитектора по форсмажору (4.5): человеку
+// уходит «Помощь человека» с причиной, а исходная ошибка возвращается вызывающему
+// (цикл остановится по ней — фиктивного успеха нет). Отмена контекста (останов
+// сессии человеком) не форсмажор: просто пробрасываем ошибку как есть.
+// Возвращает err без изменений — можно писать `return k.architectFail(ctx, err)`.
+func (k *KanbanRunner) architectFail(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return err
+	}
+	k.forceMajeure(ctx, "", err.Error())
+	return err
+}
+
 // phaseBugs: конвейер багрепортов. QA-специалисты публикуют багрепорты
 // (BoardCreateBugReport, статус new) во время выполнения задач. QA Lead
 // отсеивает «нейрослоп» (new -> slop) и подтверждает реальные проблемы (new ->
@@ -1999,6 +2087,7 @@ func (k *KanbanRunner) taskPrompt(t *board.Task) string {
 	}
 	b.WriteString("Правила:\n")
 	b.WriteString("- Работай в своей выходной директории (OutputDir): учи структуру через List, читай контракты через ReadFiles.\n")
+	b.WriteString("- Описание задачи — это отсылки к файлам («контракт в ./server/..., см. ./docs/...»), а не полный текст кода или структуры: читай перечисленные файлы из ветки эпика и не вставляй их содержимое в ответы/комментарии.\n")
 	b.WriteString("- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n")
 	b.WriteString("- Не выходи за пределы своей части монорепозитория (роль задана промптом).\n")
 	fmt.Fprintf(&b, "- Если у тебя есть инструменты доски: идентификатор задачи %s. Ты можешь читать её контракт (BoardGetTask); когда работа полностью выполнена (сборка и проверки зелёные) — ОБЯЗАТЕЛЬНО переведи задачу в статус done вызовом BoardSetTaskStatus.\n", t.TaskID)

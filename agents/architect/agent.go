@@ -35,9 +35,10 @@ const SubmitBacklogToolName = "submit_architecture_backlog"
 
 // toolNames — инструменты архитектора: чтение проекта (List, ReadFiles) из
 // общего реестра, семантический поиск (CodeSearch) и статус RAG-индекса
-// (RagIndexStatus), работа с общей Kanban-доской (инструменты Board*). Писать
-// файлы и запускать команды архитектору нельзя: его работа — спроектировать
-// архитектуру, вести эпики и проводить экспертизу багрепортов.
+// (RagIndexStatus), работа с общей Kanban-доской (инструменты Board*), а после
+// Этапа 4 — запись файлов и команды git в ветке эпика (WriteFiles, Run):
+// системный архитектор ведёт структуру проекта в worktree ветки эпика
+// (запись ограничена allowlist см. architectWriteAllowlist).
 var toolNames = []string{
 	"List", "ReadFiles",
 	tools.LspDefinition, tools.LspReferences, tools.LspHover,
@@ -46,6 +47,17 @@ var toolNames = []string{
 	tools.BoardGetEpic, tools.BoardGetTask,
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
 	tools.BoardReviewBug,
+	"WriteFiles", "Run",
+}
+
+// architectWriteAllowlist — allowlist ЗАПИСИ системного архитектора (4.2):
+// каталоги общесистемного уровня и корневые файлы репозитория. Остальная
+// запись (код приложения, тесты, инфраструктура приложения) запрещена — её
+// ведут лиды направлений и рядовые специалисты в своих ветках.
+var architectWriteAllowlist = []string{
+	"server", "client", "cicd", "docs",
+	"readme.md", "README.md", "AGENTS.md",
+	"compose.yaml", "Makefile", ".env.example",
 }
 
 // Architect — агент Системный архитектор. Публикует эпики на общую
@@ -70,6 +82,13 @@ type Architect struct {
 	// перед их декомпозицией. Обязательный инструмент отключается, системный
 	// промпт меняется, инструмент submit_architecture_backlog не объявляется.
 	ReviewerMode bool
+
+	// epicWorkdir — резолвер рабочего каталога ветки эпика (4.1). Оркестратор
+	// (KanbanRunner.phaseArchitect) задаёт его через SetEpicWorkdir: возвращает
+	// (dir, branch) основного эпика доски — worktree ветки, куда архитектор
+	// пишет структуру проекта. nil/("", "") — резолвер не задан (консольный
+	// запуск, не-git проект, доска без эпиков): структура не пишется.
+	epicWorkdir func() (string, string)
 }
 
 // NewArchitect создаёт архитектора для проекта: подключает хранилище доски по
@@ -93,6 +112,7 @@ func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Arch
 	// Project задан явно: каталог проекта может быть переименован/подменён
 	// (сабмодуль, worktree), а RAG-фильтр строится по имени проекта.
 	ops := &tools.FileOps{OutputDir: dir, Project: projectName}
+	ops.SetWriteAllowlist(architectWriteAllowlist)
 	return &Architect{
 		FileOps: ops,
 		Prompt:  prompt,
@@ -128,6 +148,14 @@ func (a *Architect) AsBugExpert() *Architect {
 // submit_architecture_backlog отключаются.
 func (a *Architect) AsReviewer() *Architect {
 	a.ReviewerMode = true
+	return a
+}
+
+// SetEpicWorkdir задаёт резолвер рабочего каталога ветки эпика (4.1): вызывается
+// оркестратором до прогона. Worktree создаётся лениво при первом вызове
+// резолвера (в момент публикации бэклога), а не при постановке на паузу.
+func (a *Architect) SetEpicWorkdir(fn func() (string, string)) *Architect {
+	a.epicWorkdir = fn
 	return a
 }
 
@@ -211,7 +239,18 @@ makefile проекта — это корневой Makefile (temp/<проект
 2. В description эпика продублируй ЭТАЛОННЫЙ КОНТРАКТ целей: 'help' — список целей; 'deps' — установка зависимостей (go mod download/npm ci/pip install); 'build'/'backend-build'/'frontend-build' — сборка; 'test'/'backend-test'/'frontend-test' — автотесты; 'lint'/'backend-lint'/'frontend-lint' — стиль+анализатор (gofmt -l/go vet, prettier/eslint, black/ruff); 'run'/'backend-run'/'frontend-run' — запуск (для человека, дев-режим); 'e2e' — САМОЗАВЕРШАЮЩИЙСЯ прогон (up → проверки → down → exit code); инфра-блок DevOps: 'up'/'down'/'logs'/'ps' и зеркальные 'infra.<цель>' = 'docker compose run -it --rm <сервис> <исходная команда>'.
 3. Профильные цели 'backend-*'/'frontend-*' — ТОЛЬКО для реально существующих направлений по DetectStack (консольное приложение без фронтенда НЕ получает 'frontend-*'; цели только для реальных направлений).
 4. Эпик «Makefile проекта» (прикладные цели) размещай РАНЬШЕ инфраструктурного блока DevOps: зеркала 'infra.<цель>' оборачивают уже существующие прикладные команды (dependencies инфра-эпика → «Makefile проекта»).
-5. Файл пишет не архитектор (ему писать файлы нельзя) — контракт идёт в бэклог, реализуют специалисты по декомпозиции лидов.
+5. Файл пишешь ТЫ после публикации бэклога — в worktree ветки эпика (см. «Ветка эпика и структура»): сам контракт целей дублируй в description эпика, а корневой Makefile создай/актуализируй каркасом в своей ветке; реализация целей — за специалистами по декомпозиции лидов.
+
+### ВЕТКА ЭПИКА И СТРУКТУРА ПРОЕКТА (worktree):
+После успешного submit_architecture_backlog в результате появляются поля workdir и branch — это рабочая точка (worktree) ветки эпика ai/epic/<id>, в которую переключается твой OutputDir. Твои новые обязанности в этой ветке:
+1. Выстрой структуру ПЕРВОГО УРОВНЯ и ключевые корневые файлы — каркас (скелетон), а не реализацию: директории проекта по DetectStack (./server, ./client, ./cicd, ./docs — какие реально нужны), README.md, AGENTS.md, compose.yaml, .env.example, корневой Makefile по контракту выше. В файлах — заголовки, назначение, пустые заготовки/интерфейсы и комментарии-подсказки, никакой бизнес-логики.
+2. Гард записи (allowlist): писать можно ТОЛЬКО папки 1-го уровня ./server, ./client, ./cicd, ./docs и корневые readme.md, README.md, AGENTS.md, compose.yaml, Makefile, .env.example. Всё остальное (код приложения, тесты, инфраструктура) запись инструмент WriteFiles отклонит — его ведут лиды и специалисты в своих ветках.
+3. Закоммить и запушь структуру через Run (git add <пути> → git commit -m "chore: project structure" → git push -u origin <branch>). Если удалённого репозитория (remote) нет — пропусти push и отметь это в ответе, локального коммита достаточно.
+4. Если в результате submit_architecture_backlog нет workdir (только note) — структуру не пиши: работа в консоли/не-git проекте. Только эпики на доске.
+5. Только ПОСЛЕ этого распределяй задачи лидам: описание каждого эпика строй как отсылки к файлам этой структуры (см. «Отсылки к файлам в описаниях»), а не копируя структуру кода в description.
+
+### ОТСЫЛКИ К ФАЙЛАМ В ОПИСАНИЯХ (единый формат):
+Описание эпика (description) — это отсылки к файлам и контрактам, а не вставка структуры кода: «контракт в ./server/..., см. ./docs/...», «интерфейс в ./server/..., моки в ./client/...». Полный текст контракта, кода или структуры в description не клади — его читают из ветки эпика по ссылке. Такой же формат обязаны использовать лиды и специалисты (правило дублируется в taskPrompt).
 
 ### ГЛУБИНА ДЕКОМПОЗИЦИИ:
 Эпик — законченная вертикаль, а не «просто кнопка». Каждый эпик обязан учитывать ВСЕ слои, которых касается функциональность:
@@ -272,7 +311,7 @@ makefile проекта — это корневой Makefile (temp/<проект
 - Перед правкой контрактов обязательно смотри детали: BoardGetEpic/BoardGetTask (и связанные BoardListTasks), чтобы учитывать существующие зависимости и декомпозицию лидов.
 
 ### ОГРАНИЧЕНИЕ НА ФОРМАТ ОТВЕТА:
-Отвечай ТОЛЬКО вызовами инструментов (submit_architecture_backlog и Board*). Любой текстовый ответ вместо вызова инструмента является критической ошибкой. Не пиши вступлений, пояснений или markdown-разметки.
+Отвечай ТОЛЬКО вызовами инструментов (submit_architecture_backlog, Board*, WriteFiles, Run). Любой текстовый ответ вместо вызова инструмента является критической ошибкой. Не пиши вступлений, пояснений или markdown-разметки.
 
 ### ТРЕБУЕМАЯ СХЕМА АРГУМЕНТОВ submit_architecture_backlog:
 {
@@ -296,7 +335,8 @@ makefile проекта — это корневой Makefile (temp/<проект
 1. Изучи текущее состояние проекта (если проект существует): сначала CodeSearch/RAG — семантический поиск релевантного кода по задаче (плюс блок «релевантный код» ниже, если есть), затем List → ReadFiles для точного чтения, а для навигации по символам (определение, места использования, сигнатуры) — LspDefinition/LspReferences/LspHover по file:line:col (компактнее чтения файлов целиком). Если CodeSearch вернул skipped со словом про индекс — проверь RagIndexStatus; при пустом индексе предложи построение через AskUser + IndexBackground (правило «RAG-индекс»). Перед эпиком, меняющим существующий функционал, исследуй смежные модули (CodeSearch/LSP/ReadFiles) и зафиксируй их в description как «затронет: ...».
 2. Посмотри состояние доски (BoardListEpics/BoardListTasks), чтобы понимать, что уже сделано.
 3. Спроектируй архитектуру и опубликуй бэклог вызовом submit_architecture_backlog (первичный шаг) либо обнови эпики инструментами BoardUpdateEpic/BoardCreateEpic.
-4. Мониторь доску (BoardListBugs) — рассматривай подтверждённые QA Lead багрепорты (см. правила экспертизы).`
+4. По результату submit_architecture_backlog с workdir — выстрой структуру 1-го уровня и корневые файлы в ветке эпика (WriteFiles в пределах allowlist), закоммить и запусть через Run (правило «Ветка эпика и структура»). Без workdir/note — этот шаг пропускается.
+5. Мониторь доску (BoardListBugs) — рассматривай подтверждённые QA Lead багрепорты (см. правила экспертизы).`
 
 // bugExpertSystemPrompt — режим экспертизы багрепортов: QA Lead подтвердил
 // проблему, архитектор решает, чинить ли, на какой стороне, и создаёт эпик
@@ -395,7 +435,7 @@ func submitBacklogDefinition() tools.ToolDefinition {
 						"properties": map[string]any{
 							"task_id":          map[string]any{"type": "string", "description": "Уникальный ID эпика (например ARCH-01)"},
 							"title":            map[string]any{"type": "string", "description": "Название эпика"},
-							"description":      map[string]any{"type": "string", "description": "Подробное техническое описание эпика: цели, контракты, ограничения."},
+							"description":      map[string]any{"type": "string", "description": "Подробное техническое описание эпика: цели, контракты, ограничения. Описывай отсылками к файлам ветки эпика («контракт в ./server/..., см. ./docs/...»), без вставки структуры кода."},
 							"assigned_role":    map[string]any{"type": "string", "description": "Одна из ролей: Backend Lead, Frontend Lead, DevOps Lead, QA Lead"},
 							"sequence_order":   map[string]any{"type": "integer", "description": "Порядок выполнения эпика"},
 							"can_run_parallel": map[string]any{"type": "boolean", "description": "Может ли эпик выполняться параллельно с соседними эпиками"},
@@ -492,7 +532,12 @@ func (a *Architect) submitBacklog(args map[string]any) ([]byte, error) {
 		created = append(created, ts.TaskID)
 	}
 
-	res, _ := json.Marshal(map[string]any{
+	// 4.1: после публикации бэклога эпики на доске есть — резолвер возвращает
+	// worktree ветки основного эпика. Переключаем OutputDir, чтобы WriteFiles/Run
+	// работали в ветке эпика (запись ограничена allowlist architectWriteAllowlist).
+	// Без резолвера/без worktree (консоль, не-git проект) — остаёмся в каталоге
+	// проекта и просим модель структуру не писать.
+	result := map[string]any{
 		"status":                "success",
 		"created_epics":         created,
 		"skipped_dups":          skipped,
@@ -500,8 +545,37 @@ func (a *Architect) submitBacklog(args map[string]any) ([]byte, error) {
 		"architecture_summary":  backlog.ArchitectureSummary,
 		"opportunities":         len(valid),
 		"skipped_opportunities": skippedOpps,
-	})
+	}
+	if dir, branch := a.resolveEpicWorkdir(); dir != "" {
+		a.SetOutputDir(dir)
+		result["workdir"] = dir
+		if branch != "" {
+			result["branch"] = branch
+		}
+	} else {
+		result["note"] = "рабочий каталог ветки эпика недоступен: структуру проекта (README, docs, Makefile) не пиши, только эпики"
+	}
+
+	res, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("submit_architecture_backlog: сериализация результата: %w", err)
+	}
 	return res, nil
+}
+
+// resolveEpicWorkdir безопасно вызывает резолвер worktree ветки эпика:
+// nil-резолвер и паника не должны валить публикацию бэклога (деградация —
+// пустая строка, см. ветку else в submitBacklog).
+func (a *Architect) resolveEpicWorkdir() (dir, branch string) {
+	if a.epicWorkdir == nil {
+		return "", ""
+	}
+	defer func() {
+		if recover() != nil {
+			dir, branch = "", ""
+		}
+	}()
+	return a.epicWorkdir()
 }
 
 // validOpportunities фильтрует кросс-функциональные возможности (Ф-6) и
