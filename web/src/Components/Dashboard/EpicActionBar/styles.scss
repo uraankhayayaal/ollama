@@ -40,14 +40,14 @@
     }
   }
 
-  // «Пауза» — янтарная (цвет статуса «на паузе»).
+  // «Пауза» — янтарная (цвет статуса «помощь человека»).
   .epic-pause {
-    border-color: var(--st-paused, #b45309);
-    color: var(--st-paused, #b45309);
+    border-color: var(--st-human-help, #b45309);
+    color: var(--st-human-help, #b45309);
 
     &:hover:not(:disabled) {
-      background: var(--st-paused, #b45309);
-      border-color: var(--st-paused, #b45309);
+      background: var(--st-human-help, #b45309);
+      border-color: var(--st-human-help, #b45309);
       color: #fff;
     }
   }

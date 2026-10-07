@@ -38,7 +38,7 @@ export function Cell({
       return;
     }
     const m = MOVES[t.status];
-    if (m.prev !== status && m.next !== status) {
+    if (!m.prev.includes(status) && !m.next.includes(status)) {
       return;
     }
     onTaskUpdate(t, { status });

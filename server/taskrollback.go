@@ -108,8 +108,8 @@ func (s *Server) handleRollbackTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Задача возвращается в очередь: агент следующего прогона продолжит с
-	// откатанного кода. Отмена/пауза/готово остаются без изменений (иначе
-	// откат тихо воскресил бы отменённую задачу).
+	// откатанного кода. Отмена/помощь человека/готово остаются без изменений
+	// (иначе откат тихо воскресил бы отменённую задачу).
 	status := task.Status
 	if status == board.StatusInProgress {
 		if err := store.SetTaskStatus(r.Context(), taskID, board.StatusReady); err != nil {

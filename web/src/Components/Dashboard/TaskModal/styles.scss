@@ -28,10 +28,11 @@
   .status.new { color: var(--st-todo, #64748b); }
   .status.analysis { color: var(--st-analysis, #7c3aed); }
   .status.ready { color: var(--st-ready, #0891b2); }
+  .status.human_help { color: var(--st-human-help, #b45309); }
   .status.in_progress { color: var(--st-in-progress, #2563eb); }
+  .status.testing { color: var(--st-testing, #0f766e); }
   .status.done { color: var(--st-done, #15803d); }
   .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
-  .status.paused { color: var(--st-paused, #b45309); }
 
   // Ф-5: конфликт мёрджа — ветка не влилась, нужен резолв. Красный акцент на
   // dd, чтобы конфликт был заметен в модалке задачи/эпика.
@@ -164,6 +165,7 @@
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
 

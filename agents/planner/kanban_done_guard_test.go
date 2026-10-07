@@ -3,7 +3,8 @@ package planner
 // Ф-6 (инцидент FEL-04): fallback оркестратора «в работе → выполнена» больше не
 // закрывает задачу, которую специалист фактически не сделал. Отказ серверного
 // гарда «phantom done» не рушит раунд: задача остаётся в работе, получает
-// требование сделать работу и уходит на эскалацию/паузу (детектор петли).
+// требование сделать работу и уходит на эскалацию/«помощь человека» (детектор
+// петли).
 
 import (
 	"ai/agents"
@@ -120,8 +121,9 @@ func TestFallbackDoneAllowedWhenGuardPasses(t *testing.T) {
 
 // TestGuardRejectionEscalatesWithinBudget — инцидент QAL-01/FEL-04: отказ
 // гарда «phantom done» съедает бюджет автономии, а не крутится бесконечно.
-// По бюджету задача встаёт на паузу, а запуск заканчивается сообщением
+// По бюджету задача уходит в human_help, а запуск заканчивается сообщением
 // «нужен человек» с последней причиной (а не 100 раундами сжигания токенов).
+// Задача по бюджету уходит в human_help с причиной остановки.
 func TestGuardRejectionEscalatesWithinBudget(t *testing.T) {
 	t.Setenv("KANBAN_MAX_ESCALATIONS", "1")
 	ctx := context.Background()
@@ -147,20 +149,20 @@ func TestGuardRejectionEscalatesWithinBudget(t *testing.T) {
 	if terr != nil {
 		t.Fatalf("ListTasks: %v", terr)
 	}
-	paused := 0
+	stopped := 0
 	for _, task := range tasks {
 		if task.Status == board.StatusDone {
 			t.Fatalf("задача %s не должна закрываться в done без работы (инцидент FEL-04)", task.TaskID)
 		}
-		if task.Status != board.StatusPaused {
+		if task.Status != board.StatusHumanHelp {
 			continue
 		}
-		paused++
+		stopped++
 		if task.Escalations != 1 {
 			t.Fatalf("задача %s: эскалаций %d, ожидался бюджет 1", task.TaskID, task.Escalations)
 		}
 		// Инъекция последней попытки объясняет модели, что работа не сделана,
-		// и подсказывает честный выход через paused.
+		// и подсказывает честный выход через human_help.
 		found := false
 		for _, inj := range task.Injections {
 			if strings.Contains(inj.Content, "внеси правки в проект") &&
@@ -169,11 +171,11 @@ func TestGuardRejectionEscalatesWithinBudget(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("в поставленной на паузу задаче %s нет инъекции о пустой работе: %+v", task.TaskID, task.Injections)
+			t.Fatalf("в остановленной по бюджету задаче %s нет инъекции о пустой работе: %+v", task.TaskID, task.Injections)
 		}
 	}
-	if paused == 0 {
-		t.Fatalf("хотя бы одна задача должна встать на паузу по бюджету: %+v", tasks)
+	if stopped == 0 {
+		t.Fatalf("хотя бы одна задача должна уйти в human_help по бюджету: %+v", tasks)
 	}
 	joined := strings.Join(audit, "\n")
 	if !strings.Contains(joined, "нужен человек") {
@@ -181,16 +183,16 @@ func TestGuardRejectionEscalatesWithinBudget(t *testing.T) {
 	}
 }
 
-// pauseProvider — специалист сам ставит свою задачу на паузу с причиной
-// (задача невыполнима), как это делает BoardSetTaskStatus(status=paused,
+// humanHelpProvider — специалист сам останавливает свою задачу с причиной
+// (задача невыполнима), как это делает BoardSetTaskStatus(status=human_help,
 // reason): оркестратор обязан уважать этот выбор, а не затирать его
 // fallback-ом в done и не сжигать бюджет эскалаций.
-type pauseProvider struct {
+type humanHelpProvider struct {
 	idleProvider
 	store *board.Store
 }
 
-func (p *pauseProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *humanHelpProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
@@ -206,7 +208,7 @@ func (p *pauseProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 		if task.Status != board.StatusInProgress {
 			continue
 		}
-		if err := p.store.SetTaskStatus(ctx, task.TaskID, board.StatusPaused); err != nil {
+		if err := p.store.SetTaskStatus(ctx, task.TaskID, board.StatusHumanHelp); err != nil {
 			return nil, err
 		}
 		if err := p.store.PatchTask(ctx, task.TaskID, func(cur *board.Task) error {
@@ -216,55 +218,55 @@ func (p *pauseProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 			return nil, err
 		}
 	}
-	return &runner.AgentResponse{Content: "задача невыполнима, поставил паузу"}, nil
+	return &runner.AgentResponse{Content: "задача невыполнима, перевёл в human_help"}, nil
 }
 
-// TestAgentPauseRespectedByFallback — пауза специалиста не проходит через
-// fallback «в работу → выполнена» и не тратит бюджет: задача остаётся на
-// паузе с причиной, человек получает сообщение, эскалаций нет.
-func TestAgentPauseRespectedByFallback(t *testing.T) {
+// TestAgentHumanHelpRespectedByFallback — остановка специалиста не проходит
+// через fallback «в работу → выполнена» и не тратит бюджет: задача остаётся
+// в human_help с причиной, человек получает сообщение, эскалаций нет.
+func TestAgentHumanHelpRespectedByFallback(t *testing.T) {
 	ctx := context.Background()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-pause"})
-	// Гард на месте: если бы паузу затирал fallback, он бы тут же отказал.
+	// Гард на месте: если бы остановку затирал fallback, он бы тут же отказал.
 	store.TaskDoneGuard = func(_ context.Context, task *board.Task, _ board.Status) error {
 		return fmt.Errorf("задача %s не может стать выполненной: worktree пуст", task.TaskID)
 	}
 	projectDir := projects.ProjectDir("kanban-pause")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
-	kr := NewKanbanRunner(&pauseProvider{store: store}, store)
+	kr := NewKanbanRunner(&humanHelpProvider{store: store}, store)
 
 	var audit []string
 	kr.SetStatusNotifier(func(msg string) { audit = append(audit, msg) })
 
-	// Остановка «нет прогресса» (на паузе всё, дальше бессмысленно) — норма.
+	// Остановка «нет прогресса» (всё в human_help, дальше бессмысленно) — норма.
 	_ = kr.Run(ctx, "kanban-pause", "Сделай todo-приложение")
 
 	tasks, err := store.ListTasks(ctx)
 	if err != nil {
 		t.Fatalf("ListTasks: %v", err)
 	}
-	paused := 0
+	stopped := 0
 	for _, task := range tasks {
 		if task.Status == board.StatusDone {
-			t.Fatalf("задача %s: пауза не должна затираться fallback-ом в done", task.TaskID)
+			t.Fatalf("задача %s: остановка не должна затираться fallback-ом в done", task.TaskID)
 		}
-		if task.Status != board.StatusPaused {
+		if task.Status != board.StatusHumanHelp {
 			continue
 		}
-		paused++
+		stopped++
 		if task.PauseReason != "нет пакета internal/service: тестировать нечего" {
-			t.Fatalf("задача %s: причина паузы %q не сохранилась", task.TaskID, task.PauseReason)
+			t.Fatalf("задача %s: причина остановки %q не сохранилась", task.TaskID, task.PauseReason)
 		}
 		if task.Escalations != 0 {
-			t.Fatalf("задача %s: эскалаций %d — осознанная пауза не должна сжигать бюджет", task.TaskID, task.Escalations)
+			t.Fatalf("задача %s: эскалаций %d — осознанная остановка не должна сжигать бюджет", task.TaskID, task.Escalations)
 		}
 	}
-	if paused == 0 {
-		t.Fatalf("задача должна остаться на паузе, не ставшей done: %+v", tasks)
+	if stopped == 0 {
+		t.Fatalf("задача должна остаться в human_help, а не стать done: %+v", tasks)
 	}
 	joined := strings.Join(audit, "\n")
 	if !strings.Contains(joined, "ждёт решения человека") || !strings.Contains(joined, "нет пакета") {
-		t.Fatalf("в аудите нет сообщения о паузе с причиной: %v", audit)
+		t.Fatalf("в аудите нет сообщения об остановке с причиной: %v", audit)
 	}
 }

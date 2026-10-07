@@ -107,25 +107,25 @@ QAL-01 набежало `attempts=24`, токены росли с каждым �
 не триггерит). Фикс: общий `escalate(ctx, t, escalationDiag{event, detail,
 action})` — `escalateLoop` теперь тонкая обёртка («зациклилась»), гард-ветка
 зовёт его с `event: "работа не сделана"` и action «внеси правки + коммит; если
-задача невыполнима — paused с причиной»; исчерпание `KANBAN_MAX_ESCALATIONS`
-(общий счётчик с петлями) → `StatusPaused` + `setStopReason` «бюджет автономии
+задача невыполнима — human_help с причиной»; исчерпание `KANBAN_MAX_ESCALATIONS`
+(общий счётчик с петлями) → `StatusHumanHelp` + `setStopReason` «бюджет автономии
 исчерпан … нужен человек», запуск падает с этой причиной, а не с «нет
-прогресса». Оркестратор теперь УВАЖАЕТ `paused`/`cancelled` от специалиста до
+прогресса». Оркестратор теперь УВАЖАЕТ `human_help`/`cancelled` от специалиста до
 fallback-а (раньше `cancelled→done` ронял Run: переход запрещён FSM, а эскалация
 пыталась сделать `ready` из `cancelled`), причина уходит в чат статусным
-сообщением. Инструмент: `BoardSetTaskStatus` принимает `paused` с
+сообщением. Инструмент: `BoardSetTaskStatus` принимает `human_help` с
 обязательным `reason` (`tools/board_tools.go`) → новое поле
 `board.Task.PauseReason` (`json:"pause_reason"`, очищается при выходе из
-паузы); промпты: `developer.kanbanStep` и новый `kanbanRule` у QA
+`human_help`; статус `paused` заменён на `human_help` мержем harness-rework); промпты: `developer.kanbanStep` и новый `kanbanRule` у QA
 (`agents/qaengineer/agent.go` — добавляется только при `Store != nil`,
-по образцу разработчика) объясняют done/paused. Web UI: `pause_reason` в
-`web/src/Types/Types.ts` + блок «Причина паузы» в `TaskModal.tsx`,
+по образцу разработчика) объясняют done/human_help. Web UI: `pause_reason` в
+`web/src/Types/Types.ts` + блок «Причина остановки» в `TaskModal.tsx`,
 `npm run typecheck`/`npm run build` (dist пересобран: `index-qIdXu1th.js`).
-Тесты: `TestGuardRejectionEscalatesWithinBudget` (бюджет 1 → пауза, ошибка
+Тесты: `TestGuardRejectionEscalatesWithinBudget` (бюджет 1 → `human_help`, ошибка
 «бюджет автономии исчерпан»/«нужен человек», инъекция с причиной),
-`TestAgentPauseRespectedByFallback` (provider сам ставит paused+reason; гард
-на месте доказывает, что fallback не затирает паузу; `Escalations=0`),
-`TestBoardSetTaskStatusPausedReason` (reason обязателен, оседает в задаче,
+`TestAgentHumanHelpRespectedByFallback` (provider сам ставит human_help+reason; гард
+на месте доказывает, что fallback не затирает остановку; `Escalations=0`),
+`TestBoardSetTaskStatusHumanHelpReason` (reason обязателен, оседает в задаче,
 чистится на `ready`); существующие `TestPhantomDoneNotClosedByFallback`
 (теперь останавливается по бюджету, а не на 100-м раунде),
 `TestKanbanTaskLoopEscalatesThenAsksHuman`, `TestEscalationBudgetStopsAndAsksHuman`

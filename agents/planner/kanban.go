@@ -613,6 +613,11 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, t := range tasks {
+		// «Помощь человека» и «на тестирование» работой не считаются:
+		// human_help ждёт ручного выхода, testing возьмёт phaseTesting
+		// (этап 7 плана) — пока фазы нет, такие статусы не должны ни
+		// будить runner, ни давать «прогресс» циклу (иначе — кручение
+		// без результата).
 		switch t.Status {
 		case board.StatusReady, board.StatusInProgress:
 			ok, err := k.epicWorkable(ctx, t.EpicID)
@@ -652,7 +657,7 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, e := range epics {
-		if e.Status.Terminal() || e.Status == board.StatusPaused {
+		if e.Status.Terminal() || e.Status == board.StatusHumanHelp {
 			continue
 		}
 		// Эпик без задач (или с необработанной ревизией) — работа для лида:
@@ -682,10 +687,10 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 }
 
 // epicWorkable сообщает, можно ли брать в работу задачи эпика: эпик существует
-// и не находится на паузе/в отмене/выполнен. Приостановленные и отменённые
-// эпики «замораживают» свои задачи — оркестратор их не трогает (код/ветки
-// остаются на месте, позже можно возобновить). Отсутствующий эпик — «нет
-// работы» (задача-сирота без родителя исполняться не должна).
+// и не находится на «помощи человека»/в отмене/выполнен. Остановленные и
+// отменённые эпики «замораживают» свои задачи — оркестратор их не трогает
+// (код/ветки остаются на месте, позже можно возобновить). Отсутствующий эпик —
+// «нет работы» (задача-сирота без родителя исполняться не должна).
 func (k *KanbanRunner) epicWorkable(ctx context.Context, epicID string) (bool, error) {
 	if epicID == "" {
 		return false, nil
@@ -698,7 +703,7 @@ func (k *KanbanRunner) epicWorkable(ctx context.Context, epicID string) (bool, e
 		return false, err
 	}
 	switch e.Status {
-	case board.StatusPaused, board.StatusCancelled, board.StatusDone:
+	case board.StatusHumanHelp, board.StatusCancelled, board.StatusDone:
 		return false, nil
 	}
 	return true, nil
@@ -806,10 +811,10 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 	}
 	var drafts []*board.Epic
 	for _, epic := range epics {
-		// Черновики не трогаем только в терминальных/приостановленных состояниях
-		// (пауза замораживает ревизию, Ф-8): в остальных состояниях ревизия
-		// обязательна, пока флаг не снят.
-		if !epic.RequiresReview || epic.Status.Terminal() || epic.Status == board.StatusPaused {
+		// Черновики не трогаем только в терминальных/остановленных
+		// состояниях («помощь человека» замораживает ревизию, Ф-8): в
+		// остальных состояниях ревизия обязательна, пока флаг не снят.
+		if !epic.RequiresReview || epic.Status.Terminal() || epic.Status == board.StatusHumanHelp {
 			continue
 		}
 		drafts = append(drafts, epic)
@@ -1027,10 +1032,11 @@ func printLeadTasks(log *logging.Logger, epic *board.Epic, tasks []*board.Task) 
 }
 
 // pipelineIdle сообщает, что на доске нет незавершённых задач (все предыдущие
-// декомпозиции выполнены, отменены или приостановлены). Только в этом состоянии
+// декомпозиции выполнены, отменены или остановлены). Только в этом состоянии
 // лиду выдаётся следующая декомпозиция: сначала выполняется уже запланированный
-// объём работы. Задачи «на паузе» (эпик приостановлен) не блокируют очередь —
-// пауза эпика не должна замораживать декомпозицию остальных эпиков.
+// объём работы. Задачи на «помощи человека» (эпик остановлен) не блокируют
+// очередь — остановка эпика не должна замораживать декомпозицию остальных
+// эпиков. «На тестирование» — активная работа: конвейер лидов пока не свободен.
 func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
@@ -1038,7 +1044,7 @@ func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
 	}
 	for _, t := range tasks {
 		switch t.Status {
-		case board.StatusDone, board.StatusCancelled, board.StatusPaused:
+		case board.StatusDone, board.StatusCancelled, board.StatusHumanHelp:
 			continue
 		default:
 			return false, nil
@@ -1081,6 +1087,10 @@ func staleTaskAfter() time.Duration {
 // старше State Tracking или агент не отчитывался). Переход «в работе» →
 // «готова к работе» теперь разрешён конечным автоматом (см. board/entity.go),
 // поэтому статус идёт через SetTaskStatus, а не в обход валидации.
+//
+// «Помощь человека» и «на тестирование» сюда НЕ попадают: human_help снимается
+// только вручную (иначе авто-цикл заменил бы собой ручной разбор), testing
+// ждёт тестировщика.
 func (k *KanbanRunner) recoverStuckTasks(ctx context.Context) (int, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
@@ -1162,7 +1172,7 @@ func epicLess(a, b *board.Epic) bool {
 // blockingDependencyEpic ищет эпик, который блокирует уже запланированные
 // задачи: у незавершённой задачи в dependencies стоит ID эпика, который ещё не
 // декомпозирован лидом (len(epic.Tasks)==0), не ждёт ревизии архитектора
-// (RequiresReview=false) и не терминален/приостановлен. Такой эпик разбирается
+// (RequiresReview=false) и не терминален/не остановлен. Такой эпик разбирается
 // вне очереди `pipelineIdle` — иначе задача и эпик блокируют друг друга.
 //
 // Возвращает nil, если блокирующих эпиков нет: тогда поведение phaseLeads
@@ -1179,12 +1189,12 @@ func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*boar
 	var best *board.Epic
 	for _, t := range tasks {
 		switch t.Status {
-		case board.StatusDone, board.StatusCancelled, board.StatusPaused:
+		case board.StatusDone, board.StatusCancelled, board.StatusHumanHelp:
 			continue
 		}
 		for _, dep := range t.Dependencies {
 			depEpic, ok := byID[dep]
-			if !ok || depEpic.Status.Terminal() || depEpic.Status == board.StatusPaused {
+			if !ok || depEpic.Status.Terminal() || depEpic.Status == board.StatusHumanHelp {
 				continue
 			}
 			if depEpic.RequiresReview || len(depEpic.Tasks) > 0 {
@@ -1206,9 +1216,10 @@ func (k *KanbanRunner) nextLeadEpic(epics []*board.Epic) (*board.Epic, bool, boo
 	var best *board.Epic
 	bestDecompose := false
 	for _, epic := range epics {
-		// Терминальные и приостановленные эпики не трогаем: пауза замораживает
-		// и декомпозицию, и ревизию лидом (код остаётся в своей ветке).
-		if epic.Status.Terminal() || epic.Status == board.StatusPaused {
+		// Терминальные и остановленные эпики не трогаем: «помощь человека»
+		// замораживает и декомпозицию, и ревизию лидом (код остаётся в
+		// своей ветке).
+		if epic.Status.Terminal() || epic.Status == board.StatusHumanHelp {
 			continue
 		}
 		// Черновик (requires_review=true, Ф-8) не декомпозируется лидом, пока
@@ -1378,12 +1389,13 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// Промпт-инъекции задачи: снапшот на старте + ЖИВОЙ источник, который
 		// перечитывает задачу перед каждым запросом к модели. Благодаря живому
 		// источнику правка инъекций (REST/инструмент доски) видна модели со
-		// следующего раунда, даже если цикл уже идёт.
+		// следующего раунда, даже если цикл уже идёт. Также передаём комментарии
+		// в контекст для будущей доставки в модель.
 		//
 		// Контекст собирается в taskCtx, а не в ctx: присваивание в ctx внутри
-		// цикла по ready оставляло бы инъекции ПРЕДЫДУЩЕЙ задачи в контексте
-		// следующей (инъекция задачи попадала в чужую задачу).
+		// цикла по ready оставляло бы контекст предыдущей задачи следующей.
 		taskCtx := board.NewInjectionContext(ctx, t.Injections)
+		taskCtx = board.NewCommentContext(taskCtx, t.Comments)
 		if k.store != nil {
 			taskCtx = board.WithInjectionSource(taskCtx, func(ctx context.Context) ([]board.Injection, error) {
 				fresh, err := k.store.GetTask(ctx, t.TaskID)
@@ -1393,9 +1405,17 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				if fresh == nil {
 					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
 				}
-				// Пустой список — честный ответ «инъекций у задачи больше нет»:
-				// удаление с доски действует немедленно.
 				return fresh.Injections, nil
+			})
+			taskCtx = board.WithCommentSource(taskCtx, func(ctx context.Context) (board.Comments, error) {
+				fresh, err := k.store.GetTask(ctx, t.TaskID)
+				if err != nil {
+					return nil, err
+				}
+				if fresh == nil {
+					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
+				}
+				return fresh.Comments, nil
 			})
 		}
 		taskCtx = board.WithInjectionScope(taskCtx, board.InjectionScope{
@@ -1454,19 +1474,19 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			progress = true
 			continue
 		}
-		// Специалист сам вывел задачу из работы: paused (задача невыполнима —
-		// нет исходного кода/зависимостей, блокер) или cancelled (снята с
-		// работы). Это осознанный шаг агента, а не «пустая попытка»: уважаем
-		// статус, сообщаем человеку и НЕ страхуем fallback-ом в done — гард
-		// всё равно бы отказал, а эскалация (ниже) затёрла бы решение
-		// специалиста: пауза/отмена нетерминальны, вернуть задачу в очередь
-		// можно одной кнопкой (или докомандой лиду).
-		if current.Status == board.StatusPaused || current.Status == board.StatusCancelled {
+		// Специалист сам вывел задачу из работы: human_help (задача
+		// невыполнима — нет исходного кода/зависимостей, блокер, зацикливание)
+		// или cancelled (снята с работы). Это осознанный шаг агента, а не
+		// «пустая попытка»: уважаем статус, сообщаем человеку и НЕ страхуем
+		// fallback-ом в done — гард всё равно бы отказал, а эскалация (ниже)
+		// затёрла бы решение специалиста: оба статуса нетерминальны, вернуть
+		// задачу в очередь можно одной кнопкой (или докомандой лиду).
+		if current.Status == board.StatusHumanHelp || current.Status == board.StatusCancelled {
 			reason := truncateText(current.PauseReason, 400)
 			if reason == "" {
 				reason = "причина не указана"
 			}
-			what := "поставил на паузу"
+			what := "перевёл в human_help (просит помощь человека)"
 			if current.Status == board.StatusCancelled {
 				what = "снял с работы (cancelled)"
 			}
@@ -1482,14 +1502,14 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// попытка: работа без результата съедает бюджет автономии так же,
 		// как петля, иначе FEL-04 превращается в бесконечное сжигание
 		// токенов (задача возвращается в очередь и гоняется заново). По
-		// бюджету (KANBAN_MAX_ESCALATIONS) задача встаёт на паузу, а
-		// запуск сообщает, что нужен человек.
+		// бюджету (KANBAN_MAX_ESCALATIONS) задача уходит в «помощь
+		// человека», а запуск сообщает, что нужен человек.
 		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusDone); err != nil {
 			k.log.Warnf("[задача %s] fallback в done отклонён гардом (инцидент FEL-04: пустая задача не должна закрываться): %v", t.TaskID, err)
 			if _, escErr := k.escalate(ctx, current, escalationDiag{
 				event:  "работа не сделана",
 				detail: err.Error(),
-				action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом: задача закроется только когда в её ветке появится свой коммит или в worktree будут правки. Если же задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в paused инструментом BoardSetTaskStatus с обязательной причиной (reason): это честный выход, задача уйдёт человеку вместо повторов без результата.",
+				action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом: задача закроется только когда в её ветке появится свой коммит или в worktree будут правки. Если же задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason): это честный выход, задача уйдёт человеку вместо повторов без результата.",
 			}); escErr != nil {
 				return false, fmt.Errorf("задача %s: эскалация пустой работы: %w", t.TaskID, escErr)
 			}
@@ -1548,13 +1568,21 @@ type escalationDiag struct {
 // нового прогона) и возвращаем задачу в очередь. Откат кода при этом НЕ
 // делается (Р-2).
 //
-// Исчерпали бюджет: останавливаем работу задачи и зовём человека — пауза
-// (не терминальный статус: вернуть в очередь можно одной кнопкой) плюс
-// явное сообщение в чат. Никаких «выполнено»/фиктивного успеха.
+// Исчерпали бюджет: останавливаем работу задачи и зовём человека — «помощь
+// человека» (не терминальный статус: вернуть в очередь можно одной кнопкой)
+// плюс явное сообщение в чат. Никаких «выполнено»/фиктивного успеха.
 func (k *KanbanRunner) escalate(ctx context.Context, t *board.Task, diag escalationDiag) (bool, error) {
 	budget := maxEscalations()
 	if t.Escalations >= budget {
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusPaused); err != nil {
+		// Причина остановки оседает в задаче (карточка в UI): человек должен
+		// увидеть, ЧТО именно не получилось, а не «загадочный простой».
+		if err := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
+			cur.PauseReason = truncateText(diag.detail, 500)
+			return nil
+		}); err != nil {
+			return false, fmt.Errorf("задача %s: запись причины остановки: %w", t.TaskID, err)
+		}
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusHumanHelp); err != nil {
 			return false, fmt.Errorf("задача %s: остановка исчерпанием бюджета: %w", t.TaskID, err)
 		}
 		stop := fmt.Sprintf("задача %s: %s — попытка %d, бюджет автономии исчерпан: работа остановлена, нужен человек (последняя причина: %s)",
@@ -1685,9 +1713,9 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 		if epic.Status == board.StatusDone || epic.Status.Terminal() {
 			continue
 		}
-		// Приостановленный эпик не финализируем: «на паузе» — временное
-		// состояние, завершение дождётся возобновления.
-		if epic.Status == board.StatusPaused {
+		// Остановленный эпик не финализируем: «помощь человека» — временное
+		// состояние, завершение дождётся выхода (вручную).
+		if epic.Status == board.StatusHumanHelp {
 			continue
 		}
 		if len(epic.Tasks) == 0 {
@@ -1699,9 +1727,11 @@ func (k *KanbanRunner) phaseComplete(ctx context.Context) (bool, error) {
 		}
 		if allDone {
 			// «Доводим» эпик до «выполнена» из любого не-терминального статуса
-			// по цепочке new -> analysis -> ready -> in_progress -> done. Новая
-			// задача продвигает последующие; статусы менеджер переместил вручную
-			// (resume) — по цепочке с текущего места.
+			// по цепочке new -> analysis -> ready -> in_progress -> done (из
+			// testing цепочка заходит через in_progress; human_help фаза выше
+			// пропускает). Новая задача продвигает последующие; статусы
+			// менеджер переместил вручную (resume) — по цепочке с текущего
+			// места.
 			advanced := false
 			for _, tgt := range []board.Status{
 				board.StatusAnalysis, board.StatusReady,
@@ -1768,7 +1798,7 @@ func (k *KanbanRunner) noteEpicProgress(ctx context.Context, epicID string) {
 	}
 }
 
-// readyTasks возвращает задачи «готова к работе» (эпик не приостановлен/не
+// readyTasks возвращает задачи «готова к работе» (эпик не остановлен/не
 // отменён), отсортированные по порядку (sequence_order) и ID.
 func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*board.Task, error) {
 	tasks, err := k.store.ListTasks(ctx)

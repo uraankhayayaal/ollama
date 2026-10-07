@@ -297,11 +297,12 @@ func (s *Store) ListEpics(ctx context.Context) ([]*Epic, error) {
 	return epics, nil
 }
 
-// SetEpicStatus переводит эпик в новый статус (с проверкой перехода). Пауза
-// (paused), возобновление (ready из paused) и отмена (cancelled) каскадно
-// переводят задачи эпика, следуя за родителем: не взятые в работу задачи
-// «паузятся»/«отменяются», на паузе — возвращаются в «готова к работе».
-// Задачи «в работе» не трогаются: их доводит текущий раунд оркестратора.
+// SetEpicStatus переводит эпик в новый статус (с проверкой перехода). «Помощь
+// человека» (human_help), возобновление (ready/in_progress из human_help) и
+// отмена (cancelled) каскадно переводят задачи эпика, следуя за родителем:
+// не взятые в работу задачи «останавливаются»/«отменяются», при выходе —
+// возвращаются в исходный статус (ResumeStatus). Задачи «в работе»/«на
+// тестирование» не трогаются: их доводит текущий раунд оркестратора.
 func (s *Store) SetEpicStatus(ctx context.Context, id string, st Status) error {
 	e, err := s.GetEpic(ctx, id)
 	if err != nil {
@@ -316,19 +317,19 @@ func (s *Store) SetEpicStatus(ctx context.Context, id string, st Status) error {
 		return err
 	}
 	// Каскад статусов задач эпика (без FSM-хуков — прямое сохранение):
-	// трансляция приостановки/возобновления/отмены родителя на его задачи.
-	if st == StatusPaused && from != StatusPaused {
+	// трансляция остановки/возобновления/отмены родителя на его задачи.
+	if st == StatusHumanHelp && from != StatusHumanHelp {
 		if err := s.pauseEpicTasks(ctx, id); err != nil {
 			return err
 		}
 	}
-	if st == StatusReady && from == StatusPaused {
+	if (st == StatusReady || st == StatusInProgress) && from == StatusHumanHelp {
 		if err := s.resumeEpicTasks(ctx, id); err != nil {
 			return err
 		}
 	}
 	if st == StatusCancelled && from != StatusCancelled {
-		if err := s.setEpicTasksStatus(ctx, id, []Status{StatusNew, StatusAnalysis, StatusReady, StatusPaused}, StatusCancelled); err != nil {
+		if err := s.setEpicTasksStatus(ctx, id, []Status{StatusNew, StatusAnalysis, StatusReady, StatusHumanHelp}, StatusCancelled); err != nil {
 			return err
 		}
 	}
@@ -342,7 +343,7 @@ func (s *Store) SetEpicStatus(ctx context.Context, id string, st Status) error {
 
 // setEpicTasksStatus переводит задачи эпика из from статусов в to напрямую
 // (обход FSM — статусы задач следуют за каскадом родителя). Задачи с другими
-// статусами (в работе/выполнены) не трогаются.
+// статусами (в работе/на тестировании/выполнены) не трогаются.
 func (s *Store) setEpicTasksStatus(ctx context.Context, epicID string, from []Status, to Status) error {
 	tasks, err := s.TasksByEpic(ctx, epicID)
 	if err != nil {
@@ -369,11 +370,12 @@ func (s *Store) setEpicTasksStatus(ctx context.Context, epicID string, from []St
 	return nil
 }
 
-// pauseEpicTasks приостанавливает задачи эпика, которые ещё не взял в работу
-// специалист (new/analysis/ready), запоминая исходный статус в ResumeStatus —
-// возобновление вернёт задачу на прежнее место цепочки (зависимости и фазовые
-// гейты оркестратор проверит заново). Задачи «в работе» не трогаются: их
-// доводит текущий раунд оркестратора, иначе агент не смог бы закрыть задачу.
+// pauseEpicTasks останавливает каскадом задачи эпика, которые ещё не взял в
+// работу специалист (new/analysis/ready), запоминая исходный статус в
+// ResumeStatus — возобновление вернёт задачу на прежнее место цепочки
+// (зависимости и фазовые гейты оркестратор проверит заново). Задачи «в
+// работе»/«на тестирование» не трогаются: их доводит текущий раунд
+// оркестратора, иначе агент не смог бы закрыть задачу.
 func (s *Store) pauseEpicTasks(ctx context.Context, epicID string) error {
 	tasks, err := s.TasksByEpic(ctx, epicID)
 	if err != nil {
@@ -386,31 +388,31 @@ func (s *Store) pauseEpicTasks(ctx context.Context, epicID string) error {
 			continue
 		}
 		t.ResumeStatus = t.Status
-		t.Status = StatusPaused
+		t.Status = StatusHumanHelp
 		if err := s.SaveTask(ctx, t); err != nil {
-			return fmt.Errorf("задача %s: пауза: %w", t.TaskID, err)
+			return fmt.Errorf("задача %s: помощь человека: %w", t.TaskID, err)
 		}
 	}
 	return nil
 }
 
-// resumeEpicTasks возвращает приостановленные задачи эпика в статус, из
-// которого они были приостановлены (ResumeStatus); если он не запомнен —
-// в «готова к работе».
+// resumeEpicTasks возвращает остановленные каскадом задачи эпика в статус,
+// из которого они были остановлены (ResumeStatus). Задачи БЕЗ ResumeStatus —
+// «помощь человека» понадобилась им самим (эскалация, форсмажор) — каскад не
+// трогает: возврат с human_help делается только вручную.
 func (s *Store) resumeEpicTasks(ctx context.Context, epicID string) error {
 	tasks, err := s.TasksByEpic(ctx, epicID)
 	if err != nil {
 		return err
 	}
 	for _, t := range tasks {
-		if t.Status != StatusPaused {
+		if t.Status != StatusHumanHelp {
 			continue
 		}
-		back := t.ResumeStatus
-		if back == "" {
-			back = StatusReady
+		if t.ResumeStatus == "" {
+			continue
 		}
-		t.Status = back
+		t.Status = t.ResumeStatus
 		t.ResumeStatus = ""
 		if err := s.SaveTask(ctx, t); err != nil {
 			return fmt.Errorf("задача %s: возобновление: %w", t.TaskID, err)
@@ -571,6 +573,74 @@ func (s *Store) RemoveTaskInjection(ctx context.Context, taskID, injID string) (
 	return out, true, nil
 }
 
+// SetTaskComments заменяет список комментариев задачи.
+func (s *Store) SetTaskComments(ctx context.Context, taskID string, cms Comments) error {
+	if len(cms) > 0 {
+		for i := range cms {
+			cms[i].Normalize()
+			cms[i].TaskID = taskID
+			if err := cms[i].Validate(); err != nil {
+				return err
+			}
+		}
+	}
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	t.Comments = cms
+	return s.SaveTask(ctx, t)
+}
+
+// AddTaskComment добавляет комментарий к задаче (с тем же id перезаписывается).
+func (s *Store) AddTaskComment(ctx context.Context, taskID string, cm Comment) (Comments, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	cm.Normalize()
+	cm.TaskID = taskID
+	if err := cm.Validate(); err != nil {
+		return nil, err
+	}
+	out := make(Comments, 0, len(t.Comments)+1)
+	for _, existing := range t.Comments {
+		if cm.ID != "" && existing.ID == cm.ID {
+			continue
+		}
+		out = append(out, existing)
+	}
+	out = append(out, cm)
+	if err := s.SetTaskComments(ctx, taskID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RemoveTaskComment удаляет комментарий задачи по id.
+func (s *Store) RemoveTaskComment(ctx context.Context, taskID, cmID string) (Comments, bool, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(Comments, 0, len(t.Comments))
+	found := false
+	for _, existing := range t.Comments {
+		if existing.ID == cmID {
+			found = true
+			continue
+		}
+		out = append(out, existing)
+	}
+	if !found {
+		return t.Comments, false, nil
+	}
+	if err := s.SetTaskComments(ctx, taskID, out); err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
 // PatchTask читает задачу, применяет mutate к её полям и сохраняет результат.
 // Точечное обновление вместо SaveTask вызывающего: State Tracking пишет задачу
 // каждый раунд (агент), а статус меняют человек и оркестратор — общая запись
@@ -680,6 +750,8 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 	t.Status = st
 	// Ф-6 State Tracking: «взята в работу» — попытка номер N. Счётчик переживает
 	// рестарт сервера (лежит на доске) и нужен бюджету автономии этапа 4.
+	// Возврат из «на тестирование» после замечаний тестировщика — новая
+	// попытка (за откат по счётчику цикл dev↔qa ограничен бюджетом эскалации).
 	if st == StatusInProgress && from != StatusInProgress {
 		t.Attempts++
 	}
@@ -738,7 +810,7 @@ func (s *Store) DeleteTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if t.Status == StatusInProgress || t.Status == StatusDone || t.Status == StatusCancelled {
+	if t.Status == StatusInProgress || t.Status == StatusTesting || t.Status == StatusDone || t.Status == StatusCancelled {
 		return fmt.Errorf("board: задачу %q нельзя удалить (статус %s: специалист уже начал работу или работа завершена)", id, t.Status)
 	}
 	if err := s.checkNoDependents(ctx, "task:"+id); err != nil {

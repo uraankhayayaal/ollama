@@ -9,6 +9,7 @@ import { fmtTokens, tokenTitle } from "../tokens";
 import { Modal } from "../Modal";
 import { GitBlock } from "../GitBlock";
 import "./styles.scss";
+import { useState as useStateReact } from "react";
 
 // Ф-6 State Tracking: чем агент занят прямо сейчас.
 const AGENT_STATE_LABEL: Record<AgentState, string> = {
@@ -42,7 +43,7 @@ export function TaskModal({
   onRollback?: (t: TaskRow, to: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const m = MOVES[task.status] ?? { prev: null, next: null };
+  const m = MOVES[task.status] ?? { prev: [], next: [] };
   const taskGit = git?.tasks?.[task.task_id];
   const taskBranch = taskGit?.branch;
   // Ф-6 (5.3): откат — только пока рабочая копия задачи жива; сабмодули
@@ -57,6 +58,10 @@ export function TaskModal({
   const [rollbackTo, setRollbackTo] = useState("");
   const [rolling, setRolling] = useState(false);
   const [rollbackErr, setRollbackErr] = useState("");
+
+  const [newComment, setNewComment] = useStateReact({ type: "user" as const, body: "" });
+  const [sending, setSending] = useStateReact(false);
+  const [error, setError] = useStateReact("");
 
   const rollback = (to: string) => {
     setRolling(true);
@@ -162,12 +167,12 @@ export function TaskModal({
             <dd className="last-error">{task.last_error}</dd>
           </div>
         )}
-        {/* Пауза по решению специалиста (задача невыполнима): причина из
+        {/* Остановка по решению специалиста (задача невыполнима): причина из
             аргумента reason инструмента BoardSetTaskStatus — человек должен
             видеть, зачем задача встала, а не гадать по статусу. */}
         {task.pause_reason && (
           <div>
-            <dt>Причина паузы</dt>
+            <dt>Причина остановки</dt>
             <dd className="last-error">{task.pause_reason}</dd>
           </div>
         )}
@@ -263,9 +268,65 @@ export function TaskModal({
       <h4 className="section">Описание</h4>
       <p className="desc">{task.description || "—"}</p>
 
+      <h4 className="section">Комментарии</h4>
+      <div className="comments">
+        {(task.comments ?? []).length === 0 && <div className="empty">Комментариев нет</div>}
+        {(task.comments ?? []).map((c) => (
+          <div className="comment" key={c.id}>
+            <div className="meta">
+              <span className="author">{c.author}</span>
+              <span className="type">{c.type}</span>
+              <span className="date">{c.created_at}</span>
+            </div>
+            <div className="body">{c.body}</div>
+          </div>
+        ))}
+        <div className="add-comment">
+          <select value={newComment.type} onChange={(e) => setNewComment({ ...newComment, type: e.target.value as any })}>
+            <option value="user">user</option>
+            <option value="qa">qa</option>
+            <option value="system">system</option>
+          </select>
+          <textarea
+            value={newComment.body}
+            onChange={(e) => setNewComment({ ...newComment, body: e.target.value })}
+            placeholder="Добавить комментарий..."
+          />
+          <button
+            disabled={sending || !newComment.body.trim()}
+            onClick={() => {
+              setSending(true);
+              setError("");
+              onTaskUpdate(task, {
+                comments: [...(task.comments ?? []), {
+                  id: `tmp-${Date.now()}`,
+                  author: "user",
+                  type: newComment.type,
+                  body: newComment.body,
+                  created_at: new Date().toISOString(),
+                }],
+              });
+              setNewComment({ type: "user", body: "" });
+              setSending(false);
+            }}
+          >
+            Добавить
+          </button>
+        </div>
+        {error && <div className="err">{error}</div>}
+      </div>
+
       <div className="actions">
-        {m.prev && <button onClick={() => onTaskUpdate(task, { status: m.prev! })}>← {STATUS_LABEL[m.prev]}</button>}
-        {m.next && <button onClick={() => onTaskUpdate(task, { status: m.next! })}>{STATUS_LABEL[m.next]} →</button>}
+        {m.prev.map((s) => (
+          <button key={"p" + s} onClick={() => onTaskUpdate(task, { status: s })}>
+            ← {STATUS_LABEL[s]}
+          </button>
+        ))}
+        {m.next.map((s) => (
+          <button key={"n" + s} onClick={() => onTaskUpdate(task, { status: s })}>
+            {STATUS_LABEL[s]} →
+          </button>
+        ))}
       </div>
 
       <div className="meta">

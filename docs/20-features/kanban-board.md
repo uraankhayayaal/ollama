@@ -66,7 +66,7 @@ BOARD_TTL=0            # 0 = без истечения; например 24h
 `ai/task/<id>`.
 
 Отличия от эпика: `epic_id`, `assignee`, `resume_status` (из какого статуса
-снята на паузе). Остальные поля те же, включая `merge_conflict_files` и
+снята в human_help). Остальные поля те же, включая `merge_conflict_files` и
 `TokenUsage`.
 
 У задачи есть `injections` — промпт-инъекции этой задачи. Они принадлежат ровно
@@ -91,39 +91,48 @@ BOARD_TTL=0            # 0 = без истечения; например 24h
 
 ## Статусы и переходы
 
-### Задачи и эпики (`board/entity.go:26-118`)
+### Задачи и эпики (`board/entity.go:32-150`)
+
+Основная цепочка (Р-6) плюс боковая ветка «помощь человека»:
 
 ```
-new ──────► analysis ──────► ready ──────► in_progress ──────► done
- │              │              │               │                  ▲
- │              │              │               └──► paused ──────┘
- ▼              ▼              ▼                   (resume)
-cancelled    cancelled      cancelled              │
- ▲              ▲              ▲                   ▼
- └──────────────┴──────────────┴─────────────── (cancelled)
+new ──► analysis ──► ready ──► in_progress ──► testing ──► done
+  │         │          │            │ ▲           │
+  │         │          │            └─┘           │
+  │         │          │        (замечания:       │
+  │         │          │         testing →        │
+  │         │          │         in_progress)     │
+  └─────────┴──────────┴──► human_help ◄──────────┘
+                ▲  │           (боковая ветка: вход из любого
+                │  └──────────── нетерминального статуса,
+                │   ready / in_progress — помощь получена)
+cancelled ◄─────┴────────────── из любого нетерминального статуса
 ```
 
 Точные разрешённые переходы:
 
 | Из | В |
 |---|---|
-| `new` | `analysis`, `paused`, `cancelled` |
-| `analysis` | `ready`, `paused`, `cancelled` |
-| `ready` | `in_progress`, `paused`, `cancelled` |
-| `in_progress` | `done`, `paused`, `cancelled` |
-| `paused` | `ready` (возобновление), `cancelled` |
+| `new` | `analysis`, `human_help`, `cancelled` |
+| `analysis` | `ready`, `human_help`, `cancelled` |
+| `ready` | `in_progress`, `human_help`, `cancelled` |
+| `human_help` | `ready` (помощь получена, задача в очередь), `in_progress` (продолжаем), `cancelled` |
+| `in_progress` | `ready` (ручной откат кода), `testing` (сдача), `done`, `human_help`, `cancelled` |
+| `testing` | `in_progress` (замечания тестировщика), `done` (приёмка), `human_help`, `cancelled` |
 
-- Терминальны только `done` и `cancelled` (`entity.go:63-65`).
+- Терминальны только `done` и `cancelled` (`entity.go:68-71`).
 - Переход в тот же статус — идемпотентный «переход», не ошибка.
 - Неизвестный статус → `StatusError`.
-- `paused` **замораживает** ревизию: `phaseArchitectReview` пропускает
-  эпики на паузе (`agents/planner/kanban.go:710`).
-- Специалист сам переводит свою задачу в `paused` инструментом
+- `human_help` **замораживает** ревизию: `phaseArchitectReview` пропускает
+  эпики в «помощи человека» (`agents/planner/kanban.go:817`).
+- Специалист сам переводит свою задачу в `human_help` инструментом
   `BoardSetTaskStatus` с обязательным `reason` (задача невыполнима: кода или
   зависимостей нет, блокер) — причина оседает в `pause_reason` и видна в
-  карточке; оркестратор уважает паузу/отмену от агента и не затирает их
-  fallback'ом в `done` (`agents/planner/kanban.go`, ветка после
-  «агент подтвердил сам»).
+  карточке; оркестратор уважает `human_help`/`cancelled` от агента и не
+  затирает их fallback'ом в `done` (`agents/planner/kanban.go`, ветка после
+  «агент подтвердил сам»). Исчерпание бюджета автономии
+  (`KANBAN_MAX_ESCALATIONS`) тоже ведёт в `human_help` — с последней причиной
+  в `pause_reason`.
 
 ### Багрепорты (`board/entity.go:313-394`)
 

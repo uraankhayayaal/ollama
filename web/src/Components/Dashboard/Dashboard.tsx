@@ -194,14 +194,15 @@ export function Dashboard({
   // по видимым строкам: фильтры доски не должны «прятать» расход.
   const tokens = tokensSummary([...board.epics, ...board.tasks]);
 
-  // Эпик активен, если у него есть незавершённые задачи (new → in_progress);
-  // только такие по умолчанию развёрнуты полностью. Пауза/отмена/done — не активны.
+  // Эпик активен, если у него есть незавершённые задачи (new → testing);
+  // только такие по умолчанию развёрнуты полностью. Пауза (human_help),
+  // отмена/done — не активны.
   const isActive = (tasks: TaskRow[]) =>
     tasks.some(
       (t) =>
         t.status !== "done" &&
         t.status !== "cancelled" &&
-        t.status !== "paused",
+        t.status !== "human_help",
     );
 
   const isCollapsed = (epicId: string, tasks: TaskRow[]) =>

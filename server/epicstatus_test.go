@@ -11,11 +11,12 @@ import (
 	"ai/board"
 )
 
-// TestSetEpicStatusPauseResumeCancel — REST-кнопки «Пауза»/«Продолжить»/
-// «Отменить» эпика (Ф-6): статус эпика меняется, незавершённые задачи идут
-// каскадом, а git-ветка и код НЕ трогаются (отката нет — ветка остаётся
-// артефактом). Проверяется и то, что ни одной git-команды не выполняется.
-func TestSetEpicStatusPauseResumeCancel(t *testing.T) {
+// TestSetEpicStatusHumanHelpResumeCancel — REST-кнопки «Помощь человека»/
+// «Продолжить»/«Отменить» эпика (Р-4): статус эпика меняется, незавершённые
+// задачи идут каскадом, а git-ветка и код НЕ трогаются (отката нет — ветка
+// остаётся артефактом). Проверяется и то, что ни одной git-команды не
+// выполняется.
+func TestSetEpicStatusHumanHelpResumeCancel(t *testing.T) {
 	git := &fakeGit{}
 	srv, handler, mr := newTestServerGit(t, git, nil)
 	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
@@ -59,14 +60,14 @@ func TestSetEpicStatusPauseResumeCancel(t *testing.T) {
 		return task.Status
 	}
 
-	// Пауза: эпик «на паузе», его новая задача — тоже.
-	if rec := post("epic-1", "paused"); rec.Code != http.StatusOK {
-		t.Fatalf("пауза эпика: %d, body: %s", rec.Code, rec.Body.String())
-	} else if got := epicStatus(rec); got != board.StatusPaused {
-		t.Fatalf("статус эпика = %s, ожидалось paused", got)
+	// «Помощь человека»: эпик остановлен, его новая задача — тоже.
+	if rec := post("epic-1", "human_help"); rec.Code != http.StatusOK {
+		t.Fatalf("остановка эпика: %d, body: %s", rec.Code, rec.Body.String())
+	} else if got := epicStatus(rec); got != board.StatusHumanHelp {
+		t.Fatalf("статус эпика = %s, ожидалось human_help", got)
 	}
-	if got := taskStatus("task-1"); got != board.StatusPaused {
-		t.Fatalf("задача после паузы эпика = %s, ожидалось paused", got)
+	if got := taskStatus("task-1"); got != board.StatusHumanHelp {
+		t.Fatalf("задача после остановки эпика = %s, ожидалось human_help", got)
 	}
 
 	// Возобновление: эпик снова «готов к работе», задача вернулась в исходный
@@ -91,7 +92,8 @@ func TestSetEpicStatusPauseResumeCancel(t *testing.T) {
 		t.Fatalf("задача после отмены эпика = %s, ожидалось cancelled", got)
 	}
 
-	// Откатывать код нечего: пауза/возобновление/отмена не выполняют git-команд.
+	// Откатывать код нечего: остановка/возобновление/отмена не выполняют
+	// git-команд.
 	if calls := git.callsList(); len(calls) != 0 {
 		t.Fatalf("ожидалось ноль git-команд (без отката кода), получено: %v", calls)
 	}
@@ -128,15 +130,15 @@ func TestSetEpicStatusErrors(t *testing.T) {
 	if code := post("epic-1", "bogus"); code != http.StatusBadRequest {
 		t.Fatalf("неизвестный статус: %d, ожидалось 400", code)
 	}
-	if code := post("epic-missing", "paused"); code != http.StatusNotFound {
+	if code := post("epic-missing", "human_help"); code != http.StatusNotFound {
 		t.Fatalf("несуществующий эпик: %d, ожидалось 404", code)
 	}
 	// new -> done конечным автоматом не разрешён.
 	if code := post("epic-1", "done"); code != http.StatusBadRequest {
 		t.Fatalf("запрещённый переход: %d, ожидалось 400", code)
 	}
-	// Пауза допустима из любого активного статуса.
-	if code := post("epic-1", "paused"); code != http.StatusOK {
-		t.Fatalf("new -> paused: %d, ожидалось 200", code)
+	// «Помощь человека» допустима из любого активного статуса.
+	if code := post("epic-1", "human_help"); code != http.StatusOK {
+		t.Fatalf("new -> human_help: %d, ожидалось 200", code)
 	}
 }

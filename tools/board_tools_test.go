@@ -409,11 +409,11 @@ func TestBoardNotFoundListsExistingIDs(t *testing.T) {
 	}
 }
 
-// BoardSetTaskStatus(paused) — честный выход специалиста из невыполнимой
+// BoardSetTaskStatus(human_help) — честный выход специалиста из невыполнимой
 // задачи (нет исходного кода/зависимостей, блокер). Без причины инструмент
 // отказывает; с причиной она оседает в записи задачи (карточка UI) и
-// очищается при выходе из паузы, чтобы не висеть после возобновления.
-func TestBoardSetTaskStatusPausedReason(t *testing.T) {
+// очищается при выходе из human_help, чтобы не висеть после возобновления.
+func TestBoardSetTaskStatusHumanHelpReason(t *testing.T) {
 	set, store := newBoardToolSet(t)
 	ctx := context.Background()
 
@@ -430,9 +430,9 @@ func TestBoardSetTaskStatusPausedReason(t *testing.T) {
 		mustExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "P-01", "status": st})
 	}
 
-	msg := errExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "P-01", "status": "paused"})
+	msg := errExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "P-01", "status": "human_help"})
 	if !strings.Contains(msg, "reason") {
-		t.Fatalf("пауза без причины должна отказывать с упоминанием reason, got %q", msg)
+		t.Fatalf("human_help без причины должна отказывать с упоминанием reason, got %q", msg)
 	}
 	got, err := store.GetTask(ctx, "P-01")
 	if err != nil {
@@ -443,19 +443,19 @@ func TestBoardSetTaskStatusPausedReason(t *testing.T) {
 	}
 
 	mustExec(t, set, BoardSetTaskStatus, map[string]any{
-		"task_id": "P-01", "status": "paused", "reason": "нет пакета internal/service: тестировать нечего",
+		"task_id": "P-01", "status": "human_help", "reason": "нет пакета internal/service: тестировать нечего",
 	})
 	if got, err = store.GetTask(ctx, "P-01"); err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if got.Status != board.StatusPaused {
-		t.Fatalf("статус %s, ожидалась пауза", got.Status)
+	if got.Status != board.StatusHumanHelp {
+		t.Fatalf("статус %s, ожидалась помощь человека", got.Status)
 	}
 	if got.PauseReason != "нет пакета internal/service: тестировать нечего" {
-		t.Fatalf("причина паузы не сохранилась: %q", got.PauseReason)
+		t.Fatalf("причина остановки не сохранилась: %q", got.PauseReason)
 	}
 
-	// Возобновление чистит причину прошлого простоя.
+	// Возобновление чистит причину прошлой остановки.
 	mustExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "P-01", "status": "ready"})
 	if got, err = store.GetTask(ctx, "P-01"); err != nil {
 		t.Fatalf("GetTask: %v", err)
