@@ -1,6 +1,7 @@
 package devopslead
 
 import (
+	"ai/agents"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,23 +34,21 @@ func TestLeadToolsAreSelected(t *testing.T) {
 	for _, td := range got {
 		names[td.Name] = true
 	}
-	// Лид документирует план в readme (WriteFiles/AppendFile), но не пишет код
-	// (DeleteFiles/Run запрещены).
-	for _, want := range []string{"List", "ReadFiles", "WriteFiles", "AppendFile"} {
+	// 5.1: лид пишет скелетон (WriteFiles/AppendFile) и гоняет проверку/git
+	// через Run; удаления файлов у него нет (реализацию не трогает).
+	for _, want := range []string{"List", "ReadFiles", "WriteFiles", "AppendFile", "Run"} {
 		if !names[want] {
 			t.Errorf("агент не включает инструмент %q", want)
 		}
 	}
-	for _, disallowed := range []string{"DeleteFiles", "Run"} {
-		if names[disallowed] {
-			t.Errorf("агент не должен включать инструмент %q (лид не пишет код и не запускает команды)", disallowed)
-		}
+	if names["DeleteFiles"] {
+		t.Error("агент не должен включать DeleteFiles (лид не удаляет файлы проекта)")
 	}
 }
 
 func TestLeadCannotWriteThroughTools(t *testing.T) {
 	d := newTestLead(t)
-	// Запись вне readme через инструменты запрещена (readme-only scope):
+	// Запись вне allowlist через инструменты запрещена (гард в инструменте):
 	// WriteFiles возвращает статус "error" внутри JSON-результата.
 	out, err := d.CallFunction("WriteFiles", map[string]any{
 		"files": []map[string]string{{"filename": "x.yaml", "content": "services: {}\n"}},
@@ -58,29 +57,61 @@ func TestLeadCannotWriteThroughTools(t *testing.T) {
 		t.Fatalf("неожиданная ошибка инструмента: %v", err)
 	}
 	if !strings.Contains(string(out), `"status":"error"`) {
-		t.Fatalf("запись не-readme файла должна вернуть статус error, got: %s", out)
+		t.Fatalf("запись вне allowlist должна вернуть статус error, got: %s", out)
 	}
-	if _, err := d.CallFunction("Run", map[string]any{"command": "docker compose config"}); err == nil {
-		t.Fatal("лид не должен уметь запускать консольные команды через инструменты")
+	// Файл разрешённой директории пишется штатно (скелетон в ./cicd).
+	if _, err := d.CallFunction("WriteFiles", map[string]any{
+		"files": []map[string]string{{"filename": "cicd/pipeline.yaml", "content": "stages: []\n"}},
+	}); err != nil {
+		t.Fatalf("запись скелетона в cicd: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.OutputDir, "cicd", "pipeline.yaml")); err != nil {
+		t.Fatalf("скелетон cicd/pipeline.yaml не создан: %v", err)
 	}
 }
 
-// TestLeadWriteOnlyReadme: запись лида разрешена ТОЛЬКО в файлы readme* в корне
-// проекта (документирование плана работ); код лид писать не должен.
-func TestLeadWriteOnlyReadme(t *testing.T) {
+// TestLeadWriteSkeletonAllowlist (5.1): readme-only снят — лид пишет скелетон
+// по allowlist (директории 1-го уровня и корневые файлы), всё остальное
+// запись отклоняет (гард в инструменте, а не только в промпте).
+func TestLeadWriteSkeletonAllowlist(t *testing.T) {
 	d := newTestLead(t)
-	d.SetScope([]string{"k8s/"})
-	if err := d.Write("README.md", "# План работ\n"); err != nil {
-		t.Fatalf("запись в readme должна быть разрешена: %v", err)
+	for _, ok := range []string{
+		"README.md", "readme.md", "AGENTS.md",
+		"compose.yaml", "Makefile",
+		"cicd/pipeline.yaml",
+		"docs/runbook.md",
+	} {
+		if err := d.Write(ok, "skel\n"); err != nil {
+			t.Errorf("запись %q должна быть разрешена allowlist: %v", ok, err)
+		}
 	}
-	if err := d.Write("readme.md", "# План работ\n"); err != nil {
-		t.Fatalf("запись в readme* без учёта регистра должна быть разрешена: %v", err)
+	for _, bad := range []string{
+		"k8s/deploy.yaml",
+		"main.go",
+		"x.yaml",
+	} {
+		if err := d.Write(bad, "x\n"); err == nil {
+			t.Errorf("запись %q вне allowlist должна быть отклонена", bad)
+		}
 	}
-	if err := d.Write("k8s/deploy.yaml", "apiVersion: v1\n"); err == nil {
-		t.Fatal("запись вне readme должна быть отклонена (лид ведёт только readme)")
+}
+
+// TestLeadPromptSkeletonRules (5.3): системный промпт лида ведёт скелетон
+// (не «не пишешь код»), знает про allowlist и Run и несёт общий Run-фрагмент
+// компактного вывода.
+func TestLeadPromptSkeletonRules(t *testing.T) {
+	d := newTestLead(t)
+	p := d.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"скелетон", "СКЕЛЕТОН", "allowlist", "Run", "ВЕТКА ЭПИКА",
+		agents.RunTokenEconomy,
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт девопс-лида не содержит %q", want)
+		}
 	}
-	if err := d.Write("compose.yaml", "services: {}\n"); err == nil {
-		t.Fatal("запись вне readme должна быть отклонена")
+	if strings.Contains(p, "Ты НЕ пишешь код") {
+		t.Error("промпт лида не должен запрещать код: роль — скелетон")
 	}
 }
 

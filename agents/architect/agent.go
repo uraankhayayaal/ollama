@@ -38,7 +38,7 @@ const SubmitBacklogToolName = "submit_architecture_backlog"
 // (RagIndexStatus), работа с общей Kanban-доской (инструменты Board*), а после
 // Этапа 4 — запись файлов и команды git в ветке эпика (WriteFiles, Run):
 // системный архитектор ведёт структуру проекта в worktree ветки эпика
-// (запись ограничена allowlist см. architectWriteAllowlist).
+// (запись ограничена общим allowlist см. agents.SkeletonWriteAllowlist).
 var toolNames = []string{
 	"List", "ReadFiles",
 	tools.LspDefinition, tools.LspReferences, tools.LspHover,
@@ -48,16 +48,6 @@ var toolNames = []string{
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
 	tools.BoardReviewBug,
 	"WriteFiles", "Run",
-}
-
-// architectWriteAllowlist — allowlist ЗАПИСИ системного архитектора (4.2):
-// каталоги общесистемного уровня и корневые файлы репозитория. Остальная
-// запись (код приложения, тесты, инфраструктура приложения) запрещена — её
-// ведут лиды направлений и рядовые специалисты в своих ветках.
-var architectWriteAllowlist = []string{
-	"server", "client", "cicd", "docs",
-	"readme.md", "README.md", "AGENTS.md",
-	"compose.yaml", "Makefile", ".env.example",
 }
 
 // Architect — агент Системный архитектор. Публикует эпики на общую
@@ -112,7 +102,7 @@ func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Arch
 	// Project задан явно: каталог проекта может быть переименован/подменён
 	// (сабмодуль, worktree), а RAG-фильтр строится по имени проекта.
 	ops := &tools.FileOps{OutputDir: dir, Project: projectName}
-	ops.SetWriteAllowlist(architectWriteAllowlist)
+	ops.SetWriteAllowlist(agents.SkeletonWriteAllowlist)
 	return &Architect{
 		FileOps: ops,
 		Prompt:  prompt,
@@ -538,7 +528,7 @@ func (a *Architect) submitBacklog(args map[string]any) ([]byte, error) {
 
 	// 4.1: после публикации бэклога эпики на доске есть — резолвер возвращает
 	// worktree ветки основного эпика. Переключаем OutputDir, чтобы WriteFiles/Run
-	// работали в ветке эпика (запись ограничена allowlist architectWriteAllowlist).
+	// работали в ветке эпика (запись ограничена agents.SkeletonWriteAllowlist).
 	// Без резолвера/без worktree (консоль, не-git проект) — остаёмся в каталоге
 	// проекта и просим модель структуру не писать.
 	result := map[string]any{

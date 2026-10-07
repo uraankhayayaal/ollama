@@ -1,6 +1,7 @@
 package backendlead
 
 import (
+	"ai/agents"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,36 +45,60 @@ func TestLeadToolsAreSelected(t *testing.T) {
 	for _, td := range got {
 		names[td.Name] = true
 	}
-	// Лид документирует план в readme (WriteFiles/AppendFile), но не пишет код
-	// (DeleteFiles/Run запрещены).
-	for _, want := range []string{"List", "ReadFiles", "WriteFiles", "AppendFile"} {
+	// 5.1: лид пишет скелетон (WriteFiles/AppendFile) и гоняет проверку/git
+	// через Run; удаления файлов у него нет (реализацию не трогает).
+	for _, want := range []string{"List", "ReadFiles", "WriteFiles", "AppendFile", "Run"} {
 		if !names[want] {
 			t.Errorf("агент не включает инструмент %q", want)
 		}
 	}
-	for _, disallowed := range []string{"DeleteFiles", "Run"} {
-		if names[disallowed] {
-			t.Errorf("агент не должен включать инструмент %q (лид не пишет код и не запускает команды)", disallowed)
+	if names["DeleteFiles"] {
+		t.Error("агент не должен включать DeleteFiles (лид не удаляет файлы проекта)")
+	}
+}
+
+// TestLeadWriteSkeletonAllowlist (5.1): readme-only снят — лид пишет скелетон
+// по allowlist (директории 1-го уровня и корневые файлы), всё остальное
+// запись отклоняет (гард в инструменте, а не только в промпте).
+func TestLeadWriteSkeletonAllowlist(t *testing.T) {
+	l := newTestLead(t)
+	for _, ok := range []string{
+		"README.md", "readme.md", "AGENTS.md",
+		"server/internal/service/weather.go",
+		"docs/api.md",
+	} {
+		if err := l.Write(ok, "// скелетон\n"); err != nil {
+			t.Errorf("запись %q должна быть разрешена allowlist: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"main.go",
+		"internal/service/x.go",
+		"web/src/App.tsx",
+		"server.go",
+	} {
+		if err := l.Write(bad, "package main\n"); err == nil {
+			t.Errorf("запись %q вне allowlist должна быть отклонена", bad)
 		}
 	}
 }
 
-// TestLeadWriteOnlyReadme: запись лида разрешена ТОЛЬКО в файлы readme* в корне
-// проекта (документирование плана работ); код лид писать не должен.
-func TestLeadWriteOnlyReadme(t *testing.T) {
+// TestLeadPromptSkeletonRules (5.3): системный промпт лида ведёт скелетон
+// (не «не пишешь код»), знает про allowlist и Run и несёт общий Run-фрагмент
+// компактного вывода.
+func TestLeadPromptSkeletonRules(t *testing.T) {
 	l := newTestLead(t)
-	l.SetScope([]string{"internal/"})
-	if err := l.Write("README.md", "# План работ\n"); err != nil {
-		t.Fatalf("запись в readme должна быть разрешена: %v", err)
+	p := l.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"скелетон", "СКЕЛЕТОН", "allowlist", "Run", "ВЕТКА ЭПИКА",
+		agents.RunTokenEconomy,
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт бэкенд-лида не содержит %q", want)
+		}
 	}
-	if err := l.Write("readme.md", "# План работ\n"); err != nil {
-		t.Fatalf("запись в readme* без учёта регистра должна быть разрешена: %v", err)
-	}
-	if err := l.Write("internal/plan.json", "{}\n"); err == nil {
-		t.Fatal("запись вне readme должна быть отклонена (лид ведёт только readme)")
-	}
-	if err := l.Write("main.go", "package main\n"); err == nil {
-		t.Fatal("запись вне readme должна быть отклонена")
+	if strings.Contains(p, "Ты НЕ пишешь код") {
+		t.Error("промпт лида не должен запрещать код: роль — скелетон")
 	}
 }
 

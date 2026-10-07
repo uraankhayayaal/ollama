@@ -63,10 +63,11 @@ type KanbanRunner struct {
 	// и правки агента падают в ВЕТКУ ЗАДАЧИ — авто-коммит на done соберёт именно
 	// их. nil — общая проектная копия temp/<проект>.
 	outputDir func(project, taskID string) string
-	// epicOutputDir — резолвер worktree ветки эпика для архитектора (4.1):
+	// epicOutputDir — резолвер worktree ветки эпика (4.1 архитектор, 5.2 лиды):
 	// (project, epicID) → каталог worktree `ai/epic/<id>` либо "" (нельзя
 	// создать). Задаётся сервером (SetEpicOutputDir); nil — структуру
-	// эпик-ветки архитектор не пишет (консольный режим/тесты).
+	// эпик-ветки архитектор не пишет, лиды работают в temp/<проект>
+	// (консольный режим/тесты).
 	epicOutputDir func(project, epicID string) string
 	// wake — канал событийного побуждения из standby (см. Wake): буфер 1
 	// поглощает сигналы, когда runner не ждёт работу.
@@ -208,10 +209,11 @@ func (k *KanbanRunner) SetStandbyNotifier(fn func(bool)) { k.onStandby = fn }
 // стандартно. nil возвращает поведение по умолчанию.
 func (k *KanbanRunner) SetOutputDir(fn func(project, taskID string) string) { k.outputDir = fn }
 
-// SetEpicOutputDir задаёт функцию рабочей директории ветки эпика (4.1):
-// (project, epicID) → worktree ветки `ai/epic/<id>` для git-проектов, "" —
-// если worktree создать нельзя (не-git проект, ветки нет). nil (консоль/тесты)
-// — структура эпика архитектором не пишется (degrade).
+// SetEpicOutputDir задаёт функцию рабочей директории ветки эпика (4.1 архитектор,
+// 5.2 лиды): (project, epicID) → worktree ветки `ai/epic/<id>` для git-проектов,
+// "" — если worktree создать нельзя (не-git проект, ветки нет). nil (консоль/тесты)
+// — структура эпика архитектором не пишется (degrade), лиды пишут скелетон в
+// temp/<проект>.
 func (k *KanbanRunner) SetEpicOutputDir(fn func(project, epicID string) string) {
 	k.epicOutputDir = fn
 }
@@ -955,7 +957,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 
 	lead, err := k.leadFor(epic)
 	if err != nil {
-		return false, fmt.Errorf("фаза лидов, эпик %s: %w", epic.TaskID, err)
+		return false, k.leadFail(ctx, epic, fmt.Errorf("фаза лидов, эпик %s: %w", epic.TaskID, err))
 	}
 	if sb, ok := lead.(interface{ SetBoardStore(*board.Store) }); ok {
 		sb.SetBoardStore(k.store)
@@ -965,12 +967,24 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 	if tp, ok := lead.(interface{ SetTaskPublishing(bool) }); ok {
 		tp.SetTaskPublishing(true)
 	}
+	// 5.2: резолвер worktree ветки эпика — лид пишет скелетон в ветку своего
+	// эпика, а не в общий temp/<проект>. Резолвер лениво пересоздаёт worktree
+	// (мог быть удалён drop-хуком после прошлой фазы), поэтому вызывается на
+	// каждой итерации. Без worktree (консоль/не-git) резолвер вернёт "" — лид
+	// работает в обычной директории проекта и скелетон не пишет (см. промпт).
+	if k.epicOutputDir != nil {
+		if sd, ok := lead.(interface{ SetOutputDir(string) }); ok {
+			if dir := k.epicOutputDir(k.store.Project(), epic.TaskID); dir != "" {
+				sd.SetOutputDir(dir)
+			}
+		}
+	}
 
 	// «В анализе»: для новой декомпозиции обязателен; при ревизии эпик может
 	// находиться дальше по цепочке — некритично (переход в анализ не требуется).
 	if err := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusAnalysis); err != nil {
 		if _, ok := err.(*board.StatusError); !ok {
-			return false, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err)
+			return false, k.leadFail(ctx, epic, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err))
 		}
 	}
 	k.log.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
@@ -978,19 +992,19 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 
 	resp, err := k.generate(ctx, tokens.ScopeEpic(epic.TaskID), lead)
 	if err != nil {
-		return false, fmt.Errorf("декомпозиция эпика %s: %w", epic.TaskID, err)
+		return false, k.leadFail(ctx, epic, fmt.Errorf("декомпозиция эпика %s: %w", epic.TaskID, err))
 	}
 	if stop := resp.StopReason(); stop != "" {
 		// Ни лимит раундов, ни зацикливание лида не должны ронять весь запуск,
 		// если он уже опубликовал на доске частичную (но рабочую) декомпозицию:
 		// продолжаем, задачи передадутся специалистам после затвора. Задач нет —
-		// эпик пуст, работа не выполнена: сообщаем причину явно.
+		// эпик пуст, работа не выполнена: эпик уходит в human_help (5.4).
 		tasks, terr := k.store.TasksByEpic(ctx, epic.TaskID)
 		if terr != nil {
 			return false, fmt.Errorf("декомпозиция эпика %s: цикл прерван (%s): %w", epic.TaskID, stop, terr)
 		}
 		if len(tasks) == 0 {
-			return false, fmt.Errorf("декомпозиция эпика %s: цикл прерван (%s), задачи не созданы", epic.TaskID, stop)
+			return false, k.leadFail(ctx, epic, fmt.Errorf("декомпозиция эпика %s: цикл прерван (%s), задачи не созданы", epic.TaskID, stop))
 		}
 		k.log.Infof("[эпик %s] цикл лида прерван (%s), но опубликовано задач: %d — продолжаем с частичной декомпозицией", epic.TaskID, stop, len(tasks))
 	}
@@ -1010,10 +1024,10 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 		if len(tasks) == 0 {
 			dec, err := board.UnmarshalTasks(resp.Content)
 			if err != nil {
-				return false, fmt.Errorf("декомпозиция эпика %s: лид не создал задач ни доской, ни JSON: %w", epic.TaskID, err)
+				return false, k.leadFail(ctx, epic, fmt.Errorf("декомпозиция эпика %s: лид не создал задач ни доской, ни JSON: %w", epic.TaskID, err))
 			}
 			if len(dec) == 0 {
-				return false, fmt.Errorf("декомпозиция эпика %s: лид вернул пустой список tasks", epic.TaskID)
+				return false, k.leadFail(ctx, epic, fmt.Errorf("декомпозиция эпика %s: лид вернул пустой список tasks", epic.TaskID))
 			}
 			for i := range dec {
 				ts := dec[i]
@@ -1719,6 +1733,31 @@ func (k *KanbanRunner) architectFail(ctx context.Context, err error) error {
 	return err
 }
 
+// leadFail — 5.4: падение лид-фазы (декомпозиции эпика) останавливает ЭПИК
+// с human_help вместо бесконечных повторов цикла: эпик не разобран, повтор с
+// тем же промптом ничего не меняет. В отличие от forceMajeure (задача/мета)
+// здесь комментарий к эпику пока не ставим — у эпиков на доске нет комментариев
+// (только AddTaskComment для задач); причину несут стоп-причина запуска и
+// статус эпика, а подробный разбор отложен в Этап 9. SetEpicStatus сам каскадом
+// ставит на паузу незакрытые задачи эпика (pauseEpicTasks). Отмена контекста —
+// не форсмажор: пробрасываем как есть. Возвращает err без изменений —
+// можно писать `return k.leadFail(ctx, epic, err)`.
+func (k *KanbanRunner) leadFail(ctx context.Context, epic *board.Epic, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return err
+	}
+	reason := fmt.Sprintf("декомпозиция эпика %s не удалась: %s", epic.TaskID, truncateText(err.Error(), 300))
+	k.setStopReason(reason)
+	if serr := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusHumanHelp); serr != nil {
+		k.log.Warnf("[эпик %s] не удалось перевести в human_help: %v", epic.TaskID, serr)
+	}
+	k.status("[эпик %s] %s — нужна помощь человека", epic.TaskID, reason)
+	return err
+}
+
 // phaseBugs: конвейер багрепортов. QA-специалисты публикуют багрепорты
 // (BoardCreateBugReport, статус new) во время выполнения задач. QA Lead
 // отсеивает «нейрослоп» (new -> slop) и подтверждает реальные проблемы (new ->
@@ -2010,7 +2049,9 @@ func (k *KanbanRunner) boardSummary(ctx context.Context) string {
 }
 
 // leadFor создаёт агента-лида направления по assigned_role эпика и собирает
-// промпт декомпозиции. Лиды не пишут код и не запускают команды.
+// промпт декомпозиции. Лиды пишут ТОЛЬКО скелетон (allowlist в инструменте,
+// worktree ветки эпика подключается в phaseLeads через epicOutputDir); QA-лид
+// пишет readme до Этапа 8.
 func (k *KanbanRunner) leadFor(epic *board.Epic) (agents.Agent, error) {
 	prompt := k.leadPrompt(epic)
 	project := k.store.Project()
@@ -2056,7 +2097,15 @@ func (k *KanbanRunner) bugExpertPrompt(project string, bugs []*board.BugReport) 
 
 // leadPrompt формирует задание лиду: эпик, архитектурная сводка. Лид публикует
 // задачи инструментами доски (если они доступны), иначе — JSON-декомпозицией.
+// 5.3: НЕ-QA лиды (backend/frontend/devops) дополнительно пишут СКЕЛЕТОН в
+// worktree ветки эпика: контракты живут в коде скелетона, задачи ссылаются на
+// файлы, а не дублируют контракт текстом. QA-лид скелетона не пишет (у него
+// нет Run и работ с кодом — readme-only до Этапа 8), для него сохраняется
+// старый формат «полный контракт в description».
 func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
+	// Скелетон пишут все лиды, кроме QA: их направления имеют Write/Run и
+	// worktree ветки эпика (см. phaseLeads → SetOutputDir).
+	skeleton := !isRole(epic.AssignedRole, "qa", "тест", "testing")
 	var b strings.Builder
 	b.WriteString("Декомпозируй эпик из бэклога Системного архитектора на задачи для рядовых специалистов.\n\n")
 	fmt.Fprintf(&b, "Проект: %s\n", k.store.Project())
@@ -2066,7 +2115,11 @@ func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
 	}
 	fmt.Fprintf(&b, "Описание эпика:\n%s\n\n", epic.Description)
 	b.WriteString("Публикация задач:\n")
-	b.WriteString("- Если у тебя есть инструменты доски (BoardCreateTask и др.) — создавай задачи ими (полный контракт в description, assigned_role, sequence_order, dependencies). Обновляй и удаляй задачи через BoardUpdateTask/BoardDeleteTask (кроме взятых в работу).\n")
+	if skeleton {
+		b.WriteString("- Если у тебя есть инструменты доски (BoardCreateTask и др.) — создавай задачи ими (объём, приёмочные критерии и отсылки к файлам скелетона: путь + символ/строка; assigned_role, sequence_order, dependencies). Обновляй и удаляй задачи через BoardUpdateTask/BoardDeleteTask (кроме взятых в работу).\n")
+	} else {
+		b.WriteString("- Если у тебя есть инструменты доски (BoardCreateTask и др.) — создавай задачи ими (полный контракт в description, assigned_role, sequence_order, dependencies). Обновляй и удаляй задачи через BoardUpdateTask/BoardDeleteTask (кроме взятых в работу).\n")
+	}
 	b.WriteString("- Если инструментов доски нет — верни строго JSON-декомпозицию (без markdown-обёрток) по схеме:\n")
 	b.WriteString("{\n")
 	b.WriteString(`  "lead_summary": "краткое техническое описание модуля",` + "\n")
@@ -2074,7 +2127,11 @@ func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
 	b.WriteString("    {\n")
 	b.WriteString(`      "task_id": "уникальный ID (например T-01)",` + "\n")
 	b.WriteString(`      "title": "название задачи",` + "\n")
-	b.WriteString(`      "description": "детальное техническое описание задачи с готовым контрактом взаимодействия, который ты спроектировал",` + "\n")
+	if skeleton {
+		b.WriteString(`      "description": "объём и приёмочные критерии задачи плюс ОБЯЗАТЕЛЬНЫЕ отсылки к файлам скелетона (путь + имя символа), которые ты спроектировал; полный текст контракта не копируется — он зафиксирован в коде скелетона",` + "\n")
+	} else {
+		b.WriteString(`      "description": "детальное техническое описание задачи с готовым контрактом взаимодействия, который ты спроектировал",` + "\n")
+	}
 	b.WriteString(`      "assigned_role": "роль специалиста (например Senior Go Developer / React Developer / QA Engineer / DevOps Engineer)",` + "\n")
 	b.WriteString("      \"sequence_order\": 1,\n")
 	b.WriteString(`      "can_run_parallel": true,` + "\n")
@@ -2083,11 +2140,24 @@ func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
 	b.WriteString("    }\n")
 	b.WriteString("  ]\n")
 	b.WriteString("}\n\n")
-	b.WriteString("ДЕТАЛИЗАЦИЯ КОНТРАКТОВ (обязательно для каждой задачи): описание задачи обязано содержать ПОЛНЫЙ контракт, по которому специалист пишет код без догадок: точные типы/структуры (поля с типами), публичные сигнатуры функций/методов/интерфейсов (имя, параметры с типами, возвращаемые значения), API-контракты (метод, путь, схема запроса/ответа, коды ошибок), схему БД, манифесты с конкретными значениями. Зафиксируй контракт в description — специалист не меняет публичные сигнатуры и схемы.\n\n")
+	if skeleton {
+		b.WriteString("СКЕЛЕТОН В ВЕТКЕ ЭПИКА (обязательно, если OutputDir — git worktree): до публикации задач спроектируй контракты КОДОМ скелетона в ветке эпика — каркасы файлов своего направления (типы/интерфейсы/заготовки конфигов) с комментариями-подсказками, без реализации. Затем прогони проверку через Run (цель из корневого Makefile), закоммить и запуши (git add → git commit → git push). Если .git нет — скелетон не пиши: только декомпозиция.\n\n")
+		b.WriteString("ДЕТАЛИЗАЦИЯ ЗАДАЧ (обязательно для каждой задачи): описание обязано содержать отсылки к коду скелетона — файл и символ (путь + имя интерфейса/функции/сервиса, где возможно — строка из ReadMap), объём и приёмочные критерии. ПОЛНЫЙ текст контракта в description НЕ копируй: специалист читает файл скелетона, а не пересказ. Зафиксируй правило: специалист не меняет публичные сигнатуры/схемы из скелетона.\n\n")
+	} else {
+		b.WriteString("ДЕТАЛИЗАЦИЯ КОНТРАКТОВ (обязательно для каждой задачи): описание задачи обязано содержать ПОЛНЫЙ контракт, по которому специалист пишет код без догадок: точные типы/структуры (поля с типами), публичные сигнатуры функций/методов/интерфейсов (имя, параметры с типами, возвращаемые значения), API-контракты (метод, путь, схема запроса/ответа, коды ошибок), схему БД, манифесты с конкретными значениями. Зафиксируй контракт в description — специалист не меняет публичные сигнатуры и схемы.\n\n")
+	}
 	b.WriteString("Правила:\n")
-	b.WriteString("- Ты НЕ пишешь код и НЕ запускаешь команды: только проектируешь контракты и раздаёшь задачи.\n")
+	if skeleton {
+		b.WriteString("- Ты пишешь ТОЛЬКО скелетон (в ветке эпика), НЕ реализацию: контракты фиксируй кодом скелетона, задачи — отсылками к этим файлам. Run — только проверка (сборка/тесты/автостиль) и git-пуш скелетона; реализацию и удаление файлов выполняют специалисты по твоим задачам.\n")
+	} else {
+		b.WriteString("- Ты НЕ пишешь код и НЕ запускаешь команды: только проектируешь контракты и раздаёшь задачи.\n")
+	}
 	b.WriteString("- Порядок разработки: сначала инфраструктура, затем приложение, затем тестирование — проставляй sequence_order и зависимости так, чтобы этот порядок соблюдался (тестовые задачи зависят от прикладных, прикладные — от инфраструктурных).\n")
-	b.WriteString("- Контракты взаимодействия дублируй в описание каждой связанной задачи (единый источник истины).\n")
+	if skeleton {
+		b.WriteString("- Единый источник контрактов — код скелетона: задачи ссылаются на файлы, контракт не дублируется в описаниях.\n")
+	} else {
+		b.WriteString("- Контракты взаимодействия дублируй в описание каждой связанной задачи (единый источник истины).\n")
+	}
 	b.WriteString("- Чётко проставь sequence_order и dependencies: какие задачи параллельны (can_run_parallel: true), какие блокируют друг друга.\n")
 	return b.String()
 }

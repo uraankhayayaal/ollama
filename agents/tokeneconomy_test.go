@@ -58,11 +58,29 @@ func runAgents(t *testing.T) []withRunAgent {
 	// в ветке эпика) — фрагменты компактного вывода ему уместны.
 	arch := architect.NewArchitectWithStore("tokeneconomy-arch-test", "задание", nil)
 	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-arch-test"))
+	// Лиды получили Run и скелетон в ветке эпика на Этапе 5 (проверка
+	// сборки и git-пуш) — фрагмент компактного вывода им уместен. LSP у
+	// лидов нет, поэтому LSP-фолбэк не добавляется (hasLSP=false).
+	be, err := backendlead.NewBackendLeadInDir("задание", dir)
+	if err != nil {
+		t.Fatalf("Backend Lead: %v", err)
+	}
+	fe, err := frontendlead.NewFrontendLeadInDir("задание", dir)
+	if err != nil {
+		t.Fatalf("Frontend Lead: %v", err)
+	}
+	dl, err := devopslead.NewDevopsLeadInDir("задание", dir)
+	if err != nil {
+		t.Fatalf("DevOps Lead: %v", err)
+	}
 	return []withRunAgent{
 		{"backend-разработчик", backend.GetSystemMessages(nil)[0].Message, setOf(backend.GetTools()), true},
 		{"QA-инженер", qa.GetSystemMessages(nil)[0].Message, setOf(qa.GetTools()), false},
 		{"DevOps-инженер", dev.GetSystemMessages(nil)[0].Message, setOf(dev.GetTools()), false},
 		{"Системный архитектор", arch.GetSystemMessages(nil)[0].Message, setOf(arch.GetTools()), true},
+		{"Backend Lead", be.GetSystemMessages(nil)[0].Message, setOf(be.GetTools()), false},
+		{"Frontend Lead", fe.GetSystemMessages(nil)[0].Message, setOf(fe.GetTools()), false},
+		{"DevOps Lead", dl.GetSystemMessages(nil)[0].Message, setOf(dl.GetTools()), false},
 	}
 }
 
@@ -132,32 +150,18 @@ func TestTokenEconomyFragmentMentionsOnlyAvailableTools(t *testing.T) {
 	}
 }
 
-// TestRunFragmentAbsentWithoutRunTool — агенты без инструмента Run (лиды,
+// TestRunFragmentAbsentWithoutRunTool — агенты без инструмента Run (QA-лид,
 // чат-ассистент) не получают фрагмент про команды: упоминать Run в их промпте
-// бессмысленно и провоцирует вызов несуществующего инструмента. Агент с Run
-// (архитектор после Этапа 4 плана harness-rework: git в ветке эпика) из этой
-// проверки выходит — фрагмент ему уместен.
+// бессмысленно и провоцирует вызов несуществующего инструмента. Агенты с Run
+// (архитектор после Этапа 4: git в ветке эпика; лиды после Этапа 5: проверка
+// и пуш скелетона) из этой проверки выходят — фрагмент им уместен.
 func TestRunFragmentAbsentWithoutRunTool(t *testing.T) {
 	dir := t.TempDir()
 
-	be, err := backendlead.NewBackendLeadInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("Backend Lead: %v", err)
-	}
-	fe, err := frontendlead.NewFrontendLeadInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("Frontend Lead: %v", err)
-	}
 	qa, err := qalead.NewQALeadInDir("задание", dir)
 	if err != nil {
 		t.Fatalf("QA Lead: %v", err)
 	}
-	dl, err := devopslead.NewDevopsLeadInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("DevOps Lead: %v", err)
-	}
-	arch := architect.NewArchitectWithStore("tokeneconomy-arch-test", "задание", nil)
-	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-arch-test"))
 	assistant := chatassist.NewAssistantInDir(dir, "tokeneconomy-chat-test", "задание", nil, nil)
 	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-chat-test"))
 
@@ -166,11 +170,7 @@ func TestRunFragmentAbsentWithoutRunTool(t *testing.T) {
 		system string
 		tools  map[string]bool
 	}{
-		{"Backend Lead", be.GetSystemMessages(nil)[0].Message, setOf(be.GetTools())},
-		{"Frontend Lead", fe.GetSystemMessages(nil)[0].Message, setOf(fe.GetTools())},
 		{"QA Lead", qa.GetSystemMessages(nil)[0].Message, setOf(qa.GetTools())},
-		{"DevOps Lead", dl.GetSystemMessages(nil)[0].Message, setOf(dl.GetTools())},
-		{"Архитектор", arch.GetSystemMessages(nil)[0].Message, setOf(arch.GetTools())},
 		{"Чат-ассистент", assistant.GetSystemMessages(nil)[0].Message, setOf(assistant.GetTools())},
 	}
 	for _, c := range cases {
