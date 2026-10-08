@@ -9,11 +9,13 @@ import (
 	"testing"
 
 	"ai/agents"
+	"ai/agents/qaengineer"
 	"ai/board"
 	"ai/projects"
 	"ai/runevents"
 	"ai/runner"
 	"ai/tokens"
+	"ai/tools"
 	"github.com/alicebob/miniredis/v2"
 )
 
@@ -272,6 +274,17 @@ type tokenEchoProvider struct{ t *testing.T }
 func (p *tokenEchoProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
 	if rep := runevents.ReporterFromContext(ctx); rep != nil {
 		rep.OnTokens(1000, 200, 0)
+	}
+	// Разработчик всегда ставит задачу в testing (Этап 6); тестировщик —
+	// в done (Этап 7). Без явного вызова BoardSetTaskStatus задача зависла бы
+	// в testing/in_progress и recoverStuckTasks вернул бы её в ready — цикл.
+	if _, ok := agent.(*qaengineer.QAEngineer); ok {
+		return &runner.AgentResponse{
+			Content: "Тестирование пройдено.",
+			ToolCalls: []tools.ToolCall{
+				{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`},
+			},
+		}, nil
 	}
 	return (&kanbanProvider{}).Generate(ctx, agent)
 }

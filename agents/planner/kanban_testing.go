@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/qaengineer"
 	"ai/board"
@@ -196,14 +197,14 @@ func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
 			continue
 		}
 		busy[t.Assignee] = true
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusInProgress); err != nil {
-			return false, fmt.Errorf("задача %s: testing -> in_progress: %w", t.TaskID, err)
-		}
+		// Задача остаётся в testing на время работы тестировщика: переход в
+		// in_progress означал бы «зависла» для recoverStuckTasks, и при пустом
+		// ответе тестировщика задача вернулась бы в ready — цикл вместо
+		// приёмки. Статус меняет сам тестировщик (done/in_progress/human_help).
 		k.noteEpicProgress(ctx, t.EpicID)
-		specialist, err := k.specialistFor(t)
-		if err != nil {
-			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
-		}
+		// Тестировщик перехватывает задачу после разработчика (Этап 7):
+		// назначаем QA-инженера независимо от Assignee задачи.
+		var specialist agents.Agent = qaengineer.NewQAEngineer(k.store.Project(), k.taskPrompt(t))
 		if sb, ok := specialist.(interface{ SetBoardStore(*board.Store) }); ok {
 			sb.SetBoardStore(k.store)
 		}
