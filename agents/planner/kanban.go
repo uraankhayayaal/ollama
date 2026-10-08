@@ -9,7 +9,6 @@ import (
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
-	"ai/agents/qalead"
 	"ai/board"
 	"ai/logging"
 	"ai/models"
@@ -1812,7 +1811,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 
 	// Триаж QA Lead: подтвердить или отсечь «нейрослоп».
 	if len(newBugs) > 0 {
-		qa := qalead.NewQALead(k.store.Project(), k.bugTriagePrompt(k.store.Project(), newBugs))
+		qa := qaengineer.NewQAEngineer(k.store.Project(), k.bugTriagePrompt(k.store.Project(), newBugs))
 		if sb, ok := any(qa).(interface{ SetBoardStore(*board.Store) }); ok {
 			sb.SetBoardStore(k.store)
 		}
@@ -2079,14 +2078,14 @@ func (k *KanbanRunner) boardSummary(ctx context.Context) string {
 
 // leadFor создаёт агента-лида направления по assigned_role эпика и собирает
 // промпт декомпозиции. Лиды пишут ТОЛЬКО скелетон (allowlist в инструменте,
-// worktree ветки эпика подключается в phaseLeads через epicOutputDir); QA-лид
-// пишет readme до Этапа 8.
+// worktree ветки эпика подключается в phaseLeads через epicOutputDir); для QA
+// эпика лидом становится qaengineer.
 func (k *KanbanRunner) leadFor(epic *board.Epic) (agents.Agent, error) {
 	prompt := k.leadPrompt(epic)
 	project := k.store.Project()
 	switch {
 	case isRole(epic.AssignedRole, "qa", "тест", "testing"):
-		return qalead.NewQALead(project, prompt), nil
+		return qaengineer.NewQAEngineer(project, prompt), nil
 	case isRole(epic.AssignedRole, "devops", "инфра", "infra", "dev", "sre", "ci"):
 		return devopslead.NewDevopsLead(project, prompt), nil
 	case isRole(epic.AssignedRole, "front", "react", "ui", "client", "фронт"):

@@ -12,7 +12,7 @@ import (
 	"ai/agents/frontendlead"
 	"ai/agents/planner"
 	"ai/agents/qaengineer"
-	"ai/agents/qalead"
+
 	"ai/board"
 	"ai/checkpoint"
 
@@ -195,15 +195,7 @@ func main() {
 		prompt := strings.Join(agentArgs[1:], " ")
 		// Объединённый агент QA-приёмки: сборка → автотесты → приёмка.
 		agent = qaengineer.NewQAEngineer(projectName, prompt)
-	case "qalead":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . qalead <имя_проекта> <промпт>\n" +
-				"Пример: go run . qalead billingService \"Сформируй тест-план по контрактам Архитектора и декомпозируй его на задачи для QA-инженеров\"")
-		}
-		projectName := agentArgs[0]
-		projName = projectName
-		prompt := strings.Join(agentArgs[1:], " ")
-		agent = qalead.NewQALead(projectName, prompt)
+
 	case "frontendlead":
 		if len(agentArgs) < 2 {
 			logging.Fatalf("Использование: go run . frontendlead <имя_проекта> <промпт>\n" +
@@ -298,7 +290,7 @@ func main() {
 	// JSON-декомпозицию. Печатаем в консоль список спроектированных задач,
 	// чтобы результат работы лида был виден сразу, до передачи исполнителям.
 	switch agent.(type) {
-	case *backendlead.BackendLead, *frontendlead.FrontendLead, *devopslead.DevopsLead, *qalead.QALead:
+	case *backendlead.BackendLead, *frontendlead.FrontendLead, *devopslead.DevopsLead, *qaengineer.QAEngineer:
 		printLeadDecomposition(resp.Content)
 	}
 

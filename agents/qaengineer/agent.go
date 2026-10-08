@@ -26,7 +26,7 @@ var qaToolNames = []string{
 // QA-инженеру, когда оркестратор Kanban подключает доску (SetBoardStore):
 // чтение своей задачи, смена её статуса и публикация багрепортов.
 var qaBoardToolNames = []string{
-	tools.BoardGetTask, tools.BoardSetTaskStatus, tools.BoardCreateBug, tools.BoardListBugs,
+	tools.BoardGetTask, tools.BoardSetTaskStatus, tools.BoardCreateBug, tools.BoardListBugs, tools.BoardAddComment,
 }
 
 // QAEngineer — агент QA Engineer и приёмки (объединение QA и acceptor).

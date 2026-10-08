@@ -9,7 +9,7 @@ import (
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
-	"ai/agents/qalead"
+
 	"ai/board"
 	"ai/checkpoint"
 	"ai/logging"
@@ -576,8 +576,7 @@ func newStepAgent(step *Step, projectName string) agents.Agent {
 		return devopslead.NewDevopsLead(projectName, step.Prompt)
 	case AgentQAEngineer:
 		return qaengineer.NewQAEngineer(projectName, step.Prompt)
-	case AgentQALead:
-		return qalead.NewQALead(projectName, step.Prompt)
+
 	case AgentFrontendLead:
 		return frontendlead.NewFrontendLead(projectName, step.Prompt)
 	case AgentBackendLead:
