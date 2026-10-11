@@ -90,8 +90,20 @@ func NewQAEngineerInDir(prompt, dir string) (*QAEngineer, error) {
 // newQAEngineer создаёт агента в заданной директории: собирает *tools.FileOps
 // (лимиты записи берутся из конфига) и выбирает из реестра инструменты
 // QA-инженера. Используется всеми конструкторами.
+//
+// QA — тестировщик, а не разработчик: FileOps переводится в режим «только
+// тесты» (WriteTestsOnly), поэтому записывающие инструменты принимают лишь
+// тестовые файлы (и дополнительно файл-отчёт cfg.ReportFile). Правку кода
+// продукта инструменты отклоняют с понятным сообщением: найденный дефект QA
+// возвращает разработчику комментарием к задаче и статусом in_progress, а не
+// чинит сам.
 func newQAEngineer(dir, prompt string, cfg Config) *QAEngineer {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
+	var extra []string
+	if strings.TrimSpace(cfg.ReportFile) != "" {
+		extra = append(extra, cfg.ReportFile)
+	}
+	ops.SetWriteTestsOnly(extra)
 	return &QAEngineer{
 		FileOps: ops,
 		Prompt:  prompt,
@@ -116,9 +128,12 @@ func (q *QAEngineer) RequiredToolFirstRound() (string, bool) {
 	return "", false
 }
 
+// Label возвращает человекочитаемое имя агента для чата.
+func (q *QAEngineer) Label() string { return "QA-инженер" }
+
 // verifyPlan — команды проверки, вычисленные тем же кодом, что и приёмка
 // (agents/acceptor): env ACCEPT_* → корневой Makefile → автодетект по типу
-// проекта. Раньше эти команды были описаны в промпте прозой, и QA н��ходил
+// проекта. Раньше эти команды были описаны в промпте прозой, и QA находил
 // их сам: правитель забывал оговорку — тесты писались не той командой, какой
 // проверяет приёмка, и «зелёные тесты» ничего не значили.
 func (q *QAEngineer) verifyPlan() acceptor.VerifyPlan {
@@ -186,6 +201,10 @@ func (q *QAEngineer) GetSystemMessages(_ []agents.Message) []agents.Message {
 Ты работаешь только внутри выходной директории проекта (OutputDir).
 ` + overwriteRule + `
 
+ТОЛЬКО ТЕСТЫ: ты пишешь и правишь ИСКЛЮЧИТЕЛЬНО автотесты и конфигурацию тест-раннеров. Код продукта (реализация, API, схемы, конфиги приложения) трогать НЕЛЬЗЯ — записывающие инструменты отклонят любой не-тестовый файл. Найденный дефект продукта ты НЕ чинишь сам:
+` + q.defectRule() + `
+Обновляй код продукта только если задача явно поручает тебе это как разработчику (не роль QA).
+
 ` + planRule + `
 
 ` + kanbanRule + `СОСТАВ АВТОТЕСТОВ (пиши все три уровня, где они применимы к задаче):
@@ -218,6 +237,17 @@ func (q *QAEngineer) GetSystemMessages(_ []agents.Message) []agents.Message {
 - Нельзя писать файлы вне OutputDir (инструменты сами это заблокируют).` + agents.RunTokenEconomy,
 		},
 	}
+}
+
+// defectRule — что делать QA при найденном дефекте продукта. С доской (Kanban)
+// дефект возвращается разработчику штатным путём (комментарий + статус
+// in_progress); без доски (standalone/план) остаётся текстовый отчёт с
+// дефектом — правку всё равно выполняет разработчик, а не QA.
+func (q *QAEngineer) defectRule() string {
+	if q.Store != nil {
+		return "оформи его комментарием к задаче (BoardAddComment, type=qa: шаги воспроизведения, ожидаемый результат по контракту, фактический) и переведи задачу обратно в работу (BoardSetTaskStatus: testing → in_progress), чтобы её доработал разработчик."
+	}
+	return "оформи его в отчёте (шаги воспроизведения, ожидаемый результат по контракту, фактический) — правку выполняет разработчик, а не ты."
 }
 
 // GetTools возвращает определения выбранных инструментов (единый JSON Schema

@@ -14,6 +14,7 @@ import (
 	"ai/rag"
 	"ai/runctx"
 	"ai/runevents"
+	"ai/tools"
 )
 
 // --- Ассистент проекта (Ф-1) ---
@@ -78,58 +79,157 @@ func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider model
 		// общего реестра tools (цикл импортов) — инъектируем их в набор
 		// ассистента на стороне сервера.
 		asst.AddTools(sess.serverActionTools()...)
-		// Репортёр в контексте диалога: ответ ассистента и потребление токенов
-		// транслируются в живую шину (type=chat_delta/chat, type=tokens), иначе
-		// счётчик токенов чата остаётся на нулях.
-		var finalReported atomic.Bool
-		chatReporter := runevents.NewRouter(func(ev runevents.Event) {
-			if ev.Type == runevents.TypeMessage {
-				// Пустой финал заменяется человекочитаемым уточнением ниже.
-				if strings.TrimSpace(ev.Content) == "" {
+
+		// Фантомное действие: модель может ОТЧИТАТЬСЯ о создании записи, не
+		// вызвав инструмент доски (в логе — «Завёл эпик CHAT-01», tool_calls=0).
+		// Тогда в историю чата ушло бы ложное сообщение, а эпика на доске не
+		// появилось. Ход повторяем один раз с корректирующей инструкцией, а если
+		// и он «соврал» — честно сообщаем статусом, что запись НЕ создана.
+		for attempt := 0; attempt < chatWriteAttempts; attempt++ {
+			if attempt > 0 {
+				asst.Correction = phantomActionCorrection
+			}
+			var (
+				boardWrote    atomic.Bool
+				phantom       atomic.Bool
+				finalReported atomic.Bool
+			)
+			// Репортёр в контексте диалога: ответ ассистента и потребление
+			// токенов транслируются в живую шину (type=chat_delta/chat,
+			// type=tokens), иначе счётчик токенов чата остаётся на нулях.
+			chatReporter := runevents.NewRouter(func(ev runevents.Event) {
+				switch ev.Type {
+				case runevents.TypeToolResult:
+					// Успешный вызов write-инструмента доски — доказательство
+					// реального действия (в т.ч. когда текст-заявление пришёл
+					// раньше вызова в том же раунде: заявление было
+					// преждевременным, но действие всё-таки свершилось).
+					if ev.OK && boardWriteToolNames[ev.Tool] {
+						boardWrote.Store(true)
+						phantom.Store(false)
+					}
+				case runevents.TypeMessage:
+					// Пустой финал заменяется человекочитаемым уточнением ниже.
+					if strings.TrimSpace(ev.Content) == "" {
+						return
+					}
+					if !boardWrote.Load() && looksLikeBoardWriteClaim(ev.Content) {
+						// Ложное заявление: доска не менялась, инструмент не
+						// вызывался. Не публикуем и не пишем в историю.
+						phantom.Store(true)
+						return
+					}
+					finalReported.Store(true)
+				}
+				// Общий маршрут сессии (не голый chatEvent): события
+				// board-инструментов ассистента публикуют снимок доски сразу — в
+				// idle-сессии флашера нет, иначе новый эпик/баг появился бы в UI
+				// только после обновления страницы.
+				sess.routeRunEvent(ev)
+			}).WithAgent("assistant")
+			rctx := runevents.WithReporter(ctx, chatReporter)
+			// Расширенное сжатие истории (Ф-6..Ф-11): RAG-вытеснение/ранжирование
+			// поверх ragClient и LSP-оглавления проекта. Флаги CODEGEN_HISTORY_*
+			// из окружения; выключено по умолчанию.
+			rctx = runctx.WithCompression(rctx, sess.project, dir, ragClient)
+			// Рамка прогона для промпт-инъекций: проект и роль заполняют
+			// переменные when ({{project.*}}, `when: "role == \"assistant\""`) и
+			// шаблоны. Без неё эти условия никогда не срабатывали бы.
+			rctx = board.WithInjectionScope(rctx, board.InjectionScope{
+				Project: sess.project,
+				Role:    "assistant",
+			})
+			// Сессионные инъекции — не только через asst.Injections (снапшот на
+			// старте хода): живой источник перечитывает их перед КАЖДЫМ запросом
+			// к модели, так что добавленная посреди стрима инъекция попадёт в
+			// следующий раунд того же хода, а не только в следующий ход.
+			rctx = board.WithInjectionSource(rctx, func(context.Context) ([]board.Injection, error) {
+				return sess.SessionInjections(), nil
+			})
+			rep, err := provider.Generate(rctx, asst)
+			if err != nil {
+				sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)
+				return
+			}
+			if phantom.Load() {
+				// Модель весь ход отчитывалась о записи, но доски не касалась —
+				// повторяем с явным требованием вызвать инструмент.
+				continue
+			}
+			if rep == nil || strings.TrimSpace(rep.Content) == "" {
+				if boardWrote.Load() && !finalReported.Load() {
+					// Действие выполнено, но отчёта текстом не было — даём честное
+					// подтверждение, а не «не расслышал».
+					sess.append(chat.RoleAssistant, "Готово — доска проекта обновлена.", "assistant", "", nil)
 					return
 				}
-				finalReported.Store(true)
+				sess.append(chat.RoleAssistant, "Не расслышал — уточните, пожалуйста. Могу рассказать о состоянии проекта и работах на доске, создать эпик/задачу/баг или просто поболтать.", "assistant", "", nil)
+				return
 			}
-			// Общий маршрут сессии (не голый chatEvent): события board-инструментов
-			// ассистента публикуют снимок доски сразу — в idle-сессии флашера нет,
-			// иначе новый эпик/баг появился бы в UI только после обновления страницы.
-			sess.routeRunEvent(ev)
-		}).WithAgent("assistant")
-		rctx := runevents.WithReporter(ctx, chatReporter)
-		// Расширенное сжатие истории (Ф-6..Ф-11): RAG-вытеснение/ранжирование
-		// поверх ragClient и LSP-оглавления проекта. Флаги CODEGEN_HISTORY_*
-		// из окружения; выключено по умолчанию.
-		rctx = runctx.WithCompression(rctx, sess.project, dir, ragClient)
-		// Рамка прогона для промпт-инъекций: проект и роль заполняют переменные
-		// when ({{project.*}}, `when: "role == \"assistant\""`) и шаблоны. Без неё
-		// эти условия никогда не срабатывали бы.
-		rctx = board.WithInjectionScope(rctx, board.InjectionScope{
-			Project: sess.project,
-			Role:    "assistant",
-		})
-		// Сессионные инъекции — не только через asst.Injections (снапшот на старте
-		// хода): живой источник перечитывает их перед КАЖДЫМ запросом к модели, так
-		// что добавленная посреди стрима инъекция попадёт в следующий раунд того же
-		// хода, а не только в следующий ход.
-		rctx = board.WithInjectionSource(rctx, func(context.Context) ([]board.Injection, error) {
-			return sess.SessionInjections(), nil
-		})
-		rep, err := provider.Generate(rctx, asst)
-		if err != nil {
-			sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)
+			// runner.Generate публикует финальный текст через Reporter.OnMessage,
+			// тогда как некоторые реализации LLMProvider возвращают только ответ.
+			// Записываем вручную лишь во втором случае.
+			if !finalReported.Load() {
+				sess.append(chat.RoleAssistant, rep.Content, "assistant", "", nil)
+			}
 			return
 		}
-		if rep == nil || strings.TrimSpace(rep.Content) == "" {
-			sess.append(chat.RoleAssistant, "Не расслышал — уточните, пожалуйста. Могу рассказать о состоянии проекта и работах на доске, создать эпик/задачу/баг или просто поболтать.", "assistant", "", nil)
-			return
-		}
-		// runner.Generate публикует финальный текст через Reporter.OnMessage,
-		// тогда как некоторые реализации LLMProvider возвращают только ответ.
-		// Записываем вручную лишь во втором случае.
-		if !finalReported.Load() {
-			sess.append(chat.RoleAssistant, rep.Content, "assistant", "", nil)
-		}
+		sess.append(chat.RoleStatus, "Запись на доске НЕ создана: ассистент сообщил о действии, но не вызвал инструмент доски. Повторите запрос или уточните формулировку.", "", "", nil)
 	}()
+}
+
+// chatWriteAttempts — сколько раз за один ход чата запускается ассистент, если
+// он «фантомно» отчитался о действии на доске, не вызвав инструмент. Вторая
+// попытка идёт с корректирующей инструкцией (phantomActionCorrection), третьей
+// не бывает: если модель неисправима, честный статус важнее расхода токенов.
+const chatWriteAttempts = 2
+
+// phantomActionCorrection — корректирующая инструкция для повторного хода:
+// прямо называет факт, что прошлый ответ был ложью, и требует выполнить
+// действие инструментом в этом же ходе.
+const phantomActionCorrection = `ВАЖНО (исправление): в прошлой попытке ты ответил текстом, что создал запись на доске, но НЕ ВЫЗВАЛ НИ ОДНОГО инструмента доски — на доске ничего не появилось, это ложь. Сейчас обязательно вызови нужный инструмент (BoardCreateEpic для эпика, BoardCreateBug для бага, KanbanStart для запуска работы) в этом же ходе и отчитайся об успехе ТОЛЬКО после его status=success. Если обязательных полей не хватает — задай ОДИН вопрос (AskUser). Не повторяй ложный отчёт текстом.`
+
+// boardWriteToolNames — инструменты, успешный вызов которых реально меняет
+// доску (создание/правка записей, запуск оркестрации). Чтение (BoardList*,
+// BoardGet*) и файловые инструменты сюда не входят: ими действие не
+// подтверждается. Имена мостов-действий — константы этого пакета, инструменты
+// доски — константы tools.
+var boardWriteToolNames = map[string]bool{
+	tools.BoardCreateEpic:    true,
+	tools.BoardUpdateEpic:    true,
+	tools.BoardDeleteEpic:    true,
+	tools.BoardSetEpicStatus: true,
+	tools.BoardCreateTask:    true,
+	tools.BoardUpdateTask:    true,
+	tools.BoardDeleteTask:    true,
+	tools.BoardSetTaskStatus: true,
+	tools.BoardCreateBug:     true,
+	tools.BoardSetBugStatus:  true,
+	tools.BoardReviewBug:     true,
+	actionKanbanStart:        true,
+}
+
+// boardWriteClaimPhrases — узкий список формулировок, которыми ассистент (по
+// системному промпту) отчитывается о ТОЛЬКО ЧТО выполненном действии на доске.
+// Список намеренно узкий: он ловит отчёт об уже сделанном (первое лицо,
+// совершенный вид), а не нейтральные упоминания («эпиков на доске нет») — иначе
+// легко подавить честный ответ.
+var boardWriteClaimPhrases = []string{
+	"завёл эпик", "завела эпик", "создал эпик", "создала эпик",
+	"завёл баг", "завела баг", "создал баг", "создала баг",
+	"запустил оркестрацию", "запустила оркестрацию",
+}
+
+// looksLikeBoardWriteClaim сообщает, похож ли текст модели на отчёт о
+// выполненном действии на доске (регистр не важен).
+func looksLikeBoardWriteClaim(content string) bool {
+	low := strings.ToLower(content)
+	for _, p := range boardWriteClaimPhrases {
+		if strings.Contains(low, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // chatDialogueHistory строит компактную историю диалога из стрима чата:

@@ -45,3 +45,14 @@ export const MOVES: Record<Status, { prev: Status[]; next: Status[] }> = {
   done: { prev: [], next: [] },
   cancelled: { prev: [], next: [] },
 };
+
+// Фаза эпика (зеркало board/order.go EpicPhase): перетаскивание строк доски
+// разрешено только внутри одной фазы — фаза остаётся первичным ключом очереди
+// лидов (инфраструктура → приложение → тестирование).
+export function epicPhase(e: { assigned_role?: string }): "infra" | "app" | "test" {
+  const role = (e.assigned_role ?? "").toLowerCase();
+  const has = (...markers: string[]) => markers.some((m) => role.includes(m));
+  if (has("qa", "тест", "testing")) return "test";
+  if (has("devops", "инфра", "infra", "sre", "docker", "k8s", "ci")) return "infra";
+  return "app";
+}

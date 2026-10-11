@@ -26,6 +26,42 @@
     opacity: 0.75;
   }
 
+  // Перетаскиваемый «ручеёк» строки эпика (изменение приоритета). Стрелки ↑/↓
+  // и ручеёк не должны открывать модалку при клике.
+  .drag-handle {
+    align-self: flex-start;
+    padding: 0 3px;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--muted, #8a94a6);
+    cursor: grab;
+    user-select: none;
+
+    &:hover { color: var(--ink, #1b2330); }
+    &:active { cursor: grabbing; }
+  }
+
+  .epic-order {
+    display: inline-flex;
+    gap: 2px;
+    width: fit-content;
+
+    button {
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: 1px solid #d3d9e2;
+      border-radius: 5px;
+      background: #fff;
+      font-size: 11px;
+      line-height: 1;
+      color: var(--ink, #1b2330);
+      cursor: pointer;
+
+      &:hover { background: #eef1f5; }
+    }
+  }
+
   // Внутренняя обводка не обрезается краем прокручиваемой Kanban-сетки.
   &:focus-within { outline: none; box-shadow: inset 0 0 0 2px #cbd2dc; }
 

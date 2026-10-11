@@ -133,7 +133,7 @@
 | Backend-разработчик | Файловые, правки, `Run`, `LspCheck`, `CodeSearch`, `ReadAppLogs` |
 | Frontend-разработчик | То же |
 | DevOps | То же |
-| QA-инженер | То же + `ReadAppLogs` обязательно |
+| QA-инженер | То же + `ReadAppLogs` обязательно; запись ограничена тестами (`WriteTestsOnly`) + файлом-отчётом |
 | Лиды | Только чтение + `LspDefinition` / `LspReferences` / `LspHover` (без `LspCheck`) |
 | Архитектор | Чтение, `CodeSearch`, `RagIndexStatus`, `DetectStack`, `BoardCreateEpic` / `Update` / `Delete` / `SetStatus`, `BoardReviewBug` |
 | Планировщик | Навигация без `LspCheck` (`agents/planner/planner.go:14`) |

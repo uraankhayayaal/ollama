@@ -53,6 +53,9 @@ type FrontendLead struct {
 	requireTaskPublishing bool
 }
 
+// Label возвращает человекочитаемое имя агента для чата.
+func (l *FrontendLead) Label() string { return "Frontend-лид" }
+
 // NewFrontendLead создаёт Frontend Tech Lead в общей для всех агентов выходной
 // папке temp/<projectName> в корне модуля. projectName — имя проекта, задаётся
 // пользователем. prompt — текст задания от Архитектора (может быть пустым —

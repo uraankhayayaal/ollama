@@ -2,12 +2,14 @@
 // сворачивания) и ячейки по всем статусам. В свёрнутом виде — компактная
 // строка «иконка + название» и счётчики задач в колонках; интерактивность
 // счётчиков даёт пересчёт из пропсов при каждом апдейте доски.
+import { useState } from "react";
 import type { EpicRow as Epic, BugRow, TaskRow } from "@/Types";
 import { STATUS_LABEL, STATUS_ORDER } from "../board";
 import { tokenLabel, tokenTitle } from "../tokens";
 import { Cell } from "../Cell";
 import { EpicActionBar } from "../EpicActionBar";
 import { BugCard } from "../BugCard";
+import { getEpicDragID, setEpicDragID } from "../dnd";
 import "./styles.scss";
 
 export function EpicRow({
@@ -26,6 +28,8 @@ export function EpicRow({
   onEpicPause,
   onEpicResume,
   onEpicCancel,
+  onEpicReorder,
+  onEpicShift,
   onToggle,
 }: {
   epic: Epic | null;
@@ -46,16 +50,67 @@ export function EpicRow({
   onEpicPause?: (e: Epic) => Promise<void>;
   onEpicResume?: (e: Epic) => Promise<void>;
   onEpicCancel?: (e: Epic) => Promise<void>;
+  // Пересортировка эпиков: перетащить thisId на место targetId (after=true —
+  // после, false — перед). Игнорируется для строк без эпика и межфазовых
+  // переносов (фаза — первичный ключ очереди).
+  onEpicReorder?: (thisId: string, targetId: string, after: boolean) => void;
+  // Показать стрелки поднять/опустить только внутри фазы (dir=±1 относительно
+  // эффективного порядка доски).
+  onEpicShift?: (e: Epic, dir: -1 | 1) => void;
   onToggle: () => void;
 }) {
   const plain = epic ? "" : " plain";
+  // Подсветка зоны сброса при перетаскивании эпика поверх строки.
+  const [dragOver, setDragOver] = useState(false);
+  const canReorder = !!epic && !!onEpicReorder;
+
+  const onRowDragOver = (e: React.DragEvent) => {
+    const id = getEpicDragID();
+    if (canReorder && id && id !== epicId) {
+      e.preventDefault();
+    }
+  };
+  const onRowDrop = (e: React.DragEvent) => {
+    const id = getEpicDragID();
+    setDragOver(false);
+    if (!id) {
+      return;
+    }
+    if (id !== epicId) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      onEpicReorder?.(id, epicId, e.clientY > rect.top + rect.height / 2);
+    }
+    setEpicDragID(null);
+  };
+
   return (
-    <div className="epic-row-grid">
+    <div
+      className={"epic-row-grid" + (dragOver ? " drag-over" : "")}
+      onDragOver={onRowDragOver}
+      onDragEnter={() => setDragOver(true)}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onRowDrop}
+    >
       <div
         className={"epic-head" + (collapsed ? " collapsed" : "") + plain}
         onClick={() => epic && onEpicOpen(epic)}
         title={epic ? epic.title : undefined}
       >
+        {canReorder && (
+          <span
+            className="drag-handle"
+            draggable
+            onDragStart={(e) => {
+              e.stopPropagation();
+              setEpicDragID(epicId);
+            }}
+            onDragEnd={() => setEpicDragID(null)}
+            title="Перетащить, чтобы изменить приоритет"
+            aria-hidden="true"
+          >
+            ⠿
+          </span>
+        )}
         <button
           className="toggle"
           onClick={(e) => {
@@ -84,6 +139,30 @@ export function EpicRow({
             <span className={"status " + epic.status}>{STATUS_LABEL[epic.status] ?? epic.status}</span>
             {epic.merged_into_main && (
               <span className="merged-into-main-badge" title="Релизная ветка эпика влита в main">Слит в main</span>
+            )}
+            {onEpicShift && (
+              <span className="epic-order" aria-label="Приоритет эпика">
+                <button
+                  type="button"
+                  title="Поднять приоритет (выше — раньше)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEpicShift(epic, -1);
+                  }}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  title="Опустить приоритет"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEpicShift(epic, 1);
+                  }}
+                >
+                  ↓
+                </button>
+              </span>
             )}
             <EpicActionBar
               epic={epic}

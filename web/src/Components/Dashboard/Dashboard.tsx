@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import type { BoardView, BranchDiffContext, BugRow, EpicRow, TaskRow } from "@/Types";
-import { STATUS_LABEL, STATUS_ORDER } from "./board";
+import { STATUS_LABEL, STATUS_ORDER, epicPhase } from "./board";
 import { fmtTokens, tokensSummary } from "./tokens";
 import { EpicRow as EpicRowView } from "./EpicRow";
 import { EpicModal } from "./EpicModal";
@@ -24,6 +24,7 @@ export function Dashboard({
   onEpicPause,
   onEpicResume,
   onEpicCancel,
+  onEpicReorder,
   onEpicBranch,
   onTaskBranch,
   onEpicMR,
@@ -40,6 +41,10 @@ export function Dashboard({
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onEpicDelete: (e: EpicRow) => void;
   onEpicRelease: (e: EpicRow) => Promise<void>;
+  // Пересортировка эпиков (перетаскивание строк/стрелки): новый полный порядок
+  // ID эпиков, первый — самый приоритетный. Сервер сохраняет приоритеты и при
+  // идущей оркестрации мягко перезапускает её.
+  onEpicReorder: (order: string[]) => void;
   // Ф-6: пауза/возобновление/отмена эпика (без отката кода — ветка остаётся).
   onEpicPause?: (e: EpicRow) => Promise<void>;
   onEpicResume?: (e: EpicRow) => Promise<void>;
@@ -218,6 +223,52 @@ export function Dashboard({
       [epicId]: !isCollapsed(epicId, tasks),
     }));
 
+  // Пересортировка эпиков: переносим thisId на место targetId (after=false —
+  // перед ним, after=true — после). Фаза остаётся первичным ключом очереди
+  // лидов, поэтому перенос между фазами игнорируется (после сохранения доска
+  // вернётся в эффективный порядок: фаза → приоритет → sequence_order).
+  const moveEpic = (thisId: string, targetId: string, after: boolean) => {
+    const eps = board.epics;
+    const from = eps.findIndex((e) => e.task_id === thisId);
+    const to = eps.findIndex((e) => e.task_id === targetId);
+    if (from < 0 || to < 0 || from === to) {
+      return;
+    }
+    const drag = eps[from];
+    const target = eps[to];
+    if (!drag || !target) {
+      return;
+    }
+    if (epicPhase(drag) !== epicPhase(target)) {
+      return;
+    }
+    const next = [...eps];
+    next.splice(from, 1);
+    const insert = next.findIndex((e) => e.task_id === targetId);
+    if (insert < 0) {
+      return;
+    }
+    next.splice(after ? insert + 1 : insert, 0, drag);
+    onEpicReorder(next.map((e) => e.task_id));
+  };
+
+  // Стрелки ↑/↓: сдвиг на одну строку внутри своей фазы (границу фазы не
+  // переходим — иначе доска вернула бы порядок обратно).
+  const shiftEpic = (e: EpicRow, dir: -1 | 1) => {
+    const idx = board.epics.findIndex((x) => x.task_id === e.task_id);
+    if (idx < 0) {
+      return;
+    }
+    const target = board.epics[idx + dir];
+    if (!target || target.task_id === e.task_id) {
+      return;
+    }
+    if (epicPhase(e) !== epicPhase(target)) {
+      return;
+    }
+    moveEpic(e.task_id, target.task_id, dir === 1);
+  };
+
   // Строка открытой модалки — из актуального снимка доски (см. выше): если
   // строка исчезла (удалили), модалка просто не рендерится.
   const epic = epicId ? board.epics.find((e) => e.task_id === epicId) ?? null : null;
@@ -249,6 +300,11 @@ export function Dashboard({
             <em> (всего задач: {board.total.tasks}, доска ограничена)</em>
           )}
         </span>
+        {board.epics.length > 1 && (
+          <span className="sort-hint" title="Порядок строк задаёт приоритет эпиков: выше — раньше в очереди лидов. Перенос работает внутри фазы (инфраструктура → приложение → тестирование).">
+            ⟶ тащите строки (=приоритет)
+          </span>
+        )}
       </div>
 
       <div className="board-tools">
@@ -293,6 +349,8 @@ export function Dashboard({
             onEpicPause={onEpicPause}
             onEpicResume={onEpicResume}
             onEpicCancel={onEpicCancel}
+            onEpicReorder={moveEpic}
+            onEpicShift={shiftEpic}
             onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}

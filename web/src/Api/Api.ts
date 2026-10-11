@@ -397,6 +397,22 @@ export async function setEpicStatus(
   );
 }
 
+// Пересортировка эпиков на доске (перетаскивание строк / стрелки): первый ID
+// в списке получает наибольший приоритет. Если оркестрация идёт — сервер
+// рестартует её, чтобы новая очередь применилась немедленно. restarting=true
+// значит, что перезапуск запущен в фоне.
+export async function reorderEpics(
+  base: string,
+  project: string,
+  order: string[],
+): Promise<{ ok: boolean; updated: number; restarting?: boolean }> {
+  return req<{ ok: boolean; updated: number; restarting?: boolean }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/epics/reorder`,
+    { order },
+  );
+}
+
 // «Залить в main» (Ф-3): вливает релизную ветку эпика в базовую ветку проекта
 // (git_base) без конфликтов — merge-коммит + push. Только для done-эпиков;
 // при конфликтах сервер вернёт 409 (вход инструмента авто-резолва Ф-4).

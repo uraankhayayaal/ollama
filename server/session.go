@@ -87,6 +87,12 @@ type Session struct {
 	// board_changed. nil вне оркестрации.
 	runner *planner.KanbanRunner
 
+	// runDone закрывается, когда горутина текущего запуска (start) полностью
+	// завершилась. Нужен Restart: он отменяет контекст и ждёт закрытия канала,
+	// прежде чем стартовать заново (иначе single-flight start отвергнет запуск
+	// как «оркестрация уже идёт»). Создаётся в start под mu, читается Restart.
+	runDone chan struct{}
+
 	// boardRev — монотонный счётчик изменений доски (инкремент на каждое
 	// событие board_changed). Служит ассистенту «индикатором свежести»: доста-
 	// точно увидеть, что ревизия выросла относительно прошлого ответа, чтобы
@@ -286,6 +292,9 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	cctx = runctx.WithCompression(cctx, sess.project, dir, ragClient)
 	sess.ctx = cctx
 	sess.cancel = func() { cancel() }
+	// Канал завершения запуска: Restart ждёт его после отмены контекста.
+	done := make(chan struct{})
+	sess.runDone = done
 	sess.mu.Unlock()
 
 	// Сессионная песочница (Этап 1, п. 1.5): контейнер поднимается ДО первого
@@ -366,6 +375,7 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.wg.Add(1)
 	go func() {
 		defer sess.wg.Done()
+		defer close(done)
 		// П. 1.7: контейнер песочницы живёт ровно столько, сколько оркестрация
 		// (defer срабатывает и при отмене стопом — StopSession отвязывает
 		// контекст сам).
@@ -410,6 +420,50 @@ func (sess *Session) stop() {
 	if cancel != nil && running {
 		cancel()
 	}
+}
+
+// isRunning сообщает, идёт ли сейчас оркестрация (для решений «рестартовать»).
+func (sess *Session) isRunning() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.running
+}
+
+// Restart мягко перезапускает оркестрацию (стоп → старт), чтобы изменения
+// доски — в первую очередь ручная пересортировка эпиков — применились
+// немедленно, а не после ручного «Продолжить». Если оркестрация не идёт
+// (running=false), возвращает nil без действий: порядок применится при
+// следующем запуске. boardOnly всегда true: пересортировка не создаёт новых
+// эпиков, работает ровно с тем, что уже на доске.
+func (sess *Session) Restart(ctx context.Context, provider models.LLMProvider) error {
+	sess.mu.Lock()
+	running := sess.running
+	cancel := sess.cancel
+	done := sess.runDone
+	sess.mu.Unlock()
+	if !running {
+		return nil
+	}
+	if cancel != nil {
+		cancel()
+	}
+	// Ждём полной остановки прежнего запуска: single-flight start отклонит
+	// повторный старт, пока running=true. Запас 30с на деструктивное завершение
+	// (дроп песочницы, финальный снимок доски).
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+			return fmt.Errorf("оркестрация не остановилась за 30с")
+		}
+	}
+	taskText, err := sess.continueTaskText(ctx)
+	if err != nil {
+		return err
+	}
+	return sess.start(ctx, taskText, provider, true)
 }
 
 // --- HITL-затворы (реализация planner.HumanGate) ---
@@ -801,6 +855,11 @@ func boardView(ctx context.Context, store *board.Store) (boardSnapshot, error) {
 	if err != nil {
 		return boardSnapshot{}, err
 	}
+	// Порядок по умолчанию — ListEpics (по ID); приводим к эффективному порядку
+	// очереди лидов (фаза → приоритет → sequence_order → task_id). Так строки
+	// доски идут ровно в том порядке, в каком эпики берёт оркестратор, и
+	// перетаскивание строк меняет реальную очередь.
+	board.SortEpics(epics)
 	tasks, err := store.ListTasks(ctx)
 	if err != nil {
 		return boardSnapshot{}, err

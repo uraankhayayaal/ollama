@@ -38,6 +38,10 @@ export interface EpicRow {
   architecture_summary: string;
   created_at: string;
   updated_at: string;
+  // Приоритет эпика (пересортировка строк доски): чем больше — тем раньше эпик
+  // в очереди лидов. Действует внутри фазы (инфра→приложение→QA); 0/отсутствует —
+  // приоритет по умолчанию.
+  priority?: number;
   // Релизная ветка эпика (git-workflow Ф-1, префикс ai/epic/<id>). Пусто, пока
   // ветка не создана.
   git_branch?: string;

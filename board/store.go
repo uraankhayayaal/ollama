@@ -297,6 +297,38 @@ func (s *Store) ListEpics(ctx context.Context) ([]*Epic, error) {
 	return epics, nil
 }
 
+// ReorderEpics задаёт приоритет эпиков по порядку из Web UI: первый в списке
+// получает наибольший Priority, последний — наименьший. Порядок из UI
+// присваивается сквозным счётом (n-i), поэтому относительный порядок внутри
+// каждой фазы сохраняется, а межфазовые переносы строки эффективного порядка
+// не меняют (фаза первична, см. EpicLess). Ревизию эпиков НЕ увеличиваем:
+// приоритет — не содержание, повторная декомпозиция лидом не нужна.
+//
+// Неизвестный ID — ошибка (ничего не сохраняем поверх частичного результата
+// молча): раньше сохранённые эпики к этому моменту уже обновлены, но клиент
+// получает явную ошибку и перечитает доску. Пропущенные в order эпики не
+// трогаются (сохраняют прежний приоритет).
+func (s *Store) ReorderEpics(ctx context.Context, order []string) (int, error) {
+	n := len(order)
+	updated := 0
+	for i, id := range order {
+		e, err := s.GetEpic(ctx, id)
+		if err != nil {
+			return updated, fmt.Errorf("эпик %s: %w", id, err)
+		}
+		prio := n - i
+		if e.Priority == prio {
+			continue
+		}
+		e.Priority = prio
+		if err := s.SaveEpic(ctx, e); err != nil {
+			return updated, fmt.Errorf("эпик %s: %w", id, err)
+		}
+		updated++
+	}
+	return updated, nil
+}
+
 // SetEpicStatus переводит эпик в новый статус (с проверкой перехода). «Помощь
 // человека» (human_help), возобновление (ready/in_progress из human_help) и
 // отмена (cancelled) каскадно переводят задачи эпика, следуя за родителем:

@@ -181,6 +181,7 @@ POST /api/projects/calc/chat
 | `DELETE` | `/api/projects/{id}/tasks/{tid}` | Удалить задачу |
 | `DELETE` | `/api/projects/{id}/epics/{eid}` | Удалить эпик |
 | `POST` | `/api/projects/{id}/epics/{eid}/status` | Сменить статус эпика |
+| `POST` | `/api/projects/{id}/epics/reorder` | Пересортировать эпики (приоритет): `{"order": ["EPIC-1", …]}`; при идущей оркестрации — мягкий рестарт |
 | `GET` | `/api/projects/{id}/bugs` | Список багрепортов |
 
 ## Промпт-инъекции

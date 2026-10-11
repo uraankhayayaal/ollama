@@ -63,6 +63,44 @@ func TestQAConstrainScopePreventsWriteOutsideScope(t *testing.T) {
 	}
 }
 
+// TestQAWritesOnlyTests — инструментальный гард: QA пишет тесты, но не код
+// продукта. Это защита от того, что модель «чинит» найденный дефект сама
+// вместо передачи разработчику.
+func TestQAWritesOnlyTests(t *testing.T) {
+	q := newTestQA(t)
+	for _, f := range []string{"api_test.go", "src/api.test.ts", "tests/e2e.spec.js", "playwright.config.ts"} {
+		if err := q.Write(f, "x"); err != nil {
+			t.Errorf("QA должен уметь писать тестовый файл %q: %v", f, err)
+		}
+	}
+	for _, f := range []string{"main.go", "internal/order/service.go", "src/App.tsx", "package.json"} {
+		err := q.Write(f, "x")
+		if err == nil {
+			t.Errorf("QA не должен писать код продукта %q", f)
+			continue
+		}
+		if !strings.Contains(err.Error(), "только тесты") {
+			t.Errorf("сообщение отказа для %q должно объяснять ограничение, got: %v", f, err)
+		}
+	}
+}
+
+// TestQAReportFileAllowed — файл отчёта QA (Config.ReportFile) разрешён к
+// записи, хотя это не тест.
+func TestQAReportFileAllowed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	q := newQAEngineer(dir, "", Config{ReportFile: "TEST_REPORT.md"})
+	if err := q.Write("TEST_REPORT.md", "# Отчёт\n"); err != nil {
+		t.Fatalf("файл отчёта QA должен быть разрешён: %v", err)
+	}
+	if err := q.Write("RELEASE_NOTES.md", "# x\n"); err == nil {
+		t.Fatal("произвольный markdown-файл не является отчётом QA и должен быть отклонён")
+	}
+}
+
 // TestQAPromptUsesAcceptorVerifyPlan — Ф-3: команды проверки в промпте QA
 // приходят из приёмки (agents/acceptor.VerifyPlanFor), а не из прозы промпта.
 // Проверяется на настоящем Makefile-проекте: если план перестанет вычисляться

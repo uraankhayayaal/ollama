@@ -15,6 +15,7 @@ import (
 	"ai/logging"
 	"ai/models"
 	"ai/projects"
+	"ai/runevents"
 	"ai/runner"
 	"ai/tools"
 	"context"
@@ -607,6 +608,9 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	if agent == nil {
 		return nil, fmt.Errorf("неизвестный тип агента: %s", step.Agent)
 	}
+	if rep := runevents.ReporterFromContext(ctx); rep != nil {
+		ctx = runevents.WithReporter(ctx, rep.WithAgent(agentDisplayName(step.Agent)))
+	}
 
 	// Ограничиваем инструменты агента областью работы шага: вне scope он не
 	// сможет ни читать, ни писать, ни удалять файлы. Для шагов создания scope
@@ -810,7 +814,11 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	}
 	e.clearRoundState(ctx, step)
 
-	resp, err := e.provider.Generate(ctx, lead)
+	leadCtx := ctx
+	if rep := runevents.ReporterFromContext(leadCtx); rep != nil {
+		leadCtx = runevents.WithReporter(leadCtx, rep.WithAgent(agentDisplayName(step.Agent)))
+	}
+	resp, err := e.provider.Generate(leadCtx, lead)
 	if err != nil {
 		e.rollbackStep(projectName, step.ID, snap)
 		return fmt.Errorf("декомпозиция эпика %q: %w", step.ID, err)
@@ -864,7 +872,12 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 			scoper.SetScope(leadStepScope(projects.ProjectDir(projectName), step))
 		}
 		e.log.Infof("[задача %s] специалист %s выполняет: %s", ts.TaskID, truncateText(ts.AssignedRole, 30), truncateText(ts.Title, 60))
-		resp, err := e.provider.Generate(ctx, spec)
+		specCtx := ctx
+		specName := chatNameForSpec(spec, ts.AssignedRole)
+		if rep := runevents.ReporterFromContext(specCtx); rep != nil {
+			specCtx = runevents.WithReporter(specCtx, rep.WithAgent(specName))
+		}
+		resp, err := e.provider.Generate(specCtx, spec)
 		if err != nil {
 			e.rollbackStep(projectName, step.ID, snap)
 			return fmt.Errorf("шаг %q, задача %s: %w", step.ID, ts.TaskID, err)
@@ -1477,4 +1490,34 @@ func (e *Executor) findStep(id string) *Step {
 		}
 	}
 	return nil
+}
+
+// chatNameForSpec возвращает имя агента для чата по типу агента и роли задачи.
+func chatNameForSpec(spec agents.Agent, role string) string {
+	type labler interface{ Label() string }
+	if l, ok := spec.(labler); ok && l.Label() != "" {
+		return l.Label()
+	}
+	r := strings.ToLower(role)
+	switch {
+	case strings.Contains(r, "qa") && strings.Contains(r, "lead"):
+		return "QA-лид"
+	case strings.Contains(r, "qa"), strings.Contains(r, "тест"), strings.Contains(r, "testing"):
+		return "QA-инженер"
+	case strings.Contains(r, "devopslead") || (strings.Contains(r, "lead") && (strings.Contains(r, "devops") || strings.Contains(r, "инфра") || strings.Contains(r, "infra"))):
+		return "DevOps-лид"
+	case strings.Contains(r, "devops"), strings.Contains(r, "инфра"), strings.Contains(r, "infra"), strings.Contains(r, "sre"), strings.Contains(r, "ci"):
+		return "DevOps-инженер"
+	case strings.Contains(r, "frontendlead") || (strings.Contains(r, "lead") && (strings.Contains(r, "front") || strings.Contains(r, "фронт") || strings.Contains(r, "ui"))):
+		return "Frontend-лид"
+	case strings.Contains(r, "backendlead") || (strings.Contains(r, "lead") && (strings.Contains(r, "back") || strings.Contains(r, "бэк"))):
+		return "Backend-лид"
+	case strings.Contains(r, "architect"):
+		return "архитектор"
+	case strings.Contains(r, "front"), strings.Contains(r, "react"), strings.Contains(r, "vue"), strings.Contains(r, "next"), strings.Contains(r, "ui"), strings.Contains(r, "фронт"):
+		return "фронтенд-разработчик"
+	case strings.Contains(r, "back"), strings.Contains(r, "бэк"), strings.Contains(r, "backend"), strings.Contains(r, "go"), strings.Contains(r, "python"), strings.Contains(r, "java"), strings.Contains(r, "node"):
+		return "бэкенд-разработчик"
+	}
+	return role
 }

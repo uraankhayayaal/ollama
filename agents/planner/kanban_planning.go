@@ -43,7 +43,7 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 		}
 		primary := eps[0]
 		for _, e := range eps[1:] {
-			if epicLess(e, primary) {
+			if board.EpicLess(e, primary) {
 				primary = e
 			}
 		}
@@ -321,46 +321,9 @@ func printLeadTasks(log *logging.Logger, epic *board.Epic, tasks []*board.Task) 
 	}
 }
 
-// epicPhase классифицирует эпик по фазе разработки (аналог taskPhase для задач):
-// инфраструктура (DevOps) -> приложение (backend/frontend) -> тестирование (QA).
-func epicPhase(e *board.Epic) string {
-	switch {
-	case isRole(e.AssignedRole, "qa", "тест", "testing"):
-		return "test"
-	case isRole(e.AssignedRole, "devops", "инфра", "infra", "sre", "docker", "k8s", "ci"):
-		return "infra"
-	default:
-		return "app"
-	}
-}
-
-// epicPhaseRank — приоритет фазы эпика в очереди лидов: инфраструктура раньше
-// приложения, тестирование (в т.ч. qaengineer) — после всех задач разработки.
-func epicPhaseRank(phase string) int {
-	switch phase {
-	case "infra":
-		return 0
-	case "app":
-		return 1
-	default: // test
-		return 2
-	}
-}
-
-// epicLess — приоритет эпиков в очереди лидов: сначала фаза разработки
-// (инфраструктура -> приложение -> тестирование, QA Last), затем
-// sequence_order и, для детерминизма, task_id.
-func epicLess(a, b *board.Epic) bool {
-	ar, br := epicPhaseRank(epicPhase(a)), epicPhaseRank(epicPhase(b))
-	if ar != br {
-		return ar < br
-	}
-	ao, bo := a.SequenceOrder.Int(), b.SequenceOrder.Int()
-	if ao != bo {
-		return ao < bo
-	}
-	return a.TaskID < b.TaskID
-}
+// Порядок эпиков в очереди лидов — общий с доской компаратор board.EpicLess
+// (фаза -> приоритет -> sequence_order -> task_id). Он живёт в пакете board,
+// чтобы строки Web UI и выбор оркестратора не расходились.
 
 // blockingDependencyEpic ищет эпик, который блокирует уже запланированные
 // задачи: у незавершённой задачи в dependencies стоит ID эпика, который ещё не
@@ -393,7 +356,7 @@ func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*boar
 			if depEpic.RequiresReview || len(depEpic.Tasks) > 0 {
 				continue
 			}
-			if best == nil || epicLess(depEpic, best) {
+			if best == nil || board.EpicLess(depEpic, best) {
 				best = depEpic
 			}
 		}
@@ -427,7 +390,7 @@ func (k *KanbanRunner) nextLeadEpic(epics []*board.Epic) (*board.Epic, bool, boo
 		if !needDecompose && !needResync {
 			continue
 		}
-		if best == nil || epicLess(epic, best) {
+		if best == nil || board.EpicLess(epic, best) {
 			best = epic
 			bestDecompose = needDecompose
 		}

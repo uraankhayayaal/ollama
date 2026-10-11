@@ -52,6 +52,9 @@ type DevopsLead struct {
 	requireTaskPublishing bool
 }
 
+// Label возвращает человекочитаемое имя агента для чата.
+func (d *DevopsLead) Label() string { return "DevOps-лид" }
+
 // NewDevopsLead создаёт DevOps Lead в общей для всех агентов выходной папке
 // temp/<projectName> в корне модуля. projectName — имя проекта, задаётся
 // пользователем. prompt — текст задания от Системного архитектора (может быть

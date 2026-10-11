@@ -1,8 +1,10 @@
 package planner
 
 import (
+	"ai/agents"
 	"ai/board"
 	"ai/models"
+	"ai/runevents"
 	"ai/tokens"
 	"context"
 	"errors"
@@ -123,6 +125,10 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		}
 
 		k.markActive(t.TaskID)
+		chatName := agentChatNameForKanban(specialist, t.Assignee)
+		if rep := runevents.ReporterFromContext(taskCtx); rep != nil {
+			taskCtx = runevents.WithReporter(taskCtx, rep.WithAgent(chatName))
+		}
 		resp, genErr := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
 		k.unmarkActive(t.TaskID)
 		if genErr != nil {
@@ -417,4 +423,34 @@ func (k *KanbanRunner) leadFail(ctx context.Context, epic *board.Epic, err error
 	}
 	k.status("[эпик %s] %s — нужна помощь человека", epic.TaskID, reason)
 	return err
+}
+
+// agentChatNameForKanban возвращает человекочитаемое имя агента для чата.
+func agentChatNameForKanban(spec agents.Agent, assignee string) string {
+	type labler interface{ Label() string }
+	if l, ok := spec.(labler); ok && l.Label() != "" {
+		return l.Label()
+	}
+	r := strings.ToLower(assignee)
+	switch {
+	case strings.Contains(r, "qa") && strings.Contains(r, "lead"):
+		return "QA-лид"
+	case strings.Contains(r, "qa"), strings.Contains(r, "тест"), strings.Contains(r, "testing"):
+		return "QA-инженер"
+	case strings.Contains(r, "devopslead") || (strings.Contains(r, "lead") && (strings.Contains(r, "devops") || strings.Contains(r, "инфра") || strings.Contains(r, "infra"))):
+		return "DevOps-лид"
+	case strings.Contains(r, "devops"), strings.Contains(r, "инфра"), strings.Contains(r, "infra"), strings.Contains(r, "sre"), strings.Contains(r, "ci"):
+		return "DevOps-инженер"
+	case strings.Contains(r, "frontendlead") || (strings.Contains(r, "lead") && (strings.Contains(r, "front") || strings.Contains(r, "фронт") || strings.Contains(r, "ui"))):
+		return "Frontend-лид"
+	case strings.Contains(r, "backendlead") || (strings.Contains(r, "lead") && (strings.Contains(r, "back") || strings.Contains(r, "бэк"))):
+		return "Backend-лид"
+	case strings.Contains(r, "architect"):
+		return "архитектор"
+	case strings.Contains(r, "front"), strings.Contains(r, "react"), strings.Contains(r, "vue"), strings.Contains(r, "next"), strings.Contains(r, "ui"), strings.Contains(r, "фронт"):
+		return "фронтенд-разработчик"
+	case strings.Contains(r, "back"), strings.Contains(r, "бэк"), strings.Contains(r, "backend"), strings.Contains(r, "go"), strings.Contains(r, "python"), strings.Contains(r, "java"), strings.Contains(r, "node"):
+		return "бэкенд-разработчик"
+	}
+	return assignee
 }

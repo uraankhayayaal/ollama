@@ -63,6 +63,9 @@ func (d *Devops) SetBoardStore(s *board.Store) {
 	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s})
 }
 
+// Label возвращает человекочитаемое имя агента для чата.
+func (d *Devops) Label() string { return "DevOps-инженер" }
+
 // NewDevops создаёт DevOps-агента в общей для всех агентов выходной папке
 // temp/<projectName> в корне модуля (единая точка для генератора и рефактора,
 // чтобы агент работал с тем же проектом). projectName — имя проекта, задаётся

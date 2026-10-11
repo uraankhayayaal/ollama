@@ -221,6 +221,9 @@ func (s *Server) routes() http.Handler {
 	// Git-workflow (Ф-6): кнопки «Пауза»/«Продолжить»/«Отменить» эпика — перевод
 	// статуса (каскад задач + git-хуки, ветка/код остаются на месте).
 	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/status", s.handleSetEpicStatus)
+	// Ручная пересортировка эпиков (Web UI): первый ID в списке получает
+	// наибольший приоритет; если оркестрация идёт, она рестартуется.
+	mux.HandleFunc("POST /api/projects/{id}/epics/reorder", s.handleReorderEpics)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
 
 	// Инъекции (Ф-8): управление сессионными промпт-инъекциями — add, remove, list.
@@ -1436,6 +1439,68 @@ func (s *Server) handleSetEpicStatus(w http.ResponseWriter, r *http.Request) {
 	logging.For(project).Infof("доска: эпик %s → %s (через REST)", epicID, st)
 	s.srvEmitBoard(project, "REST: эпик сменил статус")
 	writeJSON(w, http.StatusOK, epic)
+}
+
+// handleReorderEpics — ручная пересортировка эпиков на доске (Web UI,
+// перетаскивание строк или стрелки). Тело: { "order": ["EPIC-1", "EPIC-2", …] } —
+// первый ID получает наибольший приоритет (см. Store.ReorderEpics). Порядок
+// действует внутри фазы эпика: фаза остаётся первичным ключом очереди лидов.
+// Если оркестрация сейчас идёт — она ЖЁСТКО рестартуется в фоне, чтобы новая
+// очередь применялась немедленно (стоп → старт). Ответ возвращаем сразу,
+// статус рестарта виден по WS-событиям status (stopped → running).
+func (s *Server) handleReorderEpics(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	var body struct {
+		Order []string `json:"order"`
+	}
+	if err := decodeBody(r, &body); err != nil || len(body.Order) == 0 {
+		writeErr(w, http.StatusBadRequest, `невалидный JSON: ожидается {"order": ["EPIC-1", "EPIC-2", ...]}`)
+		return
+	}
+
+	store, err := s.boardStore(r.Context(), project)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
+		return
+	}
+	defer store.Close()
+
+	updated, err := store.ReorderEpics(r.Context(), body.Order)
+	if err != nil {
+		if errors.Is(err, board.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "пересортировка: "+err.Error())
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "пересортировка: "+err.Error())
+		return
+	}
+
+	restarting := false
+	if sess := s.session(project); sess != nil {
+		sess.emitBoard("эпики пересортированы")
+		if sess.isRunning() {
+			restarting = true
+			prov, perr := s.provider()
+			if perr != nil {
+				sess.log.Warnf("пересортировка: LLM-провайдер недоступен: %v", perr)
+				sess.append(chat.RoleStatus,
+					"Пересортировка эпиков сохранена, но перезапуск оркестрации отложен: LLM-провайдер недоступен.",
+					"", "", nil)
+			} else {
+				go func() {
+					if rerr := sess.Restart(context.Background(), prov); rerr != nil {
+						sess.log.Warnf("пересортировка: перезапуск оркестрации: %v", rerr)
+						sess.append(chat.RoleStatus,
+							"Пересортировка эпиков сохранена, но не удалось перезапустить оркестрацию: "+rerr.Error(),
+							"", "", nil)
+					}
+				}()
+			}
+		}
+	}
+	logging.For(project).Infof("доска: пересортировка %d эпиков (%s), порядок: %s, перезапуск: %v",
+		updated, project, strings.Join(body.Order, ", "), restarting)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "updated": updated, "restarting": restarting})
 }
 
 // handleDeleteEpic удаляет эпик вместе с его задачами. Допустимо только для

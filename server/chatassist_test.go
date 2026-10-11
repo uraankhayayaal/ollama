@@ -465,6 +465,158 @@ func TestChatAssistantCreatesEpic(t *testing.T) {
 	})
 }
 
+// TestChatAssistantPhantomClaimRejected — модель отчиталась о создании эпика,
+// но НИ РАЗУ не вызвала инструмент доски (реальный лог: «Завёл эпик CHAT-01»,
+// tool_calls=0). Ложное сообщение не должно попасть в чат, эпика на доске быть
+// не должно, а пользователь — получить честный статус, что запись НЕ создана.
+func TestChatAssistantPhantomClaimRejected(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-phantom")
+	sess, _, err := srv.getOrCreate("proj-phantom")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &scriptedGenerateProvider{chat: &scriptedChatProvider{replies: []*runner.ModelReply{
+		{Content: "Завёл эпик CHAT-01.", FinishReason: "stop"},
+	}}}
+	sess.runChatAssistant(context.Background(), "заведи эпик на порт на Rust", prov)
+	sess.wg.Wait()
+
+	hist, err := sess.chat.History(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range hist {
+		if strings.Contains(m.Content, "Завёл эпик") {
+			t.Fatalf("ложное заявление о создании эпика попало в чат: %+v", m)
+		}
+	}
+	var honest bool
+	for _, m := range hist {
+		if m.Role == chat.RoleStatus && strings.Contains(m.Content, "НЕ создана") {
+			honest = true
+		}
+	}
+	if !honest {
+		t.Fatalf("нет честного статуса о несозданной записи; history=%+v", hist)
+	}
+	epics, err := sess.board.ListEpics(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(epics) != 0 {
+		t.Fatalf("фантомное заявление не должно создавать эпик, на доске: %d", len(epics))
+	}
+}
+
+// TestChatAssistantPhantomClaimRetriesAndCreatesEpic — первая попытка «фантом»,
+// вторая (с корректирующей инструкцией) реально вызывает BoardCreateEpic: эпик
+// появляется на доске, а в чат уходит правдивый отчёт, без ложного заявления.
+func TestChatAssistantPhantomClaimRetriesAndCreatesEpic(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-phantom-retry")
+	sess, _, err := srv.getOrCreate("proj-phantom-retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &scriptedGenerateProvider{chat: &scriptedChatProvider{replies: []*runner.ModelReply{
+		{Content: "Завёл эпик CHAT-01.", FinishReason: "stop"},
+		{
+			ToolCalls: []tools.ToolCall{{
+				Name:      tools.BoardCreateEpic,
+				Arguments: `{"task_id":"CHAT-01","title":"Порт на Rust","description":"Перевести сервер на Rust"}`,
+			}},
+			FinishReason: "tool_calls",
+		},
+		{Content: "Эпик создан на доске.", FinishReason: "stop"},
+	}}}
+	sess.runChatAssistant(context.Background(), "заведи эпик на порт на Rust", prov)
+	sess.wg.Wait()
+
+	epics, err := sess.board.ListEpics(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(epics) != 1 || epics[0].TaskID != "CHAT-01" {
+		t.Fatalf("эпик не создан после повтора: %+v", epics)
+	}
+	got := waitChatAssistant(t, sess, 2*time.Second)
+	if !strings.Contains(got.Content, "Эпик создан") {
+		t.Fatalf("ответ ассистента = %q", got.Content)
+	}
+	hist, _ := sess.chat.History(context.Background(), 100)
+	for _, m := range hist {
+		if strings.Contains(m.Content, "Завёл эпик") {
+			t.Fatalf("ложное заявление первой попытки попало в чат: %+v", m)
+		}
+	}
+}
+
+// TestChatAssistantClaimWithRealWriteTrusted — если вместе с заявлением модель
+// действительно вызвала write-инструмент, заявление правдиво и НЕ подавляется.
+func TestChatAssistantClaimWithRealWriteTrusted(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	registerTestDir(t, srv, "proj-real-write")
+	sess, _, err := srv.getOrCreate("proj-real-write")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &scriptedGenerateProvider{chat: &scriptedChatProvider{replies: []*runner.ModelReply{
+		{
+			Content: "Завёл эпик CHAT-01.",
+			ToolCalls: []tools.ToolCall{{
+				Name:      tools.BoardCreateEpic,
+				Arguments: `{"task_id":"CHAT-01","title":"Порт на Rust","description":"Перевести сервер на Rust"}`,
+			}},
+			FinishReason: "tool_calls",
+		},
+		{Content: "Завёл эпик CHAT-01.", FinishReason: "stop"},
+	}}}
+	sess.runChatAssistant(context.Background(), "заведи эпик на порт на Rust", prov)
+	sess.wg.Wait()
+
+	epics, err := sess.board.ListEpics(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(epics) != 1 || epics[0].TaskID != "CHAT-01" {
+		t.Fatalf("эпик не создан: %+v", epics)
+	}
+	got := waitChatAssistant(t, sess, 2*time.Second)
+	if !strings.Contains(got.Content, "Завёл эпик CHAT-01") {
+		t.Fatalf("правдивый отчёт всё же подавлен: %q", got.Content)
+	}
+}
+
+// TestLooksLikeBoardWriteClaim — детектор фантомных заявлений ловит отчёт о
+// ТОЛЬКО ЧТО выполненном действии и не трогает нейтральные упоминания.
+func TestLooksLikeBoardWriteClaim(t *testing.T) {
+	yes := []string{
+		"Завёл эпик CHAT-01.",
+		"Создала эпик на рефакторинг.",
+		"Запустил оркестрацию по задаче.",
+		"Создал баг про тормоза.",
+	}
+	for _, s := range yes {
+		if !looksLikeBoardWriteClaim(s) {
+			t.Errorf("%q должно распознаваться как заявление", s)
+		}
+	}
+	no := []string{
+		"На доске нет эпиков.",
+		"Эпик CHAT-01 уже был создан ранее.",
+		"Расскажу про состояние проекта и работы на доске.",
+	}
+	for _, s := range no {
+		if looksLikeBoardWriteClaim(s) {
+			t.Errorf("%q не должно считаться заявлением", s)
+		}
+	}
+}
+
 // TestChatAssistantPublishesBoardWhenIdle — «создай эпик …» в idle-сессии
 // (оркестрация не запущена): boardFlusher в этот момент не крутится, поэтому
 // router-колбэк обязан опубликовать снимок доски в шину сразу (через

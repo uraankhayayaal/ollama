@@ -57,6 +57,19 @@
 | Ревьюер | — | `ReviewMr`, `ApproveMr`, `NextChunk` |
 | Планировщик | `List`, `ReadFiles` | `LspDefinition`, `LspReferences`, `LspHover` (без `LspCheck`) |
 
+### QA-инженер пишет только тесты
+
+QA — тестировщик, а не разработчик. Его `*tools.FileOps` переводится в режим
+`WriteTestsOnly` (`tools/testpath.go`, вызов из `newQAEngineer`,
+`agents/qaengineer/agent.go`), поэтому записывающие инструменты принимают
+только тестовые файлы (см. `isTestPath`) и дополнительно файл-отчёт
+`Config.ReportFile` (`TEST_REPORT.md`, env `QA_REPORT_FILE`). Попытка записать
+код продукта отклоняется с сообщением «QA-инженер пишет только тесты».
+Режим совместим со `SetScope` (проверяются оба ограничения) и с
+`WriteAllowlist` (`agents/planner/executor.go`). Найденный дефект QA не чинит
+сам, а возвращает разработчику: комментарий `BoardAddComment` (`type=qa`) +
+статус `testing → in_progress`; без доски — только текстом отчёта.
+
 `SetRAG` / `SetBoardStore` / `SetArchitectExtras` **пересобирают** набор
 инструментов на лету (`agents/architect/agent.go:106-114`,
 `agents/frontendlead/agent.go:94-100`, `agents/planner/kanban.go:143,153`).

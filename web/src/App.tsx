@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, reopenTask, rollbackTask, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
+import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, reopenTask, reorderEpics, rollbackTask, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, LogStream, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -480,6 +480,33 @@ export function App() {
     }
   };
 
+  // Пересортировка эпиков на доске: применяем новый порядок сразу (оптимизм),
+  // а сервер подтверждает снимком доски/рестартом оркестрации. При ошибке
+  // перечитываем доску, чтобы вернуть авторитетный порядок.
+  const onEpicReorder = async (order: string[]) => {
+    if (!project || !board) {
+      return;
+    }
+    const byId = new Map(board.epics.map((e) => [e.task_id, e]));
+    const reordered = order.map((id) => byId.get(id)).filter((e): e is EpicRow => !!e);
+    const known = new Set(reordered.map((e) => e.task_id));
+    for (const e of board.epics) {
+      if (!known.has(e.task_id)) {
+        reordered.push(e);
+      }
+    }
+    setBoard((prev) => (prev ? { ...prev, epics: reordered } : prev));
+    try {
+      await reorderEpics(BASE, project.project_name, reordered.map((e) => e.task_id));
+    } catch (e) {
+      fail(e);
+      // Откат к авторитетному порядку.
+      boardOf(BASE, project.project_name)
+        .then(setBoard)
+        .catch(() => {});
+    }
+  };
+
   const onEpicDelete = async (epic: EpicRow) => {
     if (!project) {
       return;
@@ -932,6 +959,7 @@ export function App() {
                 onShowDiff={setDiffContext}
                 onTaskAutoResolve={onTaskAutoResolve}
                 onEpicAutoResolve={onEpicAutoResolve}
+                onEpicReorder={onEpicReorder}
                 collapsed
                 onToggleCollapse={() => toggleCollapse("dash")}
               />
@@ -955,6 +983,7 @@ export function App() {
                 onShowDiff={setDiffContext}
                 onTaskAutoResolve={onTaskAutoResolve}
                 onEpicAutoResolve={onEpicAutoResolve}
+                onEpicReorder={onEpicReorder}
                 collapsed={false}
                 onToggleCollapse={() => toggleCollapse("dash")}
               />

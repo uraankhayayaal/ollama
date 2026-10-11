@@ -50,6 +50,20 @@ func (f *fakeAssistantSearcher) ProjectInfo(_ context.Context, _ string) (rag.Pr
 
 var _ agents.Agent = (*Assistant)(nil)
 
+// TestAssistantCorrectionAppendedToSystemPrompt — Correction (разовая
+// корректирующая инструкция сервера на повторный ход после фантомного
+// заявления) попадает в конец системного промпта.
+func TestAssistantCorrectionAppendedToSystemPrompt(t *testing.T) {
+	a := newTestAssistant(t, "заведи эпик")
+	if strings.Contains(a.GetSystemMessages(nil)[0].Message, "ИСПРАВЛЕНИЕ-TEST") {
+		t.Fatal("пустая Correction не должна влиять на промпт")
+	}
+	a.Correction = "ИСПРАВЛЕНИЕ-TEST: обязательно вызови инструмент"
+	if !strings.Contains(a.GetSystemMessages(nil)[0].Message, "ИСПРАВЛЕНИЕ-TEST") {
+		t.Fatal("промпт не содержит корректирующую инструкцию")
+	}
+}
+
 func TestAssistantInterface(t *testing.T) {
 	a := newTestAssistant(t, "что сейчас делает проект?")
 	if len(a.GetSystemMessages(nil)) == 0 {

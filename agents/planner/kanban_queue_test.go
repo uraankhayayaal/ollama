@@ -224,3 +224,61 @@ func TestKanbanLeadQueueOrderQALast(t *testing.T) {
 		t.Fatalf("эпики должны быть выполнены: be=%s qa=%s", be.Status, qa.Status)
 	}
 }
+
+// TestNextLeadEpicPriorityWithinPhase: ручная пересортировка (Priority) меняет
+// очередь лидов только внутри фазы — инфраструктура всё равно раньше
+// приложения, тестирование (QA Last) позже всей разработки, даже если у них
+// больший приоритет. Внутри фазы приоритет > sequence_order > task_id.
+func TestNextLeadEpicPriorityWithinPhase(t *testing.T) {
+	ctx := context.Background()
+	srv := miniredis.RunT(t)
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-prio"})
+	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-prio")) })
+
+	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	epics := []*board.Epic{
+		// Тест с большим приоритетом, но фаза — последняя.
+		{TaskSpec: board.TaskSpec{TaskID: "TEST-1", Title: "QA-план", AssignedRole: "QA Lead", SequenceOrder: 1}, Priority: 9},
+		// Инфраструктура с малым приоритетом — но фаза первая.
+		{TaskSpec: board.TaskSpec{TaskID: "INFRA-1", Title: "CI", AssignedRole: "DevOps Lead", SequenceOrder: 2}, Priority: 1},
+		// Приложение: приоритет 9 → 5 → 0.
+		{TaskSpec: board.TaskSpec{TaskID: "APP-2", Title: "Бэкенд 2", AssignedRole: "Backend Lead", SequenceOrder: 3}, Priority: 5},
+		{TaskSpec: board.TaskSpec{TaskID: "APP-1", Title: "Бэкенд 1", AssignedRole: "Backend Lead", SequenceOrder: 3}, Priority: 9},
+		{TaskSpec: board.TaskSpec{TaskID: "APP-0", Title: "Бэкенд 0", AssignedRole: "Backend Lead", SequenceOrder: 3}, Priority: 0},
+	}
+	for _, e := range epics {
+		if err := store.CreateEpic(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var got []string
+	for range epics {
+		e, _, _, err := kr.nextLeadEpic(epics)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e == nil {
+			break
+		}
+		got = append(got, e.TaskID)
+		// Убираем выданный эпик, чтобы очередь продолжала двигаться.
+		remaining := epics[:0]
+		for _, x := range epics {
+			if x.TaskID != e.TaskID {
+				remaining = append(remaining, x)
+			}
+		}
+		epics = remaining
+	}
+
+	want := []string{"INFRA-1", "APP-1", "APP-2", "APP-0", "TEST-1"}
+	if len(got) != len(want) {
+		t.Fatalf("очередь лидов = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("очередь лидов = %v, want %v", got, want)
+		}
+	}
+}

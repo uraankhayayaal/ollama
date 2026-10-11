@@ -59,6 +59,22 @@ type FileOps struct {
 	// List) не ограничивается. Ставится лидам, чтобы они могли вести план
 	// проекта в readme, но не могли писать/удалять код.
 	WriteReadmeOnly bool
+	// WriteTestsOnly — true: записывающие инструменты (Write/Append/Delete)
+	// разрешены ТОЛЬКО для тестовых файлов (isTestPath: *_test.go, *.test.*,
+	// *.spec.*, test_*.py, каталоги test/tests/__tests__/e2e и конфиги
+	// раннеров) плюс явных дополнительных путей WriteTestsExtra (например,
+	// файл-отчёт QA). Чтение (ReadFiles, List) не ограничивается. Ставится
+	// QA-инженеру: тестировщик пишет и правит тесты, но НЕ код продукта —
+	// найденный дефект он возвращает разработчику комментарием к задаче и
+	// статусом in_progress.
+	WriteTestsOnly bool
+	// WriteTestsExtra — дополнительные точные пути (относительные slash),
+	// разрешённые к записи в режиме WriteTestsOnly (файл-отчёт QA). Сравнение
+	// как в ScopeMatcher: точный файл или директория-префикс.
+	WriteTestsExtra []string
+	// writeTestsExtraMatch — скомпилированный WriteTestsExtra; nil — нет
+	// дополнительных путей.
+	writeTestsExtraMatch *forges.ScopeMatcher
 	// written — счётчик записанных файлов (разделяется инструментами).
 	written int
 	// touched — относительные (slash) пути файлов, затронутых мутацией с
@@ -144,8 +160,10 @@ func (ops *FileOps) dirHasScope(rel string) bool {
 // writeAllowed проверяет, разрешена ли ЗАПИСЬ файла (относительный
 // slash-путь). В режиме «только readme» (WriteReadmeOnly) разрешены ТОЛЬКО
 // файлы readme* в корне OutputDir независимо от Scope (чтение при этом
-// продолжает ограничиваться Scope). Иначе — allowlist записи (WriteAllowlist,
-// если задан) И область работы: обе проверки должны пройти.
+// продолжает ограничиваться Scope). В режиме «только тесты» (WriteTestsOnly)
+// разрешены только тестовые файлы (isTestPath) и дополнительные пути
+// WriteTestsExtra. Иначе — allowlist записи (WriteAllowlist, если задан) И
+// область работы: обе проверки должны пройти.
 func (ops *FileOps) writeAllowed(rel string) bool {
 	if ops.WriteReadmeOnly {
 		// Разрешён только файл readme* в корне проекта (без вложенных
@@ -156,10 +174,26 @@ func (ops *FileOps) writeAllowed(rel string) bool {
 		}
 		return strings.HasPrefix(strings.ToLower(slug), "readme")
 	}
+	if ops.WriteTestsOnly && !ops.testsWriteAllowed(rel) {
+		return false
+	}
 	if ops.writeAllowMatch != nil && !ops.writeAllowMatch.Empty() && !ops.writeAllowMatch.Allow(rel) {
 		return false
 	}
 	return ops.allowed(rel)
+}
+
+// testsWriteAllowed проверяет путь в режиме WriteTestsOnly: тестовый файл
+// (isTestPath) либо путь из дополнительного allowlist WriteTestsExtra
+// (например, файл-отчёт QA в корне проекта).
+func (ops *FileOps) testsWriteAllowed(rel string) bool {
+	if isTestPath(rel) {
+		return true
+	}
+	if ops.writeTestsExtraMatch != nil && !ops.writeTestsExtraMatch.Empty() {
+		return ops.writeTestsExtraMatch.Allow(rel)
+	}
+	return false
 }
 
 // writeDenyMsg — точная причина отказа записи (для модели): при гарде allowlist
@@ -167,6 +201,13 @@ func (ops *FileOps) writeAllowed(rel string) bool {
 // исправиться, а не наступать на них вслепую. Без allowlist — прежнее сообщение
 // про scope (обратная совместимость).
 func (ops *FileOps) writeDenyMsg(name string) string {
+	if ops.WriteTestsOnly {
+		msg := fmt.Sprintf("QA-инженер пишет только тесты: файл %q не является тестовым. Найденный дефект верни разработчику комментарием к задаче (BoardAddComment) и статусом in_progress (BoardSetTaskStatus)", name)
+		if len(ops.WriteTestsExtra) > 0 {
+			msg += fmt.Sprintf("; дополнительно разрешено: %s", strings.Join(ops.WriteTestsExtra, ", "))
+		}
+		return msg
+	}
 	if ops.writeAllowMatch != nil && !ops.writeAllowMatch.Empty() {
 		return fmt.Sprintf("файл %q вне allowlist записи (разрешено: %s)", name, strings.Join(ops.WriteAllowlist, ", "))
 	}

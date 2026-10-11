@@ -270,6 +270,14 @@ func (d *base) SetBoardStore(s *board.Store) {
 	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s, RAG: d.RAG})
 }
 
+// Label возвращает человекочитаемое имя агента для чата.
+func (b *base) Label() string {
+	if b.label != "" {
+		return b.label
+	}
+	return "разработчик"
+}
+
 // SetTaskID записывает id задачи, ради которой построен агент (Ф-6, этап 2).
 // Нужен для State Tracking: без него агент не знает, в какую запись доски
 // писать состояние раунда, и откатываться будет не к чему. Вызывается
