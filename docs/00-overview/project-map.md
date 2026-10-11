@@ -36,7 +36,6 @@
 | `backendlead/` | Декомпозиция бэкенда на JSON-задачи (Tech Lead) |
 | `frontendlead/` | Декомпозиция UI, стейта и API-контрактов |
 | `devopslead/` | Декомпозиция инфраструктуры (без LSP-инструментов) |
-| `qalead/` | Тест-план по контрактам, триаж багов |
 | `developer/` | Backend/frontend-разработчики. `readme.go` — генерация `readme.md` |
 | `devops/` | DevOps-инженер: Docker Compose, K8s, CI/CD |
 | `qaengineer/` | QA-инженер: автотесты, баг-репорты |

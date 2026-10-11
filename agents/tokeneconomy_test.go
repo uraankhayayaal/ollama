@@ -10,7 +10,6 @@ import (
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
-	"ai/agents/qalead"
 	"ai/projects"
 	"ai/tools"
 	"os"
@@ -150,18 +149,14 @@ func TestTokenEconomyFragmentMentionsOnlyAvailableTools(t *testing.T) {
 	}
 }
 
-// TestRunFragmentAbsentWithoutRunTool — агенты без инструмента Run (QA-лид,
-// чат-ассистент) не получают фрагмент про команды: упоминать Run в их промпте
+// TestRunFragmentAbsentWithoutRunTool — агент без инструмента Run
+// (чат-ассистент) не получает фрагмент про команды: упоминать Run в его промпте
 // бессмысленно и провоцирует вызов несуществующего инструмента. Агенты с Run
 // (архитектор после Этапа 4: git в ветке эпика; лиды после Этапа 5: проверка
-// и пуш скелетона) из этой проверки выходят — фрагмент им уместен.
+// и пуш скелетона; QA-инженер) из этой проверки выходят — фрагмент им уместен.
 func TestRunFragmentAbsentWithoutRunTool(t *testing.T) {
 	dir := t.TempDir()
 
-	qa, err := qalead.NewQALeadInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("QA Lead: %v", err)
-	}
 	assistant := chatassist.NewAssistantInDir(dir, "tokeneconomy-chat-test", "задание", nil, nil)
 	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-chat-test"))
 
@@ -170,7 +165,6 @@ func TestRunFragmentAbsentWithoutRunTool(t *testing.T) {
 		system string
 		tools  map[string]bool
 	}{
-		{"QA Lead", qa.GetSystemMessages(nil)[0].Message, setOf(qa.GetTools())},
 		{"Чат-ассистент", assistant.GetSystemMessages(nil)[0].Message, setOf(assistant.GetTools())},
 	}
 	for _, c := range cases {

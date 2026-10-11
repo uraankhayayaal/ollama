@@ -214,6 +214,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/ask/{askID}/answer", s.handleAskAnswer)
 	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
 	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}", s.handleDeleteTask)
+	// Переоткрытие выполненной задачи на доработку (done -> ready прежнему
+	// исполнителю) с обязательным комментарием-обоснованием.
+	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/reopen", s.handleReopenTask)
 	mux.HandleFunc("DELETE /api/projects/{id}/epics/{eid}", s.handleDeleteEpic)
 	// Git-workflow (Ф-6): кнопки «Пауза»/«Продолжить»/«Отменить» эпика — перевод
 	// статуса (каскад задач + git-хуки, ветка/код остаются на месте).
@@ -1269,6 +1272,21 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		injectionsChanged = true
 	}
 
+	// Комментарии задачи: поле-список из UI (PUT /tasks/{id} c полем
+	// comments) раньше молча терялось — обработчик его не разбирал, и
+	// добавленный в модалке задачи комментарий не сохранялся. Список
+	// заменяется целиком и валидируется, как в инструменте BoardUpdateTask.
+	commentsChanged := false
+	if raw, ok := patch["comments"]; ok {
+		list, err := decodeTaskComments(raw, taskID)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "comments: "+err.Error())
+			return
+		}
+		t.Comments = list
+		commentsChanged = true
+	}
+
 	if err := store.SaveTask(r.Context(), t); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1278,6 +1296,9 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		// Инъекции видны модели со следующего запроса: агентский цикл читает
 		// их из записи задачи перед каждым обращением (board.InjectionSource).
 		logging.For(project).Infof("[задача %s] промпт-инъекции обновлены: %d", taskID, len(t.Injections))
+	}
+	if commentsChanged {
+		logging.For(project).Infof("[задача %s] комментарии обновлены: %d", taskID, len(t.Comments))
 	}
 
 	// Публикуем обновённую доску.
@@ -1290,6 +1311,32 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 // живёт в board, чтобы ею пользовался и инструмент доски.
 func decodeInjections(raw any) ([]board.Injection, error) {
 	return board.DecodeInjections(raw)
+}
+
+// decodeTaskComments разбирает поле comments из JSON-патча (список заменяется
+// целиком). Оптимистичные id вида «tmp-…», которые фронтенд ставит до ответа
+// сервера, отбрасываются — хранилище получает серверный id. Логика повторяет
+// инструмент BoardUpdateTask (tools/board_tools.go).
+func decodeTaskComments(raw any, taskID string) (board.Comments, error) {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	list, err := board.DecodeComments(b)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if strings.HasPrefix(list[i].ID, "tmp-") {
+			list[i].ID = ""
+		}
+		list[i].TaskID = taskID
+		list[i].Normalize()
+		if err := list[i].Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return list, nil
 }
 
 // handleDeleteTask удаляет задачу с доски (Ф-3). Задачи в работе/done/cancelled

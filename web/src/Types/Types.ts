@@ -108,6 +108,9 @@ export interface Comment {
   type: "qa" | "user" | "system";
   body: string;
   created_at: string;
+  // Учтён: по этому комментарию задача уже переоткрывалась на доработку —
+  // повторно открыть задачу тем же поводом нельзя.
+  accounted?: boolean;
 }
 
 // Состояния агента на доске (зеркалят board/entity.go).

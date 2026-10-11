@@ -3,7 +3,7 @@
 // Ф-5: блок «ветка + MR» — ветка/MR, кнопки «Создать ветку задачи» (от ветки
 // эпика) и «Создать MR» (push → MR в ветку эпика).
 import { useState } from "react";
-import type { AgentState, BranchDiffContext, GitView, TaskRow } from "@/Types";
+import type { AgentState, BranchDiffContext, Comment, GitView, TaskRow } from "@/Types";
 import { MOVES, STATUS_LABEL } from "../board";
 import { fmtTokens, tokenTitle } from "../tokens";
 import { Modal } from "../Modal";
@@ -31,6 +31,7 @@ export function TaskModal({
   onAutoResolve,
   onTaskUpdate,
   onRollback,
+  onReopen,
   onClose,
 }: {
   task: TaskRow;
@@ -41,6 +42,7 @@ export function TaskModal({
   onAutoResolve?: (t: TaskRow) => Promise<void>;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onRollback?: (t: TaskRow, to: string) => Promise<void>;
+  onReopen?: (t: TaskRow, body: string) => Promise<void>;
   onClose: () => void;
 }) {
   const m = MOVES[task.status] ?? { prev: [], next: [] };
@@ -62,6 +64,25 @@ export function TaskModal({
   const [newComment, setNewComment] = useStateReact({ type: "user" as const, body: "" });
   const [sending, setSending] = useStateReact(false);
   const [error, setError] = useStateReact("");
+
+  // Переоткрытие выполненной задачи на доработку. Обоснование (комментарий)
+  // обязательно — либо новое тело, либо уже добавленные необработанные
+  // комментарии (кнопка «По замечаниям»).
+  const [reopenNote, setReopenNote] = useStateReact("");
+  const [reopening, setReopening] = useStateReact(false);
+  const [reopenErr, setReopenErr] = useStateReact("");
+  const unaccountedComments = (task.comments ?? []).filter((c) => !c.accounted).length;
+
+  const reopen = (body: string) => {
+    setReopening(true);
+    setReopenErr("");
+    onReopen!(task, body)
+      .then(() => onClose())
+      .catch((e) => {
+        setReopenErr(e instanceof Error && e.message ? e.message : String(e));
+        setReopening(false);
+      });
+  };
 
   const rollback = (to: string) => {
     setRolling(true);
@@ -272,49 +293,89 @@ export function TaskModal({
       <div className="comments">
         {(task.comments ?? []).length === 0 && <div className="empty">Комментариев нет</div>}
         {(task.comments ?? []).map((c) => (
-          <div className="comment" key={c.id}>
+          <div className={`comment ${c.type}`} key={c.id}>
             <div className="meta">
               <span className="author">{c.author}</span>
-              <span className="type">{c.type}</span>
-              <span className="date">{c.created_at}</span>
+              <span className="type">{c.type === 'user' ? 'Пользователь (вы)' : c.type === 'qa' ? 'QA специалист' : 'Система'}</span>
+              {c.accounted && (
+                <span className="accounted" title="Учтён: по этому комментарию задача уже переоткрывалась на доработку">
+                  учтён
+                </span>
+              )}
+              <span className="date">{new Date(c.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
             </div>
             <div className="body">{c.body}</div>
           </div>
         ))}
         <div className="add-comment">
-          <select value={newComment.type} onChange={(e) => setNewComment({ ...newComment, type: e.target.value as any })}>
-            <option value="user">user</option>
-            <option value="qa">qa</option>
-            <option value="system">system</option>
-          </select>
-          <textarea
-            value={newComment.body}
-            onChange={(e) => setNewComment({ ...newComment, body: e.target.value })}
-            placeholder="Добавить комментарий..."
-          />
-          <button
-            disabled={sending || !newComment.body.trim()}
-            onClick={() => {
-              setSending(true);
-              setError("");
-              onTaskUpdate(task, {
-                comments: [...(task.comments ?? []), {
+          <div className="comment-form">
+            <select value={newComment.type} onChange={(e) => setNewComment({ ...newComment, type: e.target.value as any })}>
+              <option value="user">Пользователь (вы)</option>
+              <option value="qa">QA специалист</option>
+              <option value="system">Система</option>
+            </select>
+            <textarea
+              value={newComment.body}
+              onChange={(e) => setNewComment({ ...newComment, body: e.target.value })}
+              placeholder="Добавить комментарий..."
+            />
+            <button
+              disabled={sending || !newComment.body.trim()}
+              onClick={() => {
+                setSending(true);
+                setError("");
+                const comment: Comment = {
                   id: `tmp-${Date.now()}`,
                   author: "user",
                   type: newComment.type,
                   body: newComment.body,
                   created_at: new Date().toISOString(),
-                }],
-              });
-              setNewComment({ type: "user", body: "" });
-              setSending(false);
-            }}
-          >
-            Добавить
-          </button>
+                };
+                // Сервер заменит tmp-id на свой и вернёт задачу с сохранённым
+                // комментарием; доска обновится из ответа (см. onTaskUpdate).
+                onTaskUpdate(task, { comments: [...(task.comments ?? []), comment] });
+                setNewComment({ type: "user", body: "" });
+                setSending(false);
+              }}
+            >
+              Добавить комментарий
+            </button>
+          </div>
         </div>
         {error && <div className="err">{error}</div>}
       </div>
+
+      {onReopen && task.status === "done" && (
+        <div className="reopen">
+          <div className="reopen-title">Переоткрыть на доработку</div>
+          <p className="reopen-note">
+            Задача вернётся в очередь к исполнителю {task.assignee || "—"}. Опишите,
+            что доработать: без комментария переоткрыть нельзя.
+            {unaccountedComments > 0 && ` Необработанных замечаний: ${unaccountedComments}.`}
+          </p>
+          <textarea
+            value={reopenNote}
+            onChange={(e) => setReopenNote(e.target.value)}
+            placeholder="Что доработать? (обязательно)"
+          />
+          <div className="reopen-actions">
+            <button disabled={reopening || !reopenNote.trim()} onClick={() => reopen(reopenNote.trim())}>
+              {reopening ? "Переоткрываю…" : "Переоткрыть на доработку"}
+            </button>
+            {unaccountedComments > 0 && (
+              <button
+                className="reopen-secondary"
+                disabled={reopening}
+                title="Переоткрыть без нового комментария — обоснованием станут уже добавленные замечания"
+                onClick={() => reopen("")}
+              >
+                По замечаниям ({unaccountedComments})
+              </button>
+            )}
+          </div>
+          {reopenErr && <span className="reopen-err">{reopenErr}</span>}
+        </div>
+      )}
 
       <div className="actions">
         {m.prev.map((s) => (

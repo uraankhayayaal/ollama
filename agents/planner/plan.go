@@ -19,7 +19,6 @@ const (
 	AgentDevops       AgentType = "devops"
 	AgentDevopsLead   AgentType = "devopslead"
 	AgentQAEngineer   AgentType = "qa"
-	AgentQALead       AgentType = "qalead"
 	AgentFrontendLead AgentType = "frontendlead"
 	AgentBackendLead  AgentType = "backendlead"
 )
@@ -51,8 +50,6 @@ func agentDisplayName(a AgentType) string {
 		return "DevOps-лид"
 	case AgentQAEngineer:
 		return "QA-инженер"
-	case AgentQALead:
-		return "QA-лид"
 	case AgentFrontendLead:
 		return "Frontend-лид"
 	case AgentBackendLead:

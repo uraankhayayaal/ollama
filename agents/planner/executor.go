@@ -550,7 +550,7 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 		_, err := e.runCodingAgent(ctx, step, projectName)
 		return err
 
-	case AgentDevopsLead, AgentQALead, AgentFrontendLead, AgentBackendLead:
+	case AgentDevopsLead, AgentFrontendLead, AgentBackendLead:
 		return e.runLeadStep(ctx, step, projectName)
 
 	case AgentQAEngineer:

@@ -335,7 +335,7 @@ func epicPhase(e *board.Epic) string {
 }
 
 // epicPhaseRank — приоритет фазы эпика в очереди лидов: инфраструктура раньше
-// приложения, тестирование (в т.ч. qalead) — после всех задач разработки.
+// приложения, тестирование (в т.ч. qaengineer) — после всех задач разработки.
 func epicPhaseRank(phase string) int {
 	switch phase {
 	case "infra":

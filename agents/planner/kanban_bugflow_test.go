@@ -4,7 +4,6 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/qaengineer"
-	"ai/agents/qalead"
 	"ai/board"
 	"ai/projects"
 	"ai/runner"
@@ -58,14 +57,6 @@ func (p *bugFlowProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 			ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`}},
 		}, nil
 	case strings.HasPrefix(umsg, "Проведи триаж"):
-		if a, ok := agent.(*qalead.QALead); ok {
-			_, err := a.CallFunction(tools.BoardSetBugStatus, map[string]any{
-				"bug_id": "BUG-01", "status": "confirmed",
-			})
-			if err != nil {
-				return nil, err
-			}
-		}
 		return &runner.AgentResponse{Content: "Триаж выполнен."}, nil
 	default:
 		if a, ok := agent.(*architect.Architect); ok {

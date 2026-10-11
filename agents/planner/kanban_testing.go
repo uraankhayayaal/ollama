@@ -279,15 +279,70 @@ func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
 			}
 			progress = true
 			continue
-		case board.StatusHumanHelp, board.StatusCancelled, board.StatusTesting:
+		case board.StatusHumanHelp, board.StatusCancelled:
+			progress = true
+			continue
+		case board.StatusTesting:
+			// Если задача осталась в testing, это значит что тестирование ещё не завершено
+			// или тестировщик не завершил работу (например, не изменил статус)
+			// Добавим комментарий о тестировании, но не завершаем задачу
+			progress = true
+			continue
+		case board.StatusInProgress:
+			// Проверим, не происходит ли цикл testing → in_progress
+			if !k.checkTestingLoop(ctx, t) {
+				// Если цикл обнаружен, останавливаем задачу
+				k.setStopReason("Обнаружен цикл между разработчиком и тестировщиком")
+				if _, err := k.store.AddTaskComment(ctx, t.TaskID, board.Comment{
+					Author: "system",
+					Type:   board.CommentTypeSystem,
+					Body:   "Задача остановлена из-за циклического возврата между разработчиком и тестировщиком. Повторяющиеся замечания не привели к результату. Требуется ручное вмешательство.",
+				}); err != nil {
+					k.log.Warnf("[доска] цикл задачи %s: комментарий: %v", t.TaskID, err)
+				}
+				if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusHumanHelp); err != nil {
+					k.log.Warnf("[доска] цикл задачи %s: статус human_help: %v", t.TaskID, err)
+				}
+				progress = true
+				continue
+			}
+			// Если возврат в работу был, то добавим комментарий
+			if _, err := k.store.AddTaskComment(ctx, t.TaskID, board.Comment{
+				Author: "qa",
+				Type:   board.CommentTypeQA,
+				Body:   "Тестирование показало необходимость доработки. Задача возвращена разработчику для исправления.",
+			}); err != nil {
+				k.log.Warnf("[доска] тестирование задачи %s: комментарий: %v", t.TaskID, err)
+			}
 			progress = true
 			continue
 		default:
+			// Если тестировщик оставил задачу с другим статусом (например, в работе)
+			// добавим комментарий
+			if _, err := k.store.AddTaskComment(ctx, t.TaskID, board.Comment{
+				Author: "qa",
+				Type:   board.CommentTypeQA,
+				Body:   "Проведено тестирование. Результаты переданы разработчику для доработки.",
+			}); err != nil {
+				k.log.Warnf("[доска] тестирование задачи %s: комментарий: %v", t.TaskID, err)
+			}
 			progress = true
 			continue
 		}
 	}
 	return progress, nil
+}
+
+// checkTestingLoop проверяет, не происходит ли цикл testing → in_progress
+// с повторяющимися замечаниями. Возвращает false, если цикл обнаружен.
+func (k *KanbanRunner) checkTestingLoop(ctx context.Context, task *board.Task) bool {
+	// Если количество попыток больше лимита (3), считаем это циклом
+	if task.Attempts > 3 {
+		k.log.Infof("[цикл] задача %s достигла лимита попыток возврата (%d), остановка", task.TaskID, task.Attempts)
+		return false
+	}
+
+	return true
 }
 
 func truncateText(s string, n int) string {

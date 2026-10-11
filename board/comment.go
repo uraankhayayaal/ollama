@@ -36,6 +36,10 @@ type Comment struct {
 	Type      string    `json:"type"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
+	// Accounted — комментарий учтён: по нему задача уже переоткрывалась на
+	// доработку. Повторно переоткрыть задачу тем же комментарием нельзя —
+	// иначе «доработка» запускалась бы по одному и тому же поводу бесконечно.
+	Accounted bool `json:"accounted,omitempty"`
 }
 
 // Normalize normalizes comment fields.

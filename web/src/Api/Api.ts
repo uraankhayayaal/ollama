@@ -516,6 +516,23 @@ export async function rollbackTask(
   return req("POST", `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/rollback`, { to });
 }
 
+// Переоткрытие выполненной задачи на доработку: done -> ready прежнему
+// исполнителю. Обоснование обязательно — `body` (новый комментарий) либо уже
+// добавленные к задаче необработанные комментарии. Использованные комментарии
+// помечаются учтёнными, повторно тем же поводом задачу не переоткрыть.
+export async function reopenTask(
+  base: string,
+  project: string,
+  taskID: string,
+  body?: string,
+): Promise<TaskRow> {
+  return req<TaskRow>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/reopen`,
+    { body: body ?? "", author: "user", type: "user" },
+  );
+}
+
 // --- приёмка (Ф-2-3) ---
 
 // Дифф предложенных изменений: для git-проектов — список файлов (метаданные,

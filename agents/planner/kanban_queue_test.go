@@ -196,7 +196,7 @@ const qaQueueDecompositionJSON = `{
   ]
 }`
 
-// TestKanbanLeadQueueOrderQALast: qalead задачи выполняются после всех задач
+// TestKanbanLeadQueueOrderQALast: задачи qaengineer выполняются после всех задач
 // разработки — в бэклоге из бэкенд- и QA-эпика первым декомпозируется бэкенд,
 // QA-эпик берётся в работу только после завершения задач разработки.
 func TestKanbanLeadQueueOrderQALast(t *testing.T) {

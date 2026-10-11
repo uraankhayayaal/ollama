@@ -17,7 +17,7 @@
                │
 ┌──────────────┴────────────────────────────────────────────────────┐
 │  Агенты (agents/*)                                                │
-│  architect · backendlead · frontendlead · devopslead · qalead     │
+│  architect · backendlead · frontendlead · devopslead · qaengineer     │
 │  developer · devops · qaengineer · codereviewer · chatassist     │
 │  acceptor (детерминированный, без LLM)                            │
 └──────────────┬────────────────────────────────────────────────────┘

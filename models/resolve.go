@@ -10,10 +10,11 @@ import (
 type ProviderName string
 
 const (
-	ProviderOllama ProviderName = "ollama"
-	ProviderAlisa  ProviderName = "yandex"
-	ProviderTrim   ProviderName = "trim"
-	ProviderReg    ProviderName = "reg"
+	ProviderOllama   ProviderName = "ollama"
+	ProviderAlisa    ProviderName = "yandex"
+	ProviderTrim     ProviderName = "trim"
+	ProviderReg      ProviderName = "reg"
+	ProviderLlamaCpp ProviderName = "llama.cpp"
 )
 
 // Selection — выбор провайдера и моделей. Пустые поля означают «взять из
@@ -136,11 +137,11 @@ func ResolveSelection(sel Selection) (*Resolved, error) {
 			provider = NewLayeredProvider(provider, largeProvider)
 		}
 
-	case ProviderAlisa, ProviderTrim, ProviderReg:
+	case ProviderAlisa, ProviderTrim, ProviderReg, ProviderLlamaCpp:
 		provider, err = NewOpenAIProvider(sel.Provider, model, providerCfg)
 
 	default:
-		return nil, fmt.Errorf("unknown provider: %s. Use 'ollama', 'yandex', 'trim' or 'reg'", sel.Provider)
+		return nil, fmt.Errorf("unknown provider: %s. Use 'ollama', 'yandex', 'trim', 'reg' or 'llama.cpp'", sel.Provider)
 	}
 
 	if err != nil {

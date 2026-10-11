@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, rollbackTask, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
+import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, reopenTask, rollbackTask, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, LogStream, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -662,6 +662,26 @@ export function App() {
     await createTaskBranch(BASE, project.project_name, task.task_id);
   };
 
+  // Переоткрытие выполненной задачи на доработку: done -> ready прежнему
+  // исполнителю. Обоснование (body) обязательно; сервер помечает использованные
+  // комментарии учтёнными и возвращает обновлённую задачу.
+  const onTaskReopen = async (task: TaskRow, body: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const next = await reopenTask(BASE, project.project_name, task.task_id, body);
+      setBoard((prev) =>
+        prev
+          ? { ...prev, tasks: prev.tasks.map((x) => (x.task_id === next.task_id ? next : x)) }
+          : prev,
+      );
+    } catch (e) {
+      fail(e);
+      throw e;
+    }
+  };
+
   const onStop = async () => {
     if (!project) {
       return;
@@ -908,6 +928,7 @@ export function App() {
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
                 onTaskRollback={onTaskRollback}
+                onTaskReopen={onTaskReopen}
                 onShowDiff={setDiffContext}
                 onTaskAutoResolve={onTaskAutoResolve}
                 onEpicAutoResolve={onEpicAutoResolve}
@@ -930,6 +951,7 @@ export function App() {
                 onEpicMR={onEpicMR}
                 onTaskMR={onTaskMR}
                 onTaskRollback={onTaskRollback}
+                onTaskReopen={onTaskReopen}
                 onShowDiff={setDiffContext}
                 onTaskAutoResolve={onTaskAutoResolve}
                 onEpicAutoResolve={onEpicAutoResolve}

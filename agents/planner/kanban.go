@@ -28,7 +28,7 @@ const maxKanbanRounds = 100
 // Статусы эпиков и задач единые: новая -> в анализе -> готова к работе ->
 // в работе -> выполнена (или отменена). Переходы валидирует board.ValidateTransition.
 //
-// Лиды направлений (frontendlead/backendlead/devopslead/qalead) НЕ пишут код и
+// Лиды направлений (frontendlead/backendlead/devopslead) НЕ пишут код и
 // НЕ запускают консольные команды: они исследуют существующий код (List/ReadFiles),
 // декомпозируют эпик на задачи для подчинённых (publication через общую доску
 // BoardCreateTask/BoardUpdateTask/BoardDeleteTask) и ревизуют задачи при

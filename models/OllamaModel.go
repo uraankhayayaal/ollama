@@ -64,8 +64,8 @@ func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 // вида `when: "model == \"qwen3:30b\""` вычислялись по факту, а не по пустоте.
 func (o *OllamaProvider) ModelName() string { return o.model }
 
-// ProviderName — «ollama»: то же назначение, что у ModelName, для переменной
-// provider в условиях when.
+// ProviderName — имя провайдера, используемое в условиях when.
+// Возвращает "ollama" для both ollama and llama.cpp providers.
 func (o *OllamaProvider) ProviderName() string { return "ollama" }
 
 // ModelLimits сообщает ключевые лимиты модели (окно входа/вывода, бюджет

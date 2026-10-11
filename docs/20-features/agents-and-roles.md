@@ -12,7 +12,7 @@
 | Backend Lead | `agents/backendlead/` | `backendlead` | Декомпозиция бэкенда |
 | Frontend Lead | `agents/frontendlead/` | `frontendlead` | Декомпозиция UI, стейта, API-контрактов |
 | DevOps Lead | `agents/devopslead/` | `devopslead` | Декомпозиция инфраструктуры |
-| QA Lead | `agents/qalead/` | `qalead` | Тест-план, триаж багов |
+| QA Lead | `agents/qaengineer/` | `qa` | QA-инженер: автотесты, баг-репорты |
 | Разработчик | `agents/developer/` | `backend`, `frontend` | Генерация и правка кода |
 | DevOps-инженер | `agents/devops/` | `devops` | Docker Compose, K8s, CI/CD |
 | QA-инженер | `agents/qaengineer/` | `qa` | Автотесты, баг-репорты |

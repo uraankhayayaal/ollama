@@ -641,6 +641,87 @@ func (s *Store) RemoveTaskComment(ctx context.Context, taskID, cmID string) (Com
 	return out, true, nil
 }
 
+// ReopenTask переоткрывает ВЫПОЛНЕННУЮ задачу на доработку: done -> ready с
+// сохранением прежнего исполнителя (assignee не меняется — дорабатывает тот же
+// специалист). Обоснование обязательно: либо уже добавленные необработанные
+// комментарии задачи, либо новый комментарий reason.Body. Все использованные
+// комментарии помечаются учтёнными (Accounted), поэтому повторно переоткрыть
+// задачу тем же комментарием нельзя — иначе доработка запускалась бы по одному
+// и тому же поводу бесконечно.
+//
+// Переход done -> ready запрещён общим FSM (терминальный статус), но это
+// осознанное действие человека через отдельный эндпоинт (POST .../reopen) с
+// обязательным комментарием; поэтому статус ставится напрямую, минуя
+// ValidateTransition (ср. setEpicTasksStatus для каскадов эпика).
+//
+// Если эпик задачи уже выполнен, он тоже возвращается в ready: иначе
+// оркестратор не увидит переоткрытую задачу в очереди (epicWorkable игнорирует
+// done-эпики).
+//
+// Возвращает обновлённую задачу и число учтённых комментариев.
+func (s *Store) ReopenTask(ctx context.Context, taskID string, reason Comment) (*Task, int, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if t.Status != StatusDone {
+		return nil, 0, fmt.Errorf("board: переоткрыть можно только выполненную задачу (текущий статус %q)", t.Status)
+	}
+
+	accounted := 0
+	// Новый комментарий (если передан) — сам является обоснованием и сразу
+	// учитывается.
+	if body := strings.TrimSpace(reason.Body); body != "" {
+		reason.Body = body
+		reason.TaskID = taskID
+		if strings.TrimSpace(reason.Type) == "" {
+			reason.Type = CommentTypeUser
+		}
+		if strings.TrimSpace(reason.Author) == "" {
+			reason.Author = CommentTypeUser
+		}
+		reason.Normalize()
+		reason.Accounted = true
+		if err := reason.Validate(); err != nil {
+			return nil, 0, err
+		}
+		t.Comments = append(t.Comments, reason)
+		accounted++
+	}
+	// Прочие необработанные комментарии тоже считаются учтёнными этим
+	// переоткрытием: они — часть обоснования доработки.
+	for i := range t.Comments {
+		if t.Comments[i].Accounted {
+			continue
+		}
+		t.Comments[i].Accounted = true
+		accounted++
+	}
+	if accounted == 0 {
+		return nil, 0, fmt.Errorf("board: нельзя переоткрыть задачу без комментария")
+	}
+
+	// Эпик выполнен — возвращаем и его в очередь (см. комментарий к функции).
+	if e, err := s.GetEpic(ctx, t.EpicID); err == nil && e.Status == StatusDone {
+		e.Status = StatusReady
+		if err := s.SaveEpic(ctx, e); err != nil {
+			return nil, 0, err
+		}
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, 0, err
+	}
+
+	t.Status = StatusReady
+	// Хвост прошлого прогона сбрасываем: причина остановки и последняя ошибка
+	// проверки не относятся к новой попытке.
+	t.PauseReason = ""
+	t.LastError = ""
+	if err := s.SaveTask(ctx, t); err != nil {
+		return nil, 0, err
+	}
+	return t, accounted, nil
+}
+
 // PatchTask читает задачу, применяет mutate к её полям и сохраняет результат.
 // Точечное обновление вместо SaveTask вызывающего: State Tracking пишет задачу
 // каждый раунд (агент), а статус меняют человек и оркестратор — общая запись

@@ -72,7 +72,7 @@ func (p *Planner) GetSystemMessages(_ []agents.Message) []agents.Message {
 - qa: единый агент приёмки — собирает проект, запускает автотесты и проверяет логи на ошибки (всегда финальный шаг)
 - devops: инфраструктура — Docker Compose (локально), манифесты Kubernetes (прод), конфигурации CI/CD и Dockerfile
 - devops-lead: проектирование верхнеуровневых конфигураций окружений и декомпозиция инфраструктурных задач на этапы для devops-инженеров
-- qalead: формирование тест-плана и декомпозиция задач тестирования для QA-инженеров
+- qa: формирование тест-плана и декомпозиция задач тестирования для QA-инженеров
 - frontendlead: проектирование клиентской архитектуры, декомпозиция интерфейса на переиспользуемые модули и планирование задач для фронтенд-разработчиков (JSON-декомпозиция)
 - backendlead: верхнеуровневое проектирование бэкенда, декомпозиция на атомарные задачи для бэкенд-разработчиков (JSON-декомпозиция)
 
@@ -88,7 +88,7 @@ func (p *Planner) GetSystemMessages(_ []agents.Message) []agents.Message {
   "steps": [
     {
       "id": "step1",
-      "agent": "backend|frontend|devops|devops-lead|qa|qalead|frontendlead|backendlead",
+      "agent": "backend|frontend|devops|devops-lead|qa|frontendlead|backendlead",
       "prompt": "конкретная инструкция для агента",
       "project_name": "имя_проекта",
       "depends_on": [],

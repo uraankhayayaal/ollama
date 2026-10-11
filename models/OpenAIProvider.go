@@ -29,7 +29,7 @@ type OpenAIProvider struct {
 }
 
 func NewOpenAIProvider(name ProviderName, model string, cfg ProviderConfig) (*OpenAIProvider, error) {
-	if cfg.APIKey == "" {
+	if cfg.APIKey == "" && name != ProviderLlamaCpp {
 		return nil, fmt.Errorf("api_key для провайдера %s не задан в providers.json", name)
 	}
 

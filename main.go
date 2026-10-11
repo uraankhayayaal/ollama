@@ -252,7 +252,7 @@ func main() {
 			}
 		}
 	default:
-		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devopslead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . qalead <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devopslead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Режим планировщика обрабатывается отдельно и до общего прогона:
@@ -381,7 +381,7 @@ func projectFromArgs(args []string) string {
 		return "unnamed"
 	}
 	switch args[1] {
-	case "generate", "backend", "frontend", "devops", "devopslead", "qa", "qalead", "frontendlead", "backendlead", "plan", "kanban", "accept", "index":
+	case "generate", "backend", "frontend", "devops", "devopslead", "qa", "frontendlead", "backendlead", "plan", "kanban", "accept", "index":
 		if len(args) >= 3 && args[2] != "" {
 			return args[2]
 		}
