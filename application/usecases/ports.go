@@ -85,3 +85,9 @@ type RuntimeLogger interface {
 type RoundStateReporter interface {
 	ReportRoundState(domain.RoundState)
 }
+
+// HistoryCompressor — сжимает историю раунда под бюджет контекста. Реализуется
+// инфраструктурой (runner) поверх сжатия/RAG/LSP.
+type HistoryCompressor interface {
+	Compress(ctx context.Context, provider ChatProvider, messages []domain.Message, lastInputTokens int) ([]domain.Message, *CompressionReport)
+}

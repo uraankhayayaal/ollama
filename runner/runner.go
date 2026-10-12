@@ -236,7 +236,32 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		Role:       domain.AgentRole(agentRole(agent)),
 		Reporter:   reporter,
 		Injections: newInjectionApplier(ctx, agent, provider),
-		Compressor: usecases.HistoryCompressorFunc(compressHistoryForRound),
+		Compressor: usecases.HistoryCompressorFunc(func(ctx context.Context, provider usecases.ChatProvider, messages []domain.Message, lastInputTokens int) ([]domain.Message, *usecases.CompressionReport) {
+			// Convert messages to runner.Message for compatibility
+			runnerMessages := make([]Message, len(messages))
+			for i, msg := range messages {
+				runnerMessages[i] = Message{
+					Role:      msg.Role,
+					Content:   msg.Content,
+					ToolCalls: msg.ToolCalls,
+				}
+			}
+			
+			// Call the original function with type conversion
+			compressedMessages, report := compressHistoryForRound(ctx, provider, runnerMessages, lastInputTokens)
+			
+			// Convert back to domain.Message
+			domainMessages := make([]domain.Message, len(compressedMessages))
+			for i, msg := range compressedMessages {
+				domainMessages[i] = domain.Message{
+					Role:      msg.Role,
+					Content:   msg.Content,
+					ToolCalls: msg.ToolCalls,
+				}
+			}
+			
+			return domainMessages, report
+		}),
 		Resume:     resume,
 		Config: usecases.RunConfig{
 			MaxRounds:           maxRounds(),
