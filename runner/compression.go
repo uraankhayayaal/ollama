@@ -11,11 +11,7 @@ package runner
 
 import (
 	"ai/application/usecases"
-	"ai/domain"
 	"context"
-	"fmt"
-	"os"
-	"strconv"
 	"strings"
 )
 
