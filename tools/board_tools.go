@@ -7,6 +7,8 @@ package tools
 
 import (
 	"ai/board"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/logging"
 	"context"
 	"encoding/json"
@@ -78,8 +80,8 @@ func taskSpecProps() map[string]any {
 }
 
 // parseTaskSpec извлекает поля задачи из аргументов (без task_id).
-func parseTaskSpec(args map[string]any) board.TaskSpec {
-	var ts board.TaskSpec
+func parseTaskSpec(args map[string]any) domain.TaskSpec {
+	var ts domain.TaskSpec
 	if v, ok := args["task_id"].(string); ok {
 		ts.TaskID = v
 	}
@@ -89,22 +91,22 @@ func parseTaskSpec(args map[string]any) board.TaskSpec {
 	if v, ok := args["sequence_order"]; ok {
 		switch n := v.(type) {
 		case float64:
-			ts.SequenceOrder = board.FlexInt(int(n))
+			ts.SequenceOrder = int(n)
 		case int:
-			ts.SequenceOrder = board.FlexInt(n)
+			ts.SequenceOrder = n
 		case string:
 			if i, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
-				ts.SequenceOrder = board.FlexInt(i)
+				ts.SequenceOrder = i
 			}
 		}
 	}
 	switch v := args["can_run_parallel"].(type) {
 	case bool:
-		ts.CanRunParallel = board.FlexBool(v)
+		ts.CanRunParallel = v
 	case string:
-		ts.CanRunParallel = board.FlexBool(strings.EqualFold(strings.TrimSpace(v), "true"))
+		ts.CanRunParallel = strings.EqualFold(strings.TrimSpace(v), "true")
 	case float64:
-		ts.CanRunParallel = board.FlexBool(v != 0)
+		ts.CanRunParallel = v != 0
 	}
 	if deps, ok := args["dependencies"].([]any); ok {
 		for _, d := range deps {
@@ -138,8 +140,8 @@ func boardErr(action string, err error) ([]byte, error) {
 // CHAT-001) и, получая в ответ голое «не найдено», продолжает перебирать
 // несуществующие идентификаторы вместо работы. Перечень существующих ID
 // разрывает этот цикл.
-func boardErrStore(action string, b *board.Store, err error) ([]byte, error) {
-	if b != nil && errors.Is(err, board.ErrNotFound) {
+func boardErrStore(action string, b services.BoardStore, err error) ([]byte, error) {
+	if b != nil && errors.Is(err, services.ErrNotFound) {
 		return boardErr(action, errors.New(boardNotFoundMessage(b, err)))
 	}
 	return boardErr(action, err)
@@ -147,7 +149,7 @@ func boardErrStore(action string, b *board.Store, err error) ([]byte, error) {
 
 // boardNotFoundMessage добавляет к ошибке «не найдено» перечни существующих
 // эпиков и задач доски (с ограничением длины, чтобы не съесть контекст модели).
-func boardNotFoundMessage(b *board.Store, err error) string {
+func boardNotFoundMessage(b services.BoardStore, err error) string {
 	ctx := context.Background()
 	var parts []string
 	if epics, e := b.ListEpics(ctx); e == nil && len(epics) > 0 {
@@ -196,7 +198,7 @@ func boardTitle(s string) string {
 
 // --- Чтение ---
 
-type boardListEpicsTool struct{ b *board.Store }
+type boardListEpicsTool struct{ b services.BoardStore }
 
 func (t *boardListEpicsTool) Name() string { return BoardListEpics }
 func (t *boardListEpicsTool) Definition() ToolDefinition {
@@ -218,7 +220,7 @@ func (t *boardListEpicsTool) Execute(args map[string]any) ([]byte, error) {
 	return data, nil
 }
 
-type boardGetEpicTool struct{ b *board.Store }
+type boardGetEpicTool struct{ b services.BoardStore }
 
 func (t *boardGetEpicTool) Name() string { return BoardGetEpic }
 func (t *boardGetEpicTool) Definition() ToolDefinition {
@@ -245,7 +247,7 @@ func (t *boardGetEpicTool) Execute(args map[string]any) ([]byte, error) {
 	return json.Marshal(e)
 }
 
-type boardListTasksTool struct{ b *board.Store }
+type boardListTasksTool struct{ b services.BoardStore }
 
 func (t *boardListTasksTool) Name() string { return BoardListTasks }
 func (t *boardListTasksTool) Definition() ToolDefinition {
@@ -282,7 +284,7 @@ func (t *boardListTasksTool) Execute(args map[string]any) ([]byte, error) {
 	return data, nil
 }
 
-type boardGetTaskTool struct{ b *board.Store }
+type boardGetTaskTool struct{ b services.BoardStore }
 
 func (t *boardGetTaskTool) Name() string { return BoardGetTask }
 func (t *boardGetTaskTool) Definition() ToolDefinition {
@@ -309,7 +311,7 @@ func (t *boardGetTaskTool) Execute(args map[string]any) ([]byte, error) {
 	return json.Marshal(tk)
 }
 
-type boardListBugsTool struct{ b *board.Store }
+type boardListBugsTool struct{ b services.BoardStore }
 
 func (t *boardListBugsTool) Name() string { return BoardListBugs }
 func (t *boardListBugsTool) Definition() ToolDefinition {
@@ -346,7 +348,7 @@ func (t *boardListBugsTool) Execute(args map[string]any) ([]byte, error) {
 	return data, nil
 }
 
-type boardGetBugTool struct{ b *board.Store }
+type boardGetBugTool struct{ b services.BoardStore }
 
 func (t *boardGetBugTool) Name() string { return BoardGetBug }
 func (t *boardGetBugTool) Definition() ToolDefinition {
@@ -375,7 +377,7 @@ func (t *boardGetBugTool) Execute(args map[string]any) ([]byte, error) {
 
 // --- Эпики (CRUD — Системный архитектор) ---
 
-type boardCreateEpicTool struct{ b *board.Store }
+type boardCreateEpicTool struct{ b services.BoardStore }
 
 func (t *boardCreateEpicTool) Name() string { return BoardCreateEpic }
 func (t *boardCreateEpicTool) Definition() ToolDefinition {
@@ -405,7 +407,7 @@ func (t *boardCreateEpicTool) Execute(args map[string]any) ([]byte, error) {
 			return boardErr(BoardCreateEpic, fmt.Errorf("зависимость %q: %w", dep, err))
 		}
 	}
-	epic := &board.Epic{
+	epic := &domain.Epic{
 		TaskSpec:       ts,
 		Summary:        strArg(args, "architecture_summary"),
 		RequiresReview: true, // Ф-8: каждый созданный эпик проходит обязательную ревизию архитектора.
@@ -425,7 +427,7 @@ func (t *boardCreateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	return boardOK(map[string]any{"epic_id": epic.TaskID})
 }
 
-type boardUpdateEpicTool struct{ b *board.Store }
+type boardUpdateEpicTool struct{ b services.BoardStore }
 
 func (t *boardUpdateEpicTool) Name() string { return BoardUpdateEpic }
 func (t *boardUpdateEpicTool) Definition() ToolDefinition {
@@ -473,12 +475,12 @@ func (t *boardUpdateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	if v, ok := args["sequence_order"]; ok {
 		if n, err := flexIntVal(v); err == nil {
-			e.SequenceOrder = board.FlexInt(n)
+			e.SequenceOrder = n
 		}
 	}
 	if v, ok := args["can_run_parallel"]; ok {
 		if b, err := flexBoolVal(v); err == nil {
-			e.CanRunParallel = board.FlexBool(b)
+			e.CanRunParallel = b
 		}
 	}
 	if v, ok := args["dependencies"].([]any); ok {
@@ -511,7 +513,7 @@ func (t *boardUpdateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	return boardOK(map[string]any{"epic_id": e.TaskID, "revision": e.Revision})
 }
 
-type boardDeleteEpicTool struct{ b *board.Store }
+type boardDeleteEpicTool struct{ b services.BoardStore }
 
 func (t *boardDeleteEpicTool) Name() string { return BoardDeleteEpic }
 func (t *boardDeleteEpicTool) Definition() ToolDefinition {
@@ -540,7 +542,7 @@ func (t *boardDeleteEpicTool) Execute(args map[string]any) ([]byte, error) {
 	return boardOK(map[string]any{"deleted": id})
 }
 
-type boardSetEpicStatusTool struct{ b *board.Store }
+type boardSetEpicStatusTool struct{ b services.BoardStore }
 
 func (t *boardSetEpicStatusTool) Name() string { return BoardSetEpicStatus }
 func (t *boardSetEpicStatusTool) Definition() ToolDefinition {
@@ -564,7 +566,7 @@ func (t *boardSetEpicStatusTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	ctx := context.Background()
 	id := strArg(args, "epic_id")
-	st := board.Status(strArg(args, "status"))
+	st := domain.Status(strArg(args, "status"))
 	e, err := t.b.GetEpic(ctx, id)
 	if err != nil {
 		return boardErrStore(BoardSetEpicStatus, t.b, err)
@@ -578,7 +580,7 @@ func (t *boardSetEpicStatusTool) Execute(args map[string]any) ([]byte, error) {
 
 // --- Задачи (CRUD — лиды направлений) ---
 
-type boardCreateTaskTool struct{ b *board.Store }
+type boardCreateTaskTool struct{ b services.BoardStore }
 
 func (t *boardCreateTaskTool) Name() string { return BoardCreateTask }
 func (t *boardCreateTaskTool) Definition() ToolDefinition {
@@ -608,7 +610,7 @@ func (t *boardCreateTaskTool) Execute(args map[string]any) ([]byte, error) {
 		}
 	}
 	epicID := strArg(args, "epic_id")
-	task := &board.Task{
+	task := &domain.Task{
 		TaskSpec: ts,
 		EpicID:   epicID,
 		Assignee: boardAssignee(ts.AssignedRole),
@@ -629,7 +631,7 @@ func boardAssignee(role string) string {
 	return role
 }
 
-type boardUpdateTaskTool struct{ b *board.Store }
+type boardUpdateTaskTool struct{ b services.BoardStore }
 
 func (t *boardUpdateTaskTool) Name() string { return BoardUpdateTask }
 func (t *boardUpdateTaskTool) Definition() ToolDefinition {
@@ -709,12 +711,12 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	if v, ok := args["sequence_order"]; ok {
 		if n, err := flexIntVal(v); err == nil {
-			tk.SequenceOrder = board.FlexInt(n)
+			tk.SequenceOrder = n
 		}
 	}
 	if v, ok := args["can_run_parallel"]; ok {
 		if b, err := flexBoolVal(v); err == nil {
-			tk.CanRunParallel = board.FlexBool(b)
+			tk.CanRunParallel = b
 		}
 	}
 	if raw, ok := args["dependencies"]; ok {
@@ -752,7 +754,10 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 		if err := board.ValidateInjections(list); err != nil {
 			return boardErr(BoardUpdateTask, fmt.Errorf("injections: %w", err))
 		}
-		tk.Injections = list
+		tk.Injections = make([]domain.Injection, len(list))
+		for i, inj := range list {
+			tk.Injections[i] = domain.Injection(inj)
+		}
 		injectionsChanged = true
 	}
 	commentsChanged := false
@@ -767,7 +772,10 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 				return boardErr(BoardUpdateTask, fmt.Errorf("comments: %w", err))
 			}
 		}
-		tk.Comments = cms
+		tk.Comments = make(domain.Comments, len(cms))
+		for i, cm := range cms {
+			tk.Comments[i] = domain.Comment(cm)
+		}
 		commentsChanged = true
 	}
 	if err := t.b.SaveTask(ctx, tk); err != nil {
@@ -786,7 +794,7 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 
 const BoardAddComment = "BoardAddComment"
 
-type boardAddCommentTool struct{ b *board.Store }
+type boardAddCommentTool struct{ b services.BoardStore }
 
 func (t *boardAddCommentTool) Name() string { return BoardAddComment }
 func (t *boardAddCommentTool) Definition() ToolDefinition {
@@ -812,7 +820,7 @@ func (t *boardAddCommentTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	ctx := context.Background()
 	taskID := strArg(args, "task_id")
-	cm := board.Comment{
+	cm := domain.Comment{
 		Author: strArg(args, "author"),
 		Type:   strArg(args, "type"),
 		Body:   strArg(args, "body"),
@@ -825,7 +833,7 @@ func (t *boardAddCommentTool) Execute(args map[string]any) ([]byte, error) {
 	return boardOK(map[string]any{"task_id": taskID, "comments": len(list)})
 }
 
-type boardDeleteTaskTool struct{ b *board.Store }
+type boardDeleteTaskTool struct{ b services.BoardStore }
 
 func (t *boardDeleteTaskTool) Name() string { return BoardDeleteTask }
 func (t *boardDeleteTaskTool) Definition() ToolDefinition {
@@ -854,7 +862,7 @@ func (t *boardDeleteTaskTool) Execute(args map[string]any) ([]byte, error) {
 	return boardOK(map[string]any{"deleted": id})
 }
 
-type boardSetTaskStatusTool struct{ b *board.Store }
+type boardSetTaskStatusTool struct{ b services.BoardStore }
 
 func (t *boardSetTaskStatusTool) Name() string { return BoardSetTaskStatus }
 func (t *boardSetTaskStatusTool) Definition() ToolDefinition {
@@ -879,12 +887,12 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	ctx := context.Background()
 	id := strArg(args, "task_id")
-	st := board.Status(strArg(args, "status"))
+	st := domain.Status(strArg(args, "status"))
 	reason := strings.TrimSpace(strArg(args, "reason"))
 	// «Помощь человека» без причины — загадочный простой: модель обязана
 	// объяснить блокер, иначе человек не поймёт, что ей делать (и зачем вообще
 	// останавливать задачу).
-	if st == board.StatusHumanHelp && reason == "" {
+	if st == domain.StatusHumanHelp && reason == "" {
 		return boardErr(BoardSetTaskStatus, fmt.Errorf("для human_help обязателен reason: опиши, что блокирует задачу (нет исходного кода/зависимостей, внешний блокер и т.п.)"))
 	}
 	tk, err := t.b.GetTask(ctx, id)
@@ -896,10 +904,10 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	// Причина остановки живёт в записи задачи (карточка в UI) и очищается при
 	// выходе из human_help — иначе в карточке висела бы причина прошлой остановки.
-	if st == board.StatusHumanHelp || tk.Status == board.StatusHumanHelp {
-		if perr := t.b.PatchTask(ctx, id, func(cur *board.Task) error {
+	if st == domain.StatusHumanHelp || tk.Status == domain.StatusHumanHelp {
+		if perr := t.b.PatchTask(ctx, id, func(cur *domain.Task) error {
 			cur.PauseReason = ""
-			if st == board.StatusHumanHelp {
+			if st == domain.StatusHumanHelp {
 				if r := []rune(reason); len(r) > 500 {
 					reason = string(r[:500])
 				}
@@ -910,7 +918,7 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 			return boardErrStore(BoardSetTaskStatus, t.b, perr)
 		}
 	}
-	if st == board.StatusHumanHelp && reason != "" {
+	if st == domain.StatusHumanHelp && reason != "" {
 		logging.For(t.b.Project()).Warnf("[задача %s] статус: %s → %s — причина: %s", id, tk.Status.Label(), st.Label(), reason)
 		return boardOK(map[string]any{"task_id": id, "status": string(st), "reason": reason})
 	}
@@ -920,7 +928,7 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 
 // --- Багрепорты ---
 
-type boardCreateBugReportTool struct{ b *board.Store }
+type boardCreateBugReportTool struct{ b services.BoardStore }
 
 func (t *boardCreateBugReportTool) Name() string { return BoardCreateBug }
 func (t *boardCreateBugReportTool) Definition() ToolDefinition {
@@ -946,7 +954,7 @@ func (t *boardCreateBugReportTool) Execute(args map[string]any) ([]byte, error) 
 	if t.b == nil {
 		return boardErr(BoardCreateBug, fmt.Errorf("доска не подключена"))
 	}
-	r := &board.BugReport{
+	r := &domain.BugReport{
 		BugID:        strArg(args, "bug_id"),
 		Title:        strArg(args, "title"),
 		Description:  strArg(args, "description"),
@@ -961,7 +969,7 @@ func (t *boardCreateBugReportTool) Execute(args map[string]any) ([]byte, error) 
 	return boardOK(map[string]any{"bug_id": r.BugID})
 }
 
-type boardSetBugStatusTool struct{ b *board.Store }
+type boardSetBugStatusTool struct{ b services.BoardStore }
 
 func (t *boardSetBugStatusTool) Name() string { return BoardSetBugStatus }
 func (t *boardSetBugStatusTool) Definition() ToolDefinition {
@@ -986,8 +994,8 @@ func (t *boardSetBugStatusTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	ctx := context.Background()
 	id := strArg(args, "bug_id")
-	st := board.BugStatus(strArg(args, "status"))
-	if st != board.BugStatusConfirmed && st != board.BugStatusSlop {
+	st := domain.BugStatus(strArg(args, "status"))
+	if st != domain.BugStatusConfirmed && st != domain.BugStatusSlop {
 		return boardErr(BoardSetBugStatus, fmt.Errorf("QA Lead может ставить только confirmed или slop"))
 	}
 	r, err := t.b.GetBugReport(ctx, id)
@@ -1001,7 +1009,7 @@ func (t *boardSetBugStatusTool) Execute(args map[string]any) ([]byte, error) {
 	return boardOK(map[string]any{"bug_id": id, "status": string(st), "old_status": string(r.Status)})
 }
 
-type boardReviewBugReportTool struct{ b *board.Store }
+type boardReviewBugReportTool struct{ b services.BoardStore }
 
 func (t *boardReviewBugReportTool) Name() string { return BoardReviewBug }
 func (t *boardReviewBugReportTool) Definition() ToolDefinition {
@@ -1049,7 +1057,7 @@ func (t *boardReviewBugReportTool) Execute(args map[string]any) ([]byte, error) 
 		}
 		if _, err := t.b.GetEpic(ctx, epicID); err == nil {
 			return boardErr(BoardReviewBug, fmt.Errorf("эпик %q уже существует — выбери другой epic_task_id", epicID))
-		} else if !errors.Is(err, board.ErrNotFound) {
+		} else if !errors.Is(err, services.ErrNotFound) {
 			return boardErrStore(BoardReviewBug, t.b, err)
 		}
 		ts := parseTaskSpec(epicArgs(args))
@@ -1059,7 +1067,7 @@ func (t *boardReviewBugReportTool) Execute(args map[string]any) ([]byte, error) 
 				return boardErr(BoardReviewBug, fmt.Errorf("зависимость %q: %w", dep, err))
 			}
 		}
-		epic := &board.Epic{
+		epic := &domain.Epic{
 			TaskSpec: ts,
 			Summary:  strArg(args, "epic_architecture_summary"),
 			Revision: 1,
@@ -1074,10 +1082,10 @@ func (t *boardReviewBugReportTool) Execute(args map[string]any) ([]byte, error) 
 	default:
 		return boardErr(BoardReviewBug, fmt.Errorf("неизвестный вердикт %q: используй fix, feature или wont_fix", verdict))
 	}
-	if err := t.b.SetBugStatus(ctx, id, board.BugStatus(verdict)); err != nil {
+	if err := t.b.SetBugStatus(ctx, id, domain.BugStatus(verdict)); err != nil {
 		return boardErrStore(BoardReviewBug, t.b, err)
 	}
-	r.Status = board.BugStatus(verdict)
+	r.Status = domain.BugStatus(verdict)
 	if err := t.b.SaveBugReport(ctx, r); err != nil {
 		return boardErrStore(BoardReviewBug, t.b, err)
 	}

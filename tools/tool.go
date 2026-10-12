@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"ai/board"
+	"ai/domain/services"
 	"ai/gitops"
 )
 
@@ -34,7 +34,7 @@ type Tool interface {
 type Deps struct {
 	FileOps *FileOps
 	Session *ReviewSession
-	Board   *board.Store
+	Board   services.BoardStore
 	RAG     RAGSearcher
 	GitExec gitops.Executor
 }

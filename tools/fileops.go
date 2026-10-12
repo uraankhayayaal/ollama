@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"ai/domain"
 	"ai/forges"
 	"ai/logging"
 	"ai/sandbox"
@@ -1354,8 +1355,8 @@ func runCommandWorkspace(command, workdir string, ws sandbox.Workspace) (map[str
 		"command":    command,
 		"workdir":    workdir,
 		"exit_error": "",
-		"stdout":     SanitizeToolOutput(res.Stdout),
-		"stderr":     SanitizeToolOutput(res.Stderr),
+		"stdout":     domain.SanitizeToolOutput(res.Stdout),
+		"stderr":     domain.SanitizeToolOutput(res.Stderr),
 		// Явно сообщаем модели, где выполнялась команда.
 		"sandbox": string(SandboxModeSession),
 	}
@@ -1521,8 +1522,8 @@ func runCommandSandbox(command, workdir string, sb sandboxConfig) (map[string]st
 		"command":    command,
 		"workdir":    workdir,
 		"exit_error": "",
-		"stdout":     SanitizeToolOutput(stdout.String()),
-		"stderr":     SanitizeToolOutput(stderr.String()),
+		"stdout":     domain.SanitizeToolOutput(stdout.String()),
+		"stderr":     domain.SanitizeToolOutput(stderr.String()),
 		// Явно сообщаем модели, где выполнялась команда. Без этого «песочница»
 		// существует только в коде, а агент (и человек в логе) считает все
 		// запуски изолированными — включая те, что ушли на хост по фолбэку.

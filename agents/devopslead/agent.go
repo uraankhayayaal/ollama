@@ -104,7 +104,7 @@ func (d *DevopsLead) SetBoardStore(s *board.Store) {
 		return
 	}
 	d.Store = s
-	d.Tools = tools.Select(leadToolNames, tools.Deps{FileOps: d.FileOps, Board: s})
+	d.Tools = tools.Select(leadToolNames, tools.Deps{FileOps: d.FileOps, Board: board.NewDomainStore(s)})
 }
 
 func (d *DevopsLead) GetUserMessages() []agents.Message {

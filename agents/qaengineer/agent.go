@@ -60,7 +60,7 @@ func (q *QAEngineer) SetBoardStore(s *board.Store) {
 	}
 	q.Store = s
 	names := append(append([]string{}, qaToolNames...), qaBoardToolNames...)
-	q.Tools = tools.Select(names, tools.Deps{FileOps: q.FileOps, Board: s})
+	q.Tools = tools.Select(names, tools.Deps{FileOps: q.FileOps, Board: board.NewDomainStore(s)})
 }
 
 // NewQAEngineer создаёт QA-инженера в общей для всех агентов выходной папке

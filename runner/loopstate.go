@@ -1,7 +1,7 @@
 package runner
 
 import (
-	"ai/tools"
+	"ai/domain"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -68,7 +68,7 @@ func loopStateFromCall(name string, args map[string]any, result []byte) (state, 
 	}
 
 	var run runResult
-	if err := json.Unmarshal([]byte(tools.SanitizeToolOutput(string(result))), &run); err != nil {
+	if err := json.Unmarshal([]byte(domain.SanitizeToolOutput(string(result))), &run); err != nil {
 		return "", "", ""
 	}
 	if run.Status != "error" {
@@ -145,7 +145,7 @@ func loopIsVerificationCommand(cmd string) bool {
 // ANSI, абсолютные пути, метки времени, тайминги, номера строк и счётчики,
 // схлопывает пустые строки и обрезает до предела.
 func normalizeVerifyOutput(text string) string {
-	s := tools.SanitizeToolOutput(text)
+	s := domain.SanitizeToolOutput(text)
 	s = reAbsPath.ReplaceAllString(s, "/…/")
 	s = reClock.ReplaceAllString(s, "<время>")
 	s = reDuration.ReplaceAllString(s, "<длительность>")

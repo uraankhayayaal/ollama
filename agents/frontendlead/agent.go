@@ -105,7 +105,7 @@ func (l *FrontendLead) SetBoardStore(s *board.Store) {
 		return
 	}
 	l.Store = s
-	l.Tools = tools.Select(frontendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: s})
+	l.Tools = tools.Select(frontendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: board.NewDomainStore(s)})
 }
 
 func (l *FrontendLead) GetUserMessages() []agents.Message {

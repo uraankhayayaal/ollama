@@ -60,7 +60,7 @@ func (d *Devops) SetBoardStore(s *board.Store) {
 	}
 	d.Store = s
 	names := append(append([]string{}, devopsToolNames...), devopsBoardToolNames...)
-	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s})
+	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: board.NewDomainStore(s)})
 }
 
 // Label возвращает человекочитаемое имя агента для чата.

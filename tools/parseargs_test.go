@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"ai/domain"
 	"fmt"
 	"testing"
 )
@@ -63,7 +64,7 @@ func TestSanitizeToolOutput(t *testing.T) {
 		{"пусто", "", ""},
 	}
 	for _, tc := range cases {
-		if got := SanitizeToolOutput(tc.in); got != tc.want {
+		if got := domain.SanitizeToolOutput(tc.in); got != tc.want {
 			t.Fatalf("%s: SanitizeToolOutput(%q) = %q, ожидалось %q", tc.name, tc.in, got, tc.want)
 		}
 	}

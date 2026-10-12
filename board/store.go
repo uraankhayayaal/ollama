@@ -9,14 +9,16 @@ import (
 	"strings"
 	"time"
 
+	"ai/domain"
+
 	"github.com/redis/go-redis/v9"
 )
 
 // ErrNotFound — сущность доски или метаданные не найдены.
-var ErrNotFound = errors.New("запись на доске не найдена")
+var ErrNotFound = domain.ErrNotFound
 
 // ErrExists — запись с таким ID уже есть на доске.
-var ErrExists = errors.New("запись с таким ID уже есть на доске")
+var ErrExists = domain.ErrExists
 
 // ErrDependency — нарушение связей доски (несуществующий эпик/задача в
 // зависимости или ссылке).

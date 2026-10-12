@@ -2,6 +2,7 @@ package runner
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/injections"
 	"ai/runevents"
 	"ai/tools"
@@ -1025,7 +1026,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			// диалога: escape-последовательности терминала и управляющие байты
 			// деформируют JSON-пакеты и роняют разбор аргументов на следующих
 			// раундах (см. runner/sanitize.go).
-			result = []byte(tools.SanitizeToolOutput(string(result)))
+			result = []byte(domain.SanitizeToolOutput(string(result)))
 
 			callCounts[sig]++
 

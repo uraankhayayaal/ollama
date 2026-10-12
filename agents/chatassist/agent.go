@@ -153,7 +153,7 @@ func newAssistant(dir, projectName, prompt string, store *board.Store, ragClient
 		Prompt:      prompt,
 		ProjectName: projectName,
 		RAG:         ragClient,
-		Tools:       tools.Select(assistantToolNames, tools.Deps{FileOps: ops, Board: store, RAG: ragClient}),
+		Tools:       tools.Select(assistantToolNames, tools.Deps{FileOps: ops, Board: board.NewDomainStore(store), RAG: ragClient}),
 		Store:       store,
 		seenCalls:   make(map[string]int),
 	}

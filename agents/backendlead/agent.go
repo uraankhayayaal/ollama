@@ -88,7 +88,7 @@ func (l *BackendLead) SetBoardStore(s *board.Store) {
 		return
 	}
 	l.Store = s
-	l.Tools = tools.Select(backendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: s})
+	l.Tools = tools.Select(backendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: board.NewDomainStore(s)})
 }
 
 // newBackendLead создаёт агента в заданной директории: собирает *tools.FileOps

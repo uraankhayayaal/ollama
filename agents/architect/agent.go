@@ -107,7 +107,7 @@ func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Arch
 		FileOps: ops,
 		Prompt:  prompt,
 		Config:  LoadConfig(),
-		Tools:   tools.Select(toolNames, tools.Deps{FileOps: ops, Board: store}),
+		Tools:   tools.Select(toolNames, tools.Deps{FileOps: ops, Board: board.NewDomainStore(store)}),
 		Store:   store,
 	}
 }
@@ -118,7 +118,7 @@ func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Arch
 func (a *Architect) SetRAG(r tools.RAGSearcher) *Architect {
 	a.RAG = r
 	if a.Store != nil {
-		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, Board: a.Store, RAG: r})
+		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, Board: board.NewDomainStore(a.Store), RAG: r})
 	} else {
 		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, RAG: r})
 	}

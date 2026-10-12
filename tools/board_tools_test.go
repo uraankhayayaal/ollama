@@ -15,7 +15,7 @@ func newBoardToolSet(t *testing.T) (*Set, *board.Store) {
 	t.Helper()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
-	return Select(boardToolNames, Deps{Board: store}), store
+	return Select(boardToolNames, Deps{Board: board.NewDomainStore(store)}), store
 }
 
 // mustExec выполняет инструмент и требует успешный ответ.
@@ -222,7 +222,7 @@ func TestBoardToolsReadOnlyScope(t *testing.T) {
 		BoardListEpics, BoardGetEpic, BoardListTasks, BoardGetTask,
 		BoardListBugs, BoardGetBug,
 	}
-	set := Select(readOnly, Deps{Board: store})
+	set := Select(readOnly, Deps{Board: board.NewDomainStore(store)})
 
 	if out, err := set.Execute(BoardCreateEpic, map[string]any{
 		"task_id": "EPIC-01", "title": "X", "description": "y", "assigned_role": "Backend Lead",
