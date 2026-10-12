@@ -5,15 +5,15 @@ import (
 	"ai/agents/architect"
 	"ai/agents/qaengineer"
 	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
 	"context"
+	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // TestKanbanLeadQueueWaitsUntilTasksDone: декомпозиция идёт по очереди. Пока у
@@ -137,7 +137,7 @@ func (p *queueProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 	}
 }
 
-func (p *queueProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *queueProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

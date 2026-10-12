@@ -4,11 +4,13 @@ import (
 	"ai/agents"
 	"ai/agents/acceptor"
 	"ai/checkpoint"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/alicebob/miniredis/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,8 +18,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // stubProvider — фейковый провайдер, который падает при вызове. Используется,
@@ -39,7 +39,7 @@ func (s *stubProvider) Generate(ctx context.Context, agent agents.Agent) (*runne
 	return &runner.AgentResponse{}, nil
 }
 
-func (s *stubProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (s *stubProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -353,7 +353,7 @@ func (s *roundStubProvider) Generate(ctx context.Context, agent agents.Agent) (*
 	}, nil
 }
 
-func (s *roundStubProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (s *roundStubProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -483,7 +483,7 @@ func (p *rollbackProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 	return nil, fmt.Errorf("агент упал после записи файла")
 }
 
-func (p *rollbackProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *rollbackProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	p.chatCalls++
 	return &runner.ModelReply{}, nil
 }
@@ -578,7 +578,7 @@ func (p *overlapProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 	return &runner.AgentResponse{}, nil
 }
 
-func (p *overlapProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *overlapProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

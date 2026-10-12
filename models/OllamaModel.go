@@ -2,6 +2,7 @@ package models
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/runner"
 	"ai/tools"
 	"context"
@@ -81,8 +82,8 @@ func (o *OllamaProvider) ModelLimits() runner.ModelLimits {
 
 // ChatOnce выполняет один запрос к модели Ollama. Реализуется через ChatStream
 // с убранным потоковым колбэком — поведение сохранено (полный текст ответа).
-func (o *OllamaProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
-	return o.ChatStream(ctx, agent, msgs, nil)
+func (o *OllamaProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
+	return o.ChatStream(ctx, req, nil)
 }
 
 // toolCallRetriesDefault — сколько раз повторяем запрос к модели, если
@@ -155,8 +156,9 @@ func streamIdleInterval() time.Duration {
 // ChatStream выполняет один запрос к модели Ollama в потоковом режиме: фрагменты
 // текста отдаются через onChunk (накопленный Partial), полный текст возвращается
 // в ModelReply. Реализует runner.StreamChatProvider.
-func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msgs []runner.Message, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
-	ollamaTools := agent.GetToolsForOllama()
+func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
+	ollamaTools := tools.ToOllama(req.Tools)
+	msgs := req.Messages
 
 	// Перевод нейтральных сообщений в формат Ollama
 	var messages []api.Message
@@ -205,7 +207,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		options["num_predict"] = o.settings.OutputTokens
 	}
 
-	req := &api.ChatRequest{
+	apiReq := &api.ChatRequest{
 		Model:    o.model,
 		Messages: messages,
 		Tools:    ollamaTools,
@@ -224,7 +226,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 	//     параметр не задаётся — модель работает как настроена. Приоритет у
 	//     числового бюджета.
 	if level := thinkLevelFromTokens(o.settings.ThinkTokens); level != "" {
-		req.Think = &api.ThinkValue{Value: level}
+		apiReq.Think = &api.ThinkValue{Value: level}
 		runner.Debugf("OLLAMA: thinking для модели %q: уровень %q (бюджет %d токенов)", o.model, level, o.settings.ThinkTokens)
 	} else if v := strings.TrimSpace(os.Getenv("OLLAMA_THINK")); v != "" {
 		enabled := true
@@ -232,7 +234,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 		case "0", "false", "off", "no":
 			enabled = false
 		}
-		req.Think = &api.ThinkValue{Value: enabled}
+		apiReq.Think = &api.ThinkValue{Value: enabled}
 		if !enabled {
 			runner.Debugf("OLLAMA: рассуждение (think) отключено для модели %q", o.model)
 		}
@@ -366,7 +368,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, agent agents.Agent, msg
 
 	var err error
 	for attempt := 0; ; attempt++ {
-		err = o.client.Chat(ctx, req, streamFn)
+		err = o.client.Chat(ctx, apiReq, streamFn)
 		if err == nil {
 			break
 		}

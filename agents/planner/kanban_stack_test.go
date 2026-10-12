@@ -4,16 +4,16 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"ai/stackdetect"
 	"context"
+	"github.com/alicebob/miniredis/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // stackProvider — фейковый провайдер, симулирующий архитектора, который
@@ -111,7 +111,7 @@ func (p *stackProvider) architectBacklog(agent agents.Agent) (*runner.AgentRespo
 	return &runner.AgentResponse{Content: ""}, nil
 }
 
-func (p *stackProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *stackProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

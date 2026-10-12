@@ -121,7 +121,14 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 `application/use-cases/`.
 
 1. Создать `application/usecases/`:
-   - `RunTask` — запуск агента по задаче (текущий `runner.Runner`).
+   - `RunTask` — запуск агента по задаче (текущий `runner.Runner`). ⏳ Введён
+     нейтральный LLM-порт: `domain.ChatRequest`/`domain.ToolDefinition`
+     (`domain/chat.go`), `services.LLMClient` переписан на `ChatRequest`;
+     провайдеры (`models/OllamaModel.go`, `models/OpenAIProvider.go`,
+     `models/layered.go`) и `runner.Generate` переведены на него без
+     `agents.Agent` в сигнатуре, `tools.ToolDefinition` — алиас домена,
+     `runner.Compression` больше не создаёт `compactAgent`. Это разблокирует
+     перенос цикла `generate` в `application/usecases`.
    - `CompressHistory` — сжатие контекста (`runner/compress.go`,
      `runner/compression.go`). ✅ Базовый движок (`compress.go`:
      позиционное ядро + Ф-6..Ф-10 пайплайн, `CompressContext`/`CompressOptions`/

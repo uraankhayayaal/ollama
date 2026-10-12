@@ -2,6 +2,7 @@ package models
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/logging"
 	"ai/runner"
 	"context"
@@ -82,6 +83,21 @@ func agentName(agent agents.Agent) string {
 		name = name[i+1:]
 	}
 	return name
+}
+
+// heavyForRequest решает, какой слой нужен раунду по нейтральному запросу:
+// явное требование (req.Heavy/NeedsHeavyModel), эвристика по роли (лиды) или
+// принудительный режим.
+func (l *LayeredProvider) heavyForRequest(req domain.ChatRequest) bool {
+	if llmAlwaysHeavy() {
+		return true
+	}
+	if req.Heavy {
+		return true
+	}
+	// Эвристика: лиды-декомпозиторы получают большую модель по умолчанию
+	// (роль в нижнем регистре, например "backend_lead").
+	return strings.Contains(strings.ToLower(string(req.Role)), "lead")
 }
 
 // Generate выполняет полный агентский цикл на выбранном слое с эскалацией:
@@ -168,31 +184,31 @@ func mergeModelLimits(small, large LLMProvider) runner.ModelLimits {
 // ChatOnce маршрутизирует отдельный запрос по тому же правилу слоёв (без
 // эскалации раунда — финальные решения принимает Generate). Используется,
 // когда провайдера зовут напрямую как ChatProvider.
-func (l *LayeredProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
+func (l *LayeredProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
 	layer := l.Small
-	if l.heavyFor(agent) || heavyForContext(ctx) {
+	if l.heavyForRequest(req) || heavyForContext(ctx) {
 		layer = l.Large
 	}
 	cp, ok := layer.(runner.ChatProvider)
 	if !ok {
 		return nil, fmt.Errorf("слой %T не является ChatProvider", layer)
 	}
-	return cp.ChatOnce(ctx, agent, msgs)
+	return cp.ChatOnce(ctx, req)
 }
 
 // ChatStream — потоковая версия ChatOnce для слоёв: делегирует выбранному слою,
 // если тот поддерживает стриминг, иначе fallback на разовый ChatOnce.
-func (l *LayeredProvider) ChatStream(ctx context.Context, agent agents.Agent, msgs []runner.Message, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
+func (l *LayeredProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
 	layer := l.Small
-	if l.heavyFor(agent) || heavyForContext(ctx) {
+	if l.heavyForRequest(req) || heavyForContext(ctx) {
 		layer = l.Large
 	}
 	if sp, ok := layer.(runner.StreamChatProvider); ok {
-		return sp.ChatStream(ctx, agent, msgs, onChunk)
+		return sp.ChatStream(ctx, req, onChunk)
 	}
 	cp, ok := layer.(runner.ChatProvider)
 	if !ok {
 		return nil, fmt.Errorf("слой %T не является ChatProvider", layer)
 	}
-	return cp.ChatOnce(ctx, agent, msgs)
+	return cp.ChatOnce(ctx, req)
 }

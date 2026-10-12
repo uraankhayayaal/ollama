@@ -2,13 +2,13 @@ package models
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/runner"
 	"ai/tools"
 	"context"
+	"github.com/ollama/ollama/api"
 	"strings"
 	"testing"
-
-	"github.com/ollama/ollama/api"
 )
 
 // layerStub — минимальный провайдер-слой для тестов LayeredProvider.
@@ -43,7 +43,7 @@ func (s *layerStub) Generate(ctx context.Context, agent agents.Agent) (*runner.A
 	return &runner.AgentResponse{Content: "ответ_" + s.name}, nil
 }
 
-func (s *layerStub) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (s *layerStub) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -57,7 +57,7 @@ func (a *testAgent) GetSystemMessages(text []agents.Message) []agents.Message {
 	return []agents.Message{{Type: agents.MessageTypeSystem, Message: "ты агент"}}
 }
 func (a *testAgent) GetTools() []tools.ToolDefinition { return nil }
-func (a *testAgent) GetToolsForOllama() []api.Tool     { return nil }
+func (a *testAgent) GetToolsForOllama() []api.Tool    { return nil }
 func (a *testAgent) CallFunction(string, map[string]any) ([]byte, error) {
 	return []byte("ok"), nil
 }

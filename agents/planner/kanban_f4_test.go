@@ -4,17 +4,17 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // fakeAskTool — герметичный аналог серверного моста askTool{Session} для
@@ -89,7 +89,7 @@ func (p *askFirstProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 	}
 }
 
-func (p *askFirstProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *askFirstProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -156,7 +156,7 @@ func (p *autonomyProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 	}
 }
 
-func (p *autonomyProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *autonomyProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

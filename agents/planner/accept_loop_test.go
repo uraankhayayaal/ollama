@@ -3,6 +3,7 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -39,7 +40,7 @@ func (s *fixPlanProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 	return &runner.AgentResponse{}, nil
 }
 
-func (s *fixPlanProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (s *fixPlanProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

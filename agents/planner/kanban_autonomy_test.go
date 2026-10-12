@@ -4,22 +4,21 @@ package planner
 // персистентная эскалация модели на уровне задачи и конечный бюджет.
 
 import (
+	"ai/agents"
+	"ai/agents/architect"
+	"ai/board"
+	"ai/domain"
+	"ai/models"
+	"ai/projects"
+	"ai/runner"
+	"ai/tools"
 	"context"
+	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"ai/agents"
-	"ai/agents/architect"
-	"ai/board"
-	"ai/models"
-	"ai/projects"
-	"ai/runner"
-	"ai/tools"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // --- watchdog по heartbeat ---
@@ -251,7 +250,7 @@ func (p *heavyProbeProvider) Generate(ctx context.Context, agent agents.Agent) (
 	}
 }
 
-func (p *heavyProbeProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *heavyProbeProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

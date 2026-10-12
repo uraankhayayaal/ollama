@@ -1,14 +1,14 @@
 package runner
 
 import (
+	"ai/agents"
+	"ai/board"
+	"ai/domain"
+	"ai/tools"
 	"context"
 	"errors"
 	"strings"
 	"testing"
-
-	"ai/agents"
-	"ai/board"
-	"ai/tools"
 )
 
 // injSourceAgent — агент с инъекциями уровня assistant (интерфейс
@@ -403,11 +403,12 @@ type namedRecordingProvider struct {
 	provider string
 }
 
-func (p *namedRecordingProvider) ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error) {
+func (p *namedRecordingProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*ModelReply, error) {
+	messages := req.Messages
 	cp := make([]Message, len(messages))
 	copy(cp, messages)
 	p.received = append(p.received, cp)
-	return p.fakeChatProvider.ChatOnce(ctx, agent, messages)
+	return p.fakeChatProvider.ChatOnce(ctx, req)
 }
 
 func (p *namedRecordingProvider) ModelName() string    { return p.model }

@@ -4,19 +4,19 @@
 package planner
 
 import (
-	"context"
-	"os"
-	"testing"
-
 	"ai/agents"
 	"ai/agents/qaengineer"
 	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"ai/runevents"
 	"ai/runner"
 	"ai/tokens"
 	"ai/tools"
+	"context"
 	"github.com/alicebob/miniredis/v2"
+	"os"
+	"testing"
 )
 
 // scopeProvider — провайдер, который в каждом раунде эмитит расход токенов.
@@ -289,8 +289,8 @@ func (p *tokenEchoProvider) Generate(ctx context.Context, agent agents.Agent) (*
 	return (&kanbanProvider{}).Generate(ctx, agent)
 }
 
-func (p *tokenEchoProvider) ChatOnce(ctx context.Context, a agents.Agent, m []runner.Message) (*runner.ModelReply, error) {
-	return (&kanbanProvider{}).ChatOnce(ctx, a, m)
+func (p *tokenEchoProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
+	return (&kanbanProvider{}).ChatOnce(ctx, req)
 }
 
 // TestTokenAccountingEndToEnd прогоняет полный цикл Kanban и проверяет, что

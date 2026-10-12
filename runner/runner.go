@@ -30,9 +30,10 @@ type ModelReply = domain.ModelReply
 // Usage — фактическое потребление токенов одного запроса к модели.
 type Usage = domain.Usage
 
-// ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели.
+// ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели по
+// нейтральному domain.ChatRequest (без привязки к agents.Agent).
 type ChatProvider interface {
-	ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error)
+	ChatOnce(ctx context.Context, req domain.ChatRequest) (*ModelReply, error)
 }
 
 // StreamChunk — фрагмент потокового ответа модели. Partial содержит НАКОПЛЕННЫЙ
@@ -45,23 +46,15 @@ type StreamChunk = domain.StreamChunk
 // горутины, что и ChatStream, до возврата результата. Провайдеры без стрима
 // остаются реализацией только ChatProvider — runner использует fallback.
 type StreamChatProvider interface {
-	ChatStream(ctx context.Context, agent agents.Agent, messages []Message, onChunk func(StreamChunk)) (*ModelReply, error)
+	ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(StreamChunk)) (*ModelReply, error)
 }
 
 // ModelLimits — ключевые лимиты модели, известные провайдеру ДО запроса.
 // Позволяют раннеру держать входной контекст в пределах окна даже без явных
 // настроек сжатия (CODEGEN_HISTORY_*): разросшаяся история агентского цикла
 // не должна ронять запрос ошибкой провайдера «exceeds available context size».
-type ModelLimits struct {
-	// InputTokens — размер входного окна контекста (n_ctx / num_ctx).
-	// 0 — провайдер не сообщает окно (сжатие только по явным настройкам).
-	InputTokens int
-	// OutputTokens — лимит генерации (num_predict / max_completion_tokens).
-	// 0 — неизвестен; резервируется доля окна.
-	OutputTokens int
-	// ThinkTokens — бюджет цепочки рассуждения (thinking). 0 — не задан.
-	ThinkTokens int
-}
+// Тип принадлежит домену (domain.ModelLimits); здесь — алиас.
+type ModelLimits = domain.ModelLimits
 
 // ModelLimitsProvider — опциональное расширение ChatProvider: сообщает лимиты
 // модели для авто-ограничения истории диалога перед каждым раундом.
@@ -316,6 +309,22 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// Контекст для условий when и шаблонов инъекций.
 	injCtx := injectionMergeContext(ctx, agent, provider)
 
+	// Нейтральный ChatRequest раунда: роль, инструменты, обязательный инструмент
+	// и признак тяжёлого слоя фиксируются один раз по агенту; в цикле меняется
+	// только Messages. Так провайдеры не знают об agents.Agent.
+	reqTools := agent.GetTools()
+	reqRole := domain.AgentRole(agentRole(agent))
+	var reqForceTool string
+	if tr, ok := agent.(ToolRequiringAgent); ok {
+		if n, yes := tr.RequiredToolFirstRound(); yes {
+			reqForceTool = n
+		}
+	}
+	reqHeavy := false
+	if h, ok := agent.(interface{ NeedsHeavyModel() bool }); ok && h.NeedsHeavyModel() {
+		reqHeavy = true
+	}
+
 	startRound := 0
 	if resume != nil {
 		startRound = resume.Rounds
@@ -522,15 +531,22 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// Финальное OnMessage с полным текстом приходит в обоих случаях ниже.
 		var reply *ModelReply
 		var err error
+		chatReq := domain.ChatRequest{
+			Role:          reqRole,
+			Messages:      request,
+			Tools:         reqTools,
+			ForceToolName: reqForceTool,
+			Heavy:         reqHeavy,
+		}
 		if sp, ok := provider.(StreamChatProvider); ok {
 			streamID := fmt.Sprintf("stream-%d", round+1)
-			reply, err = sp.ChatStream(ctx, agent, request, func(ch StreamChunk) {
+			reply, err = sp.ChatStream(ctx, chatReq, func(ch StreamChunk) {
 				if rep != nil && ch.Partial != "" {
 					rep.OnMessageDelta(streamID, ch.Partial)
 				}
 			})
 		} else {
-			reply, err = provider.ChatOnce(ctx, agent, request)
+			reply, err = provider.ChatOnce(ctx, chatReq)
 		}
 		if err != nil {
 			return nil, err

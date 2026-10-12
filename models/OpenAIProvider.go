@@ -2,6 +2,7 @@ package models
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/runner"
 	"ai/tools"
 	"context"
@@ -85,9 +86,10 @@ func (p *OpenAIProvider) ModelLimits() runner.ModelLimits {
 	}
 }
 
-func (p *OpenAIProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
-	oaTools := make([]openai.ChatCompletionToolParam, 0, len(agent.GetTools()))
-	for _, t := range agent.GetTools() {
+func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
+	msgs := req.Messages
+	oaTools := make([]openai.ChatCompletionToolParam, 0, len(req.Tools))
+	for _, t := range req.Tools {
 		oaTools = append(oaTools, openai.ChatCompletionToolParam{
 			Function: shared.FunctionDefinitionParam{
 				Name:        t.Name,
@@ -133,16 +135,14 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 	}
 
 	if p.forceTool {
-		if req, ok := agent.(runner.ToolRequiringAgent); ok {
-			if name, yes := req.RequiredToolFirstRound(); yes && name != "" && !hasToolResult(msgs) {
-				toolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-					OfChatCompletionNamedToolChoice: &openai.ChatCompletionNamedToolChoiceParam{
-						Type: constant.Function("function"),
-						Function: openai.ChatCompletionNamedToolChoiceFunctionParam{
-							Name: name,
-						},
+		if name := req.ForceToolName; name != "" && !hasToolResult(msgs) {
+			toolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfChatCompletionNamedToolChoice: &openai.ChatCompletionNamedToolChoiceParam{
+					Type: constant.Function("function"),
+					Function: openai.ChatCompletionNamedToolChoiceFunctionParam{
+						Name: name,
 					},
-				}
+				},
 			}
 		}
 	}
@@ -151,11 +151,9 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs 
 	if maxTokens <= 0 {
 		maxTokens = 8000
 	}
-	if req, ok := agent.(runner.ToolRequiringAgent); ok {
-		if name, yes := req.RequiredToolFirstRound(); yes && name != "" && !hasToolResult(msgs) {
-			if maxTokens < bigWriteTokens {
-				maxTokens = bigWriteTokens
-			}
+	if name := req.ForceToolName; name != "" && !hasToolResult(msgs) {
+		if maxTokens < bigWriteTokens {
+			maxTokens = bigWriteTokens
 		}
 	}
 

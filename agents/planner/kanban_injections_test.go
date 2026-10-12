@@ -1,18 +1,17 @@
 package planner
 
 import (
-	"context"
-	"os"
-	"strings"
-	"testing"
-
 	"ai/agents"
 	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
-
+	"context"
 	"github.com/alicebob/miniredis/v2"
+	"os"
+	"strings"
+	"testing"
 )
 
 // injCapturingProvider — фейковый провайдер, который запоминает, что увидел
@@ -32,10 +31,14 @@ type injCapturingProvider struct {
 	specialistRounds      int
 }
 
-func (p *injCapturingProvider) ChatOnce(ctx context.Context, agent agents.Agent, msgs []runner.Message) (*runner.ModelReply, error) {
+func (p *injCapturingProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
+	msgs := req.Messages
 	var umsg string
-	if us := agent.GetUserMessages(); len(us) > 0 {
-		umsg = us[0].Message
+	for _, m := range msgs {
+		if m.Role == "user" {
+			umsg = m.Content
+			break
+		}
 	}
 	if strings.HasPrefix(umsg, "Ты — специалист") {
 		var sb strings.Builder

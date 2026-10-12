@@ -5,6 +5,7 @@ package planner
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
@@ -33,7 +34,7 @@ func (p *lspWriteProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 	return &runner.AgentResponse{}, nil
 }
 
-func (p *lspWriteProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *lspWriteProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -43,7 +44,7 @@ type lspNoopProvider struct{}
 func (p *lspNoopProvider) Generate(_ context.Context, _ agents.Agent) (*runner.AgentResponse, error) {
 	return &runner.AgentResponse{}, nil
 }
-func (p *lspNoopProvider) ChatOnce(_ context.Context, _ agents.Agent, _ []runner.Message) (*runner.ModelReply, error) {
+func (p *lspNoopProvider) ChatOnce(_ context.Context, _ domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

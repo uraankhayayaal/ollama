@@ -2,14 +2,14 @@ package runner
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/tools"
 	"context"
 	"fmt"
+	"github.com/ollama/ollama/api"
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/ollama/ollama/api"
 )
 
 // fakeAgent — минимальная реализация agents.Agent для тестов.
@@ -62,7 +62,7 @@ type fakeChatProvider struct {
 	calls   int
 }
 
-func (f *fakeChatProvider) ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error) {
+func (f *fakeChatProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*ModelReply, error) {
 	idx := f.calls
 	if idx >= len(f.replies) {
 		idx = len(f.replies) - 1
@@ -211,9 +211,9 @@ func TestGenerateReadScopeErrorSatisfiesRequiredGroup(t *testing.T) {
 	}
 	provider := &fakeChatProvider{
 		replies: []*ModelReply{
-			{ToolCalls: []tools.ToolCall{{Name: "List", Arguments: `{}`}}, FinishReason: "tool_calls"},                                                                       // раунд 1: List (пусто)
-			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: `{"filenames":["README.md"]}`}}, FinishReason: "tool_calls"},                                         // раунд 2: scope-ошибка
-			{Content: `{"tasks":[]}`, FinishReason: "stop"},                                                                                                                  // раунд 3: итоговая декомпозиция
+			{ToolCalls: []tools.ToolCall{{Name: "List", Arguments: `{}`}}, FinishReason: "tool_calls"},                               // раунд 1: List (пусто)
+			{ToolCalls: []tools.ToolCall{{Name: "ReadFiles", Arguments: `{"filenames":["README.md"]}`}}, FinishReason: "tool_calls"}, // раунд 2: scope-ошибка
+			{Content: `{"tasks":[]}`, FinishReason: "stop"},                                                                          // раунд 3: итоговая декомпозиция
 		},
 	}
 
@@ -241,11 +241,12 @@ type recordingProvider struct {
 	received [][]Message
 }
 
-func (r *recordingProvider) ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error) {
+func (r *recordingProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*ModelReply, error) {
+	messages := req.Messages
 	cp := make([]Message, len(messages))
 	copy(cp, messages)
 	r.received = append(r.received, cp)
-	return r.fakeChatProvider.ChatOnce(ctx, agent, messages)
+	return r.fakeChatProvider.ChatOnce(ctx, req)
 }
 
 // varyingToolProvider каждый раунд просит один и тот же инструмент с РАЗНЫМИ
@@ -255,7 +256,7 @@ type varyingToolProvider struct {
 	calls int
 }
 
-func (v *varyingToolProvider) ChatOnce(ctx context.Context, agent agents.Agent, messages []Message) (*ModelReply, error) {
+func (v *varyingToolProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*ModelReply, error) {
 	n := v.calls
 	v.calls++
 	return &ModelReply{

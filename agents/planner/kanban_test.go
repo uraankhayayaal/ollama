@@ -5,15 +5,15 @@ import (
 	"ai/agents/architect"
 	"ai/agents/qaengineer"
 	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
 	"context"
+	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // kanbanProvider — фейковый провайдер, симулирующий модель на всех этапах
@@ -63,7 +63,7 @@ func (p *kanbanProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 	}
 }
 
-func (p *kanbanProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *kanbanProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 

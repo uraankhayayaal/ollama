@@ -1,7 +1,7 @@
 package runner
 
 import (
-	"ai/agents"
+	"ai/domain"
 	"ai/runevents"
 	"ai/tools"
 	"context"
@@ -15,11 +15,11 @@ type streamProvider struct {
 	chunks []string
 }
 
-func (p *streamProvider) ChatOnce(context.Context, agents.Agent, []Message) (*ModelReply, error) {
+func (p *streamProvider) ChatOnce(context.Context, domain.ChatRequest) (*ModelReply, error) {
 	return nil, nil // при стриме не должен вызываться
 }
 
-func (p *streamProvider) ChatStream(_ context.Context, _ agents.Agent, _ []Message, onChunk func(StreamChunk)) (*ModelReply, error) {
+func (p *streamProvider) ChatStream(_ context.Context, _ domain.ChatRequest, onChunk func(StreamChunk)) (*ModelReply, error) {
 	acc := ""
 	for _, c := range p.chunks {
 		acc += c
@@ -74,11 +74,11 @@ func TestGenerateStreamsWhenProviderSupports(t *testing.T) {
 // truncated (флаг приходит в OnMessage).
 type streamTruncatedProvider struct{}
 
-func (p *streamTruncatedProvider) ChatOnce(context.Context, agents.Agent, []Message) (*ModelReply, error) {
+func (p *streamTruncatedProvider) ChatOnce(context.Context, domain.ChatRequest) (*ModelReply, error) {
 	return nil, nil
 }
 
-func (p *streamTruncatedProvider) ChatStream(_ context.Context, _ agents.Agent, _ []Message, onChunk func(StreamChunk)) (*ModelReply, error) {
+func (p *streamTruncatedProvider) ChatStream(_ context.Context, _ domain.ChatRequest, onChunk func(StreamChunk)) (*ModelReply, error) {
 	onChunk(StreamChunk{Partial: "обрыв"})
 	return &ModelReply{Content: "обрыв", FinishReason: "length"}, nil
 }

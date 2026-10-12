@@ -10,16 +10,13 @@ package runner
 // Сервисы, потому что это позволяет не плодить копии.
 
 import (
-	"ai/agents"
 	"ai/application/usecases"
-	"ai/tools"
+	"ai/domain"
 	"context"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/ollama/ollama/api"
 )
 
 // historyBudget возвращает символьный бюджет истории (CODEGEN_HISTORY_BUDGET,
@@ -107,21 +104,9 @@ const compactSystemPrompt = "Ты — модуль компакции конте
 	"работы: только факты, принятые решения, затронутые файлы и ничем не закрытые задачи. " +
 	"Не рассуждай, не пересказывай код целиком и не добавляй вымышленных деталей. Максимум 150 слов."
 
-// compactAgent — нейтральный агент для вызова ChatOnce в компакции: не является
-// ToolRequiringAgent и не отдаёт инструменты, поэтому провайдеры не форсируют
-// tool_choice (только текст резюме).
-type compactAgent struct{}
-
-func (compactAgent) GetSystemMessages([]agents.Message) []agents.Message { return nil }
-func (compactAgent) GetUserMessages() []agents.Message                   { return nil }
-func (compactAgent) GetTools() []tools.ToolDefinition                    { return nil }
-func (compactAgent) GetToolsForOllama() []api.Tool                       { return nil }
-func (compactAgent) CallFunction(string, map[string]any) ([]byte, error) {
-	return nil, fmt.Errorf("компакция: вызовы инструментов запрещены")
-}
-
 // providerCompactor — абстрактивная компакция (Ф-10) через ChatOnce циклового
-// провайдера. Нейтральный агент исключает форсирование инструментов.
+// провайдера. Нейтральный запрос (без инструментов и без форсирования вызова)
+// исключает вызовы инструментов в ответе компактора.
 type providerCompactor struct {
 	p ChatProvider
 }
@@ -134,7 +119,7 @@ func (c *providerCompactor) Compact(ctx context.Context, text string) (string, e
 		{Role: "system", Content: compactSystemPrompt},
 		{Role: "user", Content: text},
 	}
-	reply, err := c.p.ChatOnce(ctx, compactAgent{}, msgs)
+	reply, err := c.p.ChatOnce(ctx, domain.ChatRequest{Messages: msgs})
 	if err != nil {
 		return "", err
 	}

@@ -4,14 +4,14 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/board"
+	"ai/domain"
+	"ai/projects"
 	"ai/runner"
 	"context"
-	"strings"
-	"testing"
-
-	"ai/projects"
 	"github.com/alicebob/miniredis/v2"
 	"os"
+	"strings"
+	"testing"
 )
 
 // loopedProvider повторяет поведение kanbanProvider (архитектор публикует
@@ -44,7 +44,7 @@ func (p *loopedProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 	}
 }
 
-func (p *loopedProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *loopedProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -165,6 +165,6 @@ func (p *architectLoopProvider) Generate(ctx context.Context, agent agents.Agent
 	}, nil
 }
 
-func (p *architectLoopProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *architectLoopProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }

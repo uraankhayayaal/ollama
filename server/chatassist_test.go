@@ -1,6 +1,15 @@
 package server
 
 import (
+	"ai/agents"
+	"ai/agents/chatassist"
+	"ai/board"
+	"ai/chat"
+	"ai/domain"
+	"ai/injections"
+	"ai/runner"
+	"ai/tools"
+	"ai/workspace"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -12,15 +21,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"ai/agents"
-	"ai/agents/chatassist"
-	"ai/board"
-	"ai/chat"
-	"ai/injections"
-	"ai/runner"
-	"ai/tools"
-	"ai/workspace"
 )
 
 // qaStubProvider — заглушка LLM-провайдера для runChatAssistant.
@@ -79,7 +79,7 @@ type scriptedChatProvider struct {
 	calls   int
 }
 
-func (c *scriptedChatProvider) ChatOnce(_ context.Context, _ agents.Agent, _ []runner.Message) (*runner.ModelReply, error) {
+func (c *scriptedChatProvider) ChatOnce(_ context.Context, _ domain.ChatRequest) (*runner.ModelReply, error) {
 	idx := c.calls
 	if idx >= len(c.replies) {
 		idx = len(c.replies) - 1

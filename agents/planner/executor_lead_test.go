@@ -4,6 +4,7 @@ import (
 	"ai/agents"
 	"ai/agents/backendlead"
 	"ai/agents/frontendlead"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -45,7 +46,7 @@ func (p *leadDecompProvider) Generate(ctx context.Context, agent agents.Agent) (
 	return &runner.AgentResponse{Content: "задача выполнена", Rounds: 1}, nil
 }
 
-func (p *leadDecompProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *leadDecompProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -169,6 +170,6 @@ func (t *textProvider) Generate(ctx context.Context, agent agents.Agent) (*runne
 	return &runner.AgentResponse{Content: "не понял задачи, отвечаю текстом", Rounds: 1}, nil
 }
 
-func (t *textProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (t *textProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }

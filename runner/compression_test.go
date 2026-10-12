@@ -1,7 +1,7 @@
 package runner
 
 import (
-	"ai/agents"
+	"ai/domain"
 	"ai/tools"
 	"context"
 	"errors"
@@ -202,7 +202,7 @@ func TestCompressContextOutlineCompactNotice(t *testing.T) {
 	}
 
 	out, rep := CompressContext(context.Background(), msgs, CompressOptions{
-		Budget: 10,
+		Budget:  10,
 		Compact: true,
 		CompactFn: func(ctx context.Context, text string) (string, error) {
 			gotText = text
@@ -331,7 +331,7 @@ type limitsProvider struct {
 }
 
 func (p *limitsProvider) ModelLimits() ModelLimits { return p.limits }
-func (p *limitsProvider) ChatOnce(_ context.Context, _ agents.Agent, _ []Message) (*ModelReply, error) {
+func (p *limitsProvider) ChatOnce(_ context.Context, _ domain.ChatRequest) (*ModelReply, error) {
 	return nil, nil
 }
 

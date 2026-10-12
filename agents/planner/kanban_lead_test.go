@@ -4,16 +4,16 @@ import (
 	"ai/agents"
 	"ai/agents/backendlead"
 	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"ai/runner"
 	"context"
 	"errors"
+	"github.com/alicebob/miniredis/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // leadFailProvider — на «Декомпозируй эпик» провайдер падает: 5.4 должен
@@ -31,7 +31,7 @@ func (p *leadFailProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 	return &runner.AgentResponse{Content: "Задача выполнена."}, nil
 }
 
-func (p *leadFailProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *leadFailProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
@@ -53,7 +53,7 @@ func (p *leadCaptureProvider) Generate(ctx context.Context, agent agents.Agent) 
 	return &runner.AgentResponse{Content: "Задача выполнена."}, nil
 }
 
-func (p *leadCaptureProvider) ChatOnce(context.Context, agents.Agent, []runner.Message) (*runner.ModelReply, error) {
+func (p *leadCaptureProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
 	return &runner.ModelReply{}, nil
 }
 
