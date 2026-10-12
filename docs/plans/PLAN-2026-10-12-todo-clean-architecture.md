@@ -1,6 +1,6 @@
 # PLAN-2026-10-12 — Рефакторинг по Clean Architecture
 
-**Статус:** В работе (этапы 1–2 завершены; этап 3 начат — `application/usecases` содержит политику отпечатка проверки и детектор петель `loop.go`; run-типы унифицированы в `domain`)
+**Статус:** В работе (этапы 1–2 завершены; этап 3 начат — `application/usecases` содержит политику отпечатка проверки и детектор петель `loop.go`, чистые политики цикла `policy.go`; run-типы и оценка токенов унифицированы в `domain`)
 
 ## Проблема
 
@@ -125,7 +125,10 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
    - `CompressHistory` — сжатие контекста (`runner/compress.go`,
      `runner/compression.go`).
    - `BreakLoop` — обнаружение и вмешательство в петли (`runner/loop.go`,
-     `runner/loopstate.go`).
+     `runner/loopstate.go`). ✅ `loop.go` перенесён; `policy.go` содержит
+     чистые политики цикла (подсказки модели, разбор NEED_*, классификация
+     провала инструмента, пороговые константы), `domain/tokens.go` — оценку
+     токенов; `runner` делегирует в них тонкими алиасами.
    - `Escalate` — эскалация при исчерпании бюджета (`agents/planner/kanban*.go`).
 2. `runner` становится тонким адаптером к `application` (как `server` к
    `application`).

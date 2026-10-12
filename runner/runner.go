@@ -7,17 +7,13 @@ import (
 	"ai/injections"
 	"ai/runevents"
 	"ai/tools"
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"unicode"
 )
 
 // AgentResponse содержит ответ модели и все выполненные вызовы функций.
@@ -73,60 +69,12 @@ type ModelLimitsProvider interface {
 	ModelLimits() ModelLimits
 }
 
-// EstimateTextTokens — грубая оценка количества токенов в тексте без словаря
-// токенизатора (проект использует разные LLM — Ollama, Yandex, OpenAI-совместимые).
-// Ориентир: ~4 символа на токен для ASCII/латиницы и более плотные языки
-// (кириллица кодируется токенами чаще), поэтому оценка берёт максимум между
-// «символьной» (len/4) и «словесной» (words × 1.25) эвристиками.
-func EstimateTextTokens(s string) int {
-	if s == "" {
-		return 0
-	}
-	chars := 0
-	words := 0
-	inWord := false
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			inWord = false
-			continue
-		}
-		chars++
-		if !inWord {
-			words++
-			inWord = true
-		}
-	}
-	if chars == 0 {
-		return 0
-	}
-	byChars := chars/4 + 1
-	byWords := words + words/4 + 1
-	if byChars > byWords {
-		return byChars
-	}
-	return byWords
-}
+// EstimateTextTokens — алиас domain.EstimateTextTokens (см. domain/tokens.go).
+func EstimateTextTokens(s string) int { return domain.EstimateTextTokens(s) }
 
-// EstimateUsage оценивает токены раунда, когда провайдер не сообщает
-// фактический usage: вход — вся история сообщений диалога (включая аргументы
-// вызовов инструментов), выход — ответ модели (текст и аргументы tool_calls).
+// EstimateUsage — алиас domain.EstimateUsage (см. domain/tokens.go).
 func EstimateUsage(messages []Message, reply *ModelReply) (in, out int) {
-	for _, m := range messages {
-		in += EstimateTextTokens(m.Content)
-		if m.Role == "tool" {
-			in += 4 // служебные токены tool-сообщения (tool_call_id и пр.)
-		}
-		for _, tc := range m.ToolCalls {
-			in += EstimateTextTokens(tc.Name) + EstimateTextTokens(tc.Arguments)
-		}
-	}
-	if reply != nil {
-		out += EstimateTextTokens(reply.Content)
-		for _, tc := range reply.ToolCalls {
-			out += EstimateTextTokens(tc.Name) + EstimateTextTokens(tc.Arguments)
-		}
-	}
-	return in, out
+	return domain.EstimateUsage(messages, reply)
 }
 
 // ToolRequiringAgent — необязательный интерфейс агента, требующего успешного
@@ -215,156 +163,49 @@ func maxRounds() int {
 	return defaultMaxRounds
 }
 
-// nudgeMessage формулирует подсказку модели, если она не выполнила
-// обязательное действие (не вызвала обязательный инструмент) и ответила
-// текстом.
-func nudgeMessage(toolName string) string {
-	return fmt.Sprintf("Ты ответил текстом, но не выполнил обязательное действие: инструмент %q не был успешно вызван. Немедленно вызови %q с нужными аргументами. Не отвечай текстом.", toolName, toolName)
-}
+// nudgeMessage — алиас usecases.NudgeMessage (политика цикла в application).
+func nudgeMessage(toolName string) string { return usecases.NudgeMessage(toolName) }
 
-// retryMessage — подсказка после неудачной попытки обязательного инструмента
-// (например, инструмент вернул ошибки аргументов/доступа). Модель должна
-// повторить вызов, пока он не завершится успешно.
-func retryMessage(toolName string) string {
-	return fmt.Sprintf("Инструмент %q вернул ошибки (вероятно, некорректные аргументы или действие вне допустимого). Проверь и повтори вызов %q ДО успешного результата. Не отвечай текстом.", toolName, toolName)
-}
+// retryMessage — алиас usecases.RetryMessage.
+func retryMessage(toolName string) string { return usecases.RetryMessage(toolName) }
 
-// maxRepeatedToolCalls — порог повторения одного и того же вызова инструмента
-// (имя + аргументы), после которого раннер подсказывает модели остановить
-// цикл. Защищает от бесконечного «исследования»: модель, не получив ничего
-// нового (например, лид в пустом проекте), начинает в цикле звать одни и те
-// же инструменты, сжигая раунды до лимита (REVIEW_MAX_ROUNDS) и роняя шаг
-// «исчерпан лимит раундов» вместо завершения декомпозицией.
-const maxRepeatedToolCalls = 4
+// Пороговые константы политики цикла (реализация — application/usecases/policy.go).
+const (
+	maxRepeatedToolCalls      = usecases.MaxRepeatedToolCalls
+	maxRepeatedToolFails      = usecases.MaxRepeatedToolFails
+	maxNeedRefills            = usecases.MaxNeedRefills
+	requiredProgressAfter     = usecases.RequiredProgressAfter
+	requiredProgressEvery     = usecases.RequiredProgressEvery
+	maxRequiredProgressNudges = usecases.MaxRequiredProgressNudges
+)
 
-// maxRepeatedToolFails — порог неудачных вызовов ОДНОГО инструмента за цикл
-// (независимо от аргументов), после которого раннер подсказывает модели
-// переключиться. Отличается от maxRepeatedToolCalls (повтор одной и той же
-// сигнатуры): модель, «перебирающая» аргументы в цикле ошибок (например,
-// архитектор, повторно создающий уже существующие эпики), каждый раз меняет
-// аргументы, и сигнатурный определитель её не ловит. Пока не сработает,
-// раунды сжигаются до лимита (REVIEW_MAX_ROUNDS) впустую.
-const maxRepeatedToolFails = 4
+// ContextSupplier — алиас usecases.ContextFetcher.
+type ContextSupplier = usecases.ContextFetcher
 
-// maxNeedRefills — сколько раз за цикл раннер может «дозаправить» контекст по
-// маркерам NEED_* в финальном ответе модели, прежде чем принять его как есть.
-// Ограничение защищает от бесконечной петли «модель просит контекст → раннер
-// добавляет → модель просит снова».
-const maxNeedRefills = 2
+// NeedContextTargets — алиас usecases.NeedContextTargets.
+func NeedContextTargets(content string) []string { return usecases.NeedContextTargets(content) }
 
-// ContextSupplier — необязательный интерфейс агента, умеющего отдавать
-// компактный контекст «по требованию» (карта кода / диапазон строк): карты
-// кода экономят контекст, а дозаправка не даёт модели галлюцинировать
-// недостающие сигнатуры. Реализуется встроенным в агентов *tools.FileOps
-// (FetchContext), поэтому методы промотируются автоматически.
-type ContextSupplier interface {
-	// FetchContext возвращает компактный контекст по цели вида
-	// "path/to/file.go" (карта кода), "path/to/file.go:20-45" или
-	// "path/to/file.go 20-45" (интервал строк). false — цель нераспознана.
-	FetchContext(target string) (string, bool)
-}
-
-// needContextRe — регулярное выражение маркеров дозаправки контекста в
-// текстовом ответе модели: NEED_CONTEXT / NEED_SIGNATURE / NEED_FILE с целью
-// (путь и, опционально, интервал строк) до конца строки.
-var needContextRe = regexp.MustCompile(`(?m)(?:NEED_CONTEXT|NEED_SIGNATURE|NEED_FILE)\s*[:：]?\s*([^\r\n]+)`)
-
-// NeedContextTargets извлекает цели дозаправки контекста (маркеры NEED_*) из
-// ответа модели. Возвращает уникальные цели в порядке появления.
-func NeedContextTargets(content string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, m := range needContextRe.FindAllStringSubmatch(content, -1) {
-		t := strings.TrimSpace(m[1])
-		if t == "" || seen[t] {
-			continue
-		}
-		seen[t] = true
-		out = append(out, t)
-	}
-	return out
-}
-
-// needContextPull запрашивает у агента (если он реализует ContextSupplier)
-// компактный контекст для каждой цели дозаправки из финального ответа.
-// Возвращает карту «цель → контекст» и true, если запросили хотя бы один.
+// needContextPull — алиас usecases.NeedContextPull.
 func needContextPull(agent agents.Agent, content string) (map[string]string, bool) {
-	supplier, ok := agent.(ContextSupplier)
-	if !ok {
-		return nil, false
-	}
-	targets := NeedContextTargets(content)
-	if len(targets) == 0 {
-		return nil, false
-	}
-	pulled := make(map[string]string, len(targets))
-	for _, t := range targets {
-		if txt, ok := supplier.FetchContext(t); ok {
-			pulled[t] = txt
-		}
-	}
-	return pulled, len(pulled) > 0
+	return usecases.NeedContextPull(agent, content)
 }
 
-// contextRefillMessage составляет системное сообщение с дозаправленным
-// контекстом (что модель запросила маркерами NEED_*). Детерминированный
-// порядок целей — по алфавиту.
+// contextRefillMessage — алиас usecases.ContextRefillMessage.
 func contextRefillMessage(pulled map[string]string) string {
-	keys := make([]string, 0, len(pulled))
-	for k := range pulled {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	b.WriteString("Система дозаправила контекст по твоим маркерам NEED_*. Используй только эти данные и заверши задачу итоговым ответом; НЕ повторяй маркеры NEED_*.\n\n")
-	for _, k := range keys {
-		fmt.Fprintf(&b, "--- %s ---\n%s\n", k, pulled[k])
-	}
-	return b.String()
+	return usecases.ContextRefillMessage(pulled)
 }
 
-// loopMessage — подсказка модели при детекции повторяющихся вызовов.
-func loopMessage(toolName string, n int) string {
-	return fmt.Sprintf("Ты уже %d раз вызвал инструмент %q с одинаковыми аргументами — это повторяющийся цикл. Прекрати его: опирайся на уже полученные результаты и заверши работу итоговым ответом по требуемой схеме (не вызывая повторно те же инструменты).", n, toolName)
-}
+// loopMessage — алиас usecases.LoopMessage.
+func loopMessage(toolName string, n int) string { return usecases.LoopMessage(toolName, n) }
 
-// requiredProgressAfter — сколько раундов цикла может пройти без успешно
-// выполненной обязательной группы инструментов, прежде чем раннер начнёт
-// возвращать модель к публикации результата. Детекторы повтора (одинаковая
-// сигнатура) и провалов (один инструмент error'ит) здесь не помогают: лид
-// направления может до самого лимита раундов читать проект РАЗНЫМИ вызовами
-// (List, ReadFiles, ReadMap по разным файлам) и не создать ни одной задачи —
-// эпик остаётся пустым, специалистам нечего брать в работу, а оркестрация
-// «зависает» на декомпозиции.
-const requiredProgressAfter = 5
-
-// requiredProgressEvery — периодичность повторных подсказок (в раундах) после
-// первой (requiredProgressAfter). Ограничено maxRequiredProgressNudges, чтобы
-// не раздувать историю и не «заболтать» модель.
-const requiredProgressEvery = 4
-
-// maxRequiredProgressNudges — максимум подсказок «обязательное действие не
-// выполнено» за один цикл.
-const maxRequiredProgressNudges = 4
-
-// progressNudgeMessage — подсказка модели, что обязательное действие всё ещё
-// не выполнено, хотя раунды цикла уже потрачены на исследование.
+// progressNudgeMessage — алиас usecases.ProgressNudgeMessage.
 func progressNudgeMessage(toolName string, round, total, nudge int) string {
-	return fmt.Sprintf("Раунд %d из %d: обязательное действие %q до сих пор не выполнено успешно (напоминание %d из %d). Исследования достаточно — опирайся на уже полученные данные и НЕМЕДЛЕННО вызови %q с реальными аргументами, доведя вызов до успешного результата. Только после этого завершай работу итоговым ответом.",
-		round, total, toolName, nudge, maxRequiredProgressNudges, toolName)
+	return usecases.ProgressNudgeMessage(toolName, round, total, nudge)
 }
 
-// toolFailMessage — подсказка модели, когда один и тот же инструмент много раз
-// подряд возвращает ошибку (аргументы могут меняться). Модель должна
-// перестать перебирать провальные варианты: проверить состояние, сменить
-// инструмент/данные или, если есть обязательное действие, выполнить его.
+// toolFailMessage — алиас usecases.ToolFailMessage.
 func toolFailMessage(toolName string, n int, required string) string {
-	msg := fmt.Sprintf("Инструмент %q %d раз подряд возвращает ошибку — не повторяй его с теми же аргументами и не перебирай их варианты наугад: проверь актуальное состояние (результатами инструментов), используй другой инструмент/другие данные или заверши работу по требуемой схеме.", toolName, n)
-	if required != "" {
-		msg += fmt.Sprintf(" Обязательное действие не выполнено: вызови %q с корректными аргументами до успешного результата.", required)
-	}
-	return msg
+	return usecases.ToolFailMessage(toolName, n, required)
 }
 
 // Параллельное выполнение инструментов (parallel tool calling).
@@ -420,36 +261,9 @@ type toolOutcome struct {
 	err    error
 }
 
-// toolResultFailed признаёт выполнение инструмента неудачным, если результат
-// помечен ошибкой ("status":"error"). Пустой результат ("status":"empty") —
-// неудача ТОЛЬКО для пишущих инструментов (WriteFiles и др.), где это
-// означает «ничего не создано». Для исследовательских инструментов (List,
-// ReadFiles) пустой каталог/файл — нормальный успешный результат чтения,
-// иначе раннер будет вечно подсказывать «вызови List ДО успешного результата»
-// при работе на пустом проекте.
-//
-// Аналогично, пер-файловые ошибки ReadFiles/List ("файл вне области работы
-// (scope)", "файл не существует") — не неудача инструмента, а информативный
-// результат: scope шага фиксирован, «успешного» повторного чтения не
-// существует, а принудительные повторы лишь сжигают раунды и роняют шаг по
-// лимиту. Для пишущих инструментов такие ошибки по-прежнему означают
-// «ничего не сделано» и требуют повтора.
+// toolResultFailed — алиас usecases.ToolResultFailed (политика в application).
 func toolResultFailed(toolName string, result []byte) bool {
-	if bytes.Contains(result, []byte(`"status":"error"`)) {
-		switch toolName {
-		case "List", "ReadFiles":
-			return false
-		}
-		return true
-	}
-	if bytes.Contains(result, []byte(`"status":"empty"`)) {
-		switch toolName {
-		case "List", "ReadFiles":
-			return false
-		}
-		return true
-	}
-	return false
+	return usecases.ToolResultFailed(toolName, result)
 }
 
 // Generate выполняет агентский цикл: отправляет диалог модели, исполняет
