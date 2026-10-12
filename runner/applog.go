@@ -25,6 +25,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"ai/application/usecases"
 )
 
 const (
@@ -50,12 +52,8 @@ const (
 // накопленный инструментом ReadAppLogs. Реализуется *tools.FileOps (встроен в
 // агентов-разработчиков, QA и DevOps через внедрённый *tools.FileOps), поэтому
 // подключается сам собой — как AutoFixer.
-type RuntimeLogger interface {
-	// TakeAppLogTail забирает и очищает накопленные строки логов рантайма.
-	// «Забирает» — чтобы один и тот же лог не подмешивался в двух раундах
-	// подряд (иначе модель зациклится на одном и том же тексте).
-	TakeAppLogTail() (source string, lines []string)
-}
+// RuntimeLogger — порт агента с хвостом логов рантайма (usecases.RuntimeLogger).
+type RuntimeLogger = usecases.RuntimeLogger
 
 // appLogFeedEnabled сообщает, включено ли подмешивание логов рантайма.
 func appLogFeedEnabled() bool {

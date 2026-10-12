@@ -29,12 +29,8 @@ type RoundState = domain.RoundState
 // RoundStateReporter — необязательный интерфейс агента для записи состояния
 // задачи на доску (Ф-6). Реализует агент-разработчик поверх board.Store.
 // Отсутствие интерфейса — не ошибка: доска просто не знает runtime-состояния.
-type RoundStateReporter interface {
-	// ReportRoundState вызывается один раз на раунд, ПОСЛЕ промежуточного
-	// коммита (в том же хуке TakeTouched). Ошибки не возвращаются: запись
-	// состояния не должна ронять генерацию.
-	ReportRoundState(RoundState)
-}
+// RoundStateReporter — порт агента, пишущего состояние раунда (usecases).
+type RoundStateReporter = usecases.RoundStateReporter
 
 // RoundStateErrorText — короткое описание упавшей проверки для last_error
 // задачи. Экспортируется: агент-репортёр пишет это в запись задачи на доске.

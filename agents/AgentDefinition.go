@@ -1,9 +1,26 @@
 package agents
 
 import (
+	"ai/domain"
 	"ai/tools"
 
 	"github.com/ollama/ollama/api"
+)
+
+// Message — алиас доменного типа (domain.AgentMessage): промпт-сообщение
+// агента. MessageType и константы тоже принадлежат домену.
+type Message = domain.AgentMessage
+
+// MessageType — тип агентского сообщения.
+type MessageType = domain.MessageType
+
+const (
+	MessageTypeAI       = domain.MessageTypeAI
+	MessageTypeHuman    = domain.MessageTypeHuman
+	MessageTypeSystem   = domain.MessageTypeSystem
+	MessageTypeGeneric  = domain.MessageTypeGeneric
+	MessageTypeFunction = domain.MessageTypeFunction
+	MessageTypeTool     = domain.MessageTypeTool
 )
 
 type Agent interface {
@@ -13,19 +30,3 @@ type Agent interface {
 	GetToolsForOllama() []api.Tool
 	CallFunction(functionName string, functionArgs map[string]any) ([]byte, error)
 }
-
-type MessageType string
-
-type Message struct {
-	Type    MessageType
-	Message string
-}
-
-const (
-	MessageTypeAI       MessageType = "ai"
-	MessageTypeHuman    MessageType = "human"
-	MessageTypeSystem   MessageType = "system"
-	MessageTypeGeneric  MessageType = "generic"
-	MessageTypeFunction MessageType = "function"
-	MessageTypeTool     MessageType = "tool"
-)

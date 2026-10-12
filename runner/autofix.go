@@ -17,7 +17,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"ai/application/usecases"
 )
+
+// AutoFixer — порт агента с очередью затронутых файлов и LSP-диагностикой
+// (usecases.AutoFixer).
+type AutoFixer = usecases.AutoFixer
 
 const (
 	autoFixOnEnv        = "LSP_AUTO_FIX"
@@ -31,16 +37,6 @@ const (
 // дренит очередь РОВНО ОДИН раз за раунд; полученный список раннер раздаёт
 // включённым хукам — авто-лечению (LspCheckFiles) и переиндексации RAG
 // (Reindexer) — чтобы хуки не конкурировали за одну очередь.
-type AutoFixer interface {
-	// TakeTouched забирает и очищает очередь файлов, затронутых мутацией
-	// с прошлого вызова.
-	TakeTouched() []string
-	// LspCheckFiles выполняет LspCheck по явному списку файлов и возвращает
-	// строки диагностик ("file:line:col: message"). hadMutation=true, если
-	// список непуст (файлы менялись).
-	LspCheckFiles(files []string) (diagnostics []string, hadMutation bool)
-}
-
 // autoFixEnabled сообщает, включено ли авто-самоисправление (LSP_AUTO_FIX).
 func autoFixEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(autoFixOnEnv))) {

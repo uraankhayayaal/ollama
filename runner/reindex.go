@@ -29,22 +29,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"ai/application/usecases"
 	"ai/rag"
 )
 
 // reindexOnEnv — env-флаг авто-обновления RAG-индекса после мутаций (Ф-5).
 const reindexOnEnv = "RAG_AUTO_REINDEX"
 
-// Reindexer — необязательный интерфейс агента для частичной переиндексации
-// RAG (Ф-5). Реализуется агентами-разработчиками: переданный список файлов
-// (из единой очереди touched, дренированной раннером) перечитывается из
-// OutputDir и заново грузится в векторную память.
-type Reindexer interface {
-	// ReindexTouched переиндексирует файлы, затронутые мутацией за раунд.
-	// Возвращает число успешно переиндексированных файлов; ошибка (например,
-	// недоступный Qdrant) — degrade: логируется, шаг не падает.
-	ReindexTouched(touched []string) (reindexed int, err error)
-}
+// Reindexer — порт агента для частичной переиндексации RAG (usecases.Reindexer).
+type Reindexer = usecases.Reindexer
 
 // ReindexClient — узкий интерфейс векторной памяти, необходимый для
 // переиндексации (Ф-5). Реализуется *rag.Client.

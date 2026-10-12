@@ -23,6 +23,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"ai/application/usecases"
 )
 
 // wipCommitOnEnv — env-флаг промежуточных коммитов (KANBAN_WIP_COMMIT).
@@ -38,12 +40,8 @@ const wipCommitFilesMax = 12
 // (Ф-6). Реализуется агентами-разработчиками поверх gitops.Repo рабочего
 // каталога. Отказываться от реализации можно молча: без неё промежуточные
 // коммиты просто не делаются, поведение прежнее.
-type WIPCommitter interface {
-	// CommitRoundTouched фиксирует изменения раунда и возвращает SHA коммита.
-	// committed=false — дерево оказалось чистым (ошибки при этом быть не
-	// должно: очистка дерева агентом тоже должна попасть в историю).
-	CommitRoundTouched(touched []string, round int) (sha string, committed bool, err error)
-}
+// WIPCommitter — порт агента для фиксации правок раунда (usecases.WIPCommitter).
+type WIPCommitter = usecases.WIPCommitter
 
 // wipCommitEnabled сообщает, включены ли промежуточные коммиты.
 func wipCommitEnabled() bool {

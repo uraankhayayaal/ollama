@@ -30,37 +30,22 @@ type ModelReply = domain.ModelReply
 // Usage — фактическое потребление токенов одного запроса к модели.
 type Usage = domain.Usage
 
-// ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели по
-// нейтральному domain.ChatRequest (без привязки к agents.Agent).
-type ChatProvider interface {
-	ChatOnce(ctx context.Context, req domain.ChatRequest) (*ModelReply, error)
-}
+// ChatProvider, StreamChatProvider, ModelLimitsProvider — порты LLM,
+// определённые в application/usecases (см. usecases/ports.go); здесь алиасы
+// для обратной совместимости пакета runner.
+type ChatProvider = usecases.ChatProvider
 
-// StreamChunk — фрагмент потокового ответа модели. Partial содержит НАКОПЛЕННЫЙ
-// текст (от начала ответа до текущего фрагмента), чтобы клиенты могли просто
-// перезаписывать сообщение, а не склеивать куски. Тип принадлежит домену.
+// StreamChunk — фрагмент потокового ответа модели (принадлежит домену).
 type StreamChunk = domain.StreamChunk
 
-// StreamChatProvider — опциональное расширение ChatProvider: отдаёт текст
-// ответа по кускам через onChunk. onChunk вызывается синхронно из той же
-// горутины, что и ChatStream, до возврата результата. Провайдеры без стрима
-// остаются реализацией только ChatProvider — runner использует fallback.
-type StreamChatProvider interface {
-	ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(StreamChunk)) (*ModelReply, error)
-}
+// StreamChatProvider — опциональное потоковое расширение ChatProvider.
+type StreamChatProvider = usecases.StreamChatProvider
 
-// ModelLimits — ключевые лимиты модели, известные провайдеру ДО запроса.
-// Позволяют раннеру держать входной контекст в пределах окна даже без явных
-// настроек сжатия (CODEGEN_HISTORY_*): разросшаяся история агентского цикла
-// не должна ронять запрос ошибкой провайдера «exceeds available context size».
-// Тип принадлежит домену (domain.ModelLimits); здесь — алиас.
+// ModelLimits — алиас domain.ModelLimits.
 type ModelLimits = domain.ModelLimits
 
-// ModelLimitsProvider — опциональное расширение ChatProvider: сообщает лимиты
-// модели для авто-ограничения истории диалога перед каждым раундом.
-type ModelLimitsProvider interface {
-	ModelLimits() ModelLimits
-}
+// ModelLimitsProvider — опциональный порт лимитов модели (usecases).
+type ModelLimitsProvider = usecases.ModelLimitsProvider
 
 // EstimateTextTokens — алиас domain.EstimateTextTokens (см. domain/tokens.go).
 func EstimateTextTokens(s string) int { return domain.EstimateTextTokens(s) }
@@ -70,32 +55,11 @@ func EstimateUsage(messages []Message, reply *ModelReply) (in, out int) {
 	return domain.EstimateUsage(messages, reply)
 }
 
-// ToolRequiringAgent — необязательный интерфейс агента, требующего успешного
-// вызова определённого инструмента за цикл (например,
-// submit_architecture_backlog у архитектора). Требование трактуется как группа
-// обязательных инструментов (см. RequiredToolGroupsAgent): предварительные
-// чтения и уточняющие вопросы (AskUser) до обязательного вызова разрешены
-// (Р-5, PLAN-wip-architect-intelligence). Если модель завершила ответ ТЕКСТОМ, не
-// выполнив требование, — раннер повторит запрос с подсказкой.
-type ToolRequiringAgent interface {
-	// RequiredToolFirstRound возвращает имя инструмента, обязательного к
-	// успешному вызову за цикл, и true, если требование активно.
-	RequiredToolFirstRound() (string, bool)
-}
+// ToolRequiringAgent — порт агента с обязательным инструментом за цикл.
+type ToolRequiringAgent = usecases.ToolRequiringAgent
 
-// RequiredToolGroupsAgent — необязательный интерфейс агента, который требует,
-// чтобы за цикл успешно выполнился хотя бы ОДИН инструмент из КАЖДОЙ
-// обязательной группы. Используется лидами направлений: они обязаны изучить
-// существующий код (List, ReadFiles) и опубликовать задачи для подчинённых
-// (BoardCreateTask/BoardUpdateTask/BoardDeleteTask). Если модель ответила
-// текстом, не выполнив очередную группу, — раннер подскажет недостающий
-// инструмент и повторит запрос.
-type RequiredToolGroupsAgent interface {
-	// RequiredToolGroups возвращает группы инструментов, обязательных к
-	// успешному вызову за цикл. Каждая группа выполняется, если успешно
-	// вызван хотя бы один её инструмент. Пустой список — требований нет.
-	RequiredToolGroups() [][]string
-}
+// RequiredToolGroupsAgent — порт агента с обязательными группами инструментов.
+type RequiredToolGroupsAgent = usecases.RequiredToolGroupsAgent
 
 // ResumeState — точка возобновления агентского цикла после лимита раундов:
 // полная история диалога и количество уже потраченных раундов. Собирается
