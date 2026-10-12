@@ -2,6 +2,7 @@ package runner
 
 import (
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/domain"
 	"ai/injections"
 	"ai/runevents"
@@ -1032,8 +1033,8 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 
 			Debugf("RUNNER: результат инструмента %q: %s", j.tc.Name, Truncate(string(result), 500))
 			failed := toolResultFailed(j.tc.Name, result)
-			state, stateSample, stateLabel := loopStateFromCall(j.tc.Name, j.args, result)
-			vcmd := verifyCommandOf(j.tc.Name, j.args)
+			state, stateSample, stateLabel := usecases.LoopStateFromCall(j.tc.Name, j.args, result)
+			vcmd := usecases.VerifyCommandOf(j.tc.Name, j.args)
 			loopCalls = append(loopCalls, loopRoundCall{
 				name:        j.tc.Name,
 				sig:         sig,
@@ -1043,7 +1044,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				state:       state,
 				stateSample: stateSample,
 				stateLabel:  stateLabel,
-				verify:      vcmd != "" && loopIsVerificationCommand(vcmd),
+				verify:      vcmd != "" && usecases.LoopIsVerificationCommand(vcmd),
 				verifyCmd:   vcmd,
 				blocked:     blocked,
 			})

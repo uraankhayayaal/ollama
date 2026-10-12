@@ -1,4 +1,4 @@
-package runner
+package usecases
 
 import (
 	"ai/domain"
@@ -59,11 +59,11 @@ var (
 	reBlank = regexp.MustCompile(`\n{2,}`)
 )
 
-// loopStateFromCall превращает результат вызова инструмента в семантический
+// LoopStateFromCall превращает результат вызова инструмента в семантический
 // отпечаток состояния. Непустой результат означает «проверка упала».
-func loopStateFromCall(name string, args map[string]any, result []byte) (state, sample, label string) {
-	cmd := verifyCommandOf(name, args)
-	if cmd == "" || !loopIsVerificationCommand(cmd) {
+func LoopStateFromCall(name string, args map[string]any, result []byte) (state, sample, label string) {
+	cmd := VerifyCommandOf(name, args)
+	if cmd == "" || !LoopIsVerificationCommand(cmd) {
 		return "", "", ""
 	}
 
@@ -80,19 +80,19 @@ func loopStateFromCall(name string, args map[string]any, result []byte) (state, 
 	if text == "" {
 		text = "проверка завершилась с ошибкой без вывода"
 	}
-	return verifyIdentity(cmd), normalizeVerifyOutput(text), cmd
+	return VerifyIdentity(cmd), NormalizeVerifyOutput(text), cmd
 }
 
-// verifyCommandOf достаёт команду проверки из аргументов вызова инструмента.
+// VerifyCommandOf достаёт команду проверки из аргументов вызова инструмента.
 // Только Run: остальные инструменты проверками не являются.
-func verifyCommandOf(name string, args map[string]any) string {
+func VerifyCommandOf(name string, args map[string]any) string {
 	if name != "Run" || args == nil {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(args["command"]))
 }
 
-// verifyIdentity приводит команду проверки к каноническому виду: убирает
+// VerifyIdentity приводит команду проверки к каноническому виду: убирает
 // префикс `cd <каталог> &&` (рабочие каталоги у разных запусков разные),
 // конвейер после первого `|` (grep/tail/head подкручиваются каждым раундом —
 // именно этим петля и маскировалась), перенаправления потоков и флаги;
@@ -100,7 +100,7 @@ func verifyCommandOf(name string, args map[string]any) string {
 //
 //	cd frontend && npm test -- --run src/pages/Login.test.tsx 2>&1 | grep -B5 -A30 "FAIL"
 //	  → cd … && npm test src/pages/Login.test.tsx
-func verifyIdentity(cmd string) string {
+func VerifyIdentity(cmd string) string {
 	head, _, _ := strings.Cut(cmd, "|")
 	head = strings.TrimSpace(head)
 
@@ -123,10 +123,10 @@ func verifyIdentity(cmd string) string {
 	return strings.Join(out, " ")
 }
 
-// loopIsVerificationCommand отличает проверочную команду (тесты, сборка, линт,
+// LoopIsVerificationCommand отличает проверочную команду (тесты, сборка, линт,
 // типы) от произвольной работы вроде git или ls. Именно по падению проверки
 // судят, что проект не чинится.
-func loopIsVerificationCommand(cmd string) bool {
+func LoopIsVerificationCommand(cmd string) bool {
 	lower := strings.ToLower(cmd)
 	for _, token := range []string{
 		"test", "tests", "spec", "jest", "vitest", "playwright", "cypress",
@@ -141,10 +141,10 @@ func loopIsVerificationCommand(cmd string) bool {
 	return false
 }
 
-// normalizeVerifyOutput приводит вывод проверки к каноническому виду: убирает
+// NormalizeVerifyOutput приводит вывод проверки к каноническому виду: убирает
 // ANSI, абсолютные пути, метки времени, тайминги, номера строк и счётчики,
 // схлопывает пустые строки и обрезает до предела.
-func normalizeVerifyOutput(text string) string {
+func NormalizeVerifyOutput(text string) string {
 	s := domain.SanitizeToolOutput(text)
 	s = reAbsPath.ReplaceAllString(s, "/…/")
 	s = reClock.ReplaceAllString(s, "<время>")
@@ -171,18 +171,18 @@ func normalizeVerifyOutput(text string) string {
 // отпечаток и в текст вмешательства.
 const loopVerifySampleLines = 12
 
-// loopVerifyInjection — сообщение принудительного вмешательства: почему харнес
+// LoopVerifyInjection — сообщение принудительного вмешательства: почему харнес
 // считает, что проверка не двигается, что он заблокировал и что делать вместо
 // повторного запуска. identity показывается отдельной строкой, чтобы модель
 // видела: одинаковым был не текст вывода (grep меняет его каждый раунд), а сам
 // запуск проверки.
-func loopVerifyInjection(label, identity, sample string, runs int) string {
+func LoopVerifyInjection(label, identity, sample string, runs int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "ВНИМАНИЕ ХАРНЕСА: ты уже %d раундов подряд запускаешь одну и ту же проверку, и она падает.\n", runs)
 	fmt.Fprintf(&b, "Проверка: %s\n", label)
 	fmt.Fprintf(&b, "Что именно повторяется: %s\n", identity)
 	b.WriteString("Суть ошибки (нормализованная — пути и номера строк приведены к общему виду):\n")
-	b.WriteString(Truncate(sample, 1200))
+	b.WriteString(truncate(sample, 1200))
 	b.WriteString("\n\n")
 	b.WriteString("Это не «не повезло»: твои правки не меняют результат этой проверки, а менять фильтр вывода (grep, tail, -A/-B, номер строки) — не решение. Не запускай её снова: харнес заблокирует повторный запуск.\n")
 	b.WriteString("Смени стратегию:\n")
@@ -193,4 +193,13 @@ func loopVerifyInjection(label, identity, sample string, runs int) string {
 	b.WriteString("5. Раздели проверку на части (например, только один тест) и найди минимальный воспроизводящий случай.\n")
 	b.WriteString("Внеси правку в причину, а не в симптом, и только затем запусти проверку снова.\n")
 	return b.String()
+}
+
+// truncate обрезает длинную строку для текста вмешательства (как runner.Truncate,
+// но без зависимости внутреннего слоя от внешнего).
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + fmt.Sprintf("...(%d байт всего)", len(s))
 }

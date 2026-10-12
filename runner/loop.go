@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ai/application/usecases"
 	"ai/tools"
 )
 
@@ -201,7 +202,7 @@ type loopDetector struct {
 	// строки в ReadFiles, менять ключи в grep и подставлять новые аргументы —
 	// сигнатуры у вызовов разные, но проверка, которую он гоняет, та же. Поэтому
 	// отпечаток раунда считается по НОРМАЛИЗОВАННОЙ САМОЙ ПРОВЕРКЕ
-	// (см. verifyIdentity), а не по тексту команд и не по выводу: grep меняет
+	// (см. usecases.VerifyIdentity), а не по тексту команд и не по выводу: grep меняет
 	// вывод каждый раунд и обошёл бы отпечаток по выводу за секунду.
 	//
 	// Счётчики — ПО ПРОВЕРКЕ, а не по последней: чередование двух падающих
@@ -404,7 +405,7 @@ func (d *loopDetector) stateWarning(state string) string {
 		d.blockedIdents[state] = d.stateSample[state]
 		d.verifyBlock = d.cfg.verifyBlockRounds
 	}
-	return loopVerifyInjection(d.stateLabel[state], state, d.stateSample[state], warn)
+	return usecases.LoopVerifyInjection(d.stateLabel[state], state, d.stateSample[state], warn)
 }
 
 // stateSampleOf/stateLabelOf достают текст падения и команду проверки с
@@ -494,7 +495,7 @@ func (d *loopDetector) noteVerify(calls []loopRoundCall, state string) {
 	// Предупреждение по неподвижному состоянию важнее: у него правильный порог
 	// (до разрыва петли). Вмешательства в один раунд не дублируем.
 	if d.injection == "" {
-		d.injection = loopVerifyInjection(call.stateLabel, call.state, call.stateSample, runs)
+		d.injection = usecases.LoopVerifyInjection(call.stateLabel, call.state, call.stateSample, runs)
 	}
 }
 
@@ -513,11 +514,11 @@ func (d *loopDetector) blockedVerifyCall(name string, args map[string]any) (stri
 	sig := callSignature(name, args)
 	sample, ok := d.blockedSigs[sig]
 	if !ok {
-		cmd := verifyCommandOf(name, args)
-		if cmd == "" || !loopIsVerificationCommand(cmd) {
+		cmd := usecases.VerifyCommandOf(name, args)
+		if cmd == "" || !usecases.LoopIsVerificationCommand(cmd) {
 			return "", false
 		}
-		ident := verifyIdentity(cmd)
+		ident := usecases.VerifyIdentity(cmd)
 		sample, ok = d.blockedIdents[ident]
 		if !ok {
 			return "", false

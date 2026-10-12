@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"ai/application/usecases"
 	"ai/tools"
 	"fmt"
 	"strings"
@@ -33,12 +34,12 @@ func TestNormalizeVerifyOutputStripsNoise(t *testing.T) {
 		"    Tests: 1 failed, 2 passed, 3 total\n" +
 		"    23:59:02 - ожидание waitFor\n"
 
-	if normalizeVerifyOutput(first) != normalizeVerifyOutput(second) {
-		t.Fatalf("шум не нормализован:\n%s\n---\n%s", normalizeVerifyOutput(first), normalizeVerifyOutput(second))
+	if usecases.NormalizeVerifyOutput(first) != usecases.NormalizeVerifyOutput(second) {
+		t.Fatalf("шум не нормализован:\n%s\n---\n%s", usecases.NormalizeVerifyOutput(first), usecases.NormalizeVerifyOutput(second))
 	}
 
 	// Номера строк схлопнуты, но имя файла и суть ошибки остались.
-	norm := normalizeVerifyOutput(first)
+	norm := usecases.NormalizeVerifyOutput(first)
 	for _, want := range []string{"/…/Login.tsx", "Login.test.tsx", "waitFor", "<стр>", "<длительность>", "<время>"} {
 		if !strings.Contains(norm, want) {
 			t.Fatalf("нормализованный вывод должен содержать %q, got:\n%s", want, norm)
@@ -51,8 +52,8 @@ func TestNormalizeVerifyOutputStripsNoise(t *testing.T) {
 
 // Разные ошибки дают разные отпечатки состояния.
 func TestNormalizeVerifyOutputKeepsRealDifference(t *testing.T) {
-	a := normalizeVerifyOutput("FAIL src/a.test.tsx:10:1\nExpected 'user' to be 'admin'")
-	b := normalizeVerifyOutput("FAIL src/b.test.tsx:10:1\nTypeError: cannot read property 'id' of undefined")
+	a := usecases.NormalizeVerifyOutput("FAIL src/a.test.tsx:10:1\nExpected 'user' to be 'admin'")
+	b := usecases.NormalizeVerifyOutput("FAIL src/b.test.tsx:10:1\nTypeError: cannot read property 'id' of undefined")
 	if a == b {
 		t.Fatalf("разные ошибки должны давать разные отпечатки:\n%s\n%s", a, b)
 	}
@@ -64,7 +65,7 @@ func TestLoopStateFromCall(t *testing.T) {
 	runArgs := map[string]any{"command": "make frontend-test"}
 	failed := []byte(`{"status":"error","exit_error":"exit status 1","stderr":"Tests: 1 failed"}`)
 
-	state, sample, label := loopStateFromCall("Run", runArgs, failed)
+	state, sample, label := usecases.LoopStateFromCall("Run", runArgs, failed)
 	if state == "" || sample == "" || label != "make frontend-test" {
 		t.Fatalf("падение проверки должно давать отпечаток: state=%q sample=%q label=%q", state, sample, label)
 	}
@@ -72,16 +73,16 @@ func TestLoopStateFromCall(t *testing.T) {
 		t.Fatalf("отпечаток — нормализованная проверка, got %q", state)
 	}
 
-	if _, _, _ = loopStateFromCall("Run", runArgs, []byte(`{"status":"success"}`)); false {
+	if _, _, _ = usecases.LoopStateFromCall("Run", runArgs, []byte(`{"status":"success"}`)); false {
 		t.Fatal("успешная проверка не должна считаться падением")
 	}
 
 	// Не проверочная команда отпечатка не даёт.
-	if s, _, _ := loopStateFromCall("Run", map[string]any{"command": "git status"}, failed); s != "" {
+	if s, _, _ := usecases.LoopStateFromCall("Run", map[string]any{"command": "git status"}, failed); s != "" {
 		t.Fatalf("git status не должен давать отпечаток состояния, got %q", s)
 	}
 	// Другие инструменты — тоже.
-	if s, _, _ := loopStateFromCall("WriteFiles", nil, failed); s != "" {
+	if s, _, _ := usecases.LoopStateFromCall("WriteFiles", nil, failed); s != "" {
 		t.Fatalf("WriteFiles не должен давать отпечаток состояния, got %q", s)
 	}
 }
@@ -219,18 +220,18 @@ func TestVerifyIdentityIgnoresPipelineAndFlags(t *testing.T) {
 		`cd /home/user/app/temp/.wt-task-42/frontend && npm test -- --run src/pages/Login.test.tsx 2>&1 | grep -i "console\|warn" | tail -20`,
 		`cd frontend && npm test -- --run src/pages/Login.test.tsx`,
 	}
-	want := verifyIdentity(same[0])
+	want := usecases.VerifyIdentity(same[0])
 	if want != "cd … && npm test src/pages/Login.test.tsx" {
 		t.Fatalf("неожиданная идентичность: %q", want)
 	}
 	for _, cmd := range same[1:] {
-		if got := verifyIdentity(cmd); got != want {
+		if got := usecases.VerifyIdentity(cmd); got != want {
 			t.Fatalf("фильтр вывода не должен менять идентичность проверки:\n%q\n%q != %q", cmd, got, want)
 		}
 	}
 
 	// Разная проверка — разная идентичность: соседние тесты не должны слиться.
-	other := verifyIdentity(`cd frontend && npm test -- --run src/pages/Register.test.tsx 2>&1 | grep FAIL`)
+	other := usecases.VerifyIdentity(`cd frontend && npm test -- --run src/pages/Register.test.tsx 2>&1 | grep FAIL`)
 	if other == want {
 		t.Fatal("разные тесты должны давать разные отпечатки состояния")
 	}
