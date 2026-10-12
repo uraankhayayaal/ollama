@@ -11,20 +11,54 @@ package runner
 
 import (
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/tools"
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/ollama/ollama/api"
 )
+
+// historyBudget возвращает символьный бюджет истории (CODEGEN_HISTORY_BUDGET,
+// 0 = сжатие выключено). Приблизительно: 1 токен ≈ 4 символа.
+func historyBudget() int {
+	if v := os.Getenv("CODEGEN_HISTORY_BUDGET"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// historyTokens возвращает токен-лимит истории по фактическому usage
+// провайдера (CODEGEN_HISTORY_TOKENS, 0 = выключено, Ф-11).
+func historyTokens() int {
+	if v := os.Getenv("CODEGEN_HISTORY_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// envFlag — включает флаг по 1/true/yes/on (для CODEGEN_HISTORY_*).
+func envFlag(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // CompressionClient — сервисы расширенного сжатия истории диалога
 // (обычно не все сразу). Пустые поля = соответствующая фича недоступна.
 type CompressionClient struct {
 	Project string
 	// Evict — вытеснение выброшенных юнитов в векторную память (Ф-7).
-	Evict func(ctx context.Context, project string, items []EvictionItem) error
+	Evict func(ctx context.Context, project string, items []usecases.EvictionItem) error
 	// Rank — семантическое ранжирование кандидатов на выброс (Ф-8).
 	Rank func(ctx context.Context, query string, texts []string) ([]float32, error)
 	// Outline — LSP-оглавления убранных файлов (Ф-9).
@@ -47,8 +81,8 @@ func CompressionClientFromContext(ctx context.Context) *CompressionClient {
 
 // options собирает CompressOptions из клиента и флагов окружения. Бюджет не
 // трогается — его считает цикл (история → пополнение по usage, см. runner.go).
-func (c *CompressionClient) options() CompressOptions {
-	opts := CompressOptions{Project: c.Project}
+func (c *CompressionClient) options() usecases.CompressOptions {
+	opts := usecases.CompressOptions{Project: c.Project}
 	if c.Evict != nil {
 		opts.Evict = envFlag("CODEGEN_HISTORY_EVICT")
 		opts.EvictFn = c.Evict
@@ -94,7 +128,7 @@ type providerCompactor struct {
 
 func (c *providerCompactor) Compact(ctx context.Context, text string) (string, error) {
 	if len(text) > 256*1024 {
-		text = truncateLines(text, 256*1024)
+		text = usecases.TruncateLines(text, 256*1024)
 	}
 	msgs := []Message{
 		{Role: "system", Content: compactSystemPrompt},
@@ -108,7 +142,7 @@ func (c *providerCompactor) Compact(ctx context.Context, text string) (string, e
 		return "", fmt.Errorf("компактор вернул пустой ответ")
 	}
 	// Компакция не должна сама раздувать контекст памятки.
-	return truncateLines(strings.TrimSpace(reply.Content), maxNoticeChars), nil
+	return usecases.TruncateLines(strings.TrimSpace(reply.Content), usecases.MaxNoticeChars), nil
 }
 
 // compactEnabled включена ли компакция (Ф-10).
@@ -143,8 +177,8 @@ func providerInputCap(provider ChatProvider) int {
 // умолчанию), собирает опции из контекстного клиента и провайдера и выполняет
 // пайплайн. Возвращает новые сообщения и отчёт (могут совпадать с входом, если
 // сжатие не нужно/выключено).
-func compressHistoryForRound(ctx context.Context, provider ChatProvider, messages []Message, lastInputTokens int) ([]Message, *CompressionReport) {
-	opts := CompressOptions{}
+func compressHistoryForRound(ctx context.Context, provider ChatProvider, messages []Message, lastInputTokens int) ([]Message, *usecases.CompressionReport) {
+	opts := usecases.CompressOptions{}
 	if cc := CompressionClientFromContext(ctx); cc != nil {
 		opts = cc.options()
 	}
@@ -186,7 +220,7 @@ func compressHistoryForRound(ctx context.Context, provider ChatProvider, message
 		opts.CompactFn = (&providerCompactor{p: provider}).Compact
 	}
 
-	out, rep := CompressContext(ctx, messages, opts)
+	out, rep := usecases.CompressContext(ctx, messages, opts)
 	// Отчёт пишем только когда сжатие реально что-то сделало.
 	if len(out) != len(messages) {
 		for _, e := range rep.Errors {

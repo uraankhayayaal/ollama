@@ -1,4 +1,4 @@
-package runner
+package usecases
 
 // Сжатие истории диалога (Скорость 3 → Ф-6..Ф-11).
 //
@@ -31,48 +31,17 @@ package runner
 // (RAG/LSP/компакция) не меняют чередования ролей сообщений.
 
 import (
+	"ai/domain"
 	"context"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-// historyBudget возвращает символьный бюджет истории (CODEGEN_HISTORY_BUDGET,
-// 0 = сжатие выключено). Приблизительно: 1 токен ≈ 4 символа.
-func historyBudget() int {
-	if v := os.Getenv("CODEGEN_HISTORY_BUDGET"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
-
-// historyTokens возвращает токен-лимит истории по фактическому usage
-// провайдера (CODEGEN_HISTORY_TOKENS, 0 = выключено, Ф-11).
-func historyTokens() int {
-	if v := os.Getenv("CODEGEN_HISTORY_TOKENS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
-
-// envFlag — включает флаг по 1/true/yes/on (для CODEGEN_HISTORY_*).
-func envFlag(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
-
-// estimateLen оценивает «вес» истории в символах (содержимое + аргументы
+// EstimateLen оценивает «вес» истории в символах (содержимое + аргументы
 // вызовов инструментов).
-func estimateLen(msgs []Message) int {
+func EstimateLen(msgs []domain.Message) int {
 	n := 0
 	for _, m := range msgs {
 		n += len(m.Content)
@@ -135,11 +104,11 @@ type compressionUnit struct {
 	text       string
 }
 
-func makeUnit(msgs []Message, start, end int) compressionUnit {
+func makeUnit(msgs []domain.Message, start, end int) compressionUnit {
 	w := 0
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		w += estimateLen(msgs[i : i+1])
+		w += EstimateLen(msgs[i : i+1])
 		if msgs[i].Role == "tool" {
 			b.WriteString("tool ")
 			b.WriteString(msgs[i].ToolName)
@@ -157,7 +126,7 @@ func makeUnit(msgs []Message, start, end int) compressionUnit {
 // splitUnits разбивает историю на неделимые юниты (assistant+его tool-результаты
 // не разрываются). Случайные tool-сообщения без своего assistant приклеиваются
 // к предыдущему юниту, чтобы сжатие не оставляло «висящих» результатов.
-func splitUnits(msgs []Message) []compressionUnit {
+func splitUnits(msgs []domain.Message) []compressionUnit {
 	var units []compressionUnit
 	i := 0
 	for i < len(msgs) {
@@ -189,7 +158,7 @@ func splitUnits(msgs []Message) []compressionUnit {
 
 // headIndex — граница «головы»: всё до первой user-постановки включительно.
 // Голова всегда сохраняется (система + задача).
-func headIndex(msgs []Message) int {
+func headIndex(msgs []domain.Message) int {
 	for i, m := range msgs {
 		if m.Role == "user" {
 			return i + 1
@@ -209,9 +178,9 @@ func clipEvictText(s string) string {
 	return s[:maxEvictionItemChars] + "\n[...урезано...]"
 }
 
-// truncateLines оставляет первые и последние строки long текста с эллипсисом
+// TruncateLines оставляет первые и последние строки long текста с эллипсисом
 // (фолбэк компакции и обрезка памятки).
-func truncateLines(s string, max int) string {
+func TruncateLines(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
@@ -224,10 +193,10 @@ var fileMarkerRe = regexp.MustCompile(`(?m)^===\s+([^\n=]+?)\s+===\s*$`)
 // namedFieldRe — поля "filename" и "file" в JSON-результатах ReadFiles/CodeSearch.
 var namedFieldRe = regexp.MustCompile(`"(?:filename|file)"\s*:\s*"([^"]+)"`)
 
-// extractFiles вытаскивает относительные пути файлов из выброшенного контента
+// ExtractFiles вытаскивает относительные пути файлов из выброшенного контента
 // (для LSP-оглавлений, Ф-9): маркеры "=== path ===" и JSON-поля filename/file.
 // Список детерминирован: первое вхождение, отсортированные, без служебного мусора.
-func extractFiles(texts []string) []string {
+func ExtractFiles(texts []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(p string) {
@@ -265,7 +234,7 @@ const maxOutlineFiles = 4
 // CompressHistory сжимает историю под символьный бюджет (базовый позиционный
 // режим, без памятки и побочных шагов). Сохранена для совместимости и является
 // частным случаем CompressContext.
-func CompressHistory(msgs []Message, budget int) []Message {
+func CompressHistory(msgs []domain.Message, budget int) []domain.Message {
 	out, _ := CompressContext(context.Background(), msgs, CompressOptions{Budget: budget})
 	return out
 }
@@ -274,14 +243,14 @@ func CompressHistory(msgs []Message, budget int) []Message {
 // ядро плюс опциональные вытеснение/ранжирование/оглавления/компакцию/памятку.
 // Возвращает новую историю и отчёт о сжатии. Опциональные шаги не роняют
 // сжатие: их ошибки уходят в report.Errors (degrade, как RAG/LSP инструменты).
-func CompressContext(ctx context.Context, msgs []Message, opts CompressOptions) ([]Message, *CompressionReport) {
+func CompressContext(ctx context.Context, msgs []domain.Message, opts CompressOptions) ([]domain.Message, *CompressionReport) {
 	rep := &CompressionReport{}
-	if len(msgs) <= 2 || opts.Budget <= 0 || estimateLen(msgs) <= opts.Budget {
+	if len(msgs) <= 2 || opts.Budget <= 0 || EstimateLen(msgs) <= opts.Budget {
 		return msgs, rep
 	}
 
 	head := headIndex(msgs)
-	headW := estimateLen(msgs[:head])
+	headW := EstimateLen(msgs[:head])
 	units := splitUnits(msgs)
 
 	// index юнита с началом head (юниты непрерывны; head лежит на границе юнита,
@@ -361,7 +330,7 @@ func CompressContext(ctx context.Context, msgs []Message, opts CompressOptions) 
 
 	// Собственно выброс: голова всегда сохраняется; середина — только keep;
 	// хвост (если есть) — целиком.
-	out := make([]Message, 0, head+(len(msgs)-head))
+	out := make([]domain.Message, 0, head+(len(msgs)-head))
 	out = append(out, msgs[:head]...)
 	for i := headUnit; i < tailStart; i++ {
 		if keep[i] {
@@ -406,7 +375,7 @@ func CompressContext(ctx context.Context, msgs []Message, opts CompressOptions) 
 
 	// Ф-9: LSP-оглавления убранных файлов — якоря для точечного дочитывания.
 	if opts.Outline && opts.OutlineFn != nil {
-		files := extractFiles(evictTexts(rep.EvictionItems))
+		files := ExtractFiles(evictTexts(rep.EvictionItems))
 		if len(files) > maxOutlineFiles {
 			files = files[:maxOutlineFiles]
 		}
@@ -431,7 +400,7 @@ func CompressContext(ctx context.Context, msgs []Message, opts CompressOptions) 
 
 // unitItems превращает юнит в список вытесняемых элементов (по одному на
 // сообщение; assistant с tool_calls складывает и свои аргументы, и текст).
-func unitItems(u compressionUnit, msgs []Message) []EvictionItem {
+func unitItems(u compressionUnit, msgs []domain.Message) []EvictionItem {
 	items := make([]EvictionItem, 0, u.end-u.start)
 	for i := u.start; i < u.end; i++ {
 		txt := msgs[i].Content
@@ -447,7 +416,7 @@ func unitItems(u compressionUnit, msgs []Message) []EvictionItem {
 	return items
 }
 
-func toolNameOf(m Message) string {
+func toolNameOf(m domain.Message) string {
 	if m.Role == "tool" {
 		return m.ToolName
 	}
@@ -485,8 +454,8 @@ func evictTexts(items []EvictionItem) []string {
 	return out
 }
 
-// maxNoticeChars — лимит объёма памятки (Ф-6) в одном system-сообщении.
-const maxNoticeChars = 6 * 1024
+// MaxNoticeChars — лимит объёма памятки (Ф-6) в одном system-сообщении.
+const MaxNoticeChars = 6 * 1024
 
 // compressionNoticeMessage составляет текст памятки о сжатии.
 func compressionNoticeMessage(project string, dropped int, summary, outlines string) string {
@@ -511,8 +480,8 @@ func compressionNoticeMessage(project string, dropped int, summary, outlines str
 		b.WriteByte('\n')
 	}
 	s := b.String()
-	if len(s) > maxNoticeChars {
-		s = s[:maxNoticeChars] + "\n[памятка урезана]"
+	if len(s) > MaxNoticeChars {
+		s = s[:MaxNoticeChars] + "\n[памятка урезана]"
 	}
 	return s
 }
@@ -520,7 +489,7 @@ func compressionNoticeMessage(project string, dropped int, summary, outlines str
 // attachNotice дописывает памятку в последнее system-сообщение «головы»
 // (после неё идут только user/tool-раунды — чередование ролей не ломается).
 // Если system-сообщений нет — памятка становится первым сообщением.
-func attachNotice(msgs []Message, head int, notice string) []Message {
+func attachNotice(msgs []domain.Message, head int, notice string) []domain.Message {
 	notice = "\n\n" + notice
 	for i := head - 1; i >= 0; i-- {
 		if msgs[i].Role == "system" {
@@ -528,5 +497,5 @@ func attachNotice(msgs []Message, head int, notice string) []Message {
 			return msgs
 		}
 	}
-	return append([]Message{{Role: "system", Content: strings.TrimPrefix(notice, "\n\n")}}, msgs...)
+	return append([]domain.Message{{Role: "system", Content: strings.TrimPrefix(notice, "\n\n")}}, msgs...)
 }

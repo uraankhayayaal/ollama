@@ -123,7 +123,11 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 1. Создать `application/usecases/`:
    - `RunTask` — запуск агента по задаче (текущий `runner.Runner`).
    - `CompressHistory` — сжатие контекста (`runner/compress.go`,
-     `runner/compression.go`).
+     `runner/compression.go`). ✅ Базовый движок (`compress.go`:
+     позиционное ядро + Ф-6..Ф-10 пайплайн, `CompressContext`/`CompressOptions`/
+     `CompressionReport`/`EvictionItem`) перенесён в `usecases/compress.go`;
+     оркестрация `compression.go` пока в `runner` (адаптер провайдера
+     `compactAgent`), делегирует в `usecases`.
    - `BreakLoop` — обнаружение и вмешательство в петли (`runner/loop.go`,
      `runner/loopstate.go`). ✅ `loop.go` перенесён; `policy.go` содержит
      чистые политики цикла (подсказки модели, разбор NEED_*, классификация
