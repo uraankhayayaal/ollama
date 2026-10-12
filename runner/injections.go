@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/board"
+	"ai/domain"
 	"ai/injections"
 )
 
@@ -145,4 +147,69 @@ func providerName(p ChatProvider) string {
 		return n.ProviderName()
 	}
 	return ""
+}
+
+// injectionApplier реализует usecases.InjectionApplier: применяет инъекции к
+// истории раунда. Источники (injs) и контекст условий (ctx) фиксируются один
+// раз на запуск, чтобы в одном промпте не было двух разных снимков инъекций.
+type injectionApplier struct {
+	injs injectionSet
+	ctx  injections.MergeContext
+}
+
+// newInjectionApplier собирает аппликатор инъекций для запуска агента.
+func newInjectionApplier(ctx context.Context, agent agents.Agent, provider ChatProvider) usecases.InjectionApplier {
+	return injectionApplier{
+		injs: newInjectionSet(ctx, agent),
+		ctx:  injectionMergeContext(ctx, agent, provider),
+	}
+}
+
+// Apply применяет инъекции к истории диалога раунда и логирует метаданные.
+// Без инъекций возвращает историю как есть (fast-path).
+func (a injectionApplier) Apply(history []domain.Message, turn int) []domain.Message {
+	all := a.injs.collect()
+	if len(all) == 0 {
+		return history
+	}
+	ctxFor := a.ctx
+	ctxFor.Turn = turn + 1
+
+	var baseSystem string
+	var baseMsgs []injections.Message
+	for _, m := range history {
+		if m.Role == "system" {
+			baseSystem = m.Content
+		} else {
+			baseMsgs = append(baseMsgs, injections.Message{Role: m.Role, Content: m.Content})
+		}
+	}
+	ctxFor.System = baseSystem
+	ctxFor.Messages = baseMsgs
+
+	result, err := injections.ApplyInjections(baseSystem, baseMsgs, all, ctxFor)
+	if err != nil || result == nil {
+		if err != nil {
+			Debugf("RUNNER: инъекции не применены: %v", err)
+		}
+		return history
+	}
+	if applied := injections.DescribeApplied(result.Applied); applied != "" {
+		Debugf("RUNNER: раунд %d: применены инъекции: %s", turn+1, applied)
+	}
+	if skipped := injections.DescribeSkipped(result.Skipped); skipped != "" {
+		Debugf("RUNNER: раунд %d: инъекции пропущены: %s", turn+1, skipped)
+	}
+	if result.ReplaceWarning != "" {
+		Debugf("RUNNER: раунд %d: %s", turn+1, result.ReplaceWarning)
+	}
+
+	out := make([]domain.Message, 0, len(result.Messages)+1)
+	if result.System != "" {
+		out = append(out, domain.Message{Role: "system", Content: result.System})
+	}
+	for _, m := range result.Messages {
+		out = append(out, domain.Message{Role: m.Role, Content: m.Content})
+	}
+	return out
 }

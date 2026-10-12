@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"ai/application/usecases"
 	"ai/tools"
 )
 
@@ -50,17 +51,17 @@ func TestAppLogFeedMessageMentionsRuntimeAndNotError(t *testing.T) {
 
 func TestTrimAppLogLinesKeepsTailAndCapsChars(t *testing.T) {
 	// Много строк — берём последние: причина падения в конце.
-	many := make([]string, 0, appLogFeedMaxLines+20)
-	for i := 0; i < appLogFeedMaxLines+20; i++ {
+	many := make([]string, 0, usecases.AppLogFeedMaxLines+20)
+	for i := 0; i < usecases.AppLogFeedMaxLines+20; i++ {
 		many = append(many, "line")
 	}
 	got := trimAppLogLines(many)
-	if len(got) != appLogFeedMaxLines {
-		t.Fatalf("строк: %d, ждём %d", len(got), appLogFeedMaxLines)
+	if len(got) != usecases.AppLogFeedMaxLines {
+		t.Fatalf("строк: %d, ждём %d", len(got), usecases.AppLogFeedMaxLines)
 	}
 	// Одна гигантская строка (трейс с locals) не должна утянуть за собой весь
 	// бюджет: остаётся только она.
-	huge := strings.Repeat("x", appLogFeedMaxChars*2)
+	huge := strings.Repeat("x", usecases.AppLogFeedMaxChars*2)
 	got = trimAppLogLines([]string{"short", huge})
 	if len(got) != 1 || got[0] != huge {
 		t.Fatalf("обрезка по символам не сработала: %d строк", len(got))

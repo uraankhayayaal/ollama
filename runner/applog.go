@@ -21,7 +21,6 @@ package runner
 //     логе — это подсказка, а не вердикт.
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -39,13 +38,6 @@ const (
 	// проблему, второй подтверждает, что правка не помогла. Дальше модель
 	// обычно начинает «качать» правки наугад, и жжение раундов вредит.
 	defaultAppLogMaxFeedRounds = 2
-	// appLogFeedMaxLines — сколько строк лога уходит в промпт. Логи рантайма
-	// самые шумные (HTTP-запросы, прогресс-бары сборки), и 2000 строк съели бы
-	// контекст раунда целиком.
-	appLogFeedMaxLines = 60
-	// appLogFeedMaxChars — потолок по символам: одна строка трейсера Go с
-	// locals бывает в десятки килобайт.
-	appLogFeedMaxChars = 6000
 )
 
 // RuntimeLogger — необязательный интерфейс агента: хвост логов рантайма,
@@ -74,43 +66,12 @@ func appLogMaxFeedRounds() int {
 	return defaultAppLogMaxFeedRounds
 }
 
-// appLogFeedMessage собирает скрытый user-промпт по логам рантайма.
+// appLogFeedMessage — алиас usecases.AppLogFeedMessage (политика в application).
 func appLogFeedMessage(source string, lines []string, used, max int) string {
-	var b strings.Builder
-	b.WriteString("ПРИЛОЖЕНИЕ В РАНТАЙМЕ ВЫДАЛО ЛОГИ (инструмент ReadAppLogs, источник ")
-	b.WriteString(orDefault(source, "local"))
-	b.WriteString("). Это не сообщение об ошибке твоей работы — это фактическое поведение запущенного приложения. ")
-	b.WriteString("Осмотри строки ниже и, если в них есть настоящая причина (исключение, «address already in use», ")
-	b.WriteString("ошибка миграции/БД, неожиданный код ответа, падение при старте), исправь её в коде ДО того, как объявишь задачу выполненной. ")
-	b.WriteString("Если логи чистые, просто продолжай работу. Не пересказывай логи в ответе и не вызывай ReadAppLogs повторно ")
-	b.WriteString("ради тех же строк — они уже у тебя есть.\n\n")
-	b.WriteString("--- логи рантайма ---\n")
-	b.WriteString(strings.Join(lines, "\n"))
-	b.WriteString("\n--- конец логов ---")
-	fmt.Fprintf(&b, "\n(подсказка %d из %d)", used, max)
-	return b.String()
+	return usecases.AppLogFeedMessage(source, lines, used, max)
 }
 
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}
-
-// trimAppLogLines оставляет последние appLogFeedMaxLines строк и обрезает по
-// символам. Обрезка идёт с начала внутри лимита строк: при переполнении
-// символами начало лога неинтересно, а конец содержит причину.
+// trimAppLogLines — алиас usecases.TrimAppLogLines (политика в application).
 func trimAppLogLines(lines []string) []string {
-	if len(lines) > appLogFeedMaxLines {
-		lines = lines[len(lines)-appLogFeedMaxLines:]
-	}
-	budget := appLogFeedMaxChars
-	for i, l := range lines {
-		if len(l) > budget {
-			return lines[i:]
-		}
-		budget -= len(l) + 1
-	}
-	return lines
+	return usecases.TrimAppLogLines(lines)
 }

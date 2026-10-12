@@ -13,7 +13,6 @@ package runner
 // нет — фича тихо неактивна.
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -57,31 +56,12 @@ func autoFixMaxRounds() int {
 	return defaultAutoFixMax
 }
 
-// filterNewDiags возвращает только те строки диагностик, которых ещё не было
-// среди отправленных (sent), сохраняя порядок. Нужен, чтобы не подмешивать
-// модели один и тот же текст повторно между итерациями (токен-бюджет, Ф-4).
+// filterNewDiags — алиас usecases.FilterNewDiags (политика в application).
 func filterNewDiags(diags []string, sent map[string]bool) []string {
-	if len(diags) == 0 || len(sent) == 0 {
-		return diags
-	}
-	fresh := make([]string, 0, len(diags))
-	for _, d := range diags {
-		if !sent[d] {
-			fresh = append(fresh, d)
-		}
-	}
-	return fresh
+	return usecases.FilterNewDiags(diags, sent)
 }
 
-// autoFixMessage составляет скрытый user-промпт «исправь код» с точными
-// строками ошибок и номером итерации.
+// autoFixMessage — алиас usecases.AutoFixMessage (политика в application).
 func autoFixMessage(diags []string, iteration, max int) string {
-	var b strings.Builder
-	b.WriteString("Твоя последняя правка файлов вызвала ошибки компиляции или типов (LspCheck по затронутым файлам). ")
-	b.WriteString("Исправь код на основе этих точных строк:\n")
-	for _, d := range diags {
-		fmt.Fprintf(&b, "- %s\n", d)
-	}
-	fmt.Fprintf(&b, "Исправь и продолжай цикл. Итерация %d/%d.", iteration, max)
-	return b.String()
+	return usecases.AutoFixMessage(diags, iteration, max)
 }
