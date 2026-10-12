@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"ai/board"
+	"ai/domain"
 )
 
 // roundStateErrorMax — сколько символов вывода упавшей проверки писать в
@@ -21,28 +22,9 @@ import (
 const roundStateErrorMax = 600
 
 // RoundState — состояние задачи по итогам одного раунда агента.
-type RoundState struct {
-	// Round — номер раунда (1-based), для журнала.
-	Round int
-	// Agent — роль/имя специалиста, который делал раунд. Раннер агента по
-	// имени не знает (в agents.Agent имени нет), поэтому поле заполняет сам
-	// репортёр.
-	Agent string
-	// State — agent_state: writing_code/running_tests/fixing_errors/idle.
-	State string
-	// VerifyRan/VerifyFailed — была ли в раунде проверка и падала ли она.
-	VerifyRan    bool
-	VerifyFailed bool
-	// VerifyCommand — нормализованная команда последней проверки раунда.
-	VerifyCommand string
-	// VerifyOutput — усечённый вывод последней УПАВШЕЙ проверки раунда.
-	VerifyOutput string
-	// CommitSHA/Committed — коммит промежуточной фиксации раунда.
-	CommitSHA string
-	Committed bool
-	// Touched — сколько файлов изменено в раунде.
-	Touched int
-}
+// RoundState — состояние задачи по итогам одного раунда агента. Тип принадлежит
+// домену (domain.RoundState), здесь — алиас.
+type RoundState = domain.RoundState
 
 // RoundStateReporter — необязательный интерфейс агента для записи состояния
 // задачи на доску (Ф-6). Реализует агент-разработчик поверх board.Store.

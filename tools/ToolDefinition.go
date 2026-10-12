@@ -1,5 +1,7 @@
 package tools
 
+import "ai/domain"
+
 // ToolDefinition описывает функцию для LLM
 type ToolDefinition struct {
 	Name        string
@@ -7,8 +9,6 @@ type ToolDefinition struct {
 	Parameters  map[string]any // JSON Schema
 }
 
-type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments string // JSON-строка с аргументами
-}
+// ToolCall — запрос модели на вызов инструмента. Тип принадлежит домену
+// (domain.ToolCall); здесь — алиас для обратной совместимости импортов.
+type ToolCall = domain.ToolCall
