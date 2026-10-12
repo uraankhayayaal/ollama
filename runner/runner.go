@@ -9,7 +9,6 @@ import (
 	"ai/tools"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -325,17 +324,6 @@ func contextRefillMessage(pulled map[string]string) string {
 	return b.String()
 }
 
-// callSignature строит нормализованный ключ вызова инструмента (имя +
-// нормализованные аргументы) для детекции повторяющихся циклов. encoding/json
-// сортирует ключи map, поэтому одинаковые по смыслу аргументы дают тот же ключ.
-func callSignature(name string, args map[string]any) string {
-	b, err := json.Marshal(args)
-	if err != nil {
-		return name
-	}
-	return name + " " + string(b)
-}
-
 // loopMessage — подсказка модели при детекции повторяющихся вызовов.
 func loopMessage(toolName string, n int) string {
 	return fmt.Sprintf("Ты уже %d раз вызвал инструмент %q с одинаковыми аргументами — это повторяющийся цикл. Прекрати его: опирайся на уже полученные результаты и заверши работу итоговым ответом по требуемой схеме (не вызывая повторно те же инструменты).", n, toolName)
@@ -637,10 +625,10 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// зацикленного хвоста истории с дайджестом «иди с другой стороны», а при
 	// повторе запрещённого — приговор Looped вместо сжигания бюджета раундов.
 	// Мягкие подсказки выше остаются как первый, дешёвый уровень помощи.
-	loop := newLoopDetector()
+	loop := usecases.NewLoopDetector(tools.IsParallelSafe)
 	// loopPrefix — число ведущих сообщений с постановкой задачи: разрыв петли
 	// их не трогает, даже если петля началась на первом раунде.
-	loopPrefix := loopPrefixLen(messages)
+	loopPrefix := usecases.LoopPrefixLen(messages)
 	// loopProgressIdx — индекс сообщения, где цикл последний раз делал что-то
 	// новое. Разрыв схлопывает всё после него: модель перестаёт видеть паттерн,
 	// который повторяет.
@@ -648,7 +636,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	// loopTask — постановка задачи (пользовательские сообщения префикса). После
 	// разрыва петли она печатается заново последним сообщением: заставляем
 	// модель вернуться к заданию, а не продолжать «по памяти».
-	loopTask := loopTaskStatement(messages[:loopPrefix])
+	loopTask := usecases.LoopTaskStatement(messages[:loopPrefix])
 	// needRefills — сколько раз за цикл уже дозаправляли контекст по маркерам
 	// NEED_* (защита от петли «модель просит контекст → дозаправка → снова»).
 	needRefills := 0
@@ -700,7 +688,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// модели немедленно — иначе оно доезжает на 1–2 раунда позже, а к этому
 		// моменту разрыв петли уже схлопнул историю и предупреждение пропало бы
 		// вместе с ней. После сжатия истории, чтобы компрессор его не вырезал.
-		if injection := loop.takeInjection(); injection != "" {
+		if injection := loop.TakeInjection(); injection != "" {
 			Debugf("RUNNER: раунд %d: вмешательство детектора петли внедрено в запрос (%d символов)", round+1, len(injection))
 			messages = append(messages, Message{Role: "user", Content: injection})
 			if rep != nil {
@@ -903,7 +891,7 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// готовый результат волны, остальные выполняются как раньше — по одному.
 		// Учёт в callCounts/failCounts/requiredDone и история диалога идентичны
 		// последовательному исполнению; порядок tool-сообщений = порядок вызова.
-		var loopCalls []loopRoundCall
+		var loopCalls []usecases.LoopRoundCall
 		roundProgress := false
 		for i, j := range jobs {
 			var (
@@ -911,12 +899,12 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				err     error
 				blocked bool
 			)
-			sig := callSignature(j.tc.Name, j.args)
+			sig := usecases.CallSignature(j.tc.Name, j.args)
 			switch {
 			case badArgs[i] != "":
 				// Модель прислала невалидный JSON аргументов: вызов не
 				// выполняем, но и запуск не роняем.
-				result = toolErrorResult(badArgs[i])
+				result = usecases.ToolErrorResult(badArgs[i])
 			case parallel[i]:
 				result, err = outcomes[i].result, outcomes[i].err
 			default:
@@ -924,9 +912,9 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 				// не запускается повторно — раунд сгорал бы впустую. Блокировка по
 				// нормализованной проверке, поэтому смена аргументов (строки, grep,
 				// --reporter) её не обходит.
-				if reason, isBlocked := loop.blockedVerifyCall(j.tc.Name, j.args); isBlocked {
+				if reason, isBlocked := loop.BlockedVerifyCall(j.tc.Name, j.args); isBlocked {
 					blocked = true
-					result = toolErrorResult(reason)
+					result = usecases.ToolErrorResult(reason)
 					Debugf("RUNNER: раунд %d: вызов %q заблокирован verify guard: %s", round+1, j.tc.Name, reason)
 					if rep != nil {
 						rep.OnToolResult(j.tc.Name, Truncate(string(result), 8000), false)
@@ -959,18 +947,18 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			failed := toolResultFailed(j.tc.Name, result)
 			state, stateSample, stateLabel := usecases.LoopStateFromCall(j.tc.Name, j.args, result)
 			vcmd := usecases.VerifyCommandOf(j.tc.Name, j.args)
-			loopCalls = append(loopCalls, loopRoundCall{
-				name:        j.tc.Name,
-				sig:         sig,
-				failed:      failed,
-				result:      Truncate(string(result), loopDigestResult),
-				paths:       loopCallPaths(j.args),
-				state:       state,
-				stateSample: stateSample,
-				stateLabel:  stateLabel,
-				verify:      vcmd != "" && usecases.LoopIsVerificationCommand(vcmd),
-				verifyCmd:   vcmd,
-				blocked:     blocked,
+			loopCalls = append(loopCalls, usecases.LoopRoundCall{
+				Name:        j.tc.Name,
+				Sig:         sig,
+				Failed:      failed,
+				Result:      Truncate(string(result), usecases.LoopDigestResult),
+				Paths:       usecases.LoopCallPaths(j.args),
+				State:       state,
+				StateSample: stateSample,
+				StateLabel:  stateLabel,
+				Verify:      vcmd != "" && usecases.LoopIsVerificationCommand(vcmd),
+				VerifyCmd:   vcmd,
+				Blocked:     blocked,
 			})
 			if !failed {
 				roundProgress = true
@@ -1003,8 +991,8 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			// вежливое предупреждение не сработало — возвращаем приговор, чтобы
 			// вызывающий код взял задачу с другой стороны (другая модель или
 			// честный фейл), вместо того чтобы жечь остаток бюджета раундов.
-			if loop.bannedSignature(sig, j.tc.Name) && loop.registerStrike() {
-				reason := fmt.Sprintf("после предупреждения о петле модель повторила запрещённый вызов %s (%d-й раз)", signatureLabel(sig), loop.strikes)
+			if loop.BannedSignature(sig, j.tc.Name) && loop.RegisterStrike() {
+				reason := fmt.Sprintf("после предупреждения о петле модель повторила запрещённый вызов %s (%d-й раз)", usecases.SignatureLabel(sig), loop.Strikes())
 				Debugf("RUNNER: раунд %d: %s — цикл прерван (Looped)", round+1, reason)
 				if rep != nil {
 					rep.OnMessage("user", "Цикл агента прерван: "+reason, false)
@@ -1181,11 +1169,11 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 		// (stateWarning) приходит в запрос на следующем раунде — см. выше.
 		// Срок действия временных блокировок проверок истекает в конце раунда, в
 		// котором они были выставлены (блок живёт ровно verifyBlockRounds).
-		loop.expireBlocks()
+		loop.ExpireBlocks()
 
-		if reason := loop.observeRound(loopCalls); reason != "" {
-			if !loop.canBreak() {
-				Debugf("RUNNER: раунд %d: петля подтверждена (%s), разрывы исчерпаны (%d) — цикл прерван (Looped)", round+1, reason, loop.breaks)
+		if reason := loop.ObserveRound(loopCalls); reason != "" {
+			if !loop.CanBreak() {
+				Debugf("RUNNER: раунд %d: петля подтверждена (%s), разрывы исчерпаны (%d) — цикл прерван (Looped)", round+1, reason, loop.Breaks())
 				if rep != nil {
 					rep.OnMessage("user", "Цикл агента прерван: "+reason, false)
 				}
@@ -1198,22 +1186,22 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 					Messages:   append([]Message{}, messages...),
 				}, nil
 			}
-			digest, banned := loop.breakLoop(reason, pendingRequired())
+			digest, banned := loop.BreakLoop(reason, pendingRequired())
 			Debugf("RUNNER: раунд %d: детектировано зацикливание (%s) — разрыв петли %d/%d, под запретом %d вызов(ов)",
-				round+1, reason, loop.breaks, loop.cfg.breaks, banned)
-			messages = loopCollapsedMessages(messages, loopProgressIdx, loopPrefix)
+				round+1, reason, loop.Breaks(), loop.MaxBreaks(), banned)
+			messages = usecases.LoopCollapsedMessages(messages, loopProgressIdx, loopPrefix)
 			// К дайджесту добавляем перезапуск: постановка задачи печатается
 			// заново последним сообщением, а уже тронутые файлы предлагается
 			// перечитать. Только запрет «не повторяй» без этого оставлял модели
 			// право продолжать по памяти, не сверившись с заданием и кодом.
-			digest += loopRestartMessage(loopTask, loop.touchedFiles(), pendingRequired())
+			digest += usecases.LoopRestartMessage(loopTask, loop.TouchedFiles(), pendingRequired())
 			messages = append(messages, Message{Role: "user", Content: digest})
 			if rep != nil {
 				rep.OnMessage("user", digest, false)
 			}
 			// После разрыва пороги считаются заново, иначе первая же попытка
 			// повторить запрещённое тут же объявила бы новую петлю.
-			loopProgressIdx = loopPrefixLen(messages)
+			loopProgressIdx = usecases.LoopPrefixLen(messages)
 			callCounts = make(map[string]int)
 			failCounts = make(map[string]int)
 			loopNudged = make(map[string]bool)

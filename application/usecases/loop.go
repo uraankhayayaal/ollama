@@ -1,16 +1,29 @@
-package runner
+package usecases
 
 import (
+	"ai/domain"
 	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
-
-	"ai/application/usecases"
-	"ai/tools"
 )
+
+// Debugf — приёмник диагностики детектора петель. Внешний слой (runner)
+// подключает к нему свой логгер, чтобы application не зависел от инфраструктуры.
+var Debugf = func(format string, args ...any) {}
+
+// CallSignature строит нормализованный ключ вызова инструмента (имя +
+// нормализованные аргументы) для детекции повторяющихся циклов. encoding/json
+// сортирует ключи map, поэтому одинаковые по смыслу аргументы дают тот же ключ.
+func CallSignature(name string, args map[string]any) string {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return name
+	}
+	return name + " " + string(b)
+}
 
 // Детектор зацикливания агентского цикла и разрыв петли («задача с другой
 // стороны»).
@@ -26,7 +39,7 @@ import (
 // Поэтому петля фиксируется объективно (по счётчикам, без согласия модели) и
 // обрабатывается решением, а не ещё одной подсказкой:
 //
-//  1. breakLoop — разрыв петли внутри цикла: зацикленный хвост истории
+//  1. BreakLoop — разрыв петли внутри цикла: зацикленный хвост истории
 //     схлопывается, модели уходит структурный дайджест («что уже пробовал,
 //     что не сработало, что запрещено, идти с другой стороны»), счётчики
 //     перевзводятся — после разрыва пороги считаются заново;
@@ -88,9 +101,9 @@ const (
 	loopVerifyFailsDefault = 5
 	// loopVerifyBlockRoundsDefault — блокировка повторного запуска проверки.
 	loopVerifyBlockRoundsDefault = 1
-	// loopDigestResult — сколько символов результата инструмента попадает
+	// LoopDigestResult — сколько символов результата инструмента попадает
 	// в дайджест (ошибка нужна модели, чтобы понять причину провала).
-	loopDigestResult = 240
+	LoopDigestResult = 240
 	// loopMinKeepTail — минимальное число сообщений, которое разрыв обязан
 	// оставить в истории (защита от схлопывания системного промпта/задачи).
 	loopMinKeepTail = 2
@@ -128,40 +141,45 @@ func loopConfigFromEnv() loopConfig {
 	}
 }
 
-// loopRoundCall — один вызов инструмента раунда с признаками результата.
-type loopRoundCall struct {
-	name   string
-	sig    string
-	failed bool
-	result string
-	// paths — пути из аргументов вызова: по ним собирается список файлов для
+// LoopRoundCall — один вызов инструмента раунда с признаками результата.
+type LoopRoundCall struct {
+	Name   string
+	Sig    string
+	Failed bool
+	Result string
+	// Paths — пути из аргументов вызова: по ним собирается список файлов для
 	// перечитывания при разрыве петли.
-	paths []string
-	// state — семантический отпечаток проверки этого вызова (пусто, если
-	// вызов не проверка или проверка прошла). Одинаковый state при неизменном
+	Paths []string
+	// State — семантический отпечаток проверки этого вызова (пусто, если
+	// вызов не проверка или проверка прошла). Одинаковый State при неизменном
 	// проекте = петля независимо от аргументов.
-	state string
-	// stateSample — нормализованный текст падения (для сообщений модели).
-	stateSample string
-	// stateLabel — команда проверки (для сообщений модели).
-	stateLabel string
-	// verify/verifyCmd — вызов был проверкой и какой была её команда. state
+	State string
+	// StateSample — нормализованный текст падения (для сообщений модели).
+	StateSample string
+	// StateLabel — команда проверки (для сообщений модели).
+	StateLabel string
+	// Verify/VerifyCmd — вызов был проверкой и какой была её команда. State
 	// пуст у ПРОШЕДШЕЙ проверки, поэтому признак «проверка была» держим
 	// отдельно: он нужен State Tracking (agent_state=running_tests и сдвиг
 	// last_good_sha), который не заглядывает в содержимое вывода.
-	verify    bool
-	verifyCmd string
-	// blocked — вызов не выполнялся: харнес его заблокировал (verify guard).
-	blocked bool
+	Verify    bool
+	VerifyCmd string
+	// Blocked — вызов не выполнялся: харнес его заблокировал (verify guard).
+	Blocked bool
 }
 
-// loopDetector копит признаки петли по раундам агентского цикла и хранит
+// LoopDetector копит признаки петли по раундам агентского цикла и хранит
 // «что уже пробовал» для дайджеста разрыва.
-type loopDetector struct {
+type LoopDetector struct {
 	cfg loopConfig
 
+	// parallelSafe — какие инструменты безопасно выполнять параллельно (не
+	// мутируют проект). Инъекция из внешнего слоя: application не знает имён
+	// инструментов инфраструктуры.
+	parallelSafe func(string) bool
+
 	// sigRound — счётчик сигнатуры с момента последнего разрыва (по нему
-	// принимается решение о петле); сбрасывается в breakLoop.
+	// принимается решение о петле); сбрасывается в BreakLoop.
 	sigRound map[string]int
 	// sigTotal — счётчик сигнатуры за весь цикл (для дайджеста: важно, что
 	// модель пыталась это и раньше, до разрыва).
@@ -202,7 +220,7 @@ type loopDetector struct {
 	// строки в ReadFiles, менять ключи в grep и подставлять новые аргументы —
 	// сигнатуры у вызовов разные, но проверка, которую он гоняет, та же. Поэтому
 	// отпечаток раунда считается по НОРМАЛИЗОВАННОЙ САМОЙ ПРОВЕРКЕ
-	// (см. usecases.VerifyIdentity), а не по тексту команд и не по выводу: grep меняет
+	// (см. VerifyIdentity), а не по тексту команд и не по выводу: grep меняет
 	// вывод каждый раунд и обошёл бы отпечаток по выводу за секунду.
 	//
 	// Счётчики — ПО ПРОВЕРКЕ, а не по последней: чередование двух падающих
@@ -226,14 +244,20 @@ type loopDetector struct {
 	blockedIdents map[string]string
 	verifyBlock   int
 	// injection — приготовленное сообщение о принудительном вмешательстве;
-	// забирается вызывающим через takeInjection.
+	// забирается вызывающим через TakeInjection.
 	injection string
 }
 
-// newLoopDetector создаёт детектор с порогами из окружения.
-func newLoopDetector() *loopDetector {
-	return &loopDetector{
+// NewLoopDetector создаёт детектор с порогами из окружения. parallelSafe —
+// предикат «этот инструмент не мутирует проект» (для счётчика раундов без
+// правок); nil трактуется как «всё мутирует», что безопаснее.
+func NewLoopDetector(parallelSafe func(string) bool) *LoopDetector {
+	if parallelSafe == nil {
+		parallelSafe = func(string) bool { return false }
+	}
+	return &LoopDetector{
 		cfg:           loopConfigFromEnv(),
+		parallelSafe:  parallelSafe,
 		sigRound:      make(map[string]int),
 		sigTotal:      make(map[string]int),
 		lastResult:    make(map[string]string),
@@ -252,51 +276,51 @@ func newLoopDetector() *loopDetector {
 	}
 }
 
-// bannedSignature сообщает, что вызов запрещён предыдущим разрывом петли:
+// BannedSignature сообщает, что вызов запрещён предыдущим разрывом петли:
 // либо конкретный вызов (повторялась сигнатура), либо инструмент целиком
 // (модель перебирала аргументы — повторов по сигнатуре не набиралось).
-func (d *loopDetector) bannedSignature(sig, name string) bool {
+func (d *LoopDetector) BannedSignature(sig, name string) bool {
 	return d.bannedSigs[sig] || d.bannedTools[name]
 }
 
-// registerStrike фиксирует повтор запрещённого вызова. Возвращает true, когда
+// RegisterStrike фиксирует повтор запрещённого вызова. Возвращает true, когда
 // прощение исчерпано и пора вернуть приговор (AgentResponse.Looped): модель
 // получила явный запрет и всё равно повторила то же самое — продолжать цикл
 // бессмысленно.
-func (d *loopDetector) registerStrike() bool {
+func (d *LoopDetector) RegisterStrike() bool {
 	d.strikes++
 	return d.strikes >= d.cfg.strikes
 }
 
-// observeRound принимает результаты раунда и возвращает вердикт детектора:
+// ObserveRound принимает результаты раунда и возвращает вердикт детектора:
 // непустая строка — петля подтверждена, она же идёт в AgentResponse.LoopReason.
-func (d *loopDetector) observeRound(calls []loopRoundCall) string {
+func (d *LoopDetector) ObserveRound(calls []LoopRoundCall) string {
 	d.rounds++
 
 	succeeded := false
 	wrote := false
 	for _, c := range calls {
-		d.sigRound[c.sig]++
-		d.sigTotal[c.sig]++
-		d.lastResult[c.sig] = c.result
-		d.toolRound[c.name]++
-		for _, p := range c.paths {
+		d.sigRound[c.Sig]++
+		d.sigTotal[c.Sig]++
+		d.lastResult[c.Sig] = c.Result
+		d.toolRound[c.Name]++
+		for _, p := range c.Paths {
 			if !d.touched[p] {
 				d.touched[p] = true
 				d.touchedOrder = append(d.touchedOrder, p)
 			}
 		}
-		if c.failed {
-			d.toolFails[c.name]++
-			d.toolLastError[c.name] = c.result
+		if c.Failed {
+			d.toolFails[c.Name]++
+			d.toolLastError[c.Name] = c.Result
 			continue
 		}
 		// Прогресс — успешный вызов, который ещё не стал повтором:
 		// иначе «прочитал 20 файлов по кругу» считался бы успехом.
-		if d.sigRound[c.sig] < d.cfg.sigRepeats {
+		if d.sigRound[c.Sig] < d.cfg.sigRepeats {
 			succeeded = true
 		}
-		if !tools.IsParallelSafe(c.name) {
+		if !d.parallelSafe(c.Name) {
 			wrote = true
 		}
 	}
@@ -340,7 +364,7 @@ func (d *loopDetector) observeRound(calls []loopRoundCall) string {
 
 	// 1. Один и тот же вызов с одними и теми же аргументами.
 	if sig, n := d.worstSignature(); n >= d.cfg.sigRepeats {
-		return fmt.Sprintf("вызов %s повторён %d раз с одними и теми же аргументами", signatureLabel(sig), n)
+		return fmt.Sprintf("вызов %s повторён %d раз с одними и теми же аргументами", SignatureLabel(sig), n)
 	}
 	// 2. Ни одного успешного действия раунд за раундом.
 	if d.failStreak >= d.cfg.failStreak {
@@ -361,7 +385,7 @@ func (d *loopDetector) observeRound(calls []loopRoundCall) string {
 
 // resetState обнуляет отсчёты неподвижного состояния: раунд с реальной
 // правкой или без падающей проверки — это другой этап работы.
-func (d *loopDetector) resetState() {
+func (d *LoopDetector) resetState() {
 	d.stateRuns = make(map[string]int)
 	d.stateSample = make(map[string]string)
 	d.stateLabel = make(map[string]string)
@@ -370,7 +394,7 @@ func (d *loopDetector) resetState() {
 
 // worstState возвращает проверку с наибольшим числом повторов без изменений и
 // это число.
-func (d *loopDetector) worstState() (string, int) {
+func (d *LoopDetector) worstState() (string, int) {
 	worst, n := "", 0
 	for ident, c := range d.stateRuns {
 		if c > n {
@@ -382,11 +406,11 @@ func (d *loopDetector) worstState() (string, int) {
 
 // stateWarning готовит СИЛЬНОЕ предупреждение модели, когда состояние стоит
 // (stateWarn повторов), но до разрыва петли (stateRepeats) ещё не дошло.
-// Предупреждение уходит в СЛЕДУЮЩИЙ запрос к модели (см. takeInjection в
+// Предупреждение уходит в СЛЕДУЮЩИЙ запрос к модели (см. TakeInjection в
 // runner.go) и временно блокирует повторный запуск этой проверки — иначе раунд
 // сгорает на бесполезном перезапуске. Повторяться может: счётчик сбрасывается
 // вместе с состоянием.
-func (d *loopDetector) stateWarning(state string) string {
+func (d *LoopDetector) stateWarning(state string) string {
 	warn := d.cfg.stateWarn
 	if warn <= 0 {
 		return ""
@@ -405,24 +429,24 @@ func (d *loopDetector) stateWarning(state string) string {
 		d.blockedIdents[state] = d.stateSample[state]
 		d.verifyBlock = d.cfg.verifyBlockRounds
 	}
-	return usecases.LoopVerifyInjection(d.stateLabel[state], state, d.stateSample[state], warn)
+	return LoopVerifyInjection(d.stateLabel[state], state, d.stateSample[state], warn)
 }
 
 // stateSampleOf/stateLabelOf достают текст падения и команду проверки с
 // отпечатком.
-func stateSampleOf(calls []loopRoundCall, state string) string {
+func stateSampleOf(calls []LoopRoundCall, state string) string {
 	for _, c := range calls {
-		if !c.blocked && c.state == state {
-			return c.stateSample
+		if !c.Blocked && c.State == state {
+			return c.StateSample
 		}
 	}
 	return ""
 }
 
-func stateLabelOf(calls []loopRoundCall, state string) string {
+func stateLabelOf(calls []LoopRoundCall, state string) string {
 	for _, c := range calls {
-		if !c.blocked && c.state == state {
-			return c.stateLabel
+		if !c.Blocked && c.State == state {
+			return c.StateLabel
 		}
 	}
 	return ""
@@ -430,14 +454,14 @@ func stateLabelOf(calls []loopRoundCall, state string) string {
 
 // blockedVerify сообщает, что в раунде не было выполненной проверки, но был
 // заблокированный вызов: отсчёт состояния в этом случае не сбрасывается.
-func blockedVerify(calls []loopRoundCall) bool {
+func blockedVerify(calls []LoopRoundCall) bool {
 	blocked := false
 	for _, c := range calls {
-		if c.blocked {
+		if c.Blocked {
 			blocked = true
 			continue
 		}
-		if c.state != "" {
+		if c.State != "" {
 			return false
 		}
 	}
@@ -447,13 +471,13 @@ func blockedVerify(calls []loopRoundCall) bool {
 // roundState собирает семантический отпечаток раунда по проверкам: несколько
 // проверок склеиваются, поэтому «тесты упали» и «сборка упала» — разные
 // состояния.
-func roundState(calls []loopRoundCall) string {
+func roundState(calls []LoopRoundCall) string {
 	var parts []string
 	for _, c := range calls {
-		if c.blocked || c.state == "" {
+		if c.Blocked || c.State == "" {
 			continue
 		}
-		parts = append(parts, c.state)
+		parts = append(parts, c.State)
 	}
 	return strings.Join(parts, "|")
 }
@@ -462,10 +486,10 @@ func roundState(calls []loopRoundCall) string {
 // порога готовит принудительное вмешательство: сообщение модели с диагнозом и
 // временную блокировку повторного запуска этой проверки. Счётчик после
 // срабатывания обнуляется — вмешательство может повториться.
-func (d *loopDetector) noteVerify(calls []loopRoundCall, state string) {
-	var call *loopRoundCall
+func (d *LoopDetector) noteVerify(calls []LoopRoundCall, state string) {
+	var call *LoopRoundCall
 	for i := range calls {
-		if calls[i].state != "" && !calls[i].blocked {
+		if calls[i].State != "" && !calls[i].Blocked {
 			call = &calls[i]
 			break
 		}
@@ -475,7 +499,7 @@ func (d *loopDetector) noteVerify(calls []loopRoundCall, state string) {
 	}
 	if state != d.verifyErr {
 		d.verifyErr, d.verifyRuns = state, 1
-		d.verifyLabel, d.verifySample = call.stateLabel, call.stateSample
+		d.verifyLabel, d.verifySample = call.StateLabel, call.StateSample
 		return
 	}
 	d.verifyRuns++
@@ -486,39 +510,39 @@ func (d *loopDetector) noteVerify(calls []loopRoundCall, state string) {
 	runs := d.verifyRuns
 	d.verifyRuns = 0
 	if d.cfg.verifyBlockRounds > 0 {
-		d.blockedSigs[call.sig] = call.stateSample
-		if call.state != "" {
-			d.blockedIdents[call.state] = call.stateSample
+		d.blockedSigs[call.Sig] = call.StateSample
+		if call.State != "" {
+			d.blockedIdents[call.State] = call.StateSample
 		}
 		d.verifyBlock = d.cfg.verifyBlockRounds
 	}
 	// Предупреждение по неподвижному состоянию важнее: у него правильный порог
 	// (до разрыва петли). Вмешательства в один раунд не дублируем.
 	if d.injection == "" {
-		d.injection = usecases.LoopVerifyInjection(call.stateLabel, call.state, call.stateSample, runs)
+		d.injection = LoopVerifyInjection(call.StateLabel, call.State, call.StateSample, runs)
 	}
 }
 
-// takeInjection забирает подготовленное сообщение о принудительном вмешательстве.
-func (d *loopDetector) takeInjection() string {
+// TakeInjection забирает подготовленное сообщение о принудительном вмешательстве.
+func (d *LoopDetector) TakeInjection() string {
 	msg := d.injection
 	d.injection = ""
 	return msg
 }
 
-// blockedVerifyCall сообщает, что харнес временно не выполняет этот вызов:
+// BlockedVerifyCall сообщает, что харнес временно не выполняет этот вызов:
 // проверка уже столько раундов подряд падала с тем же результатом, что
 // повторный запуск только жжёт раунд. Блокировка по НОРМАЛИЗОВАННОЙ проверке,
 // поэтому смена аргументов (строки, grep-флаги, `--reporter`) её не обходит.
-func (d *loopDetector) blockedVerifyCall(name string, args map[string]any) (string, bool) {
-	sig := callSignature(name, args)
+func (d *LoopDetector) BlockedVerifyCall(name string, args map[string]any) (string, bool) {
+	sig := CallSignature(name, args)
 	sample, ok := d.blockedSigs[sig]
 	if !ok {
-		cmd := usecases.VerifyCommandOf(name, args)
-		if cmd == "" || !usecases.LoopIsVerificationCommand(cmd) {
+		cmd := VerifyCommandOf(name, args)
+		if cmd == "" || !LoopIsVerificationCommand(cmd) {
 			return "", false
 		}
-		ident := usecases.VerifyIdentity(cmd)
+		ident := VerifyIdentity(cmd)
 		sample, ok = d.blockedIdents[ident]
 		if !ok {
 			return "", false
@@ -529,8 +553,8 @@ func (d *loopDetector) blockedVerifyCall(name string, args map[string]any) (stri
 		"(тест и его ожидания, асинхронные ожидания и таймауты, моки, окружение), исправь и только потом запусти проверку снова.", true
 }
 
-// expireBlocks уменьшает срок действия временных блокировок проверок.
-func (d *loopDetector) expireBlocks() {
+// ExpireBlocks уменьшает срок действия временных блокировок проверок.
+func (d *LoopDetector) ExpireBlocks() {
 	if d.verifyBlock <= 0 {
 		return
 	}
@@ -541,10 +565,10 @@ func (d *loopDetector) expireBlocks() {
 	}
 }
 
-// toolErrorResult оформляет сообщение харнеса результатом инструмента в том же
+// ToolErrorResult оформляет сообщение харнеса результатом инструмента в том же
 // JSON-виде, что и настоящие инструменты: модель и проверка toolResultFailed
 // видят status=error, а не текст в обход протокола.
-func toolErrorResult(message string) []byte {
+func ToolErrorResult(message string) []byte {
 	buf, err := json.Marshal(map[string]string{"status": "error", "message": message})
 	if err != nil {
 		return []byte(`{"status":"error","message":"внутренняя ошибка харнеса"}`)
@@ -567,7 +591,7 @@ func truncateWords(s string, max int) string {
 
 // worstSignature возвращает сигнатуру с максимальным числом повторов и это
 // число (с момента последнего разрыва).
-func (d *loopDetector) worstSignature() (string, int) {
+func (d *LoopDetector) worstSignature() (string, int) {
 	worst, n := "", 0
 	for sig, c := range d.sigRound {
 		if c > n {
@@ -577,12 +601,21 @@ func (d *loopDetector) worstSignature() (string, int) {
 	return worst, n
 }
 
-// canBreak сообщает, остался ли лимит разрывов петли.
-func (d *loopDetector) canBreak() bool {
+// CanBreak сообщает, остался ли лимит разрывов петли.
+func (d *LoopDetector) CanBreak() bool {
 	return d.breaks < d.cfg.breaks
 }
 
-// breakLoop применяет разрыв: запрещает повтор того, что модель долбит,
+// Strikes — число повторов запрещённого вызова (для лога вызывающего кода).
+func (d *LoopDetector) Strikes() int { return d.strikes }
+
+// Breaks — сколько разрывов петли уже сделано.
+func (d *LoopDetector) Breaks() int { return d.breaks }
+
+// MaxBreaks — разрешённое число разрывов петли за цикл.
+func (d *LoopDetector) MaxBreaks() int { return d.cfg.breaks }
+
+// BreakLoop применяет разрыв: запрещает повтор того, что модель долбит,
 // перевзводит счётчики раунда и возвращает текст дайджеста для модели.
 // taken — количество вызовов, попавших под запрет (для лога).
 //
@@ -590,7 +623,7 @@ func (d *loopDetector) canBreak() bool {
 // сигнатуре нет (модель перебирает АРГУМЕНТЫ одного инструмента — каждый
 // вызов уникален), запрещается сам инструмент: иначе дайджест остался бы без
 // конкретики, а модель продолжила бы перебор.
-func (d *loopDetector) breakLoop(reason, required string) (msg string, taken int) {
+func (d *LoopDetector) BreakLoop(reason, required string) (msg string, taken int) {
 	d.breaks++
 
 	sigs := make([]string, 0, len(d.sigRound))
@@ -648,13 +681,13 @@ func (d *loopDetector) breakLoop(reason, required string) (msg string, taken int
 	return loopBreakMessage(reason, sigs, lookup, required), taken
 }
 
-// signatureLabel превращает ключ сигнатуры в читаемый вид: «WriteFiles {…}».
-func signatureLabel(sig string) string {
+// SignatureLabel превращает ключ сигнатуры в читаемый вид: «WriteFiles {…}».
+func SignatureLabel(sig string) string {
 	name, args, found := strings.Cut(sig, " ")
 	if !found {
 		return name
 	}
-	return name + " " + Truncate(args, loopDigestResult)
+	return name + " " + truncate(args, LoopDigestResult)
 }
 
 // loopBreakMessage собирает дайджест разрыва: что модель уже делала и не
@@ -672,11 +705,11 @@ func loopBreakMessage(reason string, banned []string, lookup func(string) (int, 
 		b.WriteString("Что ты уже делал и что НЕ сработало (больше так делать нельзя):\n")
 		for _, sig := range banned {
 			total, res := lookup(sig)
-			label := signatureLabel(sig)
+			label := SignatureLabel(sig)
 			if res == "" {
 				res = "результат без изменений"
 			}
-			fmt.Fprintf(&b, "- %s — вызовов: %d; последний результат: %s\n", label, total, Truncate(res, loopDigestResult))
+			fmt.Fprintf(&b, "- %s — вызовов: %d; последний результат: %s\n", label, total, truncate(res, LoopDigestResult))
 		}
 		b.WriteString("\n")
 	}
@@ -692,12 +725,12 @@ func loopBreakMessage(reason string, banned []string, lookup func(string) (int, 
 	return b.String()
 }
 
-// loopCollapsedMessages схлопывает зацикленный хвост истории: оставляет
+// LoopCollapsedMessages схлопывает зацикленный хвост истории: оставляет
 // messages[:keep], чтобы модель перестала видеть паттерн, который она
 // повторяет, и получала чистый старт от последней точки прогресса.
 // prefixLen — число начальных системных/user-сообщений задания: их нельзя
 // терять даже если петля началась на первом же раунде.
-func loopCollapsedMessages(messages []Message, keep, prefixLen int) []Message {
+func LoopCollapsedMessages(messages []domain.Message, keep, prefixLen int) []domain.Message {
 	if keep < prefixLen {
 		keep = prefixLen
 	}
@@ -711,12 +744,12 @@ func loopCollapsedMessages(messages []Message, keep, prefixLen int) []Message {
 		return messages
 	}
 	Debugf("RUNNER: разрыв петли — схлопываю %d сообщений зацикленного хвоста истории (остаюсь на последней точке прогресса)", len(messages)-keep)
-	return append([]Message{}, messages[:keep]...)
+	return append([]domain.Message{}, messages[:keep]...)
 }
 
-// loopPrefixLen считает ведущие системные и пользовательские сообщения —
+// LoopPrefixLen считает ведущие системные и пользовательские сообщения —
 // постановку задачи, которая переживает разрыв петли.
-func loopPrefixLen(messages []Message) int {
+func LoopPrefixLen(messages []domain.Message) int {
 	n := 0
 	for _, m := range messages {
 		if m.Role != "system" && m.Role != "user" {
@@ -730,10 +763,10 @@ func loopPrefixLen(messages []Message) int {
 	return n
 }
 
-// loopTaskStatement собирает постановку задачи из ведущих сообщений: системный
+// LoopTaskStatement собирает постановку задачи из ведущих сообщений: системный
 // промпт переживает разрыв и в перепечатке не нуждается, а вот пользовательские
 // сообщения (обычно это и есть задание) печатаются заново.
-func loopTaskStatement(prefix []Message) string {
+func LoopTaskStatement(prefix []domain.Message) string {
 	var b strings.Builder
 	for _, m := range prefix {
 		if m.Role != "user" {
@@ -751,10 +784,10 @@ func loopTaskStatement(prefix []Message) string {
 	return b.String()
 }
 
-// touchedFiles — до loopRereadMax путей, к которым агент уже обращался. Хвост
+// TouchedFiles — до loopRereadMax путей, к которым агент уже обращался. Хвост
 // списка важнее начала: последние правки модели вероятнее всего и нужно
 // перечитать.
-func (d *loopDetector) touchedFiles() []string {
+func (d *LoopDetector) TouchedFiles() []string {
 	files := d.touchedOrder
 	if len(files) > loopRereadMax {
 		files = files[len(files)-loopRereadMax:]
@@ -764,7 +797,7 @@ func (d *loopDetector) touchedFiles() []string {
 	return out
 }
 
-// loopRestartMessage собирает указание начать задачу заново: повторная
+// LoopRestartMessage собирает указание начать задачу заново: повторная
 // постановка (последним сообщением, чтобы она читалась как актуальная), список
 // уже тронутых файлов для перечитывания и прямое требование первого действия.
 //
@@ -772,13 +805,13 @@ func (d *loopDetector) touchedFiles() []string {
 // задачи осталась далеко в начале длинной истории, а состояние файлов — тем
 // более. Теперь после разрыва модель обязана вернуться к заданию и увидеть
 // реальное содержимое файлов ДО новых правок.
-func loopRestartMessage(task string, files []string, required string) string {
+func LoopRestartMessage(task string, files []string, required string) string {
 	var b strings.Builder
 	b.WriteString("\n\nНАЧНИ ЗАДАЧУ ЗАНОВО С ЭТОГО МОМЕНТА. Предыдущие попытки не считаются верными.\n")
 
 	if strings.TrimSpace(task) != "" {
 		b.WriteString("\nПОСТАНОВКА ЗАДАЧИ (перечитай целиком):\n")
-		b.WriteString(Truncate(strings.TrimSpace(task), loopTaskMax))
+		b.WriteString(truncate(strings.TrimSpace(task), loopTaskMax))
 		b.WriteString("\n")
 	}
 
@@ -802,11 +835,11 @@ func loopRestartMessage(task string, files []string, required string) string {
 	return b.String()
 }
 
-// loopCallPaths вытаскивает из аргументов вызова пути файлов/каталогов —
+// LoopCallPaths вытаскивает из аргументов вызова пути файлов/каталогов —
 // достаточно знать, какие файлы агент уже открывал, чтобы предложить ему
 // перечитать именно их. Содержимое (ключ content) и команды (key command) сюда
 // не попадают: это не пути.
-func loopCallPaths(args any) []string {
+func LoopCallPaths(args any) []string {
 	var out []string
 	var walk func(v any, key string, depth int)
 	walk = func(v any, key string, depth int) {

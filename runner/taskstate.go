@@ -12,6 +12,7 @@ package runner
 import (
 	"strings"
 
+	"ai/application/usecases"
 	"ai/board"
 	"ai/domain"
 )
@@ -21,7 +22,6 @@ import (
 // запись доски (нормализованный вывод тестов бывает на десятки тысяч символов).
 const roundStateErrorMax = 600
 
-// RoundState — состояние задачи по итогам одного раунда агента.
 // RoundState — состояние задачи по итогам одного раунда агента. Тип принадлежит
 // домену (domain.RoundState), здесь — алиас.
 type RoundState = domain.RoundState
@@ -74,18 +74,18 @@ func agentStateFor(verifyRan, verifyFailed bool, touched int) string {
 // Признак «падала» — ЛЮБАЯ упавшая проверка раунда, даже если последняя
 // проверка зелёная: «зелёный линт» не отменяет красный тест, а last_good_sha
 // по такой конвенции не сдвинется на раунде, где что-то было сломано.
-func roundVerify(calls []loopRoundCall) (ran, failed bool, cmd, sample string) {
+func roundVerify(calls []usecases.LoopRoundCall) (ran, failed bool, cmd, sample string) {
 	for _, c := range calls {
-		if !c.verify {
+		if !c.Verify {
 			continue
 		}
 		ran = true
-		cmd = c.verifyCmd
-		if c.state != "" {
+		cmd = c.VerifyCmd
+		if c.State != "" {
 			failed = true
-			sample = c.stateSample
+			sample = c.StateSample
 			if sample == "" {
-				sample = c.stateLabel
+				sample = c.StateLabel
 			}
 		}
 	}
@@ -94,7 +94,7 @@ func roundVerify(calls []loopRoundCall) (ran, failed bool, cmd, sample string) {
 
 // newRoundState собирает состояние раунда из вызовов инструментов и результата
 // промежуточного коммита (Ф-6, этап 2).
-func newRoundState(round int, calls []loopRoundCall, touched []string, sha string, committed bool) RoundState {
+func newRoundState(round int, calls []usecases.LoopRoundCall, touched []string, sha string, committed bool) RoundState {
 	ran, failed, cmd, sample := roundVerify(calls)
 	return RoundState{
 		Round:         round,

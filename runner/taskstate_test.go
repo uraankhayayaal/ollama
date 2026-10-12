@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"ai/application/usecases"
 	"ai/tools"
 )
 
@@ -33,10 +34,10 @@ func TestAgentStateFor(t *testing.T) {
 // roundVerify: упавшая проверка раунда не «забывается» зелёной проверкой
 // следом — иначе last_good_sha сдвинулся бы на раунде со сломанным тестом.
 func TestRoundVerifyKeepsFailureAfterGreenCheck(t *testing.T) {
-	calls := []loopRoundCall{
-		{name: "Run", verify: true, verifyCmd: "go test ./...", state: "go test ./...", stateSample: "FAIL pkg/x"},
-		{name: "Run", verify: true, verifyCmd: "golangci-lint run"},
-		{name: "ReadFiles"},
+	calls := []usecases.LoopRoundCall{
+		{Name: "Run", Verify: true, VerifyCmd: "go test ./...", State: "go test ./...", StateSample: "FAIL pkg/x"},
+		{Name: "Run", Verify: true, VerifyCmd: "golangci-lint run"},
+		{Name: "ReadFiles"},
 	}
 	ran, failed, cmd, sample := roundVerify(calls)
 	if !ran || !failed {
@@ -51,7 +52,7 @@ func TestRoundVerifyKeepsFailureAfterGreenCheck(t *testing.T) {
 }
 
 func TestRoundVerifyNoVerifyInRound(t *testing.T) {
-	ran, failed, cmd, sample := roundVerify([]loopRoundCall{{name: "ReadFiles"}, {name: "WriteFiles"}})
+	ran, failed, cmd, sample := roundVerify([]usecases.LoopRoundCall{{Name: "ReadFiles"}, {Name: "WriteFiles"}})
 	if ran || failed || cmd != "" || sample != "" {
 		t.Fatalf("раунд без проверок: ran=%v failed=%v cmd=%q sample=%q", ran, failed, cmd, sample)
 	}

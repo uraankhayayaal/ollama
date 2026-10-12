@@ -1,12 +1,17 @@
 package runner
 
 import (
+	"ai/application/usecases"
 	"ai/logging"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 )
+
+// Детектор петель живёт в слое application (usecases) и не знает про логгер
+// инфраструктуры — подключаем его при инициализации пакета.
+func init() { usecases.Debugf = Debugf }
 
 // DebugEnabled — флаг из переменной окружения LLM_DEBUG ("1"/"true").
 func DebugEnabled() bool {
