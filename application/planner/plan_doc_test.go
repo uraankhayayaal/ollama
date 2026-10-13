@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/board"
+	"ai/domain"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +21,7 @@ func TestRenderPlanDocBuildsNestedSections(t *testing.T) {
 				Description: "декомпозиция бэкенда",
 				Prompt:      "Спроектируй модули",
 				Scope:       []string{"server/"},
-				Tasks: []board.TaskSpec{
+				Tasks: []domain.TaskSpec{
 					{
 						TaskID:         "BEL-01",
 						Title:          "хранение",

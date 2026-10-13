@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/board"
+	"ai/domain"
 	"ai/projects"
 	"fmt"
 	"os"
@@ -64,9 +64,9 @@ func renderStepDoc(st Step, num int) string {
 		b.WriteString("\nДекомпозиция ещё не выполнена: подзадачи появятся после шага лида.\n")
 		return b.String()
 	}
-	tasks := append([]board.TaskSpec{}, st.Tasks...)
+	tasks := append([]domain.TaskSpec{}, st.Tasks...)
 	sort.SliceStable(tasks, func(i, j int) bool {
-		a, b := tasks[i].SequenceOrder.Int(), tasks[j].SequenceOrder.Int()
+		a, b := tasks[i].SequenceOrder, tasks[j].SequenceOrder
 		if a != b {
 			return a < b
 		}
@@ -76,7 +76,7 @@ func renderStepDoc(st Step, num int) string {
 		fmt.Fprintf(&b, "\n#### %d.%d %s — %s\n\n", num, i+1, t.TaskID, strings.TrimSpace(t.Title))
 		fmt.Fprintf(&b, "- **Роль:** %s\n", emptyStrDash(t.AssignedRole))
 		fmt.Fprintf(&b, "- **Порядок:** %d, параллельно: %v, зависимости: %s\n",
-			t.SequenceOrder.Int(), t.CanRunParallel.Bool(), emptyStrDash(strings.Join(t.Dependencies, ", ")))
+			t.SequenceOrder, t.CanRunParallel, emptyStrDash(strings.Join(t.Dependencies, ", ")))
 		if strings.TrimSpace(t.Description) != "" {
 			fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(t.Description))
 		}

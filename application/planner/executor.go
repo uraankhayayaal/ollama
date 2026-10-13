@@ -6,6 +6,7 @@ import (
 
 	"ai/board"
 	"ai/checkpoint"
+	"ai/domain"
 	"ai/logging"
 	"ai/models"
 	"ai/projects"
@@ -23,6 +24,26 @@ import (
 
 	"github.com/ollama/ollama/api"
 )
+
+// toDomainTaskSpecs переводит декомпозицию лида (толерантные к формату модели
+// board.TaskSpec с FlexInt/FlexBool) в доменный domain.TaskSpec, который
+// хранится в Step.Tasks и сериализуется в чекпоинт/PLAN.md.
+func toDomainTaskSpecs(tasks []board.TaskSpec) []domain.TaskSpec {
+	out := make([]domain.TaskSpec, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, domain.TaskSpec{
+			TaskID:         t.TaskID,
+			Title:          t.Title,
+			Description:    t.Description,
+			AssignedRole:   t.AssignedRole,
+			SequenceOrder:  t.SequenceOrder.Int(),
+			CanRunParallel: t.CanRunParallel.Bool(),
+			Dependencies:   t.Dependencies,
+			Contracts:      t.Contracts,
+		})
+	}
+	return out
+}
 
 // Executor выполняет план поэтапно, создавая нужных агентов.
 // Каждый шаг запускается отдельным агентом с чистым контекстом:
@@ -829,7 +850,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	}
 	printDecomposedTasks(e.log, tasks)
 	sortTaskSpecs(tasks)
-	step.Tasks = tasks
+	step.Tasks = toDomainTaskSpecs(tasks)
 	e.persistPlan(ctx)
 
 	// PLAN.md: детерминированно записываем полный план работ с декомпозицией
