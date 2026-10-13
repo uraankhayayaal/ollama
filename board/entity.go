@@ -17,148 +17,39 @@
 package board
 
 import (
+	"ai/domain"
 	"encoding/json"
 	"strconv"
 	"strings"
 )
 
-// Status — статус эпика или задачи на общей доске.
-type Status string
+// Status — статус эпика или задачи на общей доске. Тип и конечный автомат
+// переходов принадлежат домену (domain.Status / domain.ValidateTransition);
+// здесь — алиасы для совместимости кода доски.
+//
+// Порядок колонок доски: new → analysis → ready → human_help → in_progress →
+// testing → done → cancelled.
+type Status = domain.Status
 
-// Статусы, общие для эпиков и задач (Kanban-доска). Порядок колонок доски
-// (Р-6 PLAN-2026-10-07-wip-harness-rework.md): new → analysis → ready →
-// human_help → in_progress → testing → done → cancelled.
 const (
-	StatusNew        Status = "new"         // новая
-	StatusAnalysis   Status = "analysis"    // в анализе
-	StatusReady      Status = "ready"       // готова к работе
-	StatusHumanHelp  Status = "human_help"  // помощь человека
-	StatusInProgress Status = "in_progress" // в работе
-	StatusTesting    Status = "testing"     // на тестирование
-	StatusDone       Status = "done"        // выполнена
-	StatusCancelled  Status = "cancelled"   // отменена
+	StatusNew        = domain.StatusNew        // новая
+	StatusAnalysis   = domain.StatusAnalysis   // в анализе
+	StatusReady      = domain.StatusReady      // готова к работе
+	StatusHumanHelp  = domain.StatusHumanHelp  // помощь человека
+	StatusInProgress = domain.StatusInProgress // в работе
+	StatusTesting    = domain.StatusTesting    // на тестирование
+	StatusDone       = domain.StatusDone       // выполнена
+	StatusCancelled  = domain.StatusCancelled  // отменена
 )
 
-// Label возвращает человекочитаемое название статуса (для логов/UI).
-func (s Status) Label() string {
-	switch s {
-	case StatusNew:
-		return "новая"
-	case StatusAnalysis:
-		return "в анализе"
-	case StatusReady:
-		return "готова к работе"
-	case StatusHumanHelp:
-		return "помощь человека"
-	case StatusInProgress:
-		return "в работе"
-	case StatusTesting:
-		return "на тестирование"
-	case StatusDone:
-		return "выполнена"
-	case StatusCancelled:
-		return "отменена"
-	default:
-		return string(s)
-	}
-}
-
-// Terminal сообщает, является ли статус завершающим (дальнейшие переходы
-// запрещены).
-func (s Status) Terminal() bool {
-	return s == StatusDone || s == StatusCancelled
-}
-
-// Valid проверяет, что статус известен системе.
-func (s Status) Valid() bool {
-	switch s {
-	case StatusNew, StatusAnalysis, StatusReady, StatusHumanHelp,
-		StatusInProgress, StatusTesting, StatusDone, StatusCancelled:
-		return true
-	}
-	return false
-}
-
-// ValidateTransition проверяет допустимость перехода from -> to по конечному
-// автомату статусов Kanban-доски:
-//
-//	новая           -> в анализе, помощь человеку, отменена
-//	в анализе       -> готова к работе, помощь человеку, отменена
-//	готова к работе -> в работе, помощь человеку, отменена
-//	помощь человека -> готова к работе (помощь получена, задача в очередь),
-//	                   в работе (продолжаем), отмена
-//	в работе        -> готова к работе (откат кода, см. ниже), на
-//	                   тестирование, помощь человеку, выполнена, отменена
-//	на тестирование -> в работе (замечания тестировщика), выполнена
-//	                   (приёмка), помощь человеку, отмена
-//	(терминальные: выполнена/отменена переходов не имеют)
-//
-// «Помощь человека» — боковая ветка (Р-6): вход из любого нетерминального
-// статуса, выход только обратно в работу. Отмена — тоже доступна из любого
-// нетерминального статуса. Соседность колонок: ready → human_help →
-// in_progress → testing → done.
-//
-// Одинаковый статус не считается переходом (допускается для идемпотентности).
+// ValidateTransition делегирует доменному конечному автомату статусов
+// (domain.ValidateTransition).
 func ValidateTransition(from, to Status) error {
-	if from == to {
-		return nil
-	}
-	if !from.Valid() || !to.Valid() {
-		return &StatusError{From: from, To: to, Reason: "неизвестный статус"}
-	}
-	// Боковые переходы: из любого нетерминального статуса — в «помощь
-	// человека» (эскалация/форсмажор) или в «отменена».
-	if !from.Terminal() && (to == StatusHumanHelp || to == StatusCancelled) {
-		return nil
-	}
-	switch from {
-	case StatusNew:
-		if to == StatusAnalysis {
-			return nil
-		}
-	case StatusAnalysis:
-		if to == StatusReady {
-			return nil
-		}
-	case StatusReady:
-		if to == StatusInProgress {
-			return nil
-		}
-	case StatusHumanHelp:
-		// Помощь получена: задача возвращается в очередь на новый прогон
-		// (ready) либо продолжается на месте (in_progress).
-		if to == StatusReady || to == StatusInProgress {
-			return nil
-		}
-	case StatusInProgress:
-		// Возврат в ready — ручной откат кода задачи к опорной точке
-		// (Ф-6, этап 3): ветка задачи переводится назад (gitops.RollbackWorktree),
-		// а задача должна автоматически вернуться в очередь на новый прогон.
-		// Считаем это безопасным, потому что откат делает только человек
-		// (POST .../tasks/{id}/rollback) и только по явному подтверждению в UI.
-		if to == StatusReady || to == StatusTesting || to == StatusDone {
-			return nil
-		}
-	case StatusTesting:
-		// Сдача разработчиком в работу (in_progress) при замечаниях
-		// тестировщика либо приёмка (done) по итогам тестирования.
-		if to == StatusInProgress || to == StatusDone {
-			return nil
-		}
-	}
-	return &StatusError{From: from, To: to, Reason: "переход не разрешён конечным автоматом"}
+	return domain.ValidateTransition(from, to)
 }
 
-// StatusError — ошибка некорректного перехода статуса.
-type StatusError struct {
-	From   Status
-	To     Status
-	Reason string
-}
-
-func (e *StatusError) Error() string {
-	return "переход статуса " + e.From.Label() + " -> " + e.To.Label() + " запрещён: " + e.Reason
-}
+// StatusError — ошибка некорректного перехода статуса (доменный тип).
+type StatusError = domain.StatusError
 
 // TaskSpec — единая структура задачи из JSON-схем Системного архитектора и
 // лидов направлений (task_id, title, description, assigned_role,
@@ -536,14 +427,9 @@ type BugReport struct {
 }
 
 // Meta — метаданные доски проекта: исходная задача пользователя и общий
-// статус решения (done — все эпики и задачи успешно выполнены).
-type Meta struct {
-	ProjectName string `json:"project_name"`
-	Task        string `json:"task"`
-	Status      Status `json:"status"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
+// статус решения (done — все эпики и задачи успешно выполнены). Тип принадлежит
+// домену (domain.Meta), здесь — алиас.
+type Meta = domain.Meta
 
 // flexInt — целое число из JSON-схемы, которое модель может прислать либо
 // числом, либо строкой ("1"). Парсится толерантно.

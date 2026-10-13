@@ -1205,11 +1205,9 @@ func (s *Store) SaveMeta(ctx context.Context, m *Meta) error {
 
 // --- Сводки ---
 
-// StatusCounts — распределение записей по статусам.
-type StatusCounts struct {
-	Total int
-	By    map[Status]int
-}
+// StatusCounts — распределение записей по статусам. Тип принадлежит домену
+// (domain.StatusCounts), здесь — алиас.
+type StatusCounts = domain.StatusCounts
 
 // EpicCounts возвращает распределение эпиков по статусам.
 func (s *Store) EpicCounts(ctx context.Context) (*StatusCounts, error) {
