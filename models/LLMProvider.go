@@ -2,11 +2,11 @@ package models
 
 import (
 	"ai/agents"
-	"ai/runner"
+	"ai/domain"
 	"context"
 )
 
 // LLMProvider — единый интерфейс для моделей
 type LLMProvider interface {
-	Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error)
+	Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error)
 }

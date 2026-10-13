@@ -660,3 +660,44 @@ type toolOutcome struct {
 	result []byte
 	err    error
 }
+
+// resumeStateKey — тип ключа контекста для передачи состояния resume.
+type resumeStateKey struct{}
+
+// resumeOffKey — тип ключа контекста для принудительного сброса resume
+// (WithoutResumeState): задача берётся «с другой стороны», заново.
+type resumeOffKey struct{}
+
+// WithResumeState помещает состояние возобновления агентского цикла в контекст.
+// Провайдеры сами не меняются: runner.Generate читает состояние из контекста.
+func WithResumeState(ctx context.Context, state *ResumeState) context.Context {
+	return context.WithValue(ctx, resumeStateKey{}, state)
+}
+
+// WithoutResumeState помечает контекст для принудительного сброса resume:
+// задача берётся «с другой стороны», заново.
+func WithoutResumeState(ctx context.Context) context.Context {
+	return context.WithValue(ctx, resumeOffKey{}, true)
+}
+
+// ResumeStateFromContext извлекает состояние возобновления из контекста.
+func ResumeStateFromContext(ctx context.Context) (*ResumeState, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	if st, ok := ctx.Value(resumeStateKey{}).(*ResumeState); ok {
+		return st, true
+	}
+	return nil, false
+}
+
+// ResumeDisabledFromContext проверяет, помечен ли контекст для сброса resume.
+func ResumeDisabledFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if off, _ := ctx.Value(resumeOffKey{}).(bool); off {
+		return true
+	}
+	return false
+}

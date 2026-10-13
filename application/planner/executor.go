@@ -4,13 +4,13 @@ import (
 	"ai/agents"
 	"ai/acceptor"
 
+	"ai/application/usecases"
 	"ai/checkpoint"
 	"ai/domain"
 	"ai/logging"
 	"ai/models"
 	"ai/projects"
 	"ai/runevents"
-	"ai/runner"
 	"ai/tools"
 	"context"
 	"encoding/json"
@@ -575,7 +575,7 @@ func newStepAgent(step *Step, projectName string) agents.Agent {
 // специалиста (devops, qa, лиды). Все агенты ограничены областью работы scope:
 // пишут/читают только указанные файлы. Возвращает ответ модели (нужен циклу
 // QA-багрепортов: observable из него парсятся репорты дефектов).
-func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName string) (*runner.AgentResponse, error) {
+func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName string) (*domain.AgentResponse, error) {
 	// Подмешивание контекста RAG по шагу (Ф-4): семантическая выборка
 	// релевантного кода по тексту шага с фильтром его scope. Клонируем шаг,
 	// чтобы чекпоинт/PLAN.md хранили исходный промпт (без служебного блока);
@@ -647,7 +647,7 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	genCtx := ctx
 	if rs, ok := e.loadResumeState(ctx, step.ID); ok {
 		e.log.Detailf("[%s] шаг %s: возобновляю агентский цикл с раунда %d (повторный запуск с --resume)", agentLabel(step.Agent, step.Role), step.ID, rs.Rounds+1)
-		genCtx = runner.WithResumeState(ctx, rs)
+		genCtx = usecases.WithResumeState(ctx, rs)
 	}
 
 	// Снимок публичной поверхности (нормализованные сигнатуры пакетов) до шага.
@@ -938,7 +938,7 @@ func (e *Executor) clearRoundState(ctx context.Context, step *Step) {
 	}
 }
 
-func (e *Executor) truncatedStepError(ctx context.Context, step *Step, resp *runner.AgentResponse) error {
+func (e *Executor) truncatedStepError(ctx context.Context, step *Step, resp *domain.AgentResponse) error {
 	if e.store != nil {
 		e.clearRoundState(ctx, step)
 		return fmt.Errorf("шаг %q: исчерпан лимит раундов (%d) агентского цикла — запустите с --resume, шаг выполнится заново", step.ID, resp.Rounds)
@@ -986,7 +986,7 @@ func sortTaskSpecs(tasks []domain.TaskSpec) {
 // чекпоинта. Возвращает состояние для продолжения цикла и true, если
 // история есть. Возвращает false при resume=false, без чекпоинта или если
 // истории для шага не сохранялось.
-func (e *Executor) loadResumeState(ctx context.Context, stepID string) (*runner.ResumeState, bool) {
+func (e *Executor) loadResumeState(ctx context.Context, stepID string) (*usecases.ResumeState, bool) {
 	if e.store == nil || !e.resume {
 		return nil, false
 	}
@@ -998,19 +998,19 @@ func (e *Executor) loadResumeState(ctx context.Context, stepID string) (*runner.
 	if !ok || len(conv) == 0 {
 		return nil, false
 	}
-	var msgs []runner.Message
+	var msgs []domain.Message
 	if uerr := json.Unmarshal(conv, &msgs); uerr != nil {
 		e.log.Warnf("[Checkpoint] повреждена сохранённая история шага %s (%v), начинаю шаг заново", stepID, uerr)
 		return nil, false
 	}
-	return &runner.ResumeState{Messages: msgs, Rounds: snap.Rounds[stepID]}, true
+	return &usecases.ResumeState{Messages: msgs, Rounds: snap.Rounds[stepID]}, true
 }
 
 // persistRoundState сохраняет историю диалога и потраченные раунды шага в
 // чекпоинт, чтобы при resume продолжить агентский цикл. Возвращает true,
 // если состояние сохранено. Сериализуется e.mu: при параллельном выполнении
 // волны истории двух шагов не должны терять обновления снимка.
-func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *runner.AgentResponse) bool {
+func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *domain.AgentResponse) bool {
 	if e.store == nil || len(resp.Messages) == 0 {
 		return false
 	}

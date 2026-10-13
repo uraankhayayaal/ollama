@@ -2,8 +2,8 @@ package models
 
 import (
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/domain"
-	"ai/runner"
 	"ai/tools"
 	"context"
 	"encoding/json"
@@ -23,6 +23,9 @@ import (
 type OllamaProvider struct {
 	client *api.Client
 	model  string
+	// runner — агентский раннер (порт usecases.AgentRunner), выполняет полный
+	// агентский цикл. Подключается через SetRunner; nil — Generate недоступен.
+	runner usecases.AgentRunner
 	// settings — ключевые лимиты модели: входящий контекст (num_ctx), выход
 	// (num_predict) и бюджет thinking. Задаются секцией settings провайдера в
 	// providers.json (см. ModelSettings), НЕ переменными окружения. Вход
@@ -30,6 +33,12 @@ type OllamaProvider struct {
 	// nudge-цикла может раздуваться до десятков тысяч, из-за чего модель
 	// возвращает 400 exceeded_context_size.
 	settings ModelSettings
+}
+
+// SetRunner подключает агентский раннер (порт usecases.AgentRunner) к
+// провайдеру. Вызывается оркестратором при создании провайдера.
+func (o *OllamaProvider) SetRunner(r usecases.AgentRunner) {
+	o.runner = r
 }
 
 func NewOllamaProvider(model string, cfg ProviderConfig) (*OllamaProvider, error) {
@@ -56,8 +65,11 @@ func NewOllamaProvider(model string, cfg ProviderConfig) (*OllamaProvider, error
 	}, nil
 }
 
-func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
-	return runner.Generate(ctx, o, agent)
+func (o *llamaProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
+	if o.runner == nil {
+		return nil, fmt.Errorf("OllamaProvider: агентский раннер не подключён (SetRunner)")
+	}
+	return o.runner.Generate(ctx, agent)
 }
 
 // ModelName — имя модели, реально выбранной для этого провайдера. Раннер
@@ -71,9 +83,9 @@ func (o *OllamaProvider) ProviderName() string { return "ollama" }
 
 // ModelLimits сообщает ключевые лимиты модели (окно входа/вывода, бюджет
 // thinking) — раннер использует их для авто-ограничения истории диалога по
-// умолчанию (см. runner.ModelLimitsProvider, runner/compression.go).
-func (o *OllamaProvider) ModelLimits() runner.ModelLimits {
-	return runner.ModelLimits{
+// умолчанию (см. domain.ModelLimitsProvider, runner/compression.go).
+func (o *OllamaProvider) ModelLimits() domain.ModelLimits {
+	return domain.ModelLimits{
 		InputTokens:  o.settings.InputTokens,
 		OutputTokens: o.settings.OutputTokens,
 		ThinkTokens:  o.settings.ThinkTokens,
@@ -82,7 +94,7 @@ func (o *OllamaProvider) ModelLimits() runner.ModelLimits {
 
 // ChatOnce выполняет один запрос к модели Ollama. Реализуется через ChatStream
 // с убранным потоковым колбэком — поведение сохранено (полный текст ответа).
-func (o *OllamaProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
+func (o *OllamaProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*domain.ModelReply, error) {
 	return o.ChatStream(ctx, req, nil)
 }
 
@@ -156,7 +168,7 @@ func streamIdleInterval() time.Duration {
 // ChatStream выполняет один запрос к модели Ollama в потоковом режиме: фрагменты
 // текста отдаются через onChunk (накопленный Partial), полный текст возвращается
 // в ModelReply. Реализует runner.StreamChatProvider.
-func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
+func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(domain.StreamChunk)) (*domain.ModelReply, error) {
 	ollamaTools := tools.ToOllama(req.Tools)
 	msgs := req.Messages
 
@@ -227,7 +239,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 	//     числового бюджета.
 	if level := thinkLevelFromTokens(o.settings.ThinkTokens); level != "" {
 		apiReq.Think = &api.ThinkValue{Value: level}
-		runner.Debugf("OLLAMA: thinking для модели %q: уровень %q (бюджет %d токенов)", o.model, level, o.settings.ThinkTokens)
+		logging.Debugf("OLLAMA: thinking для модели %q: уровень %q (бюджет %d токенов)", o.model, level, o.settings.ThinkTokens)
 	} else if v := strings.TrimSpace(os.Getenv("OLLAMA_THINK")); v != "" {
 		enabled := true
 		switch strings.ToLower(v) {
@@ -236,22 +248,22 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 		}
 		apiReq.Think = &api.ThinkValue{Value: enabled}
 		if !enabled {
-			runner.Debugf("OLLAMA: рассуждение (think) отключено для модели %q", o.model)
+			logging.Debugf("OLLAMA: рассуждение (think) отключено для модели %q", o.model)
 		}
 	}
 
-	runner.Debugf("OLLAMA: запрос к модели %q (сообщений: %d, инструментов: %d)", o.model, len(messages), len(ollamaTools))
+	logging.Debugf("OLLAMA: запрос к модели %q (сообщений: %d, инструментов: %d)", o.model, len(messages), len(ollamaTools))
 	for i, m := range messages {
-		runner.Debugf("OLLAMA: messages[%d] role=%q content=%q tool_calls=%d", i, m.Role, runner.Truncate(m.Content, 300), len(m.ToolCalls))
+		logging.Debugf("OLLAMA: messages[%d] role=%q content=%q tool_calls=%d", i, m.Role, logging.Truncate(m.Content, 300), len(m.ToolCalls))
 	}
 	for _, t := range ollamaTools {
-		runner.Debugf("OLLAMA: tool=%q", t.Function.Name)
+		logging.Debugf("OLLAMA: tool=%q", t.Function.Name)
 	}
 
 	var content strings.Builder
 	var toolCalls []tools.ToolCall
 	var doneReason string
-	var usage *runner.Usage
+	var usage *domain.Usage
 
 	// Авто-ретрай «обрубленных» tool-call: llama-server иногда не дочитывает
 	// JSON-аргументы вызова инструмента (модель оборвала вывод на полуслове,
@@ -272,7 +284,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 		// (prompt_eval_count — весь вход, eval_count — выход модели), а
 		// eval_count/eval_duration дают реальную скорость генерации.
 		if resp.Done && (resp.PromptEvalCount > 0 || resp.EvalCount > 0) {
-			usage = &runner.Usage{
+			usage = &domain.Usage{
 				InputTokens:  resp.PromptEvalCount,
 				OutputTokens: resp.EvalCount,
 			}
@@ -296,22 +308,22 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 				}
 
 				toolCalls = append(toolCalls, tools.ToolCall{ID: id, Name: tc.Function.Name, Arguments: string(argsBytes)})
-				runner.Debugf("OLLAMA: tool_call %q (id=%q) args=%s", tc.Function.Name, id, string(argsBytes))
+				logging.Debugf("OLLAMA: tool_call %q (id=%q) args=%s", tc.Function.Name, id, string(argsBytes))
 			}
 		}
 
 		if resp.Done {
-			runner.Debugf(
+			logging.Debugf(
 				"OLLAMA: сырой ответ done=%v done_reason=%q content=%q thinking=%q",
-				resp.Done, resp.DoneReason, runner.Truncate(resp.Message.Content, 300), runner.Truncate(resp.Message.Thinking, 300),
+				resp.Done, resp.DoneReason, logging.Truncate(resp.Message.Content, 300), logging.Truncate(resp.Message.Thinking, 300),
 			)
-			runner.DebugCheckEmpty("ollama", resp.DoneReason, content.String(), len(resp.Message.ToolCalls), resp)
+			logging.DebugCheckEmpty("ollama", resp.DoneReason, content.String(), len(resp.Message.ToolCalls), resp)
 		}
 
 		// Потоковый фрагмент: накопленный текст, чтобы клиент просто
 		// перезаписывал предпоследнее сообщение. Стрим идёт синхронно.
 		if onChunk != nil {
-			onChunk(runner.StreamChunk{Partial: content.String(), Done: resp.Done})
+			onChunk(domain.StreamChunk{Partial: content.String(), Done: resp.Done})
 		}
 
 		return nil
@@ -381,7 +393,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 		if attempt >= toolCallRetries() || !retryableToolCallErr(err) || ctx.Err() != nil {
 			break
 		}
-		runner.Debugf("OLLAMA: попытка %d/%d: невалидные аргументы tool-call (%v), повторяю запрос к модели %q",
+		logging.Debugf("OLLAMA: попытка %d/%d: невалидные аргументы tool-call (%v), повторяю запрос к модели %q",
 			attempt+1, toolCallRetries(), err, o.model)
 		// Сбрасываем накопители частичного ответа неудачной попытки.
 		content.Reset()
@@ -407,5 +419,5 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 		return nil, fmt.Errorf("Ошибка выполнения Chat: %w", err)
 	}
 
-	return &runner.ModelReply{Content: content.String(), ToolCalls: toolCalls, FinishReason: doneReason, Usage: usage}, nil
+	return &domain.ModelReply{Content: content.String(), ToolCalls: toolCalls, FinishReason: doneReason, Usage: usage}, nil
 }

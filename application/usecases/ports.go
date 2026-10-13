@@ -1,6 +1,7 @@
 package usecases
 
 import (
+	"ai/agents"
 	"ai/domain"
 	"context"
 )
@@ -84,5 +85,12 @@ type RuntimeLogger interface {
 // раунда (проверка упала/идёт, SHA промежуточного коммита).
 type RoundStateReporter interface {
 	ReportRoundState(domain.RoundState)
+}
+
+// AgentRunner — порт агентского раннера: выполняет полный агентский цикл
+// (диалог + инструменты) и возвращает ответ модели. Реализуется
+// инфраструктурой (runner).
+type AgentRunner interface {
+	Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error)
 }
 

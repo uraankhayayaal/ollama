@@ -23,14 +23,13 @@ import (
 
 	"ai/agents"
 	"ai/runevents"
-	"ai/runner"
 	"ai/tokens"
 )
 
 // generate вызывает провайдера в scope'е единицы работы: расход токенов раундов
 // атрибутируется этой единице и по нему записывается факт при завершении
 // (Ф-2). Пустой scope — расход без атрибуции (счётчик проекта).
-func (k *KanbanRunner) generate(ctx context.Context, scope string, a agents.Agent) (*runner.AgentResponse, error) {
+func (k *KanbanRunner) generate(ctx context.Context, scope string, a agents.Agent) (*domain.AgentResponse, error) {
 	return k.provider.Generate(runevents.WithScope(ctx, scope), a)
 }
 

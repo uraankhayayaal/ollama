@@ -2,9 +2,9 @@ package models
 
 import (
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/domain"
 	"ai/logging"
-	"ai/runner"
 	"context"
 	"fmt"
 	"os"
@@ -109,7 +109,7 @@ func (l *LayeredProvider) heavyForRequest(req domain.ChatRequest) bool {
 // и повторяет то же самое. Задачу с другой стороны выполняет БОЛЬШАЯ модель —
 // с чистой историей (runner.WithoutResumeState), потому что продолжение того же
 // застрявшего диалога воспроизвело бы ту же петлю.
-func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
 	// Требование задачи из контекста сильнее эвристики по агенту: если доска
 	// помнит, что задача не осилилась на дешёвой модели, берём большой слой с
 	// первого раунда, а не тратим цикл на заведомо слабую попытку.
@@ -128,7 +128,7 @@ func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 	// пробует ещё раз; если и он не смог — возвращаем его вердикт.
 	logging.Warnf("[Layered] агент %T: малый слой не справился (error=%v, truncated=%v, looped=%v%s) — эскалация на LARGE",
 		agent, err, resp != nil && resp.Truncated, resp != nil && resp.Looped, loopDetail(resp))
-	heavResp, heavErr := l.Large.Generate(runner.WithoutResumeState(ctx), agent)
+	heavResp, heavErr := l.Large.Generate(usecases.WithoutResumeState(ctx), agent)
 	if heavErr != nil {
 		if err != nil {
 			return nil, err
@@ -140,7 +140,7 @@ func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 
 // loopDetail дополняет лог эскалации причиной зацикливания (если цикл был
 // прерван петлёй), чтобы в логе было видно, ЧТО именно не получилось.
-func loopDetail(resp *runner.AgentResponse) string {
+func loopDetail(resp *domain.AgentResponse) string {
 	if resp == nil || !resp.Looped {
 		return ""
 	}
@@ -152,16 +152,16 @@ func loopDetail(resp *runner.AgentResponse) string {
 // по максимуму (резерв под худший случай). Generate делегирует раунды
 // конкретному слою, и раннер видит лимиты именно его — этот метод страховка
 // для прямого использования LayeredProvider как ChatProvider.
-func (l *LayeredProvider) ModelLimits() runner.ModelLimits {
+func (l *LayeredProvider) ModelLimits() domain.ModelLimits {
 	return mergeModelLimits(l.Small, l.Large)
 }
 
 // mergeModelLimits объединяет лимиты двух слоёв консервативно: входное окно —
 // минимальное из ненулевых, вывод/thinking — максимальное из двух.
-func mergeModelLimits(small, large LLMProvider) runner.ModelLimits {
-	var out runner.ModelLimits
+func mergeModelLimits(small, large LLMProvider) domain.ModelLimits {
+	var out domain.ModelLimits
 	take := func(p LLMProvider) {
-		mp, ok := p.(runner.ModelLimitsProvider)
+		mp, ok := p.(usecases.ModelLimitsProvider)
 		if !ok {
 			return
 		}

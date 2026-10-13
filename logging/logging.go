@@ -21,6 +21,7 @@
 package logging
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -298,4 +299,49 @@ func emit(project string, console, toFile bool, tag, format string, args ...any)
 	} else {
 		fmt.Fprintf(f, "%s %s\n", ts, msg)
 	}
+}
+
+// DebugEnabled — флаг из переменной окружения LLM_DEBUG ("1"/"true").
+func DebugEnabled() bool {
+	switch strings.ToLower(os.Getenv("LLM_DEBUG")) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// Debugf пишет отладочное сообщение только в файл (если LLM_DEBUG включён).
+func Debugf(format string, args ...any) {
+	if DebugEnabled() {
+		Detailf("[DEBUG] "+format, args...)
+	}
+}
+
+// Truncate обрезает длинные строки для компактного лога.
+func Truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + fmt.Sprintf("...(%d байт всего)", len(s))
+}
+
+// DebugCheckEmpty — диагностика пустого ответа: помогает понять,
+// почему модель вернула пустой контент.
+func DebugCheckEmpty(provider, finishReason string, content string, toolCalls int, raw any) {
+	if content != "" || toolCalls > 0 {
+		return
+	}
+
+	Debugf(
+		"!!! ПУСТОЙ ОТВЕТ от %s: finish_reason=%q, content='', tool_calls=%d",
+		provider, finishReason, toolCalls,
+	)
+
+	b, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		Debugf("%s: (не удалось сериализовать: %v)", provider, err)
+		return
+	}
+
+	Debugf("%s:\n%s", provider, string(b))
 }
