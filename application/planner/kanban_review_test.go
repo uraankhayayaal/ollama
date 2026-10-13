@@ -59,7 +59,7 @@ func newReviewRunner(t *testing.T, project string) (*KanbanRunner, *board.Store,
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: project})
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir(project)) })
 	p := &reviewFlowProvider{}
-	return NewKanbanRunner(p, store), store, p
+	return NewKanbanRunner(p, board.NewDomainStore(store)), store, p
 }
 
 // TestArchitectReviewRunsInBoardOnlyAndNormal — Ф-8: фаза phaseArchitectReview

@@ -49,7 +49,7 @@ func newIdleKanbanRunner(t *testing.T) (*KanbanRunner, *board.Store) {
 	}
 	projectDir := projects.ProjectDir("kanban-done")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
-	return NewKanbanRunner(&idleProvider{}, store), store
+	return NewKanbanRunner(&idleProvider{}, board.NewDomainStore(store)), store
 }
 
 // TestPhantomDoneNotClosedByFallback — специалист ничего не сделал и не сменил
@@ -105,7 +105,7 @@ func TestFallbackDoneAllowedWhenGuardPasses(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-done-ok"})
 	projectDir := projects.ProjectDir("kanban-done-ok")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
-	kr := NewKanbanRunner(&idleProvider{}, store)
+	kr := NewKanbanRunner(&idleProvider{}, board.NewDomainStore(store))
 
 	if err := kr.Run(context.Background(), "kanban-done-ok", "Сделай todo-приложение"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -238,7 +238,7 @@ func TestAgentHumanHelpRespectedByFallback(t *testing.T) {
 	}
 	projectDir := projects.ProjectDir("kanban-pause")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
-	kr := NewKanbanRunner(&humanHelpProvider{store: store}, store)
+	kr := NewKanbanRunner(&humanHelpProvider{store: store}, board.NewDomainStore(store))
 
 	var audit []string
 	kr.SetStatusNotifier(func(msg string) { audit = append(audit, msg) })

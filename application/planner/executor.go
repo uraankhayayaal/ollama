@@ -4,7 +4,6 @@ import (
 	"ai/agents"
 	"ai/agents/acceptor"
 
-	"ai/board"
 	"ai/checkpoint"
 	"ai/domain"
 	"ai/logging"
@@ -25,24 +24,12 @@ import (
 	"github.com/ollama/ollama/api"
 )
 
-// toDomainTaskSpecs переводит декомпозицию лида (толерантные к формату модели
-// board.TaskSpec с FlexInt/FlexBool) в доменный domain.TaskSpec, который
-// хранится в Step.Tasks и сериализуется в чекпоинт/PLAN.md.
-func toDomainTaskSpecs(tasks []board.TaskSpec) []domain.TaskSpec {
-	out := make([]domain.TaskSpec, 0, len(tasks))
-	for _, t := range tasks {
-		out = append(out, domain.TaskSpec{
-			TaskID:         t.TaskID,
-			Title:          t.Title,
-			Description:    t.Description,
-			AssignedRole:   t.AssignedRole,
-			SequenceOrder:  t.SequenceOrder.Int(),
-			CanRunParallel: t.CanRunParallel.Bool(),
-			Dependencies:   t.Dependencies,
-			Contracts:      t.Contracts,
-		})
-	}
-	return out
+// toDomainTaskSpecs переводит декомпозицию лида (domain.TaskSpec) в доменный
+// domain.TaskSpec, который хранится в Step.Tasks и сериализуется в
+// чекпоинт/PLAN.md. С унификацией моделей (срез C6) domain.TaskSpec —
+// алиас domain.TaskSpec, поэтому перевод тождественен.
+func toDomainTaskSpecs(tasks []domain.TaskSpec) []domain.TaskSpec {
+	return tasks
 }
 
 // Executor выполняет план поэтапно, создавая нужных агентов.
@@ -831,7 +818,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		}
 	}
 
-	tasks, err := board.UnmarshalTasks(resp.Content)
+	tasks, err := domain.UnmarshalTasks(resp.Content)
 	if (err != nil || len(tasks) == 0) && !resp.Truncated {
 		// Модель вместо JSON-декомпозиции вернула текст (пути, рассуждения):
 		// не фаталим сразу — один раз спрашиваем ещё раз с чёткой инструкцией.
@@ -841,7 +828,7 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 			agentLabel(step.Agent, step.Role), step.ID, err)
 		if retryResp, rerr := e.provider.Generate(ctx, leadWithHint(lead, resp.Content)); rerr == nil {
 			resp = retryResp
-			tasks, err = board.UnmarshalTasks(resp.Content)
+			tasks, err = domain.UnmarshalTasks(resp.Content)
 		}
 	}
 	if err != nil || len(tasks) == 0 {
@@ -966,14 +953,14 @@ func (e *Executor) truncatedStepError(ctx context.Context, step *Step, resp *run
 // leadTaskPrompt формирует задание специалисту по задаче из JSON-декомпозиции
 // лида (plan-режим). В отличие от Kanban-задач, в plan-режиме доска не
 // подключена, поэтому подсказки про статусы доски отсутствуют.
-func leadTaskPrompt(project string, t board.TaskSpec) string {
+func leadTaskPrompt(project string, t domain.TaskSpec) string {
 	return fmt.Sprintf("Ты — специалист (%s), выполняешь задачу из декомпозиции лида проекта %q.\n\nЗадача: %s — %s\n\nПостановка задачи (полный контракт):\n%s\n\nПравила:\n- Работай в своей выходной директории (OutputDir): учи структуру через List, читай контракты через ReadFiles (в т.ч. PLAN.md в корне проекта — там полный план работ с контрактами всех задач лида).\n- Выполни задачу строго по описанному контракту: не меняй публичные сигнатуры, типы, интерфейсы и API-схемы из постановки.\n- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n- Не выходи за пределы своей части монорепозитория (роль задана промптом).",
 		t.AssignedRole, project, t.TaskID, t.Title, t.Description)
 }
 
 // printDecomposedTasks выводит в консоль список задач из JSON-декомпозиции
 // лида (plan-режим), чтобы человек видел итог декомпозиции до реализации.
-func printDecomposedTasks(log *logging.Logger, tasks []board.TaskSpec) {
+func printDecomposedTasks(log *logging.Logger, tasks []domain.TaskSpec) {
 	log.Infof("[Список задач лида] %d задач:", len(tasks))
 	for _, t := range tasks {
 		log.Infof("  - %s [%s] -> %s (порядок %d, параллельно: %v)",
@@ -985,7 +972,7 @@ func printDecomposedTasks(log *logging.Logger, tasks []board.TaskSpec) {
 // sortTaskSpecs сортирует задачи декомпозиции по sequence_order, затем по
 // TaskID (детерминизм). Порядок последовательный: сначала выполняются
 // инфраструктурные и базовые задачи, затем зависимые.
-func sortTaskSpecs(tasks []board.TaskSpec) {
+func sortTaskSpecs(tasks []domain.TaskSpec) {
 	sort.SliceStable(tasks, func(i, j int) bool {
 		a, b := tasks[i].SequenceOrder.Int(), tasks[j].SequenceOrder.Int()
 		if a != b {

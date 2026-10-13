@@ -1,7 +1,8 @@
 package planner
 
 import (
-	"ai/board"
+	"ai/domain"
+	"ai/domain/services"
 	"context"
 	"errors"
 	"fmt"
@@ -159,7 +160,7 @@ func (k *KanbanRunner) finishIfAllDone(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	if meta, gerr := k.store.GetMeta(ctx); gerr == nil && meta != nil {
-		meta.Status = board.StatusDone
+		meta.Status = domain.StatusDone
 		_ = k.store.SaveMeta(ctx, meta)
 	}
 	k.log.Infof("[доска] задача пользователя решена: все эпики и задачи выполнены")
@@ -214,7 +215,7 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		// будить runner, ни давать «прогресс» циклу (иначе — кручение
 		// без результата).
 		switch t.Status {
-		case board.StatusReady, board.StatusInProgress:
+		case domain.StatusReady, domain.StatusInProgress:
 			ok, err := k.epicWorkable(ctx, t.EpicID)
 			if err != nil {
 				return false, err
@@ -222,7 +223,7 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 			if ok {
 				return true, nil
 			}
-		case board.StatusNew, board.StatusAnalysis:
+		case domain.StatusNew, domain.StatusAnalysis:
 			ok, err := k.epicWorkable(ctx, t.EpicID)
 			if err != nil {
 				return false, err
@@ -252,7 +253,7 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, e := range epics {
-		if e.Status.Terminal() || e.Status == board.StatusHumanHelp {
+		if e.Status.Terminal() || e.Status == domain.StatusHumanHelp {
 			continue
 		}
 		// Эпик без задач (или с необработанной ревизией) — работа для лида:
@@ -274,7 +275,7 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, b := range bugs {
-		if b.Status == board.BugStatusNew || b.Status == board.BugStatusConfirmed {
+		if b.Status == domain.BugStatusNew || b.Status == domain.BugStatusConfirmed {
 			return true, nil
 		}
 	}
@@ -292,13 +293,13 @@ func (k *KanbanRunner) epicWorkable(ctx context.Context, epicID string) (bool, e
 	}
 	e, err := k.store.GetEpic(ctx, epicID)
 	if err != nil {
-		if errors.Is(err, board.ErrNotFound) {
+		if errors.Is(err, services.ErrNotFound) {
 			return false, nil
 		}
 		return false, err
 	}
 	switch e.Status {
-	case board.StatusHumanHelp, board.StatusCancelled, board.StatusDone:
+	case domain.StatusHumanHelp, domain.StatusCancelled, domain.StatusDone:
 		return false, nil
 	}
 	return true, nil
@@ -316,15 +317,15 @@ func (k *KanbanRunner) setStandby(v bool) {
 // ещё нет, и переводит статус решения в «в работе».
 func (k *KanbanRunner) ensureMeta(ctx context.Context, projectName, taskText string) error {
 	meta, err := k.store.GetMeta(ctx)
-	if errors.Is(err, board.ErrNotFound) {
-		meta = &board.Meta{ProjectName: projectName, Task: taskText, Status: board.StatusNew}
+	if errors.Is(err, services.ErrNotFound) {
+		meta = &domain.Meta{ProjectName: projectName, Task: taskText, Status: domain.StatusNew}
 		if err := k.store.SaveMeta(ctx, meta); err != nil {
 			return err
 		}
 		k.log.Infof("[доска] проект %q создан: %s", projectName, truncateText(taskText, 80))
 	}
-	if meta.Status != board.StatusDone {
-		meta.Status = board.StatusInProgress
+	if meta.Status != domain.StatusDone {
+		meta.Status = domain.StatusInProgress
 		return k.store.SaveMeta(ctx, meta)
 	}
 	return nil
@@ -336,15 +337,15 @@ func (k *KanbanRunner) ensureMeta(ctx context.Context, projectName, taskText str
 func (k *KanbanRunner) touchMeta(ctx context.Context) error {
 	meta, err := k.store.GetMeta(ctx)
 	if err != nil {
-		if errors.Is(err, board.ErrNotFound) {
+		if errors.Is(err, services.ErrNotFound) {
 			return nil
 		}
 		return err
 	}
-	if meta == nil || meta.Status.Terminal() || meta.Status == board.StatusInProgress {
+	if meta == nil || meta.Status.Terminal() || meta.Status == domain.StatusInProgress {
 		return nil
 	}
-	meta.Status = board.StatusInProgress
+	meta.Status = domain.StatusInProgress
 	if err := k.store.SaveMeta(ctx, meta); err != nil {
 		return err
 	}
@@ -365,7 +366,7 @@ func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
 	}
 	for _, t := range tasks {
 		switch t.Status {
-		case board.StatusDone, board.StatusCancelled, board.StatusHumanHelp:
+		case domain.StatusDone, domain.StatusCancelled, domain.StatusHumanHelp:
 			continue
 		default:
 			return false, nil
@@ -420,7 +421,7 @@ func (k *KanbanRunner) recoverStuckTasks(ctx context.Context) (int, error) {
 	stale := staleTaskAfter()
 	reset := 0
 	for _, t := range tasks {
-		if t.Status != board.StatusInProgress {
+		if t.Status != domain.StatusInProgress {
 			continue
 		}
 		if k.isActive(t.TaskID) {
@@ -440,7 +441,7 @@ func (k *KanbanRunner) recoverStuckTasks(ctx context.Context) (int, error) {
 				reason = fmt.Sprintf("пульс %s назад", time.Since(age).Truncate(time.Second))
 			}
 		}
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusReady); err != nil {
 			return 0, fmt.Errorf("задача %s: возврат «в работе» → «готова к работе»: %w", t.TaskID, err)
 		}
 		k.status("[задача %s] возврат в очередь: была «в работе», но %s", t.TaskID, reason)

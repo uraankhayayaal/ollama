@@ -48,7 +48,7 @@ const epicDepDecompositionJSON = `{
 
 func newEpicDepRunner(t *testing.T, store *board.Store) *KanbanRunner {
 	t.Helper()
-	return NewKanbanRunner(&epicDepProvider{}, store)
+	return NewKanbanRunner(&epicDepProvider{}, board.NewDomainStore(store))
 }
 
 // TestPhaseLeadsUnblocksEpicDependency — взаимная блокировка задачи и её
@@ -87,7 +87,7 @@ func TestPhaseLeadsUnblocksEpicDependency(t *testing.T) {
 	}
 
 	// Доска не «пустая»: DOL-01 новая — обычная очередь лидов закрыта.
-	idle, err := (&KanbanRunner{store: store}).pipelineIdle(ctx)
+	idle, err := (&KanbanRunner{store: board.NewDomainStore(store)}).pipelineIdle(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

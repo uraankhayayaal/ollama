@@ -36,7 +36,7 @@ func stateStore(t *testing.T) *board.Store {
 }
 
 func stateAgentFor(store *board.Store) *base {
-	d := &base{FileOps: &tools.FileOps{}, Store: store, label: "backend-разработчик"}
+	d := &base{FileOps: &tools.FileOps{}, Store: board.NewDomainStore(store), label: "backend-разработчик"}
 	d.SetTaskID("T-1")
 	return d
 }
@@ -126,7 +126,7 @@ func TestReportRoundStateSkipsWithoutStoreOrTaskID(t *testing.T) {
 	noStore.SetTaskID("T-1")
 	noStore.ReportRoundState(rs)
 
-	noTask := &base{FileOps: &tools.FileOps{}, Store: store}
+	noTask := &base{FileOps: &tools.FileOps{}, Store: board.NewDomainStore(store)}
 	noTask.ReportRoundState(rs)
 
 	got, _ := store.GetTask(context.Background(), "T-1")

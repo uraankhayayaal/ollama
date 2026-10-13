@@ -149,7 +149,7 @@ func TestCanbanDetectStackConsoleGoNoFrontend(t *testing.T) {
 	}
 
 	p := &stackProvider{}
-	kr := NewKanbanRunner(p, store)
+	kr := NewKanbanRunner(p, board.NewDomainStore(store))
 	if err := kr.Run(ctx, project, "Сделай консольную утилиту"); err != nil {
 		t.Fatalf("Kanban Run: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestCanbanDetectStackMonorepoIncludesFrontend(t *testing.T) {
 	}
 
 	p := &stackProvider{}
-	kr := NewKanbanRunner(p, store)
+	kr := NewKanbanRunner(p, board.NewDomainStore(store))
 	if err := kr.Run(ctx, project, "Сделай сервис и клиент"); err != nil {
 		t.Fatalf("Kanban Run: %v", err)
 	}

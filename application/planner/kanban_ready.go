@@ -1,7 +1,8 @@
 package planner
 
 import (
-	"ai/board"
+	"ai/domain"
+	"ai/domain/services"
 	"context"
 	"errors"
 	"fmt"
@@ -19,7 +20,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 	// «Новая»: зависимости и фаза-порядок выполнены — «в анализе».
 	progress := false
 	for _, t := range tasks {
-		if t.Status != board.StatusNew {
+		if t.Status != domain.StatusNew {
 			continue
 		}
 		ok, err := k.epicWorkable(ctx, t.EpicID)
@@ -43,7 +44,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if !ok {
 			continue
 		}
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusAnalysis); err != nil {
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusAnalysis); err != nil {
 			return false, fmt.Errorf("задача %s: новая -> в анализе: %w", t.TaskID, err)
 		}
 		k.log.Infof("[задача %s] новая → в анализе", t.TaskID)
@@ -57,7 +58,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, t := range tasks {
-		if t.Status != board.StatusAnalysis {
+		if t.Status != domain.StatusAnalysis {
 			continue
 		}
 		ok, err := k.epicWorkable(ctx, t.EpicID)
@@ -74,7 +75,7 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if !ok {
 			continue
 		}
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusReady); err != nil {
 			return false, fmt.Errorf("задача %s: в анализе -> готова к работе: %w", t.TaskID, err)
 		}
 		k.log.Infof("[задача %s] в анализе → готова к работе", t.TaskID)
@@ -85,14 +86,14 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 
 // readyTasks возвращает задачи «готова к работе» (эпик не остановлен/не
 // отменён), отсортированные по порядку (sequence_order) и ID.
-func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*board.Task, error) {
+func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*domain.Task, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var ready []*board.Task
+	var ready []*domain.Task
 	for _, t := range tasks {
-		if t.Status != board.StatusReady {
+		if t.Status != domain.StatusReady {
 			continue
 		}
 		ok, err := k.epicWorkable(ctx, t.EpicID)
@@ -111,7 +112,7 @@ func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*board.Task, error) {
 // taskPhase классифицирует задачу по фазе разработки по её assigned_role:
 // инфраструктура (DevOps), тестирование (QA) или приложение (остальное).
 // Используется для фаза-гейтинга «инфраструктура → приложение → тестирование».
-func taskPhase(t *board.Task) string {
+func taskPhase(t *domain.Task) string {
 	switch {
 	case isRole(t.AssignedRole, "qa", "тест", "testing"):
 		return "test"
@@ -126,7 +127,7 @@ func taskPhase(t *board.Task) string {
 // прикладные задачи ждут завершения инфраструктурных задач эпика, тестовые —
 // завершения всех НЕ тестовых задач эпика. Отменённые задачи считаются
 // «прошедшими», инфраструктурные задачи гейта не имеют.
-func (k *KanbanRunner) phasePrereqSatisfied(ctx context.Context, t *board.Task) (bool, error) {
+func (k *KanbanRunner) phasePrereqSatisfied(ctx context.Context, t *domain.Task) (bool, error) {
 	phase := taskPhase(t)
 	if phase == "infra" {
 		return true, nil
@@ -143,7 +144,7 @@ func (k *KanbanRunner) phasePrereqSatisfied(ctx context.Context, t *board.Task) 
 		if err != nil {
 			return false, err
 		}
-		if other.Status == board.StatusCancelled {
+		if other.Status == domain.StatusCancelled {
 			continue
 		}
 		otherPhase := taskPhase(other)
@@ -154,7 +155,7 @@ func (k *KanbanRunner) phasePrereqSatisfied(ctx context.Context, t *board.Task) 
 		case "test":
 			required = otherPhase != "test"
 		}
-		if required && other.Status != board.StatusDone {
+		if required && other.Status != domain.StatusDone {
 			return false, nil
 		}
 	}
@@ -163,25 +164,25 @@ func (k *KanbanRunner) phasePrereqSatisfied(ctx context.Context, t *board.Task) 
 
 // depsDone проверяет, что все зависимости задачи (задачи/эпики доски)
 // уже выполнены. При несуществующей зависимости возвращает ошибку доски.
-func (k *KanbanRunner) depsDone(ctx context.Context, t *board.Task) (bool, error) {
+func (k *KanbanRunner) depsDone(ctx context.Context, t *domain.Task) (bool, error) {
 	if len(t.Dependencies) == 0 {
 		return true, nil
 	}
 	for _, dep := range t.Dependencies {
 		if task, err := k.store.GetTask(ctx, dep); err == nil {
-			if task.Status != board.StatusDone {
+			if task.Status != domain.StatusDone {
 				return false, nil
 			}
 			continue
-		} else if !errors.Is(err, board.ErrNotFound) {
+		} else if !errors.Is(err, services.ErrNotFound) {
 			return false, err
 		}
 		if epic, err := k.store.GetEpic(ctx, dep); err == nil {
-			if epic.Status != board.StatusDone {
+			if epic.Status != domain.StatusDone {
 				return false, nil
 			}
 			continue
-		} else if !errors.Is(err, board.ErrNotFound) {
+		} else if !errors.Is(err, services.ErrNotFound) {
 			return false, err
 		}
 		return false, fmt.Errorf("задача %s: зависимость %q не существует на доске", t.TaskID, dep)

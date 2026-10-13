@@ -2,7 +2,7 @@ package devopslead
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"os"
@@ -45,7 +45,7 @@ type DevopsLead struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store *board.Store
+	Store services.BoardStore
 	// requireTaskPublishing — обязательна ли публикация задач на доске:
 	// лид не считается отработавшим, пока не создал/обновил задачи для
 	// подчинённых (false — для сценариев, не связанных с декомпозицией).
@@ -99,12 +99,12 @@ func newDevopsLead(dir, prompt string, cfg Config) *DevopsLead {
 // SetBoardStore подключает лида к общей Kanban-доске проекта: инструменты
 // Board* становятся доступны, Board-контекст передаётся в реестр. Вызывается
 // оркестратором Kanban при построении агента лида.
-func (d *DevopsLead) SetBoardStore(s *board.Store) {
+func (d *DevopsLead) SetBoardStore(s services.BoardStore) {
 	if s == nil {
 		return
 	}
 	d.Store = s
-	d.Tools = tools.Select(leadToolNames, tools.Deps{FileOps: d.FileOps, Board: board.NewDomainStore(s)})
+	d.Tools = tools.Select(leadToolNames, tools.Deps{FileOps: d.FileOps, Board: s})
 }
 
 func (d *DevopsLead) GetUserMessages() []agents.Message {

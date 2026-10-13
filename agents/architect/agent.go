@@ -15,6 +15,7 @@ package architect
 import (
 	"ai/agents"
 	"ai/board"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"context"
@@ -60,7 +61,7 @@ type Architect struct {
 	// Tools — выбранные инструменты изучения проекта из общего реестра.
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis), куда публикуются эпики.
-	Store *board.Store
+	Store services.BoardStore
 	// RAG — клиент векторной памяти (CodeSearch + блок «релевантный код» в
 	// промпте). Опционален: nil — инструменты деградируют в skipped, блока нет.
 	RAG tools.RAGSearcher
@@ -89,14 +90,14 @@ func NewArchitect(projectName, prompt string) (*Architect, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewArchitectWithStore(projectName, prompt, store), nil
+	return NewArchitectWithStore(projectName, prompt, board.NewDomainStore(store)), nil
 }
 
 // NewArchitectWithStore создаёт архитектора с уже сконфигурированным
 // хранилищем доски (используется оркестратором Kanban). Клиент RAG
 // подключается позже через SetRAG: на этапе создания он ещё может не
 // существовать, а инструменты без него просто деградируют в skipped.
-func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Architect {
+func NewArchitectWithStore(projectName, prompt string, store services.BoardStore) *Architect {
 	dir := projects.ProjectDir(projectName)
 	os.MkdirAll(dir, 0755)
 	// Project задан явно: каталог проекта может быть переименован/подменён
@@ -107,7 +108,7 @@ func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Arch
 		FileOps: ops,
 		Prompt:  prompt,
 		Config:  LoadConfig(),
-		Tools:   tools.Select(toolNames, tools.Deps{FileOps: ops, Board: board.NewDomainStore(store)}),
+		Tools:   tools.Select(toolNames, tools.Deps{FileOps: ops, Board: store}),
 		Store:   store,
 	}
 }
@@ -118,7 +119,7 @@ func NewArchitectWithStore(projectName, prompt string, store *board.Store) *Arch
 func (a *Architect) SetRAG(r tools.RAGSearcher) *Architect {
 	a.RAG = r
 	if a.Store != nil {
-		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, Board: board.NewDomainStore(a.Store), RAG: r})
+		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, Board: a.Store, RAG: r})
 	} else {
 		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, RAG: r})
 	}

@@ -40,7 +40,7 @@ func newTokenRunner(t *testing.T, project string) (*KanbanRunner, *board.Store, 
 	tok := tokens.NewStoreNoCheck(tokens.StoreConfig{Addr: srv.Addr(), Project: project})
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir(project)) })
 
-	kr := NewKanbanRunner(&scopeProvider{t: t}, store)
+	kr := NewKanbanRunner(&scopeProvider{t: t}, board.NewDomainStore(store))
 	kr.SetTokens(tok)
 	return kr, store, tok
 }
@@ -257,7 +257,7 @@ func TestFinalizeTokensNoopWithoutStore(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	kr := &KanbanRunner{store: store} // без SetTokens
+	kr := &KanbanRunner{store: board.NewDomainStore(store)} // без SetTokens
 	kr.finalizeTokens(ctx)
 	if err := kr.finalizeTaskTokens(ctx, "T-1"); err != nil {
 		t.Fatalf("finalizeTaskTokens без счётчика: %v", err)
@@ -304,7 +304,7 @@ func TestTokenAccountingEndToEnd(t *testing.T) {
 	tok := tokens.NewStoreNoCheck(tokens.StoreConfig{Addr: srv.Addr(), Project: project})
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir(project)) })
 
-	kr := NewKanbanRunner(&tokenEchoProvider{t: t}, store)
+	kr := NewKanbanRunner(&tokenEchoProvider{t: t}, board.NewDomainStore(store))
 	kr.SetTokens(tok)
 
 	// Репортёр сессии: события расхода пишутся в счётчики scope'ов — ровно так,

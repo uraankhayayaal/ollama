@@ -57,7 +57,7 @@ func TestKanbanLeadQueueWaitsUntilTasksDone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 
 	// Пока B-01 в работе — следующий эпик лиду не выдаётся.
 	progress, err := kr.phaseLeads(ctx)
@@ -206,7 +206,7 @@ func TestKanbanLeadQueueOrderQALast(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-qa-last")) })
 
 	p := &queueProvider{}
-	kr := NewKanbanRunner(p, store)
+	kr := NewKanbanRunner(p, board.NewDomainStore(store))
 	if err := kr.Run(ctx, "kanban-qa-last", "Сделай сервис и QA"); err != nil {
 		t.Fatalf("Kanban Run: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestNextLeadEpicPriorityWithinPhase(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-prio"})
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-prio")) })
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	epics := []*board.Epic{
 		// Тест с большим приоритетом, но фаза — последняя.
 		{TaskSpec: board.TaskSpec{TaskID: "TEST-1", Title: "QA-план", AssignedRole: "QA Lead", SequenceOrder: 1}, Priority: 9},

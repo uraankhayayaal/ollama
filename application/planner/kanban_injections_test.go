@@ -93,7 +93,7 @@ func newInjKanban(t *testing.T, name string, provider *injCapturingProvider) (*K
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: name})
 	dir := projects.ProjectDir(name)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return NewKanbanRunner(provider, store), store
+	return NewKanbanRunner(provider, board.NewDomainStore(store)), store
 }
 
 // Инъекции задачи доходят до исполнителя ровно этой задачи. Это и есть смысл

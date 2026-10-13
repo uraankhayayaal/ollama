@@ -69,7 +69,7 @@ func TestRecoverStuckTasksUsesHeartbeat(t *testing.T) {
 	putTask(t, store, "NOBEAT", board.StatusInProgress, time.Time{})
 	putTask(t, store, "READY", board.StatusReady, time.Time{})
 
-	kr := NewKanbanRunner(&loopedProvider{}, store)
+	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	kr.markActive("READY")
 	t.Cleanup(func() { kr.unmarkActive("READY") })
 
@@ -101,7 +101,7 @@ func TestRecoverStuckTasksKeepsOwnActiveTask(t *testing.T) {
 	store := autonomyStore(t, "watchdog-own")
 	putTask(t, store, "MINE", board.StatusInProgress, time.Now().Add(-2*time.Hour))
 
-	kr := NewKanbanRunner(&loopedProvider{}, store)
+	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	kr.markActive("MINE")
 	n, err := kr.recoverStuckTasks(context.Background())
 	if err != nil {
@@ -123,7 +123,7 @@ func TestRecoverStuckTasksZeroThresholdDisablesHeartbeat(t *testing.T) {
 	store := autonomyStore(t, "watchdog-zero")
 	putTask(t, store, "FRESH", board.StatusInProgress, time.Now())
 
-	kr := NewKanbanRunner(&loopedProvider{}, store)
+	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	if n, err := kr.recoverStuckTasks(context.Background()); err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v, ожидался возврат свежепульсовой задачи в очередь", n, err)
 	}
@@ -140,7 +140,7 @@ func TestRecoverStuckTasksUnparsableHeartbeat(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	kr := NewKanbanRunner(&loopedProvider{}, store)
+	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	n, err := kr.recoverStuckTasks(context.Background())
 	if err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v, нечитаемый пульс должен считаться мёртвым", n, err)
@@ -165,7 +165,7 @@ func TestRecoverStuckTasksOnServerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&loopedProvider{}, store)
+	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	kr.recoverStuckTasks(ctx)
 	kr.recoverStuckTasks(ctx) // порог по умолчанию 30 мин: пульс свежий
 	if got := taskStatus(t, store, "T-1"); got != board.StatusInProgress {
@@ -265,7 +265,7 @@ func TestLoopEscalationSwitchesModelOnRetry(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	prov := &heavyProbeProvider{}
-	kr := NewKanbanRunner(prov, store)
+	kr := NewKanbanRunner(prov, board.NewDomainStore(store))
 	if err := kr.Run(context.Background(), project, "Сделай todo-приложение"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestEscalatedRequirementSurvivesNextRun(t *testing.T) {
 	store := autonomyStore(t, "escalate-persist")
 	putTask(t, store, "T-1", board.StatusReady, time.Time{})
 	ctx := context.Background()
-	kr := NewKanbanRunner(&loopedProvider{}, store)
+	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	task, _ := store.GetTask(ctx, "T-1")
 
 	if _, err := kr.escalateLoop(ctx, task, "петля"); err != nil {
@@ -345,7 +345,7 @@ func TestEscalationBudgetStopsAndAsksHuman(t *testing.T) {
 	store := autonomyStore(t, "escalate-budget")
 	putTask(t, store, "T-1", board.StatusInProgress, time.Now())
 	ctx := context.Background()
-	kr := NewKanbanRunner(&loopedProvider{}, store)
+	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 
 	var audit []string
 	kr.SetStatusNotifier(func(msg string) { audit = append(audit, msg) })

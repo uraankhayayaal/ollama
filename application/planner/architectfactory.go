@@ -3,7 +3,7 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/architect"
-	"ai/board"
+	"ai/domain/services"
 	"ai/tools"
 )
 
@@ -13,15 +13,15 @@ import (
 // по типу), а оркестратор при этом не импортирует пакет agents/architect.
 type architectFactory struct{}
 
-func (architectFactory) Architect(project, prompt string, store *board.Store) agents.Agent {
+func (architectFactory) Architect(project, prompt string, store services.BoardStore) agents.Agent {
 	return architect.NewArchitectWithStore(project, prompt, store)
 }
 
-func (architectFactory) ArchitectReviewer(project, prompt string, store *board.Store) agents.Agent {
+func (architectFactory) ArchitectReviewer(project, prompt string, store services.BoardStore) agents.Agent {
 	return architect.NewArchitectWithStore(project, prompt, store).AsReviewer()
 }
 
-func (architectFactory) ArchitectBugExpert(project, prompt string, store *board.Store) agents.Agent {
+func (architectFactory) ArchitectBugExpert(project, prompt string, store services.BoardStore) agents.Agent {
 	return architect.NewArchitectWithStore(project, prompt, store).AsBugExpert()
 }
 

@@ -104,8 +104,9 @@ func TestSetBoardStoreAddsBoardTools(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
 
 	d := newBackendDeveloperInDir("задание", t.TempDir())
-	d.SetBoardStore(store)
-	if d.Store != store {
+	ds := board.NewDomainStore(store)
+	d.SetBoardStore(ds)
+	if d.Store != ds {
 		t.Fatal("Store не подключен")
 	}
 	if _, ok := d.Tools.Get(tools.BoardSetTaskStatus); !ok {
@@ -117,7 +118,7 @@ func TestSetBoardStoreAddsBoardTools(t *testing.T) {
 
 	before := len(d.GetTools())
 	d.SetBoardStore(nil)
-	if d.Store != store {
+	if d.Store != ds {
 		t.Fatal("SetBoardStore(nil) не должен менять подключённую доску")
 	}
 	if len(d.GetTools()) != before {

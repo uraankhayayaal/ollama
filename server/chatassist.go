@@ -68,7 +68,7 @@ func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider model
 		// ассистент получает промпт без блока «релевантный код», а CodeSearch
 		// деградирует в skipped (как у планировщика).
 		ragClient := rag.NewClientSafe(rag.Config{})
-		asst := chatassist.NewAssistantInDir(dir, sess.project, prompt, sess.board, ragClient)
+		asst := chatassist.NewAssistantInDir(dir, sess.project, prompt, board.NewDomainStore(sess.board), ragClient)
 		// История диалога: последние реплики пользователя/ассистента в системный
 		// промпт, чтобы модель помнила, «о чём писали минуту назад», а не только
 		// текущий вопрос. Текущая реплика (последняя запись стрима) исключается.

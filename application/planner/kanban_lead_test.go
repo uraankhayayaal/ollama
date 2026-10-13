@@ -79,7 +79,7 @@ func TestPhaseLeadsFailureSetsEpicHumanHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&leadFailProvider{}, store)
+	kr := NewKanbanRunner(&leadFailProvider{}, board.NewDomainStore(store))
 	progress, err := kr.phaseLeads(ctx)
 	if err == nil {
 		t.Fatal("phaseLeads должна вернуть ошибку при падении провайдера декомпозиции")
@@ -125,7 +125,7 @@ func TestLeadFailCascadesToEpicTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	inErr := errors.New("декомпозиция сорвалась")
 	if got := kr.leadFail(ctx, epic, inErr); !errors.Is(got, inErr) {
 		t.Fatalf("leadFail должна вернуть исходную ошибку, got: %v", got)
@@ -169,7 +169,7 @@ func TestLeadFailCancelledContextPassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
 	inErr := errors.New("сборка прервана")
@@ -201,7 +201,7 @@ func TestPhaseLeadsWiresEpicWorktreeIntoLead(t *testing.T) {
 	}
 
 	prov := &leadCaptureProvider{}
-	kr := NewKanbanRunner(prov, store)
+	kr := NewKanbanRunner(prov, board.NewDomainStore(store))
 	wt := filepath.Join(t.TempDir(), "wt-ARCH-01")
 	if err := os.MkdirAll(wt, 0755); err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestPhaseLeadsWiresEpicWorktreeIntoLead(t *testing.T) {
 // формат «полный контракт в description» для QA-лида (без скелетона).
 func TestLeadPromptSkeletonAndContractRefs(t *testing.T) {
 	store := leadTestBoard(t, "kanban-leadprompt")
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 
 	dev := kr.leadPrompt(&board.Epic{
 		TaskSpec: board.TaskSpec{TaskID: "ARCH-01", Title: "Бэкенд-сервис", AssignedRole: "Backend Lead"},

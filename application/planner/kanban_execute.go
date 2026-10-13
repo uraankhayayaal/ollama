@@ -3,7 +3,8 @@ package planner
 import (
 	"ai/agents"
 	"ai/application/usecases"
-	"ai/board"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/models"
 	"ai/runevents"
 	"ai/tokens"
@@ -38,7 +39,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		}
 		busy[t.Assignee] = true
 
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusInProgress); err != nil {
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusInProgress); err != nil {
 			return false, fmt.Errorf("задача %s: готова к работе -> в работе: %w", t.TaskID, err)
 		}
 		// Эпик, в котором появилась работающая задача, тоже уходит «в работу».
@@ -50,7 +51,9 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		}
 		// Специалисты получают доступ к доске: смена статуса своей задачи,
 		// QA-инженер — публикация багрепортов (BoardCreateBugReport).
-		if sb, ok := specialist.(interface{ SetBoardStore(*board.Store) }); ok {
+		if sb, ok := specialist.(interface {
+			SetBoardStore(services.BoardStore)
+		}); ok {
 			sb.SetBoardStore(k.store)
 		}
 		// Специалист git-проекта работает в своём worktree ветки задачи (Ф-3):
@@ -88,10 +91,10 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		//
 		// Контекст собирается в taskCtx, а не в ctx: присваивание в ctx внутри
 		// цикла по ready оставляло бы контекст предыдущей задачи следующей.
-		taskCtx := board.NewInjectionContext(ctx, t.Injections)
-		taskCtx = board.NewCommentContext(taskCtx, t.Comments)
+		taskCtx := domain.NewInjectionContext(ctx, t.Injections)
+		taskCtx = domain.NewCommentContext(taskCtx, t.Comments)
 		if k.store != nil {
-			taskCtx = board.WithInjectionSource(taskCtx, func(ctx context.Context) ([]board.Injection, error) {
+			taskCtx = domain.WithInjectionSource(taskCtx, func(ctx context.Context) ([]domain.Injection, error) {
 				fresh, err := k.store.GetTask(ctx, t.TaskID)
 				if err != nil {
 					return nil, err // доска недоступна — работаем со снапшотом
@@ -101,7 +104,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				}
 				return fresh.Injections, nil
 			})
-			taskCtx = board.WithCommentSource(taskCtx, func(ctx context.Context) (board.Comments, error) {
+			taskCtx = domain.WithCommentSource(taskCtx, func(ctx context.Context) (domain.Comments, error) {
 				fresh, err := k.store.GetTask(ctx, t.TaskID)
 				if err != nil {
 					return nil, err
@@ -112,7 +115,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				return fresh.Comments, nil
 			})
 		}
-		taskCtx = board.WithInjectionScope(taskCtx, board.InjectionScope{
+		taskCtx = domain.WithInjectionScope(taskCtx, domain.InjectionScope{
 			Project: k.store.Project(),
 			TaskID:  t.TaskID,
 			Role:    t.Assignee,
@@ -120,7 +123,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// Требование «эта задача тяжёлая» из доски (Ф-6, этап 4.3): смена модели
 		// переживает рестарт сервера, потому что живёт в записи задачи, а не
 		// внутри одного вызова Generate.
-		if t.ModelTier == board.ModelTierLarge {
+		if t.ModelTier == domain.ModelTierLarge {
 			taskCtx = models.WithHeavyModel(taskCtx)
 			k.log.Detailf("[задача %s] модель: LARGE (требование задачи)", t.TaskID)
 		}
@@ -163,7 +166,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("задача %s: чтение статуса после работы: %w", t.TaskID, err)
 		}
-		if current.Status == board.StatusDone {
+		if current.Status == domain.StatusDone {
 			k.log.Infof("[задача %s] в работе → выполнена (агент подтвердил сам)", t.TaskID)
 			// Ф-3: факт расхода токенов задачи фиксируется сразу после выполнения.
 			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
@@ -172,7 +175,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			progress = true
 			continue
 		}
-		if current.Status == board.StatusTesting {
+		if current.Status == domain.StatusTesting {
 			k.log.Infof("[задача %s] в работе → на тестирование (агент подтвердил сам)", t.TaskID)
 			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
 				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
@@ -187,13 +190,13 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// fallback-ом в done — гард всё равно бы отказал, а эскалация (ниже)
 		// затёрла бы решение специалиста: оба статуса нетерминальны, вернуть
 		// задачу в очередь можно одной кнопкой (или докомандой лиду).
-		if current.Status == board.StatusHumanHelp || current.Status == board.StatusCancelled {
+		if current.Status == domain.StatusHumanHelp || current.Status == domain.StatusCancelled {
 			reason := truncateText(current.PauseReason, 400)
 			if reason == "" {
 				reason = "причина не указана"
 			}
 			what := "перевёл в human_help (просит помощь человека)"
-			if current.Status == board.StatusCancelled {
+			if current.Status == domain.StatusCancelled {
 				what = "снял с работы (cancelled)"
 			}
 			k.log.Warnf("[задача %s] специалист %s: %s", t.TaskID, what, reason)
@@ -205,11 +208,11 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// по Этапу 6: переводим задачу в «На тестирование» (testing).
 		// «Отказ гарда» (переход отклонён) трактуем как невозможность сдать задачу:
 		// эскалируем в human_help с комментарием и постановкой причины.
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusTesting); err != nil {
+		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusTesting); err != nil {
 			k.log.Warnf("[задача %s] переход в testing отклонён: %v", t.TaskID, err)
-			if _, perr := k.store.AddTaskComment(ctx, t.TaskID, board.Comment{
+			if _, perr := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
 				Author: "system",
-				Type:   board.CommentTypeSystem,
+				Type:   domain.CommentTypeSystem,
 				Body:   fmt.Sprintf("Авто-фолбэк: не удалось перевести задачу в «На тестирование» (testing). Причина: %s", truncateText(err.Error(), 400)),
 			}); perr != nil {
 				k.log.Warnf("[задача %s] комментарий к задаче: %v", t.TaskID, perr)
@@ -263,11 +266,11 @@ type escalationDiag = usecases.EscalationDiag
 //
 // Реализация — usecases.Escalate (application): слой принимает решение
 // (бюджет, инъекция с диагнозом, human_help при исчерпании), а здесь — только
-// адаптеры инфраструктуры (доска через board.DomainStore, лог/чат, бюджет из
+// адаптеры инфраструктуры (доска через services.BoardStore, лог/чат, бюджет из
 // окружения).
-func (k *KanbanRunner) escalate(ctx context.Context, t *board.Task, diag escalationDiag) (bool, error) {
+func (k *KanbanRunner) escalate(ctx context.Context, t *domain.Task, diag escalationDiag) (bool, error) {
 	return usecases.Escalate(ctx, t.TaskID, diag, usecases.EscalationPorts{
-		Tasks:          board.NewDomainStore(k.store),
+		Tasks:          k.store,
 		MaxEscalations: maxEscalations(),
 		Status:         k.status,
 		SetStopReason:  k.setStopReason,
@@ -275,7 +278,7 @@ func (k *KanbanRunner) escalate(ctx context.Context, t *board.Task, diag escalat
 }
 
 // escalateLoop реагирует на зацикливание специалиста (Ф-6, этапы 4.4–4.5).
-func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason string) (bool, error) {
+func (k *KanbanRunner) escalateLoop(ctx context.Context, t *domain.Task, reason string) (bool, error) {
 	return k.escalate(ctx, t, escalationDiag{
 		Event:  "зациклилась",
 		Detail: reason,
@@ -298,24 +301,24 @@ func (k *KanbanRunner) forceMajeure(ctx context.Context, taskID, reason string) 
 	k.setStopReason(msg)
 
 	if taskID != "" {
-		if _, err := k.store.AddTaskComment(ctx, taskID, board.Comment{
+		if _, err := k.store.AddTaskComment(ctx, taskID, domain.Comment{
 			Author: "system",
-			Type:   board.CommentTypeSystem,
+			Type:   domain.CommentTypeSystem,
 			Body:   "Форсмажор (непредвиденный случай): " + reason + ". Нужно решение человека: разбери причину (логи проекта, вывод проверок) и верни задачу в работу.",
 		}); err != nil {
 			k.log.Warnf("[доска] форс-мажор задачи %s: комментарий: %v", taskID, err)
 		}
-		_ = k.store.PatchTask(ctx, taskID, func(cur *board.Task) error {
+		_ = k.store.PatchTask(ctx, taskID, func(cur *domain.Task) error {
 			if cur.PauseReason == "" {
 				cur.PauseReason = truncateText(reason, 800)
 			}
 			return nil
 		})
-		if err := k.store.SetTaskStatus(ctx, taskID, board.StatusHumanHelp); err != nil {
+		if err := k.store.SetTaskStatus(ctx, taskID, domain.StatusHumanHelp); err != nil {
 			k.log.Warnf("[доска] форс-мажор задачи %s: статус human_help: %v", taskID, err)
 		}
 	} else if meta, err := k.store.GetMeta(ctx); err == nil && meta != nil && !meta.Status.Terminal() {
-		meta.Status = board.StatusHumanHelp
+		meta.Status = domain.StatusHumanHelp
 		if err := k.store.SaveMeta(ctx, meta); err != nil {
 			k.log.Warnf("[доска] форс-мажор: статус meta human_help: %v", err)
 		}
@@ -348,7 +351,7 @@ func (k *KanbanRunner) architectFail(ctx context.Context, err error) error {
 // ставит на паузу незакрытые задачи эпика (pauseEpicTasks). Отмена контекста —
 // не форсмажор: пробрасываем как есть. Возвращает err без изменений —
 // можно писать `return k.leadFail(ctx, epic, err)`.
-func (k *KanbanRunner) leadFail(ctx context.Context, epic *board.Epic, err error) error {
+func (k *KanbanRunner) leadFail(ctx context.Context, epic *domain.Epic, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -357,7 +360,7 @@ func (k *KanbanRunner) leadFail(ctx context.Context, epic *board.Epic, err error
 	}
 	reason := fmt.Sprintf("декомпозиция эпика %s не удалась: %s", epic.TaskID, truncateText(err.Error(), 300))
 	k.setStopReason(reason)
-	if serr := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusHumanHelp); serr != nil {
+	if serr := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusHumanHelp); serr != nil {
 		k.log.Warnf("[эпик %s] не удалось перевести в human_help: %v", epic.TaskID, serr)
 	}
 	k.status("[эпик %s] %s — нужна помощь человека", epic.TaskID, reason)

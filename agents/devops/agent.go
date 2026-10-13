@@ -2,7 +2,7 @@ package devops
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"os"
@@ -48,19 +48,19 @@ type Devops struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store *board.Store
+	Store services.BoardStore
 }
 
 // SetBoardStore подключает DevOps-инженера к общей Kanban-доске проекта:
 // добавляет инструменты статуса задачи (Board*), передаёт Board-контекст в
 // реестр. Вызывается оркестратором Kanban при построении агента специалиста.
-func (d *Devops) SetBoardStore(s *board.Store) {
+func (d *Devops) SetBoardStore(s services.BoardStore) {
 	if s == nil {
 		return
 	}
 	d.Store = s
 	names := append(append([]string{}, devopsToolNames...), devopsBoardToolNames...)
-	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: board.NewDomainStore(s)})
+	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s})
 }
 
 // Label возвращает человекочитаемое имя агента для чата.

@@ -8,6 +8,7 @@ package developer
 import (
 	"ai/agents"
 	"ai/board"
+	"ai/domain/services"
 	"ai/gitops"
 	"ai/logging"
 	"ai/projects"
@@ -62,7 +63,7 @@ type base struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store *board.Store
+	Store services.BoardStore
 	// RAG — клиент векторной памяти (Qdrant) для инструмента CodeSearch.
 	// Создаётся ленивым rag.NewClientSafe: при недоступном Qdrant/degrade
 	// клиент nil, а инструмент возвращает skipped.
@@ -261,13 +262,13 @@ func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, er
 // инструменты статуса задачи (BoardGetTask/BoardSetTaskStatus), передаёт
 // Board-контекст в реестр. Вызывается оркестратором Kanban при построении
 // агента специалиста.
-func (d *base) SetBoardStore(s *board.Store) {
+func (d *base) SetBoardStore(s services.BoardStore) {
 	if s == nil {
 		return
 	}
 	d.Store = s
 	names := append(append([]string{}, devToolNames...), devBoardToolNames...)
-	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: board.NewDomainStore(s), RAG: d.RAG})
+	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s, RAG: d.RAG})
 }
 
 // Label возвращает человекочитаемое имя агента для чата.

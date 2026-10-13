@@ -120,7 +120,7 @@ func newKanbanRunner(t *testing.T) (*KanbanRunner, *board.Store) {
 	projectDir := projects.ProjectDir("kanban-test")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
-	return NewKanbanRunner(&kanbanProvider{}, store), store
+	return NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store)), store
 }
 
 func TestKanbanSolvesUserTask(t *testing.T) {
@@ -224,7 +224,7 @@ func TestKanbanResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	if err := kr.Run(ctx, "kanban-test", "Сделай todo-приложение"); err != nil {
 		t.Fatalf("Kanban Run (resume): %v", err)
 	}
@@ -279,7 +279,7 @@ func TestKanbanResumesInProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	if err := kr.Run(ctx, "kanban-test", "Задача"); err != nil {
 		t.Fatalf("Kanban Run (resume зависшей задачи): %v", err)
 	}
@@ -312,7 +312,7 @@ func TestKanbanNoProgressOnCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	if err := kr.Run(ctx, "kanban-test", "x"); err == nil {
 		t.Fatal("ожидалась ошибка «нет прогресса» при отменённом эпике")
 	}

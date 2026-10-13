@@ -56,7 +56,7 @@ func newLoopedKanbanRunner(t *testing.T) (*KanbanRunner, *board.Store) {
 	projectDir := projects.ProjectDir("kanban-loop")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
-	return NewKanbanRunner(&loopedProvider{}, store), store
+	return NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store)), store
 }
 
 // Специалист зациклился (Ф-6, этапы 4.4–4.5): работа НЕ откатывается и НЕ
@@ -138,7 +138,7 @@ func TestKanbanArchitectLoopFails(t *testing.T) {
 	projectDir := projects.ProjectDir("kanban-arch-loop")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
-	kr := NewKanbanRunner(&architectLoopProvider{}, store)
+	kr := NewKanbanRunner(&architectLoopProvider{}, board.NewDomainStore(store))
 
 	err := kr.Run(context.Background(), "kanban-arch-loop", "Сделай сервис")
 	if err == nil {

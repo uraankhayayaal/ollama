@@ -11,6 +11,7 @@ package chatassist
 import (
 	"ai/agents"
 	"ai/board"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"encoding/json"
@@ -102,7 +103,7 @@ type Assistant struct {
 	// Tools — выбранные инструменты из общего реестра.
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis); nil — доска недоступна.
-	Store *board.Store
+	Store services.BoardStore
 	// Injections — промпт-инъекции уровня Assistant: применяются к работающей
 	// модели в рамках всех задач/сессий этого ассистента. Нужны, например,
 	// для деактивации ChatRAG (напрямую добавляя инструкцию в системное
@@ -128,7 +129,7 @@ type Assistant struct {
 // temp/<projectName> с подключённой Kanban-доской. projectName — имя проекта,
 // prompt — сообщение пользователя, ragClient — векторная память (nil — RAG
 // отключён, деградация).
-func NewAssistantWithStore(projectName, prompt string, store *board.Store, ragClient tools.RAGSearcher) *Assistant {
+func NewAssistantWithStore(projectName, prompt string, store services.BoardStore, ragClient tools.RAGSearcher) *Assistant {
 	dir := projects.ProjectDir(projectName)
 	return newAssistant(dir, projectName, prompt, store, ragClient)
 }
@@ -138,14 +139,14 @@ func NewAssistantWithStore(projectName, prompt string, store *board.Store, ragCl
 // (KindDir/KindGit/KindTemp) и у него есть рабочий каталог Root — тогда имя
 // проекта передаётся явно (sess.project), чтобы RAG-поиск шёл по индексу
 // именно этого проекта.
-func NewAssistantInDir(dir, projectName, prompt string, store *board.Store, ragClient tools.RAGSearcher) *Assistant {
+func NewAssistantInDir(dir, projectName, prompt string, store services.BoardStore, ragClient tools.RAGSearcher) *Assistant {
 	return newAssistant(dir, projectName, prompt, store, ragClient)
 }
 
 // newAssistant создаёт ассистента в заданной директории: собирает *tools.FileOps
 // и выбирает из реестра инструменты (чтение + доска-запись + CodeSearch).
 // Используется конструкторами.
-func newAssistant(dir, projectName, prompt string, store *board.Store, ragClient tools.RAGSearcher) *Assistant {
+func newAssistant(dir, projectName, prompt string, store services.BoardStore, ragClient tools.RAGSearcher) *Assistant {
 	os.MkdirAll(dir, 0755)
 	ops := &tools.FileOps{OutputDir: dir, Project: projectName}
 	return &Assistant{
@@ -153,7 +154,7 @@ func newAssistant(dir, projectName, prompt string, store *board.Store, ragClient
 		Prompt:      prompt,
 		ProjectName: projectName,
 		RAG:         ragClient,
-		Tools:       tools.Select(assistantToolNames, tools.Deps{FileOps: ops, Board: board.NewDomainStore(store), RAG: ragClient}),
+		Tools:       tools.Select(assistantToolNames, tools.Deps{FileOps: ops, Board: store, RAG: ragClient}),
 		Store:       store,
 		seenCalls:   make(map[string]int),
 	}

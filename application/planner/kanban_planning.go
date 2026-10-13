@@ -1,7 +1,8 @@
 package planner
 
 import (
-	"ai/board"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/logging"
 	"ai/tokens"
 	"context"
@@ -42,7 +43,7 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 		}
 		primary := eps[0]
 		for _, e := range eps[1:] {
-			if board.EpicLess(e, primary) {
+			if domain.EpicLess(e, primary) {
 				primary = e
 			}
 		}
@@ -86,12 +87,12 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var drafts []*board.Epic
+	var drafts []*domain.Epic
 	for _, epic := range epics {
 		// Черновики не трогаем только в терминальных/остановленных
 		// состояниях («помощь человека» замораживает ревизию, Ф-8): в
 		// остальных состояниях ревизия обязательна, пока флаг не снят.
-		if !epic.RequiresReview || epic.Status.Terminal() || epic.Status == board.StatusHumanHelp {
+		if !epic.RequiresReview || epic.Status.Terminal() || epic.Status == domain.StatusHumanHelp {
 			continue
 		}
 		drafts = append(drafts, epic)
@@ -130,7 +131,7 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 // epicReviewPrompt формирует задание ревизии эпиков-черновиков (Ф-8): архитектор
 // приводит каждый черновик к стандарту бэклога (ТЗ, стек, роли, глубина
 // декомпозиции, смежные модули).
-func (k *KanbanRunner) epicReviewPrompt(project string, drafts []*board.Epic) string {
+func (k *KanbanRunner) epicReviewPrompt(project string, drafts []*domain.Epic) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Проведи ревизию %d эпиков-черновиков на доске проекта %q. Это черновики, созданные чат-ассистентом или вручную: каждому требуется твоя экспертиза перед декомпозицией лидами.\n\n", len(drafts), project)
 	for _, epic := range drafts {
@@ -169,7 +170,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	var epic *board.Epic
+	var epic *domain.Epic
 	var needDecompose, needResync bool
 	if idle {
 		// Следующий эпик очереди лидов, которому нужна декомпозиция/ревизия.
@@ -196,7 +197,9 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, k.leadFail(ctx, epic, fmt.Errorf("фаза лидов, эпик %s: %w", epic.TaskID, err))
 	}
-	if sb, ok := lead.(interface{ SetBoardStore(*board.Store) }); ok {
+	if sb, ok := lead.(interface {
+		SetBoardStore(services.BoardStore)
+	}); ok {
 		sb.SetBoardStore(k.store)
 	}
 	// Декомпозиция/ревизия всегда требует публикации задач на доске:
@@ -219,8 +222,8 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 
 	// «В анализе»: для новой декомпозиции обязателен; при ревизии эпик может
 	// находиться дальше по цепочке — некритично (переход в анализ не требуется).
-	if err := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusAnalysis); err != nil {
-		if _, ok := err.(*board.StatusError); !ok {
+	if err := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusAnalysis); err != nil {
+		if _, ok := err.(*domain.StatusError); !ok {
 			return false, k.leadFail(ctx, epic, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err))
 		}
 	}
@@ -259,7 +262,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 			return false, err
 		}
 		if len(tasks) == 0 {
-			dec, err := board.UnmarshalTasks(resp.Content)
+			dec, err := domain.UnmarshalTasks(resp.Content)
 			if err != nil {
 				return false, k.leadFail(ctx, epic, fmt.Errorf("декомпозиция эпика %s: лид не создал задач ни доской, ни JSON: %w", epic.TaskID, err))
 			}
@@ -268,7 +271,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 			}
 			for i := range dec {
 				ts := dec[i]
-				if err := k.store.CreateTask(ctx, &board.Task{TaskSpec: ts, EpicID: epic.TaskID, Assignee: assignee(ts)}); err != nil {
+				if err := k.store.CreateTask(ctx, &domain.Task{TaskSpec: ts, EpicID: epic.TaskID, Assignee: assignee(ts)}); err != nil {
 					return false, fmt.Errorf("эпик %s: создание задачи %s: %w", epic.TaskID, ts.TaskID, err)
 				}
 			}
@@ -293,8 +296,8 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 		// Ревизия: статус «в работе» уже не откатываем; доводим эпик к работе,
 		// если он стоит «в анализе» или «готова к работе».
 	} else if !needResync {
-		if err := k.store.SetEpicStatus(ctx, epic.TaskID, board.StatusReady); err != nil {
-			if _, ok := err.(*board.StatusError); !ok {
+		if err := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusReady); err != nil {
+			if _, ok := err.(*domain.StatusError); !ok {
 				return false, fmt.Errorf("эпик %s: перевод в «готов к работе»: %w", epic.TaskID, err)
 			}
 		}
@@ -312,7 +315,7 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 
 // printLeadTasks выводит в консоль и лог проекта текущие задачи эпика после
 // работы лида: ID, статус, исполнитель, заголовок и приоритет/параллельность.
-func printLeadTasks(log *logging.Logger, epic *board.Epic, tasks []*board.Task) {
+func printLeadTasks(log *logging.Logger, epic *domain.Epic, tasks []*domain.Task) {
 	log.Infof("[Список обновлённых задач] эпик %s (%s) — %d задач:", epic.TaskID, truncateText(epic.Title, 60), len(tasks))
 	for _, t := range tasks {
 		log.Infof("  - %s [%s] -> %s | %s (порядок %d, параллельно: %v)",
@@ -320,7 +323,7 @@ func printLeadTasks(log *logging.Logger, epic *board.Epic, tasks []*board.Task) 
 	}
 }
 
-// Порядок эпиков в очереди лидов — общий с доской компаратор board.EpicLess
+// Порядок эпиков в очереди лидов — общий с доской компаратор domain.EpicLess
 // (фаза -> приоритет -> sequence_order -> task_id). Он живёт в пакете board,
 // чтобы строки Web UI и выбор оркестратора не расходились.
 
@@ -332,8 +335,8 @@ func printLeadTasks(log *logging.Logger, epic *board.Epic, tasks []*board.Task) 
 //
 // Возвращает nil, если блокирующих эпиков нет: тогда поведение phaseLeads
 // прежнее (следующий эпик выдаётся только на «пустой» доске).
-func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*board.Epic) (*board.Epic, error) {
-	byID := make(map[string]*board.Epic, len(epics))
+func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*domain.Epic) (*domain.Epic, error) {
+	byID := make(map[string]*domain.Epic, len(epics))
 	for _, e := range epics {
 		byID[e.TaskID] = e
 	}
@@ -341,21 +344,21 @@ func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*boar
 	if err != nil {
 		return nil, err
 	}
-	var best *board.Epic
+	var best *domain.Epic
 	for _, t := range tasks {
 		switch t.Status {
-		case board.StatusDone, board.StatusCancelled, board.StatusHumanHelp:
+		case domain.StatusDone, domain.StatusCancelled, domain.StatusHumanHelp:
 			continue
 		}
 		for _, dep := range t.Dependencies {
 			depEpic, ok := byID[dep]
-			if !ok || depEpic.Status.Terminal() || depEpic.Status == board.StatusHumanHelp {
+			if !ok || depEpic.Status.Terminal() || depEpic.Status == domain.StatusHumanHelp {
 				continue
 			}
 			if depEpic.RequiresReview || len(depEpic.Tasks) > 0 {
 				continue
 			}
-			if best == nil || board.EpicLess(depEpic, best) {
+			if best == nil || domain.EpicLess(depEpic, best) {
 				best = depEpic
 			}
 		}
@@ -367,14 +370,14 @@ func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*boar
 // приоритету очереди: инфраструктура -> приложение -> тестирование (QA Last),
 // внутри фазы — sequence_order, затем task_id. Возвращает (nil, false, false),
 // если ни одному эпику декомпозиция/ревизия не требуется.
-func (k *KanbanRunner) nextLeadEpic(epics []*board.Epic) (*board.Epic, bool, bool, error) {
-	var best *board.Epic
+func (k *KanbanRunner) nextLeadEpic(epics []*domain.Epic) (*domain.Epic, bool, bool, error) {
+	var best *domain.Epic
 	bestDecompose := false
 	for _, epic := range epics {
 		// Терминальные и остановленные эпики не трогаем: «помощь человека»
 		// замораживает и декомпозицию, и ревизию лидом (код остаётся в
 		// своей ветке).
-		if epic.Status.Terminal() || epic.Status == board.StatusHumanHelp {
+		if epic.Status.Terminal() || epic.Status == domain.StatusHumanHelp {
 			continue
 		}
 		// Черновик (requires_review=true, Ф-8) не декомпозируется лидом, пока
@@ -389,7 +392,7 @@ func (k *KanbanRunner) nextLeadEpic(epics []*board.Epic) (*board.Epic, bool, boo
 		if !needDecompose && !needResync {
 			continue
 		}
-		if best == nil || board.EpicLess(epic, best) {
+		if best == nil || domain.EpicLess(epic, best) {
 			best = epic
 			bestDecompose = needDecompose
 		}

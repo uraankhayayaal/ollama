@@ -2,7 +2,8 @@ package planner
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/logging"
 	"ai/models"
 	"ai/tokens"
@@ -26,7 +27,7 @@ const maxKanbanRounds = 100
 // решена. Общая доска (эпики, задачи, статусы) хранится в Redis.
 //
 // Статусы эпиков и задач единые: новая -> в анализе -> готова к работе ->
-// в работе -> выполнена (или отменена). Переходы валидирует board.ValidateTransition.
+// в работе -> выполнена (или отменена). Переходы валидирует domain.ValidateTransition.
 //
 // Лиды направлений (frontendlead/backendlead/devopslead) НЕ пишут код и
 // НЕ запускают консольные команды: они исследуют существующий код (List/ReadFiles),
@@ -35,7 +36,7 @@ const maxKanbanRounds = 100
 // изменении содержимого эпика.
 type KanbanRunner struct {
 	provider models.LLMProvider
-	store    *board.Store
+	store    services.BoardStore
 	gate     HumanGate
 	// boardOnly — режим запуска по доске (кнопка «Продолжить»): новая работа
 	// НЕ придумывается (фаза архитектора пропускается — новых эпиков нет), в
@@ -174,10 +175,10 @@ type GateDecision struct {
 type HumanGate interface {
 	// Epics — подтверждение эпиков, только что опубликованных Системным
 	// архитектором, перед декомпозицией лидами.
-	Epics(ctx context.Context, epics []*board.Epic) (GateDecision, error)
+	Epics(ctx context.Context, epics []*domain.Epic) (GateDecision, error)
 	// Tasks — подтверждение задач, готовых к работе, перед раздачей
 	// специалистам.
-	Tasks(ctx context.Context, tasks []*board.Task) (GateDecision, error)
+	Tasks(ctx context.Context, tasks []*domain.Task) (GateDecision, error)
 }
 
 // SetGate устанавливает HITL-затвор. nil возвращает автономный режим.
@@ -257,7 +258,7 @@ func (k *KanbanRunner) Wake() {
 }
 
 // NewKanbanRunner создаёт Kanban-оркестратор поверх хранилища доски.
-func NewKanbanRunner(provider models.LLMProvider, store *board.Store) *KanbanRunner {
+func NewKanbanRunner(provider models.LLMProvider, store services.BoardStore) *KanbanRunner {
 	return &KanbanRunner{provider: provider, store: store, wake: make(chan struct{}, 1)}
 }
 
@@ -308,11 +309,11 @@ func (k *KanbanRunner) waitReadyTasks(ctx context.Context) error {
 	for _, t := range ready {
 		epicIDs[t.EpicID] = struct{}{}
 	}
-	var epics []*board.Epic
+	var epics []*domain.Epic
 	for id := range epicIDs {
 		e, err := k.store.GetEpic(ctx, id)
 		if err != nil {
-			if errors.Is(err, board.ErrNotFound) {
+			if errors.Is(err, services.ErrNotFound) {
 				continue
 			}
 			return err
@@ -325,12 +326,12 @@ func (k *KanbanRunner) waitReadyTasks(ctx context.Context) error {
 // rework удаляет эпики вместе с их задачами (каскадом). Эпики, чьи задачи
 // уже взяты в работу, удалить нельзя — вернётся первая такая ошибка, чтобы
 // человек вмешался вручную.
-func (k *KanbanRunner) rework(ctx context.Context, epics []*board.Epic) error {
+func (k *KanbanRunner) rework(ctx context.Context, epics []*domain.Epic) error {
 	var firstErr error
 	deleted := 0
 	for _, e := range epics {
 		if err := k.store.DeleteEpic(ctx, e.TaskID); err != nil {
-			if errors.Is(err, board.ErrNotFound) {
+			if errors.Is(err, services.ErrNotFound) {
 				continue
 			}
 			if firstErr == nil {

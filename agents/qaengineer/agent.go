@@ -3,7 +3,7 @@ package qaengineer
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
-	"ai/board"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"os"
@@ -47,20 +47,20 @@ type QAEngineer struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store *board.Store
+	Store services.BoardStore
 }
 
 // SetBoardStore подключает QA-инженера к общей Kanban-доске проекта: добавляет
 // инструменты статуса задачи и публикации багрепортов (Board*), передаёт
 // Board-контекст в реестр. Вызывается оркестратором Kanban при построении
 // агента специалиста.
-func (q *QAEngineer) SetBoardStore(s *board.Store) {
+func (q *QAEngineer) SetBoardStore(s services.BoardStore) {
 	if s == nil {
 		return
 	}
 	q.Store = s
 	names := append(append([]string{}, qaToolNames...), qaBoardToolNames...)
-	q.Tools = tools.Select(names, tools.Deps{FileOps: q.FileOps, Board: board.NewDomainStore(s)})
+	q.Tools = tools.Select(names, tools.Deps{FileOps: q.FileOps, Board: s})
 }
 
 // NewQAEngineer создаёт QA-инженера в общей для всех агентов выходной папке

@@ -103,7 +103,7 @@ func TestKanbanArchitectAsksUserBeforeBacklog(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-ask")) })
 
 	ask := &fakeAskTool{}
-	kr := NewKanbanRunner(&askFirstProvider{}, store)
+	kr := NewKanbanRunner(&askFirstProvider{}, board.NewDomainStore(store))
 	kr.SetArchitectExtras(ask)
 
 	if err := kr.Run(ctx, "kanban-ask", "Сделай todo-приложение, но ТЗ противоречиво"); err != nil {
@@ -170,7 +170,7 @@ func TestKanbanArchitectAutonomousWithoutExtras(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-ask-auto")) })
 
 	p := &autonomyProvider{}
-	kr := NewKanbanRunner(p, store)
+	kr := NewKanbanRunner(p, board.NewDomainStore(store))
 	if err := kr.Run(ctx, "kanban-ask-auto", "Сделай todo-приложение"); err != nil {
 		t.Fatalf("Kanban Run (автономный режим): %v", err)
 	}
@@ -193,11 +193,11 @@ func TestPrepareArchitectWithExtras(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-prep"})
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-prep")) })
 
-	kr := NewKanbanRunner(nil, store)
+	kr := NewKanbanRunner(nil, board.NewDomainStore(store))
 	kr.SetArchitectExtras(&fakeAskTool{})
 	kr.SetArchitectExtras(&fakeAskTool{})
 
-	base := architect.NewArchitectWithStore("kanban-prep", "Задача", store)
+	base := architect.NewArchitectWithStore("kanban-prep", "Задача", board.NewDomainStore(store))
 	arch := kr.prepareArchitect(base)
 	got := arch.GetTools()
 	count := 0

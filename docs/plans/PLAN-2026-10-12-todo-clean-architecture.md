@@ -7,8 +7,12 @@
 `application/planner`, зависимости от конкретных агентов инвертированы через
 порты `AgentFactory`/архитектурные, чистые типы плана (`AgentType`/`Role`/
 `Step`/`Plan`/`ComputeWaves`) вынесены в `domain/`, `domain.Status` стал
-авторитетным FSM доски (под-шаг C1). Остался срез C целиком (C2–C6) и
-`acceptor` — см. «Остаток работ» в конце.
+авторитетным FSM доски (под-шаг C1). Срез C завершён: C2 (алиасы типов),
+C4 (контекст-плумбинг), C5 (порт `services.BoardStore`), C6 (унификация
+моделей `board.*` ↔ `domain.*`, перенос компараторов/разбора в `domain`,
+`KanbanRunner.store` → `services.BoardStore`, миграция всех `board.*`-
+обращений planner на `domain.*`/`services.*`). Остался `acceptor` — см.
+«Остаток работ» в конце.
 
 ## Проблема
 
@@ -215,17 +219,21 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
      - **C4 ✅** — контекст-плумбинг инъекций/комментариев перенесён в `domain`.
      - **C5 (частично ✅)** — порт `services.BoardStore` расширен; перевод
        `KanbanRunner.store` на интерфейс — вместе с C6.
-     - **C6** — унификация моделей `board.Task/Epic` ↔ `domain.*` и миграция
-       типов planner. Детали — в «Остаток работ по Этапу 3».
+      - **C6 ✅** — унификация моделей `board.Task/Epic` ↔ `domain.*` и миграция
+        типов planner. `domain.TaskSpec`/`Task`/`Epic` получили `FlexInt`/`FlexBool`
+        и string-таймстампы (как `board.*`); конвертеры сводятся к identity;
+        `EpicLess`/`EpicPhase`/`SortEpics`/`UnmarshalTasks` перенесены в `domain`;
+        `KanbanRunner.store` → `services.BoardStore`; все `board.*`-обращения
+        planner мигрированы на `domain.*`/`services.*`.
      - `executor.go` всё ещё импортирует `agents/acceptor` (приёмка — не только
        конструкция агента, а цикл с `acceptor.Report`).
 
 **Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask` ✅
 (`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
-распределена по `application/` и `domain/` — ⏳ `application/planner` создан,
+распределена по `application/` и `domain/` ✅ — `application/planner` создан,
 зависимости от конкретных агентов инвертированы через порты, чистые типы плана
 и `AgentType`/`Role` вынесены в `domain/`, `domain.Status` — авторитетный FSM
-доски; срез C (порт BoardStore и миграция типов) не закрыт.
+доски, срез C закрыт (C1–C6).
 
 ### Этап 4: Рефакторинг инструментов
 
@@ -347,20 +355,21 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
        `WithInjectionScope`/`NewCommentContext`/`WithCommentSource`/
        `AllInjections`/`AllComments`); в `board` — обёртки/алиасы, `runner`/
        `server`/planner продолжают работать без правок.
-     - **C5 (частично ✅)** — `services.BoardStore` расширен недостающими
-       методами (`GetMeta`/`SaveMeta`, `EpicCounts`/`TaskCounts`,
-       `MarkBugsFixedForEpic`, `FinalizeTaskTokens`/`FinalizeEpicTokens`,
-       `AllDone`); `board.DomainStore` (встраивает `*board.Store`) уже
-       удовлетворяет им благодаря алиасам `Meta`/`StatusCounts` — compile-
-       assertion `var _ services.BoardStore = (*DomainStore)(nil)` держится.
-       Осталось: `KanbanRunner.store` перевести на интерфейс — упирается в
-       C6 (смена типа store тянет за собой миграцию `board.Task`/
-       `board.Epic` → `domain.*` по всему planner).
-     - **C6 (осталось, объединяет C3)** — свести модели доски с доменом
-       (`board.TaskSpec`/`Task`/`Epic` ↔ `domain.TaskSpec`/`Task`/`Epic`:
-       `FlexInt`→`int` или наоборот, `string`↔`time.Time`), перенести
-       `EpicLess`/`EpicPhase`/`SortEpics`/`UnmarshalTasks` в `domain` и
-       мигрировать типы planner `board.*` → `domain.*` + тесты.
+      - **C5 ✅** — `services.BoardStore` расширен недостающими
+        методами (`GetMeta`/`SaveMeta`, `EpicCounts`/`TaskCounts`,
+        `MarkBugsFixedForEpic`, `FinalizeTaskTokens`/`FinalizeEpicTokens`,
+        `AllDone`); `board.DomainStore` (встраивает `*board.Store`) уже
+        удовлетворяет им благодаря алиасам `Meta`/`StatusCounts` — compile-
+        assertion `var _ services.BoardStore = (*DomainStore)(nil)` держится.
+        `KanbanRunner.store` переведён на интерфейс (вместе с C6).
+      - **C6 ✅** — модели доски сведены с доменом: `domain.TaskSpec`/
+        `domain.Task`/`domain.Epic` получили `FlexInt`/`FlexBool` и
+        string-таймстампы (как `board.*`); конвертеры сводятся к identity;
+        `EpicLess`/`EpicPhase`/`SortEpics`/`UnmarshalTasks` перенесены в
+        `domain` (`domain/order.go`, `domain/unmarshal.go`); `KanbanRunner.store`
+        → `services.BoardStore`; все `board.*`-обращения planner мигрированы
+        на `domain.*`/`services.*`; вызовы `NewKanbanRunner` в `server/session.go`
+        и `main.go` обёрнуты в `board.NewDomainStore`.
   - **`agents/acceptor`** в `executor.go`: приёмка — цикл с `acceptor.Report`,
     а не только конструкция агента.
   - **Порты `Runner`/`Models`/`Tools`**: planner по-прежнему зависит от

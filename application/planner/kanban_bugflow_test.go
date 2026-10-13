@@ -148,7 +148,7 @@ func TestKanbanPhaseGating(t *testing.T) {
 	projectDir := projects.ProjectDir("kanban-gating")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 
 	if err := store.SaveMeta(ctx, &board.Meta{ProjectName: "kanban-gating", Task: "x", Status: board.StatusInProgress}); err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestKanbanBugFlow(t *testing.T) {
 	projectDir := projects.ProjectDir("kanban-bug")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 
-	kr := NewKanbanRunner(&bugFlowProvider{}, store)
+	kr := NewKanbanRunner(&bugFlowProvider{}, board.NewDomainStore(store))
 	if err := kr.Run(ctx, "kanban-bug", "Проверь контракт API и исправь дефекты"); err != nil {
 		t.Fatalf("Kanban Run (bug flow): %v", err)
 	}

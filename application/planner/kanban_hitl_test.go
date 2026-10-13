@@ -157,7 +157,7 @@ func TestWaitEpicsRejectedReworks(t *testing.T) {
 	}
 
 	gate := &recordingGate{epicsDecide: GateDecision{Approved: false}}
-	kr := NewKanbanRunner(nil, store)
+	kr := NewKanbanRunner(nil, board.NewDomainStore(store))
 	kr.SetGate(gate)
 	if err := kr.waitEpics(ctx); err != nil {
 		t.Fatalf("waitEpics: %v", err)
@@ -193,7 +193,7 @@ func TestWaitTasksRejectedReworks(t *testing.T) {
 	}
 
 	gate := &recordingGate{tasksDecide: GateDecision{Approved: false}}
-	kr := NewKanbanRunner(nil, store)
+	kr := NewKanbanRunner(nil, board.NewDomainStore(store))
 	kr.SetGate(gate)
 	if err := kr.waitReadyTasks(ctx); err != nil {
 		t.Fatalf("waitReadyTasks: %v", err)
@@ -230,7 +230,7 @@ func TestWaitTasksApprovedKeepsBoard(t *testing.T) {
 		}
 	}
 
-	kr := NewKanbanRunner(nil, store)
+	kr := NewKanbanRunner(nil, board.NewDomainStore(store))
 	kr.SetGate(approving())
 	if err := kr.waitReadyTasks(ctx); err != nil {
 		t.Fatalf("waitReadyTasks: %v", err)

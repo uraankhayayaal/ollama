@@ -1,5 +1,20 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
+
+Срез C6 завершён: модели доски сведены с доменом (`domain.TaskSpec`/`Task`/`Epic`
+получили `FlexInt`/`FlexBool` и string-таймстампы, как `board.*`), конвертеры
+сводятся к identity, `EpicLess`/`EpicPhase`/`SortEpics`/`UnmarshalTasks`
+перенесены в `domain` (`domain/order.go`, `domain/unmarshal.go`).
+`KanbanRunner.store` переведён на `services.BoardStore`, все `board.*`-обращения
+planner мигрированы на `domain.*`/`services.*`. Стор-порт агентов (`developer`,
+`backendlead`, `frontendlead`, `devopslead`, `devops`, `qaengineer`, `chatassist`,
+`architect`) переведён на `services.BoardStore`. Вызовы `NewKanbanRunner` в
+`server/session.go` и `main.go` обёрнуты в `board.NewDomainStore`. Верификация:
+`go build`/`go vet`/`go test` по каноническому набору зелёные, кроме ровно 17
+базовых падений `application/planner` (состав не менялся — не регресс). Остаток
+пункта 3: `agents/acceptor` в `executor.go`, порты `Runner`/`Models`/`Tools`.
+
 ## `temp/` — хранилище проектов (не трогать)
 
 Каталог `temp/` — рабочее хранилище проектов, которые генерируют и дорабатывают

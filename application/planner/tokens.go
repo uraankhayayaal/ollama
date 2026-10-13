@@ -8,7 +8,7 @@
 //     architecture, QA/экспертиза — bugs. Раунды копятся в Redis-счётчике
 //     scope'а (tokens.Store.AddScoped) без involvement доски.
 //  2. Когда единица доходит до терминального статуса, оркестратор снимает
-//     счётчик и записывает факт в сущность доски (board.Finalize*Tokens),
+//     счётчик и записывает факт в сущность доски (services.Finalize*Tokens),
 //     после чего обнуляет счётчик — двойного счёта нет.
 //  3. Итог эпика = сумма фактов его задач + вклад лида (scope epic:<id>) +
 //     доля архитектора. Доля архитектора распределяется только когда эпик на
@@ -18,10 +18,10 @@
 package planner
 
 import (
+	"ai/domain"
 	"context"
 
 	"ai/agents"
-	"ai/board"
 	"ai/runevents"
 	"ai/runner"
 	"ai/tokens"
@@ -98,7 +98,7 @@ func (k *KanbanRunner) finalizeEpicTokens(ctx context.Context, epicID string) er
 
 	// Факт эпика записывается один раз: счётчики после этого обнуляются, и
 	// повторный проход (sweep) посчитал бы только сумму задач — уже без вклада
-	// лида и архитектора. От «уменьшения итога» страхует board.FinalizeEpicTokens.
+	// лида и архитектора. От «уменьшения итога» страхует services.FinalizeEpicTokens.
 	if err := k.store.FinalizeEpicTokens(ctx, epicID, in, out); err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func (k *KanbanRunner) finalizeEpicTokens(ctx context.Context, epicID string) er
 }
 
 // epicTokens суммирует факт расхода токенов по задачам эпика.
-func epicTokens(tasks []*board.Task) (in, out int64) {
+func epicTokens(tasks []*domain.Task) (in, out int64) {
 	for _, t := range tasks {
 		in += t.TokensInput
 		out += t.TokensOutput

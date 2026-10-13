@@ -24,7 +24,7 @@ func TestKanbanBoardOnlyEmptyGoesStandby(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-bo")) })
 
 	standby := make(chan bool, 8)
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	kr.SetBoardOnly(true)
 	kr.SetStandbyNotifier(func(v bool) {
 		select {
@@ -70,7 +70,7 @@ func TestKanbanBoardOnlyWakeLeavesStandby(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-bo-wake")) })
 
 	standby := make(chan bool, 8)
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	kr.SetBoardOnly(true)
 	kr.SetStandbyNotifier(func(v bool) {
 		select {
@@ -144,7 +144,7 @@ func TestKanbanBoardOnlyDecomposesExistingEpic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&kanbanProvider{}, store)
+	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	kr.SetBoardOnly(true)
 
 	done := make(chan error, 1)

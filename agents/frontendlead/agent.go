@@ -2,7 +2,7 @@ package frontendlead
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"os"
@@ -46,7 +46,7 @@ type FrontendLead struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store *board.Store
+	Store services.BoardStore
 	// requireTaskPublishing — обязательна ли публикация задач на доске:
 	// лид не считается отработавшим, пока не создал/обновил задачи для
 	// подчинённых (false — для сценариев, не связанных с декомпозицией).
@@ -100,12 +100,12 @@ func newFrontendLead(dir, prompt string, cfg Config) *FrontendLead {
 // SetBoardStore подключает лида к общей Kanban-доске проекта: инструменты
 // Board* становятся доступны, Board-контекст передаётся в реестр. Вызывается
 // оркестратором Kanban при построении агента лида.
-func (l *FrontendLead) SetBoardStore(s *board.Store) {
+func (l *FrontendLead) SetBoardStore(s services.BoardStore) {
 	if s == nil {
 		return
 	}
 	l.Store = s
-	l.Tools = tools.Select(frontendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: board.NewDomainStore(s)})
+	l.Tools = tools.Select(frontendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: s})
 }
 
 func (l *FrontendLead) GetUserMessages() []agents.Message {

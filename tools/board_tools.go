@@ -91,22 +91,22 @@ func parseTaskSpec(args map[string]any) domain.TaskSpec {
 	if v, ok := args["sequence_order"]; ok {
 		switch n := v.(type) {
 		case float64:
-			ts.SequenceOrder = int(n)
+			ts.SequenceOrder = domain.FlexInt(n)
 		case int:
-			ts.SequenceOrder = n
+			ts.SequenceOrder = domain.FlexInt(n)
 		case string:
 			if i, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
-				ts.SequenceOrder = i
+				ts.SequenceOrder = domain.FlexInt(i)
 			}
 		}
 	}
 	switch v := args["can_run_parallel"].(type) {
 	case bool:
-		ts.CanRunParallel = v
+		ts.CanRunParallel = domain.FlexBool(v)
 	case string:
-		ts.CanRunParallel = strings.EqualFold(strings.TrimSpace(v), "true")
+		ts.CanRunParallel = domain.FlexBool(strings.EqualFold(strings.TrimSpace(v), "true"))
 	case float64:
-		ts.CanRunParallel = v != 0
+		ts.CanRunParallel = domain.FlexBool(v != 0)
 	}
 	if deps, ok := args["dependencies"].([]any); ok {
 		for _, d := range deps {
@@ -475,12 +475,12 @@ func (t *boardUpdateEpicTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	if v, ok := args["sequence_order"]; ok {
 		if n, err := flexIntVal(v); err == nil {
-			e.SequenceOrder = n
+			e.SequenceOrder = domain.FlexInt(n)
 		}
 	}
 	if v, ok := args["can_run_parallel"]; ok {
 		if b, err := flexBoolVal(v); err == nil {
-			e.CanRunParallel = b
+			e.CanRunParallel = domain.FlexBool(b)
 		}
 	}
 	if v, ok := args["dependencies"].([]any); ok {
@@ -711,12 +711,12 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	if v, ok := args["sequence_order"]; ok {
 		if n, err := flexIntVal(v); err == nil {
-			tk.SequenceOrder = n
+			tk.SequenceOrder = domain.FlexInt(n)
 		}
 	}
 	if v, ok := args["can_run_parallel"]; ok {
 		if b, err := flexBoolVal(v); err == nil {
-			tk.CanRunParallel = b
+			tk.CanRunParallel = domain.FlexBool(b)
 		}
 	}
 	if raw, ok := args["dependencies"]; ok {

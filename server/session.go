@@ -332,7 +332,7 @@ func (sess *Session) start(ctx context.Context, taskText string, provider models
 	sess.wg.Add(1)
 	go sess.appLogFlusherLoop(cctx)
 
-	runner := planner.NewKanbanRunner(provider, sess.board)
+	runner := planner.NewKanbanRunner(provider, board.NewDomainStore(sess.board))
 	runner.SetGate(sess)
 	// Ф-4/Р-6: архитектор получает RAG (CodeSearch + блок «релевантный код»).
 	runner.SetRAG(ragClient)

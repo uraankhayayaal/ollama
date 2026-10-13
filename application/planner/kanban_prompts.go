@@ -2,7 +2,7 @@ package planner
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/domain"
 	"context"
 	"fmt"
 	"strings"
@@ -15,21 +15,21 @@ func (k *KanbanRunner) boardSummary(ctx context.Context) string {
 	ec, _ := k.store.EpicCounts(ctx)
 	tc, _ := k.store.TaskCounts(ctx)
 	if ec == nil {
-		ec = &board.StatusCounts{By: map[board.Status]int{}}
+		ec = &domain.StatusCounts{By: map[domain.Status]int{}}
 	}
 	if tc == nil {
-		tc = &board.StatusCounts{By: map[board.Status]int{}}
+		tc = &domain.StatusCounts{By: map[domain.Status]int{}}
 	}
 	return fmt.Sprintf("эпиков: %d (выполнено %d, отменено %d), задач: %d (выполнено %d, отменено %d)",
-		ec.Total, ec.By[board.StatusDone], ec.By[board.StatusCancelled],
-		tc.Total, tc.By[board.StatusDone], tc.By[board.StatusCancelled])
+		ec.Total, ec.By[domain.StatusDone], ec.By[domain.StatusCancelled],
+		tc.Total, tc.By[domain.StatusDone], tc.By[domain.StatusCancelled])
 }
 
 // leadFor создаёт агента-лида направления по assigned_role эпика и собирает
 // промпт декомпозиции. Лиды пишут ТОЛЬКО скелетон (allowlist в инструменте,
 // worktree ветки эпика подключается в phaseLeads через epicOutputDir); для QA
 // эпика лидом становится qaengineer.
-func (k *KanbanRunner) leadFor(epic *board.Epic) (agents.Agent, error) {
+func (k *KanbanRunner) leadFor(epic *domain.Epic) (agents.Agent, error) {
 	prompt := k.leadPrompt(epic)
 	project := k.store.Project()
 	return agentFactory().Lead(project, epic.AssignedRole, prompt), nil
@@ -37,7 +37,7 @@ func (k *KanbanRunner) leadFor(epic *board.Epic) (agents.Agent, error) {
 
 // bugTriagePrompt формирует задание QA Lead на триаж багрепортов (new):
 // подтвердить (BoardSetBugStatus, confirmed) или отсеять «нейрослоп» (slop).
-func (k *KanbanRunner) bugTriagePrompt(project string, bugs []*board.BugReport) string {
+func (k *KanbanRunner) bugTriagePrompt(project string, bugs []*domain.BugReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Проведи триаж %d багрепортов QA-специалистов проекта %q с доски.\n\n", len(bugs), project)
 	for _, bug := range bugs {
@@ -52,7 +52,7 @@ func (k *KanbanRunner) bugTriagePrompt(project string, bugs []*board.BugReport) 
 // bugExpertPrompt формирует задание архитектора (режим экспертизы) по
 // подтверждённым багрепортам: вынести вердикт BoardReviewBugReport
 // (fix|feature|wont_fix) и при fix создать эпик исправления.
-func (k *KanbanRunner) bugExpertPrompt(project string, bugs []*board.BugReport) string {
+func (k *KanbanRunner) bugExpertPrompt(project string, bugs []*domain.BugReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Системный архитектор проекта %q: QA Lead подтвердил %d багрепортов, требуется твоя экспертиза.\n\n", project, len(bugs))
 	for i, bug := range bugs {
@@ -70,7 +70,7 @@ func (k *KanbanRunner) bugExpertPrompt(project string, bugs []*board.BugReport) 
 // файлы, а не дублируют контракт текстом. QA-лид скелетона не пишет (у него
 // нет Run и работ с кодом — readme-only до Этапа 8), для него сохраняется
 // старый формат «полный контракт в description».
-func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
+func (k *KanbanRunner) leadPrompt(epic *domain.Epic) string {
 	// Скелетон пишут все лиды, кроме QA: их направления имеют Write/Run и
 	// worktree ветки эпика (см. phaseLeads → SetOutputDir).
 	skeleton := !isRole(epic.AssignedRole, "qa", "тест", "testing")
@@ -135,7 +135,7 @@ func (k *KanbanRunner) leadPrompt(epic *board.Epic) string {
 // структуру подпроекта с нуля и дорабатывает существующий код; выбор
 // специализации (frontend/backend) идёт по роли задачи (маркеры фронтенда)
 // либо по умолчанию — backend.
-func (k *KanbanRunner) specialistFor(t *board.Task) (agents.Agent, error) {
+func (k *KanbanRunner) specialistFor(t *domain.Task) (agents.Agent, error) {
 	return SpecialistForRole(k.store.Project(), t.AssignedRole, k.taskPrompt(t)), nil
 }
 
@@ -148,7 +148,7 @@ func SpecialistForRole(project, role, prompt string) agents.Agent {
 }
 
 // taskPrompt формирует задание специалисту по задаче с Kanban-доски.
-func (k *KanbanRunner) taskPrompt(t *board.Task) string {
+func (k *KanbanRunner) taskPrompt(t *domain.Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Ты — специалист (%s), выполняешь задачу с общей Kanban-доски проекта %q.\n\n", t.AssignedRole, k.store.Project())
 	fmt.Fprintf(&b, "Задача на доске: %s — %s\n\n", t.TaskID, t.Title)
@@ -172,7 +172,7 @@ func (k *KanbanRunner) taskPrompt(t *board.Task) string {
 
 // assignee возвращает ключ специалиста для задачи: присваиваем роль из
 // assigned_role (одна задача — один специалист).
-func assignee(ts board.TaskSpec) string {
+func assignee(ts domain.TaskSpec) string {
 	if strings.TrimSpace(ts.AssignedRole) == "" {
 		return "developer"
 	}
@@ -191,7 +191,7 @@ func isRole(role string, markers ...string) bool {
 }
 
 // sortTasks сортирует задачи по sequence_order, затем по TaskID (детерминизм).
-func sortTasks(tasks []*board.Task) {
+func sortTasks(tasks []*domain.Task) {
 	for i := 1; i < len(tasks); i++ {
 		for j := i; j > 0; j-- {
 			a, b := tasks[j-1], tasks[j]
@@ -205,7 +205,7 @@ func sortTasks(tasks []*board.Task) {
 }
 
 // epicList форматирует список эпиков для логов.
-func epicList(epics []*board.Epic) string {
+func epicList(epics []*domain.Epic) string {
 	ids := make([]string, 0, len(epics))
 	for _, e := range epics {
 		ids = append(ids, e.TaskID+" ("+truncateText(e.Title, 40)+")")
@@ -214,7 +214,7 @@ func epicList(epics []*board.Epic) string {
 }
 
 // leadName описывает лида направления для логов.
-func leadName(epic *board.Epic) string {
+func leadName(epic *domain.Epic) string {
 	switch {
 	case isRole(epic.AssignedRole, "qa", "тест", "testing"):
 		return "QA Lead"

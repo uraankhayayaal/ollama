@@ -10,8 +10,8 @@ import (
 	"ai/agents/devops"
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
-	"ai/application/planner"
 	"ai/agents/qaengineer"
+	"ai/application/planner"
 
 	"ai/board"
 	"ai/checkpoint"
@@ -233,7 +233,7 @@ func main() {
 		// контекст инжектируется в ctx, которой пользуются все call к Generate.
 		ragClient := rag.NewClientSafe(rag.Config{})
 		kctx := runctx.WithCompression(ctx, kanbanProject, projects.ProjectDir(kanbanProject), ragClient)
-		runner := planner.NewKanbanRunner(provider, store)
+		runner := planner.NewKanbanRunner(provider, board.NewDomainStore(store))
 		// Р-6: архитектор получает RAG (CodeSearch + блок «релевантный код»).
 		// Консоль без серверных мостов — extras (AskUser) не передаются:
 		// архитектор работает автономно (degrade).

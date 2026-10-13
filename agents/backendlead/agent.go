@@ -2,7 +2,7 @@ package backendlead
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"os"
@@ -46,7 +46,7 @@ type BackendLead struct {
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store *board.Store
+	Store services.BoardStore
 	// requireTaskPublishing — обязательна ли публикация задач на доске:
 	// лид не считается отработавшим, пока не создал/обновил задачи для
 	// подчинённых (false — например, триаж багрепортов у QA Lead).
@@ -83,12 +83,12 @@ func NewBackendLeadInDir(prompt, dir string) (*BackendLead, error) {
 // SetBoardStore подключает лида к общей Kanban-доске проекта: инструменты
 // Board* становятся доступны, Board-контекст передаётся в реестр. Вызывается
 // оркестратором Kanban при построении агента лида.
-func (l *BackendLead) SetBoardStore(s *board.Store) {
+func (l *BackendLead) SetBoardStore(s services.BoardStore) {
 	if s == nil {
 		return
 	}
 	l.Store = s
-	l.Tools = tools.Select(backendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: board.NewDomainStore(s)})
+	l.Tools = tools.Select(backendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: s})
 }
 
 // newBackendLead создаёт агента в заданной директории: собирает *tools.FileOps

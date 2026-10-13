@@ -19,7 +19,7 @@ func newTestArchitect(t *testing.T) *Architect {
 	t.Helper()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
-	a := NewArchitectWithStore("testproj", "Задача пользователя", store)
+	a := NewArchitectWithStore("testproj", "Задача пользователя", board.NewDomainStore(store))
 	a.OutputDir = filepath.Join(t.TempDir(), "testproj")
 	return a
 }

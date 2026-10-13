@@ -26,7 +26,7 @@ func newTestAssistantBoard(t *testing.T, prompt string) (*Assistant, *board.Stor
 	t.Helper()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
-	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, store, nil)
+	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, board.NewDomainStore(store), nil)
 	return a, store
 }
 
