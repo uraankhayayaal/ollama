@@ -1,15 +1,20 @@
 package domain
 
+// AgentType — тип ролевого агента, которому делегируется шаг плана.
+// Значения канонические: совпадают с сериализуемым в чекпоинтах/PLAN.md видом
+// (planner исторически использовал именно их; ранее здесь были расходящиеся
+// «backend_dev»/«qa_engineer» и т.п. — исправлено при переносе типов в domain).
 type AgentType string
 
 const (
-	AgentBackendDev   AgentType = "backend_dev"
-	AgentFrontendDev  AgentType = "frontend_dev"
+	AgentBackendDev   AgentType = "backend"
+	AgentFrontendDev  AgentType = "frontend"
 	AgentDevops       AgentType = "devops"
-	AgentDevopsLead   AgentType = "devops_lead"
-	AgentQAEngineer   AgentType = "qa_engineer"
-	AgentFrontendLead AgentType = "frontend_lead"
-	AgentBackendLead  AgentType = "backend_lead"
+	AgentDevopsLead   AgentType = "devopslead"
+	AgentQAEngineer   AgentType = "qa"
+	AgentFrontendLead AgentType = "frontendlead"
+	AgentBackendLead  AgentType = "backendlead"
+	// Типы вне ролей плана (архитектор и вспомогательные агенты).
 	AgentArchitect    AgentType = "architect"
 	AgentPromptCheck  AgentType = "prompt_check"
 	AgentCodeReviewer AgentType = "code_reviewer"

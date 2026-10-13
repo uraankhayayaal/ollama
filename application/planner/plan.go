@@ -2,25 +2,27 @@ package planner
 
 import (
 	"ai/board"
+	"ai/domain"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 )
 
-// AgentType — тип агента, которому делегируется задача.
-type AgentType string
+// AgentType — тип агента, которому делегируется задача. Тип принадлежит
+// домену (domain.AgentType), здесь — алиас для совместимости кода плана.
+type AgentType = domain.AgentType
 
 const (
 	// AgentBackendDev — агент «Backend разработчик»: серверная часть проекта.
-	AgentBackendDev AgentType = "backend"
+	AgentBackendDev = domain.AgentBackendDev
 	// AgentFrontendDev — агент «Frontend разработчик»: клиентская часть проекта.
-	AgentFrontendDev  AgentType = "frontend"
-	AgentDevops       AgentType = "devops"
-	AgentDevopsLead   AgentType = "devopslead"
-	AgentQAEngineer   AgentType = "qa"
-	AgentFrontendLead AgentType = "frontendlead"
-	AgentBackendLead  AgentType = "backendlead"
+	AgentFrontendDev  = domain.AgentFrontendDev
+	AgentDevops       = domain.AgentDevops
+	AgentDevopsLead   = domain.AgentDevopsLead
+	AgentQAEngineer   = domain.AgentQAEngineer
+	AgentFrontendLead = domain.AgentFrontendLead
+	AgentBackendLead  = domain.AgentBackendLead
 )
 
 // Role — роль разработчика. Задаётся планировщиком, когда единый этап
@@ -28,12 +30,12 @@ const (
 // фронтенд или бэкенд. Для шагов с отдельным агентом (AgentBackendDev/
 // AgentFrontendDev) роль фиксирована самим типом агента и хранится только
 // для журналирования (agentLabel); для шагов с generic-типами роль может
-// влиять на выбор агента исполнением.
-type Role string
+// влиять на выбор агента исполнением. Тип принадлежит домену (domain.Role).
+type Role = domain.Role
 
 const (
-	RoleFrontend Role = "frontend"
-	RoleBackend  Role = "backend"
+	RoleFrontend = domain.RoleFrontend
+	RoleBackend  = domain.RoleBackend
 )
 
 // agentDisplayName — человекочитаемое имя агента по типу шага. Используется
