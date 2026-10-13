@@ -2,6 +2,14 @@ package domain
 
 import "time"
 
+// Типы комментариев задач. Управляет доска (infrastructure/board), но слой
+// application ссылается на них при авто-комментариях (эскалации, форсмажоры).
+const (
+	CommentTypeSystem = "system"
+	CommentTypeUser   = "user"
+	CommentTypeQA     = "qa"
+)
+
 type Comment struct {
 	ID        string    `json:"id"`
 	TaskID    string    `json:"task_id"`

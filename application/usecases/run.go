@@ -156,6 +156,11 @@ func RunTask(ctx context.Context, p RunPorts) (*domain.AgentResponse, error) {
 	loopFailNudged := make(map[string]bool)
 	loop := NewLoopDetector(p.Config.IsParallelSafe)
 	loopPrefix := LoopPrefixLen(messages)
+	if loopPrefix > len(messages) {
+		// История короче минимального «хвоста» разрыва петли (агент без
+		// системных сообщений): не срезаем за пределы среза.
+		loopPrefix = len(messages)
+	}
 	loopProgressIdx := loopPrefix
 	loopTask := LoopTaskStatement(messages[:loopPrefix])
 	needRefills := 0

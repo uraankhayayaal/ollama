@@ -2,6 +2,7 @@ package planner
 
 import (
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/board"
 	"ai/models"
 	"ai/runevents"
@@ -214,9 +215,9 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				k.log.Warnf("[задача %s] комментарий к задаче: %v", t.TaskID, perr)
 			}
 			if _, escErr := k.escalate(ctx, current, escalationDiag{
-				event:  "работа не сделана",
-				detail: err.Error(),
-				action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
+				Event:  "работа не сделана",
+				Detail: err.Error(),
+				Action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
 			}); escErr != nil {
 				return false, fmt.Errorf("задача %s: эскалация пустой работы: %w", t.TaskID, escErr)
 			}
@@ -249,19 +250,10 @@ func maxEscalations() int {
 	return maxEscalationsDefault
 }
 
-// escalationDiag — диагноз одной автономной эскалации задачи. Общий для
-// зацикливания (Ф-6, этап 4.4) и «пустой работы» (инцидент FEL-04: гард
-// отклонил done, правок/коммитов нет): у обоих одна цель — конечный бюджет
-// попыток вместо бесконечного сжигания токенов.
-type escalationDiag struct {
-	// event — событие одной фразой («зациклилась», «работа не сделана»):
-	// участвует во всех сообщениях (инъекция, аудит, причина остановки).
-	event string
-	// detail — причина (диагноз): видна и модели в новом прогоне, и человеку.
-	detail string
-	// action — что делать модели в новом прогоне.
-	action string
-}
+// escalationDiag — диагноз одной автономной эскалации задачи: политика и
+// применение живут в application/usecases (usecases.Escalate), здесь только
+// алиас для совместимости точек вызова.
+type escalationDiag = usecases.EscalationDiag
 
 // escalate реагирует на неудачную попытку задачи (зацикливание или работа
 // без результата) в рамках бюджета автономии. Возвращает true, если работа
@@ -269,78 +261,25 @@ type escalationDiag struct {
 // это честный «прогресс» раунда, иначе цикл решил бы, что прогресса нет, и
 // упал.
 //
-// Пока бюджет не исчерпан: пишем в задачу требование большой модели
-// (model_tier), инъекцию с диагнозом (причина видна модели с первого запроса
-// нового прогона) и возвращаем задачу в очередь. Откат кода при этом НЕ
-// делается (Р-2).
-//
-// Исчерпали бюджет: останавливаем работу задачи и зовём человека — «помощь
-// человека» (не терминальный статус: вернуть в очередь можно одной кнопкой)
-// плюс явное сообщение в чат. Никаких «выполнено»/фиктивного успеха.
+// Реализация — usecases.Escalate (application): слой принимает решение
+// (бюджет, инъекция с диагнозом, human_help при исчерпании), а здесь — только
+// адаптеры инфраструктуры (доска через board.DomainStore, лог/чат, бюджет из
+// окружения).
 func (k *KanbanRunner) escalate(ctx context.Context, t *board.Task, diag escalationDiag) (bool, error) {
-	budget := maxEscalations()
-	if t.Escalations >= budget {
-		// Причина остановки оседает в задаче (карточка в UI): человек должен
-		// увидеть, ЧТО именно не получилось, а не «загадочный простой».
-		reasonFull := fmt.Sprintf("Бюджет автономии исчерпан (%d эскалаций): %s. %s. Действие: %s",
-			t.Escalations, diag.event, truncateText(diag.detail, 400), diag.action)
-		if err := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
-			cur.PauseReason = truncateText(reasonFull, 800)
-			return nil
-		}); err != nil {
-			return false, fmt.Errorf("задача %s: запись причины остановки: %w", t.TaskID, err)
-		}
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusHumanHelp); err != nil {
-			return false, fmt.Errorf("задача %s: остановка исчерпанием бюджета: %w", t.TaskID, err)
-		}
-		_, _ = k.store.AddTaskComment(ctx, t.TaskID, board.Comment{
-			Author: "system",
-			Type:   board.CommentTypeSystem,
-			Body:   fmt.Sprintf("Форсмажор: %s\n\nДиагноз: %s\n\nАнализ/рекомендация: %s", diag.event, diag.detail, diag.action),
-		})
-		stop := fmt.Sprintf("задача %s: %s — попытка %d, бюджет автономии исчерпан: работа остановлена, нужен человек (последняя причина: %s)",
-			t.TaskID, diag.event, t.Escalations+1, truncateText(diag.detail, 160))
-		k.setStopReason(stop)
-		k.status("[задача %s] %s %d раз(а) подряд (последняя причина: %s) — бюджет автономии исчерпан, работа остановлена, нужен человек",
-			t.TaskID, diag.event, t.Escalations+1, truncateText(diag.detail, 160))
-		return true, nil
-	}
-
-	escalation := t.Escalations + 1
-	if err := k.store.PatchTask(ctx, t.TaskID, func(cur *board.Task) error {
-		cur.ModelTier = board.ModelTierLarge
-		cur.Escalations = escalation
-		// Диагноз как инъекция: новая модель/новый прогон видят причину
-		// сразу, а не заново наступают на тот же грабли. Инъекция уходит в
-		// конец блока сообщений (append) — как требование «что делать дальше»,
-		// а не как подмена системного промпта.
-		inj := board.Injection{
-			Name:   fmt.Sprintf("%s (эскалация %d/%d)", diag.event, escalation, budget),
-			Scope:  board.InjectionScopeTask,
-			Target: board.InjectionTargetUserLast,
-			Content: fmt.Sprintf("Предыдущая попытка: %s (эскалация %d/%d). Причина: %s. %s",
-				diag.event, escalation, budget, truncateText(diag.detail, 400), diag.action),
-		}
-		inj.Normalize()
-		cur.Injections = append(cur.Injections, inj)
-		return nil
-	}); err != nil {
-		return false, fmt.Errorf("задача %s: запись эскалации: %w", t.TaskID, err)
-	}
-	if err := k.store.SetTaskStatus(ctx, t.TaskID, board.StatusReady); err != nil {
-		return false, fmt.Errorf("задача %s: возврат в очередь после эскалации: %w", t.TaskID, err)
-	}
-	k.status("[задача %s] %s (%s) — эскалация %d/%d: продолжаем на большой модели с разбором причины",
-		t.TaskID, diag.event, truncateText(diag.detail, 160), escalation, budget)
-	return true, nil
+	return usecases.Escalate(ctx, t.TaskID, diag, usecases.EscalationPorts{
+		Tasks:          board.NewDomainStore(k.store),
+		MaxEscalations: maxEscalations(),
+		Status:         k.status,
+		SetStopReason:  k.setStopReason,
+	})
 }
 
 // escalateLoop реагирует на зацикливание специалиста (Ф-6, этапы 4.4–4.5).
 func (k *KanbanRunner) escalateLoop(ctx context.Context, t *board.Task, reason string) (bool, error) {
 	return k.escalate(ctx, t, escalationDiag{
-		event:  "зациклилась",
-		detail: reason,
-		action: "Не повторяй те же действия: перечитай задачу, измени подход и проверь результат.",
+		Event:  "зациклилась",
+		Detail: reason,
+		Action: "Не повторяй те же действия: перечитай задачу, измени подход и проверь результат.",
 	})
 }
 

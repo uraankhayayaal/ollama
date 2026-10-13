@@ -1,6 +1,10 @@
 # PLAN-2026-10-12 — Рефакторинг по Clean Architecture
 
-**Статус:** Завершён (все этапы выполнены)
+**Статус:** Этапы 1–2 завершены. Этап 3: use-cases `RunTask`,
+`CompressHistory`, `BreakLoop`, `Escalate` перенесены в
+`application/usecases` и покрыты unit-тестами; пункт 3 (распределение 16+
+файлов `agents/planner/` по `application/` и `domain/`) **не выполнен** —
+`agents/planner/` остаётся как есть (см. «Остаток работ» в конце).
 
 ## Проблема
 
@@ -121,33 +125,53 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 `application/use-cases/`.
 
 1. Создать `application/usecases/`:
-   - `RunTask` — запуск агента по задаче (текущий `runner.Runner`). ⏳ Введён
-     нейтральный LLM-порт: `domain.ChatRequest`/`domain.ToolDefinition`
-     (`domain/chat.go`), `services.LLMClient` переписан на `ChatRequest`;
-     провайдеры (`models/OllamaModel.go`, `models/OpenAIProvider.go`,
-     `models/layered.go`) и `runner.Generate` переведены на него без
-     `agents.Agent` в сигнатуре, `tools.ToolDefinition` — алиас домена,
-     `runner.Compression` больше не создаёт `compactAgent`. Это разблокирует
-     перенос цикла `generate` в `application/usecases`.
+   - `RunTask` — запуск агента по задаче (текущий `runner.Runner`). ✅
+     `usecases/run.go` (`RunTask`/`RunPorts`/`RunConfig`, 657 строк) содержит
+     цикл целиком; `runner.Generate` (`runner/runner.go:233`) — тонкий адаптер,
+     собирающий порты (провайдер, агент, инъекции, компрессор, конфиг) из
+     окружения и делегирующий в `usecases.RunTask`. Нейтральный LLM-порт:
+     `domain.ChatRequest`/`domain.ToolDefinition` (`domain/chat.go`),
+     `services.LLMClient` на `ChatRequest`; `tools.ToolDefinition` — алиас
+     домена. Покрыт `usecases/run_test.go` (завершение, вызов инструмента и
+     возврат результата, лимит раундов, инъекции, короткая история).
    - `CompressHistory` — сжатие контекста (`runner/compress.go`,
      `runner/compression.go`). ✅ Базовый движок (`compress.go`:
      позиционное ядро + Ф-6..Ф-10 пайплайн, `CompressContext`/`CompressOptions`/
-     `CompressionReport`/`EvictionItem`) перенесён в `usecases/compress.go`;
-     оркестрация `compression.go` пока в `runner` (адаптер провайдера
-     `compactAgent`), делегирует в `usecases`.
+     `CompressionReport`/`EvictionItem`) в `usecases/compress.go`; оркестрация
+     `compression.go` делегирует в `usecases` (бюджет из окружения/usage,
+     страховка по окну провайдера, компакция через `providerCompactor`).
    - `BreakLoop` — обнаружение и вмешательство в петли (`runner/loop.go`,
      `runner/loopstate.go`). ✅ `loop.go` перенесён; `policy.go` содержит
      чистые политики цикла (подсказки модели, разбор NEED_*, классификация
      провала инструмента, пороговые константы), `domain/tokens.go` — оценку
      токенов; `runner` делегирует в них тонкими алиасами.
-   - `Escalate` — эскалация при исчерпании бюджета (`agents/planner/kanban*.go`). ✅ **Завершён**
+   - `Escalate` — эскалация при исчерпании бюджета (`agents/planner/kanban*.go`).
+     ✅ `usecases/escalate.go`: `Escalate`/`EscalationDiag`/`EscalationPorts`
+     поверх узкого порта `EscalationStore` (`domain.Task`, `domain.Injection`,
+     `domain.Status`); `KanbanRunner.escalate`/`escalateLoop`
+     (`agents/planner/kanban_execute.go`) делегируют туда, оставляя в
+     инфраструктуре доску (`board.DomainStore`), бюджет
+     (`KANBAN_MAX_ESCALATIONS`) и вывод в чат/лог. Покрыт
+     `usecases/escalate_test.go` (эскалация в бюджете, остановка при
+     исчерпании, ошибки). В `domain/comment.go` добавлены константы
+     `CommentTypeSystem/User/QA` (нужны use-case для авто-комментария);
+     `domain.ModelTierLarge` уже существовал.
 2. `runner` становится тонким адаптером к `application` (как `server` к
-   `application`).
+   `application`). ⏳ `runner.Generate` делегирует в `usecases.RunTask`;
+   `runner/compression.go` — адаптер сжатия; оставшиеся файлы (`autofix.go`,
+   `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`, `reindex.go`)
+   реализуют порты-функции (`AutoFixer`, `RuntimeLogger`, `InjectionApplier`,
+   `RoundStateReporter`, `WIPCommitter`, `Reindexer`) для инфраструктуры —
+   бизнес-логика вынесена, но пакет ещё не «тонкий» по объёму.
 3. Перенести логику из `agents/planner/` (16+ файлов) в
-   `application/usecases/` и `domain/`.
+   `application/usecases/` и `domain/`. ❌ **НЕ ВЫПОЛНЕНО**: `agents/planner/`
+   содержит `kanban*.go`, `executor.go`, `planner.go`, `plan*.go`,
+   `project_map.go`, `ragcontext.go`, `lspgate.go`, `tokens.go` без изменений
+   (кроме делегирования `Escalate` в `usecases`).
 
-**Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask`;
-логика из `agents/planner/` распределена по `application/` и `domain/`.
+**Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask` ✅
+(`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
+распределена по `application/` и `domain/` ❌ (пункт 3 не выполнен).
 
 ### Этап 4: Рефакторинг инструментов
 
@@ -237,6 +261,25 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
 - **Существующие планы в `wip`.** `PLAN-2026-10-02-wip-enterprise.md` и
   `PLAN-2026-10-07-wip-harness-rework.md` могут конфликтовать. Необходимо
   согласование.
+
+## Остаток работ по Этапу 3
+
+- **Пункт 3 — распределение `agents/planner/` по `application/` и `domain/`.**
+  Самый крупный объём (kanban-оркестрация, план/чекпоинты, project_map, RAG-
+  контекст, LSP-gate, токены, executor). Требует отдельной итерации: у многих
+  из этих файлов нет узких портов, а `board`-типы (`board.Task` и т.п.)
+  параллельны `domain`-типам — понадобится либо договориться об алиасах, либо
+  расширить адаптер `board.DomainStore`. До выполнения пункт 3 считать
+  незакрытым, несмотря на завершённые use-cases.
+- **`runner` не «тонкий» по объёму.** Делегирование есть, но адаптеры портов
+  (`autofix.go`, `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`,
+  `reindex.go`) остаются в пакете.
+- **Предсуществующие падения тестов `agents/planner`** (17 шт., включая
+  `TestGuardRejectionEscalatesWithinBudget`, `TestPhantomDoneNotClosedByFallback`,
+  `TestTokenAccountingEndToEnd`): воспроизводятся на коммите `cb8fae2` до
+  Этапа 3 — это не регрессия use-cases. Разобрать отдельно; эскалация и
+  `RunTask` на данный момент покрыты unit-тестами в `application/usecases`
+  (`escalate_test.go`, `run_test.go`), которые зелёные.
 
 ## Что осталось пользователю
 
