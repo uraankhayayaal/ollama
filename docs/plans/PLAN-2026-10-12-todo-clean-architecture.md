@@ -6,8 +6,9 @@
 `agents/planner/`) выполнен **частично** — пакет перемещён в
 `application/planner`, зависимости от конкретных агентов инвертированы через
 порты `AgentFactory`/архитектурные, чистые типы плана (`AgentType`/`Role`/
-`Step`/`Plan`/`ComputeWaves`) вынесены в `domain/`. Остался срез C (порт
-`BoardStore`) и `acceptor` — см. «Остаток работ» в конце.
+`Step`/`Plan`/`ComputeWaves`) вынесены в `domain/`, `domain.Status` стал
+авторитетным FSM доски (под-шаг C1). Остался срез C целиком (C2–C6) и
+`acceptor` — см. «Остаток работ» в конце.
 
 ## Проблема
 
@@ -201,9 +202,13 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
      - Срез разделён на два коммита: `AgentType`/`Role` (алиасы) и `Plan`/`Step`/
        `ComputeWaves`. Обновлены `plan_doc.go` и `plan_doc_test.go`.
    - **Осталось (срез C) ❌**:
-     - **C** — порт `BoardStore` поверх `domain` вместо `*board.Store`
-       (самый крупный: оркестратор работает с `board.Task`/`board.Epic` по
-       всему коду; `board.DomainStore` уже реализует `services.BoardStore`).
+     - **C1 ✅** — `domain.Status` — авторитетный FSM доски
+       (`ValidateTransition`/`StatusError`/`Terminal`/`Valid`/`Label`),
+       `board.Status`/`StatusError`/`Meta`/`StatusCounts` — алиасы.
+     - **C2–C6** — остальные алиасы (`Comment`/`Injection`/`BugReport`/
+       `BugStatus`), `domain.EpicLess`/`UnmarshalTasks`, перенос
+       контекст-плумбинга инъекций (каскад в `runner`/`server`), расширение
+       порта и миграция типов planner. Детали — в «Остаток работ по Этапу 3».
      - `executor.go` всё ещё импортирует `agents/acceptor` (приёмка — не только
        конструкция агента, а цикл с `acceptor.Report`).
 
@@ -211,8 +216,8 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 (`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
 распределена по `application/` и `domain/` — ⏳ `application/planner` создан,
 зависимости от конкретных агентов инвертированы через порты, чистые типы плана
-и `AgentType`/`Role` вынесены в `domain/`; остаточный срез C (BoardStore) не
-закрыт.
+и `AgentType`/`Role` вынесены в `domain/`, `domain.Status` — авторитетный FSM
+доски; срез C (порт BoardStore и миграция типов) не закрыт.
 
 ### Этап 4: Рефакторинг инструментов
 
@@ -309,9 +314,31 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
   в `application/planner` (срез A), порты ролевых агентов (срез B), архитектора
   (срез B2) и чистые типы плана в `domain/` (срез D: `AgentType`/`Role`/`Step`/
   `Plan`/`ComputeWaves`, значения `AgentType` канонизированы). Осталось:
-  - **Срез C — порт `BoardStore`** (`domain`-типы вместо `*board.Store`):
-    оркестратор работает с `board.Task`/`board.Epic` по всему коду;
-    `board.DomainStore` уже реализует `services.BoardStore`. Самый крупный срез.
+  - **Срез C — порт `BoardStore`** (`domain`-типы вместо `*board.Store`): самый
+    крупный. Оркестратор делает ~183 обращения к `board.*` в non-test коде
+    (11 файлов) плюс тесты. Разбит на под-шаги:
+    - **C1 ✅** — `domain.Status` стал авторитетным конечным автоматом доски
+      (метки, `Terminal`/`Valid`, `ValidateTransition`, `StatusError`);
+      `board.Status`/`board.StatusError` — алиасы, `board.ValidateTransition`
+      делегирует. `board.Meta`/`board.StatusCounts` тоже алиасированы на
+      `domain`. Тест `domain/status_test.go`.
+    - **C2 (осталось)** — алиасы `board.{Comment,Comments,Injection,BugReport,
+      BugStatus}` на доменные типы; требует переноса методов
+      `Comment.Normalize/Validate`, `Injection.Validate` в `domain`
+      (`BugStatus`-методы в `domain` уже есть).
+    - **C3 (осталось)** — `domain.EpicLess` (компаратор очереди лидов,
+      сейчас `board/order.go`) и `domain.UnmarshalTasks`.
+    - **C4 (осталось, каскад)** — контекст-плумбинг инъекций/комментариев
+      (`NewInjectionContext`/`WithInjectionSource`/`WithInjectionScope`/
+      `NewCommentContext`/`WithCommentSource`) придётся переносить из `board`
+      в `domain` или отдавать через порт: его читают `runner/injections.go` и
+      `server/chatassist.go`, поэтому срез затрагивает не только planner.
+    - **C5 (осталось)** — порт: `services.BoardStore` (уже реализован
+      `board.DomainStore`) расширить недостающими методами
+      (`GetMeta`/`SaveMeta`, `EpicCounts`/`TaskCounts`, `Finalize*Tokens`,
+      `AllDone`), `KanbanRunner.store` — на интерфейс.
+    - **C6 (осталось)** — миграция типов planner `board.*` → `domain.*` и
+      перевод тестов.
   - **`agents/acceptor`** в `executor.go`: приёмка — цикл с `acceptor.Report`,
     а не только конструкция агента.
   - **Порты `Runner`/`Models`/`Tools`**: planner по-прежнему зависит от
@@ -323,7 +350,7 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
 - **Предсуществующие падения тестов `application/planner`** (17 шт., включая
   `TestGuardRejectionEscalatesWithinBudget`, `TestPhantomDoneNotClosedByFallback`,
   `TestTokenAccountingEndToEnd`): воспроизводятся на коммите `cb8fae2` до
-  Этапа 3 и не изменились после срезов A/B/B2/D (проверено по счётчику и
+  Этапа 3 и не изменились после срезов A/B/B2/D/C1 (проверено по счётчику и
   составу) — это не регрессия переноса. Разобрать отдельно; эскалация и `RunTask`
   покрыты unit-тестами в `application/usecases` (`escalate_test.go`,
   `run_test.go`), выбор агента — `application/planner/agentfactory_test.go`,
