@@ -2,7 +2,7 @@ package planner
 
 import (
 	"ai/agents"
-	"ai/agents/acceptor"
+	"ai/acceptor"
 	"ai/checkpoint"
 	"ai/domain"
 	"ai/projects"

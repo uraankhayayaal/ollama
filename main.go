@@ -2,7 +2,7 @@ package main
 
 import (
 	"ai/agents"
-	"ai/agents/acceptor"
+	"ai/acceptor"
 	"ai/agents/architect"
 	"ai/agents/backendlead"
 	"ai/agents/codereviewer"

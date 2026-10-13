@@ -9,7 +9,7 @@
 package server
 
 import (
-	"ai/agents/acceptor"
+	"ai/acceptor"
 	"ai/board"
 	"ai/chat"
 	"ai/gitops"

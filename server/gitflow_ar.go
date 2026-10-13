@@ -12,7 +12,7 @@
 package server
 
 import (
-	"ai/agents/acceptor"
+	"ai/acceptor"
 	"ai/application/planner"
 	"ai/board"
 	"ai/gitops"

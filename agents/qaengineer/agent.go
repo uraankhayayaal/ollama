@@ -2,7 +2,7 @@ package qaengineer
 
 import (
 	"ai/agents"
-	"ai/agents/acceptor"
+	"ai/acceptor"
 	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
