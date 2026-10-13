@@ -13,7 +13,7 @@ package server
 
 import (
 	"ai/agents/acceptor"
-	"ai/agents/planner"
+	"ai/application/planner"
 	"ai/board"
 	"ai/gitops"
 	"ai/logging"

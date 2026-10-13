@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"ai/agents/architect"
-	"ai/agents/planner"
+	"ai/application/planner"
 	"ai/board"
 	"ai/chat"
 	"ai/logging"

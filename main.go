@@ -10,7 +10,7 @@ import (
 	"ai/agents/devops"
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
-	"ai/agents/planner"
+	"ai/application/planner"
 	"ai/agents/qaengineer"
 
 	"ai/board"
