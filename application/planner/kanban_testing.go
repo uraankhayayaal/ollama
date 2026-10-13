@@ -3,7 +3,6 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/architect"
-	"ai/agents/qaengineer"
 	"ai/board"
 	"ai/models"
 	"ai/tokens"
@@ -37,7 +36,7 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 
 	// Триаж QA Lead: подтвердить или отсечь «нейрослоп».
 	if len(newBugs) > 0 {
-		qa := qaengineer.NewQAEngineer(k.store.Project(), k.bugTriagePrompt(k.store.Project(), newBugs))
+		qa := agentFactory().Lead(k.store.Project(), "qa", k.bugTriagePrompt(k.store.Project(), newBugs))
 		if sb, ok := any(qa).(interface{ SetBoardStore(*board.Store) }); ok {
 			sb.SetBoardStore(k.store)
 		}
@@ -204,7 +203,7 @@ func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
 		k.noteEpicProgress(ctx, t.EpicID)
 		// Тестировщик перехватывает задачу после разработчика (Этап 7):
 		// назначаем QA-инженера независимо от Assignee задачи.
-		var specialist agents.Agent = qaengineer.NewQAEngineer(k.store.Project(), k.taskPrompt(t))
+		var specialist agents.Agent = agentFactory().Specialist(k.store.Project(), "qa", k.taskPrompt(t))
 		if sb, ok := specialist.(interface{ SetBoardStore(*board.Store) }); ok {
 			sb.SetBoardStore(k.store)
 		}

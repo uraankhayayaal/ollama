@@ -2,12 +2,6 @@ package planner
 
 import (
 	"ai/agents"
-	"ai/agents/backendlead"
-	"ai/agents/developer"
-	"ai/agents/devops"
-	"ai/agents/devopslead"
-	"ai/agents/frontendlead"
-	"ai/agents/qaengineer"
 	"ai/board"
 	"context"
 	"fmt"
@@ -38,16 +32,7 @@ func (k *KanbanRunner) boardSummary(ctx context.Context) string {
 func (k *KanbanRunner) leadFor(epic *board.Epic) (agents.Agent, error) {
 	prompt := k.leadPrompt(epic)
 	project := k.store.Project()
-	switch {
-	case isRole(epic.AssignedRole, "qa", "тест", "testing"):
-		return qaengineer.NewQAEngineer(project, prompt), nil
-	case isRole(epic.AssignedRole, "devops", "инфра", "infra", "dev", "sre", "ci"):
-		return devopslead.NewDevopsLead(project, prompt), nil
-	case isRole(epic.AssignedRole, "front", "react", "ui", "client", "фронт"):
-		return frontendlead.NewFrontendLead(project, prompt), nil
-	default: // backend
-		return backendlead.NewBackendLead(project, prompt), nil
-	}
+	return agentFactory().Lead(project, epic.AssignedRole, prompt), nil
 }
 
 // bugTriagePrompt формирует задание QA Lead на триаж багрепортов (new):
@@ -159,21 +144,7 @@ func (k *KanbanRunner) specialistFor(t *board.Task) (agents.Agent, error) {
 // выбор специализации (QA/DevOps/frontend/backend) идёт по роли задачи.
 // Экспортирован для server (авторезолвинг конфликтов мёрджа через разработчика).
 func SpecialistForRole(project, role, prompt string) agents.Agent {
-	switch {
-	case isRole(role, "qa", "тест", "testing"):
-		return qaengineer.NewQAEngineer(project, prompt)
-	case isRole(role, "devops", "инфра", "infra", "sre", "docker", "k8s", "ci"):
-		return devops.NewDevops(project, prompt)
-	}
-
-	// Разработка кода: задача с фронтенд-маркерами отдаётся Frontend-агенту,
-	// всё остальное (включая смешанные/backend/универсальные задачи) — Backend-
-	// агенту. Оба агента работают в temp/<project> в корне модуля и сами
-	// создают недостающую структуру подпроекта.
-	if isRole(role, "front", "react", "ui", "client", "фронт", "js", "ts", "vue") {
-		return developer.NewFrontendDeveloper(project, prompt)
-	}
-	return developer.NewBackendDeveloper(project, prompt)
+	return agentFactory().Specialist(project, role, prompt)
 }
 
 // taskPrompt формирует задание специалисту по задаче с Kanban-доски.

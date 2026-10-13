@@ -3,12 +3,6 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
-	"ai/agents/backendlead"
-	"ai/agents/developer"
-	"ai/agents/devops"
-	"ai/agents/devopslead"
-	"ai/agents/frontendlead"
-	"ai/agents/qaengineer"
 
 	"ai/board"
 	"ai/checkpoint"
@@ -566,24 +560,7 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 // newStepAgent создаёт агента шага по его типу (разработчик, специалист или
 // лид направления). Возвращает nil для неизвестного типа.
 func newStepAgent(step *Step, projectName string) agents.Agent {
-	switch step.Agent {
-	case AgentBackendDev:
-		return developer.NewBackendDeveloper(projectName, step.Prompt)
-	case AgentFrontendDev:
-		return developer.NewFrontendDeveloper(projectName, step.Prompt)
-	case AgentDevops:
-		return devops.NewDevops(projectName, step.Prompt)
-	case AgentDevopsLead:
-		return devopslead.NewDevopsLead(projectName, step.Prompt)
-	case AgentQAEngineer:
-		return qaengineer.NewQAEngineer(projectName, step.Prompt)
-
-	case AgentFrontendLead:
-		return frontendlead.NewFrontendLead(projectName, step.Prompt)
-	case AgentBackendLead:
-		return backendlead.NewBackendLead(projectName, step.Prompt)
-	}
-	return nil
+	return agentFactory().Step(step, projectName)
 }
 
 // runCodingAgent запускает агента-разработчика (backend/frontend) или другого
