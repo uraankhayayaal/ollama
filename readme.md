@@ -75,3 +75,48 @@ npm --prefix web run build
 ## Правила для агентов
 
 Подробности — [`AGENTS.md`](AGENTS.md).
+
+
+## Команды для запуска локальных моделей
+Сценарий А (Самый стабильный и предсказуемый)
+```bash
+./build/bin/llama-server \
+  --hf-repo unsloth/Qwen3.8-27B-GGUF \
+  --hf-file Qwen3.8-27B-UD-Q4_K_M.gguf \
+  -ngl all \
+  --split-mode layer \
+  -c 131072 \
+  -fa on \
+  --cache-type-k q4_0 \
+  --cache-type-v q4_0 \
+  -b 2048 \
+  -ub 512 \
+  -t 8 \
+  -tb 8 \
+  --port 8080 \
+  --jinja \
+  --image-min-tokens 1024 \
+  --reasoning-preserve
+```
+
+
+Сценарий Б (Экспериментальный параллельный)
+```bash
+./build/bin/llama-server \
+  --hf-repo unsloth/Qwen3.8-27B-GGUF \
+  --hf-file Qwen3.8-27B-UD-Q4_K_M.gguf \
+  -ngl all \
+  --split-mode tensor \
+  -c 131072 \
+  -fa on \
+  --cache-type-k q4_0 \
+  --cache-type-v q4_0 \
+  -b 2048 \
+  -ub 1024 \
+  -t 8 \
+  -tb 8 \
+  --port 8080 \
+  --jinja \
+  --image-min-tokens 1024 \
+  --reasoning-preserve
+```
