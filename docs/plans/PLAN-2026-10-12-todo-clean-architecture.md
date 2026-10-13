@@ -205,10 +205,16 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
      - **C1 ✅** — `domain.Status` — авторитетный FSM доски
        (`ValidateTransition`/`StatusError`/`Terminal`/`Valid`/`Label`),
        `board.Status`/`StatusError`/`Meta`/`StatusCounts` — алиасы.
-     - **C2–C6** — остальные алиасы (`Comment`/`Injection`/`BugReport`/
-       `BugStatus`), `domain.EpicLess`/`UnmarshalTasks`, перенос
-       контекст-плумбинга инъекций (каскад в `runner`/`server`), расширение
-       порта и миграция типов planner. Детали — в «Остаток работ по Этапу 3».
+     - **C2 ✅** — алиасы `Comment`/`Injection`/`BugReport`/`BugStatus` на
+       `domain` (методы `Normalize`/`Validate`/`NewInjectionID`/строгий
+       `DecodeInjections` перенесены в домен).
+     - **C3 (переоценён → C6)** — `EpicLess`/`UnmarshalTasks` упираются в
+       расхождение моделей `board.TaskSpec` (`FlexInt`/`string`) и
+       `domain.TaskSpec` (`int`/`time.Time`); переносятся вместе с унификацией
+       моделей в C6.
+     - **C4–C6** — перенос контекст-плумбинга инъекций (каскад в `runner`/
+       `server`), расширение порта и миграция типов planner. Детали — в
+       «Остаток работ по Этапу 3».
      - `executor.go` всё ещё импортирует `agents/acceptor` (приёмка — не только
        конструкция агента, а цикл с `acceptor.Report`).
 
@@ -322,23 +328,32 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
       `board.Status`/`board.StatusError` — алиасы, `board.ValidateTransition`
       делегирует. `board.Meta`/`board.StatusCounts` тоже алиасированы на
       `domain`. Тест `domain/status_test.go`.
-    - **C2 (осталось)** — алиасы `board.{Comment,Comments,Injection,BugReport,
-      BugStatus}` на доменные типы; требует переноса методов
-      `Comment.Normalize/Validate`, `Injection.Validate` в `domain`
-      (`BugStatus`-методы в `domain` уже есть).
-    - **C3 (осталось)** — `domain.EpicLess` (компаратор очереди лидов,
-      сейчас `board/order.go`) и `domain.UnmarshalTasks`.
-    - **C4 (осталось, каскад)** — контекст-плумбинг инъекций/комментариев
-      (`NewInjectionContext`/`WithInjectionSource`/`WithInjectionScope`/
-      `NewCommentContext`/`WithCommentSource`) придётся переносить из `board`
-      в `domain` или отдавать через порт: его читают `runner/injections.go` и
-      `server/chatassist.go`, поэтому срез затрагивает не только planner.
-    - **C5 (осталось)** — порт: `services.BoardStore` (уже реализован
-      `board.DomainStore`) расширить недостающими методами
-      (`GetMeta`/`SaveMeta`, `EpicCounts`/`TaskCounts`, `Finalize*Tokens`,
-      `AllDone`), `KanbanRunner.store` — на интерфейс.
-    - **C6 (осталось)** — миграция типов planner `board.*` → `domain.*` и
-      перевод тестов.
+     - **C2 ✅** — `board.{Comment,Comments,Injection,BugReport,BugStatus,
+       BugStatusError}` и константы — алиасы домена; `Comment.Normalize/
+       Validate`/`newCommentID`, `Injection.Validate`/`NewInjectionID` (16 байт
+       hex) и строгий `DecodeInjections`, `BugStatusError`/`ValidateBugTransition`
+       перенесены в `domain`.
+     - **C3 (переоценён: перенесён в C6)** — `domain.EpicLess` и
+       `domain.UnmarshalTasks` нельзя перенести в `domain` без унификации
+       моделей доски: `board.Epic`/`board.Task` встраивают `board.TaskSpec`
+       (`SequenceOrder FlexInt`, метки `string`), а `domain.Epic`/`domain.Task`
+       — `domain.TaskSpec` (`int`, `time.Time`). Компаратор завязан на
+       `*board.Epic`, разбор задач — на `board.TaskSpec`; оба требуют сначала
+       свести модели (см. C6).
+     - **C4 (осталось, каскад)** — контекст-плумбинг инъекций/комментариев
+       (`NewInjectionContext`/`WithInjectionSource`/`WithInjectionScope`/
+       `NewCommentContext`/`WithCommentSource`) перенести из `board` в `domain`
+       (типы уже доменные, перенос — алиасы): его читают `runner/injections.go`
+       и `server/chatassist.go`, поэтому срез затрагивает не только planner.
+     - **C5 (осталось)** — порт: `services.BoardStore` (уже реализован
+       `board.DomainStore`) расширить недостающими методами
+       (`GetMeta`/`SaveMeta`, `EpicCounts`/`TaskCounts`, `Finalize*Tokens`,
+       `AllDone`), `KanbanRunner.store` — на интерфейс.
+     - **C6 (осталось, объединяет C3)** — свести модели доски с доменом
+       (`board.TaskSpec`/`Task`/`Epic` ↔ `domain.TaskSpec`/`Task`/`Epic`:
+       `FlexInt`→`int` или наоборот, `string`↔`time.Time`), перенести
+       `EpicLess`/`EpicPhase`/`SortEpics`/`UnmarshalTasks` в `domain` и
+       мигрировать типы planner `board.*` → `domain.*` + тесты.
   - **`agents/acceptor`** в `executor.go`: приёмка — цикл с `acceptor.Report`,
     а не только конструкция агента.
   - **Порты `Runner`/`Models`/`Tools`**: planner по-прежнему зависит от

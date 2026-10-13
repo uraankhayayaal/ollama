@@ -334,3 +334,23 @@ NewInjectionContext/WithInjection*/NewCommentContext читается `runner/in
 AllDone, `KanbanRunner.store` — на интерфейс), C6 (миграция ~183 `board.*`-обращений
 planner в non-test коде + тесты). Остаток портов Этапа 3: `agents/acceptor` в
 executor.go, порты Runner/Models/Tools. Коммит пользователю: не запрашивался явно.
+
+Состояние последней сессии (Clean Architecture Этап 3, срез C2 — алиасы типов
+домена, коммит `0750db5`): `board.{Comment,Comments,Injection,BugReport,
+BugStatus,BugStatusError}` и их константы стали алиасами `domain.*`; в домен
+перенесены `Comment.Normalize/Validate` (+`newCommentID`, id `cmt-`),
+`Injection.Validate`/`NewInjectionID` (16 байт hex, было `inj-`+6 байт —
+расхождение устранено), полная `ValidateInjections` (проверка дублей id) и
+строгий `DecodeInjections` (unknown-поля — ошибка), а также
+`BugStatusError`/`ValidateBugTransition`. Контекст-плумбинг инъекций/комментариев
+оставлен в `board` (срез C4). Верификация: `go build`/`go vet`/`go test` по
+каноническому набору — зелёно, кроме ровно базовых 17 падений `application/
+planner` (состав не менялся); `domain`/`board`/`injections`/`runner`/
+`application/usecases`/`tools` зелёные, gofmt по правкам чист. ПЕРЕОЦЕНКА C3:
+`domain.EpicLess`/`UnmarshalTasks` нельзя перенести в домен без унификации
+моделей доски — `board.Epic`/`Task` встраивают `board.TaskSpec` (`SequenceOrder
+FlexInt`, метки `string`), а `domain.Epic`/`Task` — `domain.TaskSpec` (`int`,
+`time.Time`); поэтому C3 слит с C6 (унификация `board.TaskSpec/Task/Epic` ↔
+`domain.*`, затем перенос компаратора/разбора задач и миграция ~183
+`board.*`-обращений planner). Остаются C4 (перенос контекст-плумбинга),
+C5 (порт BoardStore), C6+C3.
