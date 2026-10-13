@@ -2,9 +2,11 @@
 
 **Статус:** Этапы 1–2 завершены. Этап 3: use-cases `RunTask`,
 `CompressHistory`, `BreakLoop`, `Escalate` перенесены в
-`application/usecases` и покрыты unit-тестами; пункт 3 (распределение 16+
-файлов `agents/planner/` по `application/` и `domain/`) **не выполнен** —
-`agents/planner/` остаётся как есть (см. «Остаток работ» в конце).
+`application/usecases` и покрыты unit-тестами; пункт 3 (перенос
+`agents/planner/`) выполнен **частично** — пакет перемещён в
+`application/planner`, зависимости от конкретных агентов инвертированы через
+порты `AgentFactory`/архитектурные. Остались срезы C (порт `BoardStore`),
+D (типы плана в `domain/`) и `acceptor` — см. «Остаток работ» в конце.
 
 ## Проблема
 
@@ -164,14 +166,42 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
    `RoundStateReporter`, `WIPCommitter`, `Reindexer`) для инфраструктуры —
    бизнес-логика вынесена, но пакет ещё не «тонкий» по объёму.
 3. Перенести логику из `agents/planner/` (16+ файлов) в
-   `application/usecases/` и `domain/`. ❌ **НЕ ВЫПОЛНЕНО**: `agents/planner/`
-   содержит `kanban*.go`, `executor.go`, `planner.go`, `plan*.go`,
-   `project_map.go`, `ragcontext.go`, `lspgate.go`, `tokens.go` без изменений
-   (кроме делегирования `Escalate` в `usecases`).
+   `application/` и `domain/`. ⏳ **ЧАСТИЧНО (порт-ориентированный перенос)**:
+   - **Срез A ✅** — весь пакет перемещён `agents/planner` → `application/planner`
+     (`git mv`, имя пакета `planner` сохранено; обновлены 3 импортёра —
+     `server/session.go`, `server/gitflow_ar.go`, `main.go`). Sibling-пакет, а не
+     `usecases`, потому что `usecases` импортируется `runner`, а planner зависит
+     от `runner`/`agents/*` — переезд в `usecases` дал бы цикл
+     (`usecases → runner → usecases`).
+   - **Срез B ✅** — `AgentFactory` (`application/planner/agentfactory.go`):
+     порт конструирования ролевых агентов (`Lead`/`Specialist`/`Step`);
+     конкретные `agents/backendlead|developer|devops|devopslead|frontendlead|
+     qaengineer` сведены в одну реализацию `roleAgentFactory` + `SetAgentFactory`.
+     Оркестратор (`kanban_prompts.go`, `kanban_testing.go`, `executor.go`)
+     зависит только от порта. Тест `agentfactory_test.go`.
+   - **Срез B2 ✅** — `AgentFactory` расширен архитектурными методами
+     (`Architect`/`ArchitectReviewer`/`ArchitectBugExpert`/`ConfigureArchitect`/
+     `SetArchitectEpicWorkdir`, реализация — `architectfactory.go`); `agents/architect`
+     больше не импортируется оркестратором (`kanban.go`/`kanban_planning.go`/
+     `kanban_testing.go`). Реализация возвращает конкретный `*architect.Architect`,
+     поэтому динамический тип агента сохранён (тестовые двойники работают).
+   - **Осталось (срезы C/D) ❌**:
+     - **C** — порт `BoardStore` поверх `domain` вместо `*board.Store`
+       (самый крупный: оркестратор работает с `board.Task`/`board.Epic` по
+       всему коду; `board.DomainStore` уже реализует `services.BoardStore`).
+     - **D** — перенос чистых типов `Plan`/`Step`/`AgentType`/`Role` в `domain/`.
+       Заблокировано расхождением: `domain/plan.go` уже определяет эти типы, но
+       с ДРУГИМИ значениями `AgentType` (`backend_dev` против `backend`) и без
+       поля `Tasks []board.TaskSpec` — нужна аккуратная сверка (влияет на JSON
+       чекпоинтов/PLAN.md), отдельная задача.
+     - `executor.go` всё ещё импортирует `agents/acceptor` (приёмка — не только
+       конструкция агента, а цикл с `acceptor.Report`).
 
 **Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask` ✅
 (`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
-распределена по `application/` и `domain/` ❌ (пункт 3 не выполнен).
+распределена по `application/` и `domain/` — ⏳ `application/planner` создан и
+зависимости от конкретных агентов инвертированы через порты; остаточные срезы
+C (BoardStore) и D (типы плана в domain) не закрыты.
 
 ### Этап 4: Рефакторинг инструментов
 
@@ -264,22 +294,34 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
 
 ## Остаток работ по Этапу 3
 
-- **Пункт 3 — распределение `agents/planner/` по `application/` и `domain/`.**
-  Самый крупный объём (kanban-оркестрация, план/чекпоинты, project_map, RAG-
-  контекст, LSP-gate, токены, executor). Требует отдельной итерации: у многих
-  из этих файлов нет узких портов, а `board`-типы (`board.Task` и т.п.)
-  параллельны `domain`-типам — понадобится либо договориться об алиасах, либо
-  расширить адаптер `board.DomainStore`. До выполнения пункт 3 считать
-  незакрытым, несмотря на завершённые use-cases.
+- **Пункт 3 — порт-ориентированный перенос `planner`.** Сделано: перенос пакета
+  в `application/planner` (срез A), порты ролевых агентов (срез B) и
+  архитектора (срез B2). Осталось:
+  - **Срез C — порт `BoardStore`** (`domain`-типы вместо `*board.Store`):
+    оркестратор работает с `board.Task`/`board.Epic` по всему коду;
+    `board.DomainStore` уже реализует `services.BoardStore`. Самый крупный срез.
+  - **Срез D — `Plan`/`Step`/`AgentType`/`Role` в `domain/`**: тип `domain.Plan`
+    уже существует, но значения `AgentType` расходятся (`backend_dev` против
+    `backend`) и нет поля `Tasks []board.TaskSpec` — нужна сверка (влияет на
+    JSON чекпоинтов/PLAN.md).
+  - **`agents/acceptor`** в `executor.go`: приёмка — цикл с `acceptor.Report`,
+    а не только конструкция агента.
+  - **Порты `Runner`/`Models`/`Tools`**: planner по-прежнему зависит от
+    `runner` и `models`/`tools` напрямую (LLM-исполнение, учёт токенов,
+    project-map/RAG).
 - **`runner` не «тонкий» по объёму.** Делегирование есть, но адаптеры портов
   (`autofix.go`, `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`,
   `reindex.go`) остаются в пакете.
-- **Предсуществующие падения тестов `agents/planner`** (17 шт., включая
+- **Предсуществующие падения тестов `application/planner`** (17 шт., включая
   `TestGuardRejectionEscalatesWithinBudget`, `TestPhantomDoneNotClosedByFallback`,
   `TestTokenAccountingEndToEnd`): воспроизводятся на коммите `cb8fae2` до
-  Этапа 3 — это не регрессия use-cases. Разобрать отдельно; эскалация и
-  `RunTask` на данный момент покрыты unit-тестами в `application/usecases`
-  (`escalate_test.go`, `run_test.go`), которые зелёные.
+  Этапа 3 и не изменились после срезов A/B/B2 (проверено по счётчику) — это не
+  регрессия переноса. Разобрать отдельно; эскалация и `RunTask` покрыты
+  unit-тестами в `application/usecases` (`escalate_test.go`, `run_test.go`),
+  выбор агента — `application/planner/agentfactory_test.go`, все зелёные.
+- **Обновить ссылки на путь** `agents/planner/...` в живых документах
+  (`docs/20-features/*`, `docs/00-overview/*`) — они указывают на
+  `application/planner/...`; исторические `PLAN-*-done-*.md` не переписываются.
 
 ## Что осталось пользователю
 

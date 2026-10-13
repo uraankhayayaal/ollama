@@ -27,10 +27,13 @@
 Рабочая сборка (обходит известный блокер в `temp/`):
 
 ```
-go build . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
-go vet . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
-go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
 ```
+
+Примечание: `./application/planner` — бывший `agents/planner` (перенос по
+PLAN-2026-10-12, этап 3); в нём 17 предсуществующих падений тестов (не регресс).
 
 Живая проверка сессионной песочницы (нужен Docker; вне рабочего набора,
 по образцу `E2E_LIVE`):
