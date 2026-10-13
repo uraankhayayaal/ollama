@@ -5,8 +5,9 @@
 `application/usecases` и покрыты unit-тестами; пункт 3 (перенос
 `agents/planner/`) выполнен **частично** — пакет перемещён в
 `application/planner`, зависимости от конкретных агентов инвертированы через
-порты `AgentFactory`/архитектурные. Остались срезы C (порт `BoardStore`),
-D (типы плана в `domain/`) и `acceptor` — см. «Остаток работ» в конце.
+порты `AgentFactory`/архитектурные, чистые типы плана (`AgentType`/`Role`/
+`Step`/`Plan`/`ComputeWaves`) вынесены в `domain/`. Остался срез C (порт
+`BoardStore`) и `acceptor` — см. «Остаток работ» в конце.
 
 ## Проблема
 
@@ -185,23 +186,33 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
      больше не импортируется оркестратором (`kanban.go`/`kanban_planning.go`/
      `kanban_testing.go`). Реализация возвращает конкретный `*architect.Architect`,
      поэтому динамический тип агента сохранён (тестовые двойники работают).
-   - **Осталось (срезы C/D) ❌**:
+   - **Срез D ✅** — чистые типы плана перенесены в `domain/`:
+     - `domain/plan.go` теперь канонически объявляет `AgentType` (значения
+       приведены к фактическим: `backend`/`frontend`/`devops`/`devopslead`/
+       `qa`/`frontendlead`/`backendlead`; устранено расхождение с прежними
+       `backend_dev`/`qa_engineer`/...), `Role`, `Step` (с полем
+       `Tasks []domain.TaskSpec`) и `Plan`, а также чистую логику волн
+       `ComputeWaves`/`readySteps`. `planner.plan.go` алиасит
+       `domain.AgentType`/`domain.Role`/`domain.Step`/`domain.Plan` и оставляет
+       себе только разбор `ParsePlan` и санитайз JSON.
+     - `Step.Tasks` сменил тип `[]board.TaskSpec` (FlexInt/FlexBool) на
+       `[]domain.TaskSpec`; `executor.go` переводит декомпозицию на границе
+       (`toDomainTaskSpecs`). Сериализация не изменилась (FlexInt -> int).
+     - Срез разделён на два коммита: `AgentType`/`Role` (алиасы) и `Plan`/`Step`/
+       `ComputeWaves`. Обновлены `plan_doc.go` и `plan_doc_test.go`.
+   - **Осталось (срез C) ❌**:
      - **C** — порт `BoardStore` поверх `domain` вместо `*board.Store`
        (самый крупный: оркестратор работает с `board.Task`/`board.Epic` по
        всему коду; `board.DomainStore` уже реализует `services.BoardStore`).
-     - **D** — перенос чистых типов `Plan`/`Step`/`AgentType`/`Role` в `domain/`.
-       Заблокировано расхождением: `domain/plan.go` уже определяет эти типы, но
-       с ДРУГИМИ значениями `AgentType` (`backend_dev` против `backend`) и без
-       поля `Tasks []board.TaskSpec` — нужна аккуратная сверка (влияет на JSON
-       чекпоинтов/PLAN.md), отдельная задача.
      - `executor.go` всё ещё импортирует `agents/acceptor` (приёмка — не только
        конструкция агента, а цикл с `acceptor.Report`).
 
 **Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask` ✅
 (`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
-распределена по `application/` и `domain/` — ⏳ `application/planner` создан и
-зависимости от конкретных агентов инвертированы через порты; остаточные срезы
-C (BoardStore) и D (типы плана в domain) не закрыты.
+распределена по `application/` и `domain/` — ⏳ `application/planner` создан,
+зависимости от конкретных агентов инвертированы через порты, чистые типы плана
+и `AgentType`/`Role` вынесены в `domain/`; остаточный срез C (BoardStore) не
+закрыт.
 
 ### Этап 4: Рефакторинг инструментов
 
@@ -295,15 +306,12 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
 ## Остаток работ по Этапу 3
 
 - **Пункт 3 — порт-ориентированный перенос `planner`.** Сделано: перенос пакета
-  в `application/planner` (срез A), порты ролевых агентов (срез B) и
-  архитектора (срез B2). Осталось:
+  в `application/planner` (срез A), порты ролевых агентов (срез B), архитектора
+  (срез B2) и чистые типы плана в `domain/` (срез D: `AgentType`/`Role`/`Step`/
+  `Plan`/`ComputeWaves`, значения `AgentType` канонизированы). Осталось:
   - **Срез C — порт `BoardStore`** (`domain`-типы вместо `*board.Store`):
     оркестратор работает с `board.Task`/`board.Epic` по всему коду;
     `board.DomainStore` уже реализует `services.BoardStore`. Самый крупный срез.
-  - **Срез D — `Plan`/`Step`/`AgentType`/`Role` в `domain/`**: тип `domain.Plan`
-    уже существует, но значения `AgentType` расходятся (`backend_dev` против
-    `backend`) и нет поля `Tasks []board.TaskSpec` — нужна сверка (влияет на
-    JSON чекпоинтов/PLAN.md).
   - **`agents/acceptor`** в `executor.go`: приёмка — цикл с `acceptor.Report`,
     а не только конструкция агента.
   - **Порты `Runner`/`Models`/`Tools`**: planner по-прежнему зависит от
@@ -315,10 +323,11 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
 - **Предсуществующие падения тестов `application/planner`** (17 шт., включая
   `TestGuardRejectionEscalatesWithinBudget`, `TestPhantomDoneNotClosedByFallback`,
   `TestTokenAccountingEndToEnd`): воспроизводятся на коммите `cb8fae2` до
-  Этапа 3 и не изменились после срезов A/B/B2 (проверено по счётчику) — это не
-  регрессия переноса. Разобрать отдельно; эскалация и `RunTask` покрыты
-  unit-тестами в `application/usecases` (`escalate_test.go`, `run_test.go`),
-  выбор агента — `application/planner/agentfactory_test.go`, все зелёные.
+  Этапа 3 и не изменились после срезов A/B/B2/D (проверено по счётчику и
+  составу) — это не регрессия переноса. Разобрать отдельно; эскалация и `RunTask`
+  покрыты unit-тестами в `application/usecases` (`escalate_test.go`,
+  `run_test.go`), выбор агента — `application/planner/agentfactory_test.go`,
+  все зелёные.
 - **Обновить ссылки на путь** `agents/planner/...` в живых документах
   (`docs/20-features/*`, `docs/00-overview/*`) — они указывают на
   `application/planner/...`; исторические `PLAN-*-done-*.md` не переписываются.
