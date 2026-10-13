@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"ai/agents/architect"
 	"ai/board"
 	"ai/logging"
 	"ai/tokens"
@@ -26,14 +25,14 @@ func (k *KanbanRunner) phaseArchitect(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	arch := architect.NewArchitectWithStore(k.store.Project(), meta.Task, k.store)
+	arch := agentFactory().Architect(k.store.Project(), meta.Task, k.store)
 	arch = k.prepareArchitect(arch)
 	// 4.1: резолвер worktree ветки эпика. Вызывается архитектором ВНУТРИ
 	// submitBacklog — после публикации бэклога, когда эпики уже на доске и их
 	// ветки созданы хуком EpicCreatedHook. Основной (первый по порядку) эпик
 	// получает структуру проекта; без worktree (консоль/не-git) архитектор
 	// получит note и структуру не напишет.
-	arch.SetEpicWorkdir(func() (string, string) {
+	arch = agentFactory().SetArchitectEpicWorkdir(arch, func() (string, string) {
 		if k.epicOutputDir == nil {
 			return "", ""
 		}
@@ -101,7 +100,7 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	reviewer := architect.NewArchitectWithStore(k.store.Project(), k.epicReviewPrompt(k.store.Project(), drafts), k.store).AsReviewer()
+	reviewer := agentFactory().ArchitectReviewer(k.store.Project(), k.epicReviewPrompt(k.store.Project(), drafts), k.store)
 	reviewer = k.prepareArchitect(reviewer)
 	resp, err := k.generate(ctx, tokens.ScopeArchitecture, reviewer)
 	if err != nil {

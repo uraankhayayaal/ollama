@@ -2,7 +2,6 @@ package planner
 
 import (
 	"ai/agents"
-	"ai/agents/architect"
 	"ai/board"
 	"ai/models"
 	"ai/tokens"
@@ -61,8 +60,8 @@ func (k *KanbanRunner) phaseBugs(ctx context.Context) (bool, error) {
 
 	// Экспертиза Системного архитектора: вердикт по подтверждённым багрепортам.
 	if len(confirmedBugs) > 0 {
-		arch := architect.NewArchitectWithStore(k.store.Project(),
-			k.bugExpertPrompt(k.store.Project(), confirmedBugs), k.store).AsBugExpert()
+		arch := agentFactory().ArchitectBugExpert(k.store.Project(),
+			k.bugExpertPrompt(k.store.Project(), confirmedBugs), k.store)
 		arch = k.prepareArchitect(arch)
 		resp, err := k.generate(ctx, tokens.ScopeBugs, arch)
 		if err != nil {

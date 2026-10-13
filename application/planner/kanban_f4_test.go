@@ -197,8 +197,8 @@ func TestPrepareArchitectWithExtras(t *testing.T) {
 	kr.SetArchitectExtras(&fakeAskTool{})
 	kr.SetArchitectExtras(&fakeAskTool{})
 
-	arch := architect.NewArchitectWithStore("kanban-prep", "Задача", store)
-	arch = kr.prepareArchitect(arch)
+	base := architect.NewArchitectWithStore("kanban-prep", "Задача", store)
+	arch := kr.prepareArchitect(base)
 	got := arch.GetTools()
 	count := 0
 	for _, td := range got {
@@ -209,7 +209,7 @@ func TestPrepareArchitectWithExtras(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("AskUser в наборе инструментов %d раз(а), ожидался 1", count)
 	}
-	if _, ok := arch.Tools.Get("AskUser"); !ok {
+	if _, ok := base.Tools.Get("AskUser"); !ok {
 		t.Fatal("AskUser отсутствует в наборе инструментов после prepareArchitect")
 	}
 }

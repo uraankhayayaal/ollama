@@ -8,6 +8,8 @@ import (
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
+	"ai/board"
+	"ai/tools"
 )
 
 // AgentFactory — порт конструирования ролевых агентов оркестратора: лидов
@@ -27,16 +29,33 @@ type AgentFactory interface {
 	Specialist(project, role, prompt string) agents.Agent
 	// Step создаёт агента шага plan-исполнителя по типу шага; nil — неизвестный.
 	Step(step *Step, projectName string) agents.Agent
+	// Architect создаёт системного архитектора (обычный режим).
+	Architect(project, prompt string, store *board.Store) agents.Agent
+	// ArchitectReviewer создаёт архитектора в режиме ревизии черновиков эпиков.
+	ArchitectReviewer(project, prompt string, store *board.Store) agents.Agent
+	// ArchitectBugExpert создаёт архитектора в режиме экспертизы багрепортов.
+	ArchitectBugExpert(project, prompt string, store *board.Store) agents.Agent
+	// ConfigureArchitect применяет к архитектору RAG и серверные инструменты
+	// (Ф-4/Р-5); не-архитектор возвращается без изменений.
+	ConfigureArchitect(a agents.Agent, rag tools.RAGSearcher, extras ...tools.Tool) agents.Agent
+	// SetArchitectEpicWorkdir задаёт резолвер worktree ветки эпика (4.1).
+	SetArchitectEpicWorkdir(a agents.Agent, fn func() (string, string)) agents.Agent
+}
+
+// infraAgentFactory — фабрика по умолчанию: ролевые агенты + архитектор.
+type infraAgentFactory struct {
+	roleAgentFactory
+	architectFactory
 }
 
 // defaultAgentFactory — фабрика по умолчанию (реальная инфраструктура).
-var defaultAgentFactory AgentFactory = roleAgentFactory{}
+var defaultAgentFactory AgentFactory = infraAgentFactory{}
 
 // SetAgentFactory переопределяет фабрику ролевых агентов (тесты, инфраструктура).
 // nil восстанавливает фабрику по умолчанию.
 func SetAgentFactory(f AgentFactory) {
 	if f == nil {
-		defaultAgentFactory = roleAgentFactory{}
+		defaultAgentFactory = infraAgentFactory{}
 		return
 	}
 	defaultAgentFactory = f

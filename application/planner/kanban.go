@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/agents/architect"
+	"ai/agents"
 	"ai/board"
 	"ai/logging"
 	"ai/models"
@@ -239,14 +239,9 @@ func (k *KanbanRunner) SetArchitectExtras(extra ...tools.Tool) *KanbanRunner {
 // CodeSearch/RagIndexStatus начинают искать по индексу, мост AskUser
 // добавляется в набор инструментов. Повторный вызов безопасен (Set.Add не
 // дублирует уже присутствующие имена, SetRAG пересобирает набор из реестра).
-func (k *KanbanRunner) prepareArchitect(a *architect.Architect) *architect.Architect {
-	if k.rag != nil {
-		a.SetRAG(k.rag)
-	}
-	if len(k.architectExtras) > 0 {
-		a.Tools.Add(k.architectExtras...)
-	}
-	return a
+// Конкретное применение — в инфраструктурной фабрике агентов.
+func (k *KanbanRunner) prepareArchitect(a agents.Agent) agents.Agent {
+	return agentFactory().ConfigureArchitect(a, k.rag, k.architectExtras...)
 }
 
 // Wake побуждает runner, ожидающий работу на доске (standby), немедленно
