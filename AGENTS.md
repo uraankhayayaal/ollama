@@ -312,3 +312,25 @@ TestE2EModelSelection ./server/ -timeout 10m`). Тест поднимает на
 `override=false`). Прогон зелёный (26s), `go build`/`go vet`/`go test` по
 перечню AGENTS.md зелёные. Документация: новая секция «Живой E2E (опционально,
 нужна Ollama)» в `docs/40-operations/testing.md`.
+
+Состояние последней сессии (Clean Architecture Этап 3, пункт 3 — порт-ориентированный
+перенос planner): коммиты `08b8273` (domain.AgentType/Role — канонические значения,
+устранено расхождение `backend_dev`/`qa_engineer` с фактическими `backend`/`qa`;
+planner.plan.go алиасит), `20f1d81` (domain.Plan/Step/ComputeWaves/readySteps;
+`Step.Tasks` сменил `[]board.TaskSpec` на `[]domain.TaskSpec`, executor конвертирует
+`toDomainTaskSpecs`; сериализация не изменилась), `a8682c3` (под-шаг C1: `domain.Status`
+— авторитетный FSM доски — `ValidateTransition`/`StatusError`/`Terminal` (без
+human_help)/`Valid`/`Label`; `board.Status`/`StatusError` — алиасы, `board.ValidateTransition`
+делегирует; `board.Meta`/`board.StatusCounts` алиасированы на domain; тест
+`domain/status_test.go`), `87c27d3`/последний docs (план: срез D закрыт, срез C разбит
+на C1–C6). Верификация: `go build`/`go vet`/`go test` по перечню выше зелёные, кроме
+ровно базовых 17 падений `application/planner` (состав не менялся — не регресс); board/
+server/tools/runner зелёные. Срез C НЕ закрыт: C2 (алиасы Comment/Injection/BugReport/
+BugStatus — требуют переноса методов Normalize/Validate в domain), C3 (domain.EpicLess/
+UnmarshalTasks), C4 (каскад: контекст-плумбинг инъекций/комментариев
+NewInjectionContext/WithInjection*/NewCommentContext читается `runner/injections.go` и
+`server/chatassist.go` — переносить в domain или через порт), C5 (расширить
+`services.BoardStore` методами GetMeta/SaveMeta/EpicCounts/TaskCounts/Finalize*Tokens/
+AllDone, `KanbanRunner.store` — на интерфейс), C6 (миграция ~183 `board.*`-обращений
+planner в non-test коде + тесты). Остаток портов Этапа 3: `agents/acceptor` в
+executor.go, порты Runner/Models/Tools. Коммит пользователю: не запрашивался явно.
