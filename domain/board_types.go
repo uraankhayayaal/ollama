@@ -85,6 +85,49 @@ func (s BugStatus) Valid() bool {
 	return false
 }
 
+// ValidateBugTransition проверяет допустимость перехода статуса багрепорта:
+//
+//	новый       -> подтверждён | нейрослоп
+//	подтверждён -> фича | не исправляем | требует исправления
+//	требует исправления -> исправлен
+//	(терминальные: нейрослоп/фича/не исправляем/исправлен переходов не имеют)
+//
+// Одинаковый статус не считается переходом (идемпотентность).
+func ValidateBugTransition(from, to BugStatus) error {
+	if from == to {
+		return nil
+	}
+	if !from.Valid() || !to.Valid() {
+		return &BugStatusError{From: from, To: to, Reason: "неизвестный статус багрепорта"}
+	}
+	switch from {
+	case BugStatusNew:
+		if to == BugStatusConfirmed || to == BugStatusSlop {
+			return nil
+		}
+	case BugStatusConfirmed:
+		if to == BugStatusFix || to == BugStatusFeature || to == BugStatusWontFix {
+			return nil
+		}
+	case BugStatusFix:
+		if to == BugStatusFixed {
+			return nil
+		}
+	}
+	return &BugStatusError{From: from, To: to, Reason: "переход не разрешён цепочкой ревью багрепорта"}
+}
+
+// BugStatusError — ошибка некорректного перехода статуса багрепорта.
+type BugStatusError struct {
+	From   BugStatus
+	To     BugStatus
+	Reason string
+}
+
+func (e *BugStatusError) Error() string {
+	return "переход статуса багрепорта " + e.From.Label() + " -> " + e.To.Label() + " запрещён: " + e.Reason
+}
+
 type BugReport struct {
 	BugID        string    `json:"bug_id"`
 	ProjectName  string    `json:"project_name"`

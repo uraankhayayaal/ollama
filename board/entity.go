@@ -307,124 +307,35 @@ func (e *Epic) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// BugStatus — статус багрепорта на общей доске.
-type BugStatus string
+// BugStatus — статус багрепорта на общей доске. Тип принадлежит домену
+// (domain.BugStatus), здесь — алиас.
+type BugStatus = domain.BugStatus
 
 // Статусы багрепортов: цепочка ревью QA Lead -> экспертиза Системного
 // архитектора. Терминальные статусы переходов не имеют.
 const (
-	BugStatusNew       BugStatus = "new"       // создан QA-специалистом, ждёт ревью
-	BugStatusConfirmed BugStatus = "confirmed" // принят QA Lead, передан архитектору
-	BugStatusSlop      BugStatus = "slop"      // отклонён QA Lead: «нейрослоп»/не проблема
-	BugStatusFix       BugStatus = "fix"       // архитектор: чинить, создан эпик исправления
-	BugStatusFeature   BugStatus = "feature"   // архитектор: это фича, не баг
-	BugStatusWontFix   BugStatus = "wont_fix"  // архитектор: исправлять не будем
-	BugStatusFixed     BugStatus = "fixed"     // эпик исправления выполнен
+	BugStatusNew       = domain.BugStatusNew
+	BugStatusConfirmed = domain.BugStatusConfirmed
+	BugStatusSlop      = domain.BugStatusSlop
+	BugStatusFix       = domain.BugStatusFix
+	BugStatusFeature   = domain.BugStatusFeature
+	BugStatusWontFix   = domain.BugStatusWontFix
+	BugStatusFixed     = domain.BugStatusFixed
 )
 
-// Label возвращает человекочитаемое название статуса багрепорта.
-func (s BugStatus) Label() string {
-	switch s {
-	case BugStatusNew:
-		return "не рассмотрен"
-	case BugStatusConfirmed:
-		return "подтверждён"
-	case BugStatusSlop:
-		return "нейрослоп"
-	case BugStatusFix:
-		return "требует исправления"
-	case BugStatusFeature:
-		return "это фича"
-	case BugStatusWontFix:
-		return "не исправляем"
-	case BugStatusFixed:
-		return "исправлен"
-	default:
-		return string(s)
-	}
-}
-
-// Terminal сообщает, является ли статус багрепорта завершающим.
-func (s BugStatus) Terminal() bool {
-	switch s {
-	case BugStatusSlop, BugStatusFeature, BugStatusWontFix, BugStatusFixed:
-		return true
-	}
-	return false
-}
-
-// Valid проверяет, что статус багрепорта известен системе.
-func (s BugStatus) Valid() bool {
-	switch s {
-	case BugStatusNew, BugStatusConfirmed, BugStatusSlop,
-		BugStatusFix, BugStatusFeature, BugStatusWontFix, BugStatusFixed:
-		return true
-	}
-	return false
-}
-
-// ValidateBugTransition проверяет допустимость перехода статуса багрепорта:
-//
-//	новый       -> подтверждён | нейрослоп
-//	подтверждён -> фича | не исправляем | требует исправления
-//	требует исправления -> исправлен
-//	(терминальные: нейрослоп/фича/не исправляем/исправлен переходов не имеют)
-//
-// Одинаковый статус не считается переходом (идемпотентность).
+// ValidateBugTransition — алиас domain.ValidateBugTransition (допустимость
+// перехода статуса багрепорта).
 func ValidateBugTransition(from, to BugStatus) error {
-	if from == to {
-		return nil
-	}
-	if !from.Valid() || !to.Valid() {
-		return &BugStatusError{From: from, To: to, Reason: "неизвестный статус багрепорта"}
-	}
-	switch from {
-	case BugStatusNew:
-		if to == BugStatusConfirmed || to == BugStatusSlop {
-			return nil
-		}
-	case BugStatusConfirmed:
-		if to == BugStatusFix || to == BugStatusFeature || to == BugStatusWontFix {
-			return nil
-		}
-	case BugStatusFix:
-		if to == BugStatusFixed {
-			return nil
-		}
-	}
-	return &BugStatusError{From: from, To: to, Reason: "переход не разрешён цепочкой ревью багрепорта"}
+	return domain.ValidateBugTransition(from, to)
 }
 
 // BugStatusError — ошибка некорректного перехода статуса багрепорта.
-type BugStatusError struct {
-	From   BugStatus
-	To     BugStatus
-	Reason string
-}
+// Тип принадлежит домену (domain.BugStatusError), здесь — алиас.
+type BugStatusError = domain.BugStatusError
 
-func (e *BugStatusError) Error() string {
-	return "переход статуса багрепорта " + e.From.Label() + " -> " + e.To.Label() + " запрещён: " + e.Reason
-}
-
-// BugReport — багрепорт с общей доски. QA-специалисты создают его при
-// обнаружении проблемы, QA Lead фильтрует «нейрослоп», Системный архитектор
-// проводит экспертизу (это фича/не исправляем/чинить) и при необходимости
-// создаёт эпик исправления (FixEpicID), после выполнения которого багрепорт
-// закрывается как «исправлен».
-type BugReport struct {
-	BugID        string    `json:"bug_id"`
-	ProjectName  string    `json:"project_name"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	ReporterRole string    `json:"reporter_role"` // специалист, обнаруживший проблему
-	TaskID       string    `json:"task_id"`       // задача, в которой найден баг (источник)
-	EpicID       string    `json:"epic_id"`       // эпик задачи-источника
-	Status       BugStatus `json:"status"`
-	Verdict      string    `json:"verdict"`     // решение архитектора (fix/feature/wont_fix)
-	FixEpicID    string    `json:"fix_epic_id"` // эпик, созданный для исправления
-	CreatedAt    string    `json:"created_at"`
-	UpdatedAt    string    `json:"updated_at"`
-}
+// BugReport — багрепорт с общей доски. Тип принадлежит домену
+// (domain.BugReport), здесь — алиас.
+type BugReport = domain.BugReport
 
 // Meta — метаданные доски проекта: исходная задача пользователя и общий
 // статус решения (done — все эпики и задачи успешно выполнены). Тип принадлежит

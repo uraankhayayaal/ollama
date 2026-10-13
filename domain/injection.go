@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -67,57 +69,131 @@ func (inj *Injection) Normalize() {
 		inj.Position = DefaultInjectionPosition
 	}
 	if inj.ID == "" {
-		inj.ID = generateInjectionID()
+		inj.ID = NewInjectionID()
 	}
 }
 
-func generateInjectionID() string {
-	b := make([]byte, 6)
+// NewInjectionID — новый идентификатор инъекции (16 байт энтропии в hex).
+func NewInjectionID() string {
+	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		for i := range b {
-			b[i] = byte(i) + 1
-		}
+		// crypto/rand на поддерживаемых платформах ошибок не возвращает.
+		panic("board: crypto/rand недоступен: " + err.Error())
 	}
-	return "inj-" + hex.EncodeToString(b)
+	return hex.EncodeToString(b)
 }
 
-func ValidateInjections(injs []Injection) error {
-	for i := range injs {
-		injs[i].Normalize()
-		if injs[i].Name == "" {
-			return fmt.Errorf("injection %d: пустое имя", i)
-		}
-		switch injs[i].Target {
-		case InjectionTargetSystem, InjectionTargetMessages, InjectionTargetUserLast, InjectionTargetAssistantLast:
-		default:
-			return fmt.Errorf("injection %s: неизвестный target %q", injs[i].Name, injs[i].Target)
-		}
-		if injs[i].Content == "" {
-			return fmt.Errorf("injection %s: пустой контент", injs[i].Name)
-		}
-		if len(injs[i].Content) > MaxInjectionContentSize {
-			return fmt.Errorf("injection %s: контент превышает %d байт", injs[i].Name, MaxInjectionContentSize)
-		}
+// Validate проверяет структурную корректность инъекции. Unknown-поля сюда не
+// попадают: их отсекает строгий декодер на стороне API.
+//
+// Пустые scope и position допустимы и трактуются как дефолты (runtime /
+// append) — иначе минимальная запись {"name","target","content"} была бы
+// невалидной, хотя ровно её и просят в API.
+func (inj Injection) Validate() error {
+	if strings.TrimSpace(inj.Name) == "" {
+		return fmt.Errorf("инъекция: имя (name) обязательно")
+	}
+	if strings.TrimSpace(inj.Content) == "" {
+		return fmt.Errorf("инъекция %q: тело (content) обязательно", inj.Name)
+	}
+	if len(inj.Content) > MaxInjectionContentSize {
+		return fmt.Errorf("инъекция %q: content %d байт больше лимита %d",
+			inj.Name, len(inj.Content), MaxInjectionContentSize)
+	}
+	switch inj.EffectiveScope() {
+	case "", InjectionScopeGlobal, InjectionScopeAssistant, InjectionScopeSession, InjectionScopeRuntime:
+	default:
+		return fmt.Errorf("инъекция %q: неизвестный scope %q", inj.Name, inj.Scope)
+	}
+	switch inj.Target {
+	case InjectionTargetSystem, InjectionTargetMessages, InjectionTargetUserLast, InjectionTargetAssistantLast:
+	default:
+		return fmt.Errorf("инъекция %q: неизвестный target %q", inj.Name, inj.Target)
+	}
+	position := inj.Position
+	if position == "" {
+		position = DefaultInjectionPosition
+	}
+	switch position {
+	case InjectionPosPrepend, InjectionPosAppend, InjectionPosReplace, InjectionPosInjectAtIndex:
+	default:
+		return fmt.Errorf("инъекция %q: неизвестная position %q", inj.Name, inj.Position)
+	}
+	if position == InjectionPosInjectAtIndex && inj.Index < 0 {
+		return fmt.Errorf("инъекция %q: inject_at_index требует index >= 0", inj.Name)
 	}
 	return nil
 }
 
-func DecodeInjections(data any) ([]Injection, error) {
-	var raw []byte
-	switch v := data.(type) {
-	case []byte:
-		raw = v
-	case string:
-		raw = []byte(v)
-	default:
-		return nil, fmt.Errorf("injections: неподдерживаемый тип %T", data)
+// ValidateInjections нормализует и проверяет список: дефолты, структура,
+// уникальность id. Мутирует элементы (нормализация) и возвращает первую
+// ошибку — вызывающий код отвечает пользователю 400, а не молча пишет мусор.
+func ValidateInjections(injs []Injection) error {
+	seen := make(map[string]int, len(injs))
+	for i := range injs {
+		inj := &injs[i]
+		inj.Normalize()
+		if err := inj.Validate(); err != nil {
+			return err
+		}
+		if inj.ID == "" {
+			continue
+		}
+		if prev, ok := seen[inj.ID]; ok {
+			return fmt.Errorf("инъекция %q (id=%s): дубль id уже занят инъекцией №%d",
+				inj.Name, inj.ID, prev+1)
+		}
+		seen[inj.ID] = i
 	}
-	if len(raw) == 0 {
+	return nil
+}
+
+// DecodeInjections разбирает список инъекций из произвольного значения:
+// массив объектов, одиночный объект или nil. Источники разные — JSON из REST,
+// разобранный в []any, и уже типизированный []map[string]any из аргументов
+// инструмента доски, — поэтому значение сначала приводится к JSON, а потом
+// разбирается строгим декодером.
+//
+// Строгость важна: неизвестное поле это ошибка, а не «успех, параметр молча
+// потерян» — опечатка в имени поля иначе выглядела бы как применённая
+// инъекция с неверным параметром.
+func DecodeInjections(raw any) ([]Injection, error) {
+	if raw == nil {
 		return nil, nil
 	}
-	var injs []Injection
-	if err := json.Unmarshal(raw, &injs); err != nil {
+	if list, ok := raw.([]Injection); ok {
+		return list, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
 		return nil, err
 	}
-	return injs, nil
+	// Форма определяется по первому значимому байту: '[' — массив, иначе
+	// одиночный объект.
+	for _, b := range data {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '[':
+			var list []Injection
+			if err := decodeStrict(data, &list); err != nil {
+				return nil, err
+			}
+			return list, nil
+		default:
+			var one Injection
+			if err := decodeStrict(data, &one); err != nil {
+				return nil, err
+			}
+			return []Injection{one}, nil
+		}
+	}
+	return nil, nil // пустой ввод
+}
+
+// decodeStrict декодирует JSON с запретом неизвестных полей.
+func decodeStrict(data []byte, out any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(out)
 }
