@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -83,3 +84,61 @@ type Comments []Comment
 func (cs Comments) Len() int           { return len(cs) }
 func (cs Comments) Swap(i, j int)      { cs[i], cs[j] = cs[j], cs[i] }
 func (cs Comments) Less(i, j int) bool { return cs[i].CreatedAt.Before(cs[j].CreatedAt) }
+
+// ---- Контекст комментариев ----
+
+type commentKey struct{}
+
+// NewCommentContext кладёт снапшот комментариев в контекст.
+func NewCommentContext(ctx context.Context, cms Comments) context.Context {
+	if len(cms) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, commentKey{}, cms)
+}
+
+// CommentsFromContext достаёт снапшот комментариев из контекста.
+func CommentsFromContext(ctx context.Context) Comments {
+	if ctx == nil {
+		return nil
+	}
+	if cms, ok := ctx.Value(commentKey{}).(Comments); ok {
+		return cms
+	}
+	return nil
+}
+
+// CommentSource — живой поставщик комментариев (перечитывается перед запросом).
+type CommentSource func(ctx context.Context) (Comments, error)
+
+type commentSourceKey struct{}
+
+// WithCommentSource кладёт живой поставщик комментариев в контекст.
+func WithCommentSource(ctx context.Context, src CommentSource) context.Context {
+	if src == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, commentSourceKey{}, src)
+}
+
+// CommentSourceFromContext достаёт живой поставщик комментариев.
+func CommentSourceFromContext(ctx context.Context) CommentSource {
+	if ctx == nil {
+		return nil
+	}
+	src, _ := ctx.Value(commentSourceKey{}).(CommentSource)
+	return src
+}
+
+// AllComments отдаёт комментарии для текущего запроса к модели: живой источник
+// авторитетен и полностью заменяет снапшот (аналог AllInjections).
+func AllComments(ctx context.Context) Comments {
+	src := CommentSourceFromContext(ctx)
+	if src != nil {
+		live, err := src(ctx)
+		if err == nil {
+			return live
+		}
+	}
+	return CommentsFromContext(ctx)
+}

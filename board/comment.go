@@ -37,59 +37,34 @@ func DecodeComments(data []byte) (Comments, error) {
 }
 
 // ---- Контекст комментариев ----
+// Реализация принадлежит домену (domain); здесь — обёртки/алиасы для обратной
+// совместимости.
 
-type commentKey struct{}
+// CommentSource — живой поставщик комментариев (domain.CommentSource).
+type CommentSource = domain.CommentSource
 
 // NewCommentContext кладёт снапшот комментариев в контекст.
 func NewCommentContext(ctx context.Context, cms Comments) context.Context {
-	if len(cms) == 0 {
-		return ctx
-	}
-	return context.WithValue(ctx, commentKey{}, cms)
+	return domain.NewCommentContext(ctx, cms)
 }
 
 // CommentsFromContext достаёт снапшот комментариев из контекста.
 func CommentsFromContext(ctx context.Context) Comments {
-	if ctx == nil {
-		return nil
-	}
-	if cms, ok := ctx.Value(commentKey{}).(Comments); ok {
-		return cms
-	}
-	return nil
+	return domain.CommentsFromContext(ctx)
 }
-
-// CommentSource — живой поставщик комментариев (перечитывается перед запросом).
-type CommentSource func(ctx context.Context) (Comments, error)
-
-type commentSourceKey struct{}
 
 // WithCommentSource кладёт живой поставщик комментариев в контекст.
 func WithCommentSource(ctx context.Context, src CommentSource) context.Context {
-	if src == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, commentSourceKey{}, src)
+	return domain.WithCommentSource(ctx, src)
 }
 
 // CommentSourceFromContext достаёт живой поставщик комментариев.
 func CommentSourceFromContext(ctx context.Context) CommentSource {
-	if ctx == nil {
-		return nil
-	}
-	src, _ := ctx.Value(commentSourceKey{}).(CommentSource)
-	return src
+	return domain.CommentSourceFromContext(ctx)
 }
 
 // AllComments отдаёт комментарии для текущего запроса к модели: живой источник
 // авторитетен и полностью заменяет снапшот (аналог AllInjections).
 func AllComments(ctx context.Context) Comments {
-	src := CommentSourceFromContext(ctx)
-	if src != nil {
-		live, err := src(ctx)
-		if err == nil {
-			return live
-		}
-	}
-	return CommentsFromContext(ctx)
+	return domain.AllComments(ctx)
 }
