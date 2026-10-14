@@ -42,11 +42,11 @@ ACCEPT_MAX_ROUNDS=3      # циклов «приёмка → исправлен�
 ```
 
 > `ACCEPT_TEST_CMD`, `ACCEPT_AUTOFORMAT`, `ACCEPT_LSP` **не описаны в
-> `.env.example`**, но читаются кодом (`agents/acceptor/config.go:118,135,141`).
+> `.env.example`**, но читаются кодом (`acceptor/config.go:118,135,141`).
 
 ## Порядок этапов
 
-`agents/acceptor/accept.go:108-401`:
+`acceptor/accept.go:108-401`:
 
 ```
 1. makefileLocate          — найти Makefile от подпроекта вверх до корня
@@ -73,12 +73,12 @@ make-цель из Makefile проекта
 автодетект по типу проекта
 ```
 
-Реализация — `agents/acceptor/detect.go:104-107`. Подробнее —
+Реализация — `acceptor/detect.go:104-107`. Подробнее —
 [Makefile-контракт](makefile-contract.md).
 
 ## Автодетект по стеку
 
-`agents/acceptor/detect.go`:
+`acceptor/detect.go`:
 
 | Этап | Go | Node/TS | Python | PHP |
 |---|---|---|---|---|
@@ -113,7 +113,7 @@ make-цель из Makefile проекта
 
 Когда на хосте нет нужного инструмента (например, `make` или `docker`),
 приёмка может выполнить **инфра-зеркало** — make-цель `infra.<цель>` через
-`docker compose run` (`agents/acceptor/detect.go:192-198`).
+`docker compose run` (`acceptor/detect.go:192-198`).
 
 Применяется к `build`, `format`, `analyze`, но **не к `run`**
 (`accept.go:209-219,270-272,297-299,413-446`): зеркало `run` мешало бы
@@ -125,13 +125,13 @@ make-цель из Makefile проекта
 
 ## Контракт для QA
 
-`agents/acceptor/plan.go:75-114` (`VerifyPlanFor`) — единый контракт проверок,
+`acceptor/plan.go:75-114` (`VerifyPlanFor`) — единый контракт проверок,
 которым пользуются и приёмка, и QA-инженер. Методы: `TestHint()`,
 `HasTarget()`, `TestTargets()`.
 
 ## Отчёт
 
-`agents/acceptor/report.go`. В отчёт попадают:
+`acceptor/report.go`. В отчёт попадают:
 
 - Вердикт по каждому подпроекту.
 - Вывод команд, обрезанный до `ACCEPT_MAX_LOG` символов.

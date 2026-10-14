@@ -38,7 +38,7 @@ ACCEPT_ANALYZE_CMD=
 
 ### Поиск Makefile
 
-`makefileLocate` (`agents/acceptor/detect.go:84-99`) идёт **от подпроекта
+`makefileLocate` (`acceptor/detect.go:84-99`) идёт **от подпроекта
 вверх** до корня приёмки. Это важно для монорепозиториев: у `frontend/` может
 быть свой Makefile.
 

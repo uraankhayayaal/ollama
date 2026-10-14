@@ -12,7 +12,7 @@
 //     цель Makefile (run/dev/start/serve) → npm-скрипт → типовой вариант по
 //     стеку (go run ., php artisan serve, npm run dev, …).
 //  2. Запускаем его как фоновый процесс с отдельной группой, построчно читаем
-//     stdout+stderr и гасим по таймауту (как приёмка в agents/acceptor/run.go,
+//     stdout+stderr и гасим по таймауту (как приёмка в acceptor/run.go,
 //     но построчно, а не «буфер целиком после выхода»).
 //  3. Каждую строку отдаём в runevents (живая трансляция в Logboard) и
 //     складываем в хвост, который runner'ер читает для самокоррекции.
@@ -462,7 +462,7 @@ func runCaptured(dir, command string, timeout time.Duration) (string, int, bool,
 }
 
 // stopProcess гасит группу процессов: сначала SIGTERM (дать дописать логи),
-// затем SIGKILL. Ровно тот же приём, что в agents/acceptor/run.go.
+// затем SIGKILL. Ровно тот же приём, что в acceptor/run.go.
 //
 // exited — канал, который ЗАКРЫВАЕТСЯ по завершении c.Wait(). Именно сигнал, а не
 // канал со значением: значение из общего chan error забрал бы себе stopProcess,
@@ -493,7 +493,7 @@ func stopProcess(c *exec.Cmd, exited <-chan struct{}) {
 // --- определение способа запуска ---
 
 // resolveRunCommand определяет команду запуска приложения для каталога dir.
-// Порядок повторяет логику приёмки (agents/acceptor/detect.go), но живёт в
+// Порядок повторяет логику приёмки (acceptor/detect.go), но живёт в
 // tools: пакет acceptor уже импортирует tools, обратная зависимость была бы
 // циклом. Порядок: Makefile (единая точка входа по Ф-1..Ф-5 плана makefile) →
 // npm-скрипт → типовой вариант по стеку.
@@ -786,7 +786,7 @@ func intArg(args map[string]any, key string) int {
 }
 
 // findGoMainPackage ищет каталог с пакетом main и func main: точку входа,
-// если main.go лежит не в корне (в отличие от agents/acceptor/detect.go, здесь
+// если main.go лежит не в корне (в отличие от acceptor/detect.go, здесь
 // обход ограничен по глубине — этого хватает для типового сервиса).
 func findGoMainPackage(dir string) string {
 	best := ""

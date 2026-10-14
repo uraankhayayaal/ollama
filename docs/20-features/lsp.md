@@ -84,7 +84,7 @@ JSON-RPC 2.0 по stdio с заголовками `Content-Length`. Сервер
 1. **Нативный** (`LSP_NATIVE=1`, по умолчанию) — `publishDiagnostics`
    от сервера. Точнее и быстрее.
 2. **CLI-чекеры** — `LspCheck` через отдельный запуск. Используется как
-   запасной путь и в приёмке (`agents/acceptor/lsp.go`).
+   запасной путь и в приёмке (`acceptor/lsp.go`).
 
 ## Step Gate
 
@@ -116,8 +116,8 @@ JSON-RPC 2.0 по stdio с заголовками `Content-Length`. Сервер
 
 `ACCEPT_LSP=1` (по умолчанию) — стадия приёмки. Сканирует
 `.go .js .jsx .ts .tsx .py .pyi .php .phtml`, максимум **100 файлов**
-(`agents/acceptor/lsp.go:16-31`). Отсутствие сервера → `Skipped`, не ошибка
-(`agents/acceptor/checks.go:107-130`).
+(`acceptor/lsp.go:16-31`). Отсутствие сервера → `Skipped`, не ошибка
+(`acceptor/checks.go:107-130`).
 
 Ошибка LSP-диагностик ⇒ `reject`.
 

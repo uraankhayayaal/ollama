@@ -137,7 +137,7 @@ func (q *QAEngineer) RequiredToolFirstRound() (string, bool) {
 func (q *QAEngineer) Label() string { return "QA-инженер" }
 
 // verifyPlan — команды проверки, вычисленные тем же кодом, что и приёмка
-// (agents/acceptor): env ACCEPT_* → корневой Makefile → автодетект по типу
+// (acceptor): env ACCEPT_* → корневой Makefile → автодетект по типу
 // проекта. Раньше эти команды были описаны в промпте прозой, и QA находил
 // их сам: правитель забывал оговорку — тесты писались не той командой, какой
 // проверяет приёмка, и «зелёные тесты» ничего не значили.

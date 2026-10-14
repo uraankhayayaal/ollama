@@ -102,7 +102,7 @@ func TestQAReportFileAllowed(t *testing.T) {
 }
 
 // TestQAPromptUsesAcceptorVerifyPlan — Ф-3: команды проверки в промпте QA
-// приходят из приёмки (agents/acceptor.VerifyPlanFor), а не из прозы промпта.
+// приходят из приёмки (acceptor.VerifyPlanFor), а не из прозы промпта.
 // Проверяется на настоящем Makefile-проекте: если план перестанет вычисляться
 // или Makefile перестанет иметь приоритет, в промпте появятся «(не определена)».
 func TestQAPromptUsesAcceptorVerifyPlan(t *testing.T) {

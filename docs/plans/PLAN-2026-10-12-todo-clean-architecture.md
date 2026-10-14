@@ -456,11 +456,11 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
   `how-it-works.md`, `glossary.md`, `docs/30-reference/agent-tools.md`,
   `docs/40-operations/testing.md`, `troubleshooting.md`) — теперь
   `application/planner/...`; исторические `PLAN-*-done-*.md` не переписываются.
-  Обнаружена смежная (вне рамок этого плана) устаревшая ссылка:
-  `acceptor` переехал из `agents/acceptor/` в корневой `acceptor/`, но живые
-  документы (`docs/20-features/acceptor.md`, `makefile-contract.md`,
-  `lsp.md`, `docs/40-operations/testing.md`) и `agents-and-roles.md` всё ещё
-  указывают `agents/acceptor/...` — обновить отдельной правкой.
+  Обнаружена смежная устаревшая ссылка: `acceptor` переехал из
+  `agents/acceptor/` в корневой `acceptor/`, а живые документы
+  (`docs/20-features/acceptor.md`, `makefile-contract.md`, `lsp.md`,
+  `docs/40-operations/testing.md`, `agents-and-roles.md`) всё ещё указывали
+  `agents/acceptor/...` — обновлены ✅ (путь заменён на `acceptor/...`).
 
 ## Что осталось пользователю
 
