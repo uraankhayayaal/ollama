@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -40,148 +39,15 @@ func ensureTaskGitignore(project, taskID, root string) {
 	gitflow.EnsureTaskGitignore(project, taskID, root)
 }
 
-// taskWorktree — Ф-3: при переводе задачи «в работу» создаёт постоянный
-// worktree её ветки (ai/task/<id>), в который специалист получает OutputDir.
-// Перед созданием worktree: синхронизация релизной ветки эпика с main и
-// rebase ветки задачи на релизную ветку эпика (задача стартует от свежего
-// кода). Ошибки не ломают переход статуса — логируются (специалист продолжит
-// работать в общем клоне temp/<проект>, авто-коммит на done пропадёт).
+// taskWorktree — обёртка над gitflow.WorktreeManager (Этап 6, срез F3r):
+// политика создания worktree задачи переехала в application/gitflow, здесь
+// остаётся адаптер хоста (git, реестр веток, RAG-хуки, merge-lock, доска).
 func (s *Server) taskWorktree(ctx context.Context, project string, task *board.Task, store *board.Store) {
-	if task == nil || task.TaskID == "" {
+	if task == nil {
 		return
 	}
-	inf, err := s.reg.Get(project)
-	if err != nil || inf.Kind != workspace.KindGit {
-		return
-	}
-	taskRef, err := s.reg.TaskBranch(project, task.TaskID)
-	if err != nil {
-		logging.For(project).Detailf("gitflow: worktree задачи %s: ветки нет: %v — пропуск", task.TaskID, err)
-		return
-	}
-	if strings.TrimSpace(taskRef.Worktree) != "" {
-		return // уже создан
-	}
-	repo, err := s.repoOf(ctx, project)
-	if err != nil {
-		return
-	}
-	wtPath := s.taskWorktreePath(repo.Root, project, task.TaskID)
-
-	lock := s.mergeLock(project)
-	lock.Lock()
-	defer lock.Unlock()
-
-	// 0) Актуальность main в индексе RAG: задача стартует, и её агент должен
-	// искать по коду, который уже ушёл в main (релизы прошлых эпиков, в т.ч.
-	// сделанные мимо releaseEpic — с пуша). Индексация по ref читает git, а не
-	// рабочую копию, и выполняется в фоне (см. server/ragref.go).
-	s.refreshRagIndexBranch(project, inf.GitBase)
-
-	// 0) Синхронизация релизной ветки эпика с main (как перед релизом, но без
-	// требования done): эпик получает свежий main, задача стартует от актуального
-	// кода. Конфликты main ↔ релизная ветка не блокируют старт задачи — они
-	// видны на доске (epic.MergeConflictFiles) и решаются флоу rebase/резолва.
-	epicRef, err := s.reg.EpicBranch(project, task.EpicID)
-	if err != nil {
-		logging.For(project).Detailf("gitflow: worktree задачи %s: ветка эпика не найдена: %v — пропуск синхронизации", task.TaskID, err)
-	} else {
-		s.syncEpicMainForTask(ctx, project, task.EpicID, inf, repo, epicRef)
-
-		// 0.1) Rebase ветки задачи на релизную ветку эпика: если предыдущая задача
-		// влита в релиз, текущая задача должна стартовать от свежего кода.
-		// Конфликт rebase не блокирует старт — специалист видит его в worktree.
-		// Перед rebase снимаем worktree основного клона (если ветка задачи
-		// используется им) — иначе git rebase откажется перемещать ветку.
-		if wtList, err := repo.WorktreeList(ctx); err == nil {
-			for _, wt := range wtList {
-				if wt.Branch == taskRef.Branch {
-					_ = repo.RemoveWorktree(ctx, wt.Path)
-				}
-			}
-		}
-		if err := repo.Rebase(ctx, taskRef.Branch, epicRef.Branch); err != nil {
-			logging.For(project).Warnf("gitflow: rebase задачи %s на эпик %s: %v — специалист решит в worktree",
-				task.TaskID, task.EpicID, err)
-		}
-	}
-
-	// Чистим осиротевший worktree (прерванный прошлый цикл задачи).
-	if _, err := os.Stat(wtPath); err == nil {
-		logging.For(project).Warnf("gitflow: 删除я осиротевший worktree задачи %s (%s)", task.TaskID, wtPath)
-		_ = repo.RemoveWorktree(ctx, wtPath)
-	}
-	// Основной клон может использовать ветку задачи (например, после rebase).
-	// Переключаем его на ветку агента, чтобы git worktree add сработал.
-	if inf.GitBranch != "" {
-		if err := repo.Checkout(ctx, inf.GitBranch); err != nil {
-			logging.For(project).Warnf("gitflow: worktree задачи %s: checkout %s: %v", task.TaskID, inf.GitBranch, err)
-		}
-	}
-	wt, err := repo.AddWorktree(ctx, wtPath, taskRef.Branch)
-	if err != nil {
-		logging.For(project).Warnf("gitflow: worktree задачи %s: %v", task.TaskID, err)
-		return
-	}
-	ensureTaskGitignore(project, task.TaskID, wtPath)
-	if subs, err := git.EnsureSubmodules(ctx, s.gitExec, wt.Root); err != nil {
-		_ = wt.RemoveWorktree(ctx, wtPath)
-		logging.For(project).Warnf("gitflow: submodule worktree задачи %s: %v", task.TaskID, err)
-		return
-	} else {
-		for _, sub := range subs {
-			childName := submoduleProjectName(project, sub.Path)
-			child, err := s.reg.Get(childName)
-			if err != nil || child.Parent != project {
-				continue
-			}
-			base, err := s.gitExec.Exec(ctx, sub.Root, "git", "rev-parse", "HEAD")
-			if err != nil {
-				_ = wt.RemoveWorktree(ctx, wtPath)
-				logging.For(project).Warnf("gitflow: base сабмодуля %s задачи %s: %v", sub.Path, task.TaskID, err)
-				return
-			}
-			branch := taskRef.Branch + "/submodule/" + git.SanitizeBranchName(filepath.ToSlash(sub.Path))
-			if _, err := s.gitExec.Exec(ctx, wt.Root, "git", "submodule", "deinit", "-f", "--", sub.Path); err != nil {
-				_ = wt.RemoveWorktree(ctx, wtPath)
-				logging.For(project).Warnf("gitflow: deinit сабмодуля %s для task worktree: %v", sub.Path, err)
-				return
-			}
-			if _, err := git.Worktree(ctx, s.gitExec, child.Root, branch, strings.TrimSpace(base), sub.Root); err != nil {
-				_ = wt.RemoveWorktree(ctx, wtPath)
-				logging.For(project).Warnf("gitflow: worktree сабмодуля %s задачи %s: %v", sub.Path, task.TaskID, err)
-				return
-			}
-			ensureTaskGitignore(project, task.TaskID, sub.Root)
-			if err := s.reg.SetTaskBranch(childName, childTaskKey(project, task.TaskID), workspace.BranchRef{
-				Branch: branch, Base: strings.TrimSpace(base), Worktree: sub.Root,
-			}); err != nil {
-				_ = wt.RemoveWorktree(ctx, wtPath)
-				logging.For(project).Warnf("gitflow: регистрация submodule task branch %s: %v", sub.Path, err)
-				return
-			}
-		}
-	}
-	if err := s.reg.SetTaskBranch(project, task.TaskID, workspace.BranchRef{
-		Branch: taskRef.Branch, Base: taskRef.Base, Worktree: wtPath,
-	}); err != nil {
-		_ = wt.RemoveWorktree(ctx, wtPath)
-		logging.For(project).Warnf("gitflow: worktree задачи %s: реестр: %v", task.TaskID, err)
-		return
-	}
-	s.invalidateDiffs(project)
-	// Ф-6 (этап 2): точка отката «снести всё» — HEAD только что созданного
-	// worktree задачи.
-	s.recordTaskBaseSHA(ctx, project, task.TaskID, wtPath, store)
-	// Индекс ветки задачи: worktree только что пересобран (rebase на релизную
-	// ветку эпика, а эпик синхронизирован с main), а точки ветки задачи в
-	// индексе ещё нет. Индексируем ИЗМЕНЕНИЯ ветки относительно main (остальное
-	// покрывает индекс main) — дёшево и ровно то, что нужно выдаче поиска:
-	// код самой задачи и слитых задач эпика. Без этого CodeSearch специалиста
-	// видел бы только main и не нашёл бы код, собранный задачами эпика.
-	s.refreshRagTaskBranch(project, taskRef.Branch, inf.GitBase)
-	logging.For(project).Infof("gitflow: задача %s → worktree %s (%s)", task.TaskID, wtPath, taskRef.Branch)
-	s.srvEmitBoard(project, "gitflow: worktree задачи")
+	m := gitflow.WorktreeManager{Host: &worktreeHost{s: s, store: store}}
+	m.TaskWorktree(ctx, project, gitflow.WorktreeTask{ID: task.TaskID, EpicID: task.EpicID})
 }
 
 // recordTaskBaseSHA запоминает HEAD worktree задачи как checkpoint.base_sha —
@@ -228,127 +94,19 @@ func (s *Server) epicWorktreePath(repoRoot, project, epicID string) string {
 	return gitflow.EpicWorktreePath(repoRoot, project, epicID)
 }
 
-// epicWorktree — Этап 4.1: ленивое создание (и повторное подключение)
-// worktree релизной ветки эпика ai/epic/<id> — рабочей точки системного
-// архитектора: он выстраивает структуру проекта 1-го уровня и коммитит её
-// в ветку эпика (см. «ВЕТКА ЭПИКА И СТРУКТУРА ПРОЕКТА» в его промпте).
-//
-// Резолвер задаётся KanbanRunner через SetEpicOutputDir и вызывается
-// архитектором ВНУТРИ submit_architecture_backlog — после публикации бэклога,
-// когда EpicCreatedHook уже создал ветки эпиков. Возвращает "" — degrade
-// (не-git-проект, ветки нет, git-ошибка): архитектор получит note и структуру
-// не напишет, публикация бэклога при этом не срывается.
+// epicWorktree — обёртка над gitflow.WorktreeManager (Этап 6, срез F3r):
+// политика ленивого создания worktree релизной ветки эпика переехала в
+// application/gitflow.
 func (s *Server) epicWorktree(ctx context.Context, project, epicID string) string {
-	if strings.TrimSpace(epicID) == "" {
-		return ""
-	}
-	inf, err := s.reg.Get(project)
-	if err != nil || inf.Kind != workspace.KindGit {
-		return ""
-	}
-	ref, err := s.reg.EpicBranch(project, epicID)
-	if err != nil || strings.TrimSpace(ref.Branch) == "" {
-		logging.For(project).Detailf("gitflow: worktree эпика %s: ветки нет: %v — пропуск", epicID, err)
-		return ""
-	}
-	if wt := strings.TrimSpace(ref.Worktree); wt != "" {
-		if _, err := os.Stat(wt); err == nil {
-			return wt
-		}
-	}
-	repo, err := s.repoOf(ctx, project)
-	if err != nil {
-		return ""
-	}
-	wtPath := s.epicWorktreePath(repo.Root, project, epicID)
-
-	// Под локом: параллельные merge-операции снимают worktree перед checkout
-	// релизной ветки — создание и снятие не должны гоняться.
-	lock := s.mergeLock(project)
-	lock.Lock()
-	defer lock.Unlock()
-
-	// Повторная проверка: пока ждали мьютекс, worktree мог создать другой поток.
-	if ref, err := s.reg.EpicBranch(project, epicID); err == nil {
-		if wt := strings.TrimSpace(ref.Worktree); wt != "" {
-			if _, err := os.Stat(wt); err == nil {
-				return wt
-			}
-		}
-	}
-	// Осиротевший каталог прошлого (прерванного) цикла: снимаем и создаём заново.
-	if _, err := os.Stat(wtPath); err == nil {
-		logging.For(project).Warnf("gitflow: удаляю осиротевший worktree эпика %s (%s)", epicID, wtPath)
-		_ = repo.RemoveWorktree(ctx, wtPath)
-		// git worktree remove отвечает ошибкой, если каталог не является
-		// worktree (ручной остаток) — убираем его иначе worktree add упрётся
-		// в «уже существует».
-		_ = os.RemoveAll(wtPath)
-	}
-	// Основной клон может держать ветку эпика (после rebase/merge) —
-	// переключаем его на ветку агента, иначе git worktree add откажется.
-	if inf.GitBranch != "" {
-		if err := repo.Checkout(ctx, inf.GitBranch); err != nil {
-			logging.For(project).Warnf("gitflow: worktree эпика %s: checkout %s: %v", epicID, inf.GitBranch, err)
-		}
-	}
-	wt, err := repo.AddWorktree(ctx, wtPath, ref.Branch)
-	if err != nil {
-		logging.For(project).Warnf("gitflow: worktree эпика %s: %v", epicID, err)
-		return ""
-	}
-	ensureTaskGitignore(project, epicID, wtPath)
-	if err := s.reg.SetEpicBranch(project, epicID, workspace.BranchRef{
-		Branch: ref.Branch, Base: ref.Base, Worktree: wtPath,
-	}); err != nil {
-		_ = wt.RemoveWorktree(ctx, wtPath)
-		logging.For(project).Warnf("gitflow: worktree эпика %s: реестр: %v", epicID, err)
-		return ""
-	}
-	logging.For(project).Infof("gitflow: эпик %s → worktree %s (%s)", epicID, wtPath, ref.Branch)
-	return wtPath
+	m := gitflow.WorktreeManager{Host: &worktreeHost{s: s}}
+	return m.EpicWorktree(ctx, project, epicID)
 }
 
-// dropEpicWorktreeLocked снимает worktree ветки эпика (4.1), если он создан:
-// операциям, которым нужен СВОБОДНЫЙ checkout релизной ветки (MergeFeature и
-// конфликтные worktree резолвов делают `git worktree add <путь> <ветка>`),
-// иначе git отказывается: «ai/epic/… is already checked out at …».
-// Незакоммиченные правки архитектора (промпт требует коммитить, но модель могла
-// не успеть) фиксируются автокоммитом — структура проекта не теряется.
-// Идемпотентно; вызывается ПОД mergeLock (свой лок здесь брать нельзя).
+// dropEpicWorktreeLocked — обёртка над gitflow.WorktreeManager (Этап 6, срез
+// F3r): политика снятия worktree эпика переехала в application/gitflow.
 func (s *Server) dropEpicWorktreeLocked(ctx context.Context, project, epicID string) {
-	if strings.TrimSpace(epicID) == "" {
-		return
-	}
-	ref, err := s.reg.EpicBranch(project, epicID)
-	if err != nil {
-		return
-	}
-	wtPath := strings.TrimSpace(ref.Worktree)
-	if wtPath == "" {
-		return
-	}
-	if repo, rerr := s.repoOf(ctx, project); rerr == nil {
-		if _, serr := os.Stat(wtPath); serr == nil {
-			wt := git.RepoFromState(s.gitExec, wtPath, ref.Branch, ref.Base, "")
-			if _, _, cerr := wt.CommitIfDirty(ctx,
-				fmt.Sprintf("эпик %s: структура проекта (авто-коммит)", epicID)); cerr != nil {
-				logging.For(project).Warnf("gitflow: worktree эпика %s: автокоммит перед снятием: %v", epicID, cerr)
-			}
-			if werr := repo.RemoveWorktree(ctx, wtPath); werr != nil {
-				logging.For(project).Warnf("gitflow: снятие worktree эпика %s: %v — удаляю каталог", epicID, werr)
-				_ = os.RemoveAll(wtPath)
-			}
-		}
-	} else {
-		logging.For(project).Warnf("gitflow: worktree эпика %s: клон недоступен: %v", epicID, rerr)
-	}
-	if werr := s.reg.SetEpicBranch(project, epicID, workspace.BranchRef{
-		Branch: ref.Branch, Base: ref.Base,
-	}); werr != nil {
-		logging.For(project).Warnf("gitflow: worktree эпика %s: запись в реестр: %v", epicID, werr)
-	}
-	logging.For(project).Detailf("gitflow: worktree эпика %s снят (%s)", epicID, wtPath)
+	m := gitflow.WorktreeManager{Host: &worktreeHost{s: s}}
+	m.DropEpicWorktreeLocked(ctx, project, epicID)
 }
 
 // commitTaskWorktree фиксирует незакоммиченные изменения специалиста в
@@ -642,3 +400,89 @@ func (s *Server) setEpicMergedIntoMain(ctx context.Context, project, epicID stri
 		logging.For(project).Warnf("gitflow: запись merged_into_main эпика %s: %v", epicID, err)
 	}
 }
+
+// worktreeHost — адаптер gitflow.WorktreeHost поверх server (Этап 6, срез F3r):
+// git-репозиторий, side-реестр веток, RAG-хуки, merge-lock, доска, точка отката.
+type worktreeHost struct {
+	s     *Server
+	store *board.Store
+}
+
+func (h *worktreeHost) Info(project string) (gitflow.WorktreeProject, error) {
+	inf, err := h.s.reg.Get(project)
+	if err != nil {
+		return gitflow.WorktreeProject{}, err
+	}
+	return gitflow.WorktreeProject{
+		IsGit:     inf.Kind == workspace.KindGit,
+		Root:      inf.Root,
+		GitBranch: inf.GitBranch,
+		GitBase:   inf.GitBase,
+	}, nil
+}
+
+func (h *worktreeHost) Repo(ctx context.Context, project string) (*git.Repo, error) {
+	return h.s.repoOf(ctx, project)
+}
+
+func (h *worktreeHost) Exec() git.Executor { return h.s.gitExec }
+
+func (h *worktreeHost) TaskBranch(project, taskID string) (gitflow.BranchRef, error) {
+	ref, err := h.s.reg.TaskBranch(project, taskID)
+	if err != nil {
+		return gitflow.BranchRef{}, err
+	}
+	return gitflow.BranchRef{Branch: ref.Branch, Base: ref.Base, Worktree: ref.Worktree}, nil
+}
+
+func (h *worktreeHost) EpicBranch(project, epicID string) (gitflow.BranchRef, error) {
+	ref, err := h.s.reg.EpicBranch(project, epicID)
+	if err != nil {
+		return gitflow.BranchRef{}, err
+	}
+	return gitflow.BranchRef{Branch: ref.Branch, Base: ref.Base, Worktree: ref.Worktree}, nil
+}
+
+func (h *worktreeHost) SetTaskBranch(project, taskID string, ref gitflow.BranchRef) error {
+	return h.s.reg.SetTaskBranch(project, taskID, workspace.BranchRef{Branch: ref.Branch, Base: ref.Base, Worktree: ref.Worktree})
+}
+
+func (h *worktreeHost) SetEpicBranch(project, epicID string, ref gitflow.BranchRef) error {
+	return h.s.reg.SetEpicBranch(project, epicID, workspace.BranchRef{Branch: ref.Branch, Base: ref.Base, Worktree: ref.Worktree})
+}
+
+func (h *worktreeHost) ChildProject(project, subPath string) (string, string, bool) {
+	childName := submoduleProjectName(project, subPath)
+	child, err := h.s.reg.Get(childName)
+	if err != nil || child.Parent != project {
+		return "", "", false
+	}
+	return childName, child.Root, true
+}
+
+func (h *worktreeHost) Locked(project string, fn func()) {
+	lock := h.s.mergeLock(project)
+	lock.Lock()
+	defer lock.Unlock()
+	fn()
+}
+
+func (h *worktreeHost) RefreshRagIndexBranch(project, base string) {
+	h.s.refreshRagIndexBranch(project, base)
+}
+
+func (h *worktreeHost) RefreshRagTaskBranch(project, branch, base string) {
+	h.s.refreshRagTaskBranch(project, branch, base)
+}
+
+func (h *worktreeHost) SyncEpicMainForTask(ctx context.Context, project, epicID string) {
+	h.s.syncEpicMainForTask(ctx, project, epicID, workspace.Info{}, nil, workspace.BranchRef{})
+}
+
+func (h *worktreeHost) InvalidateDiffs(project string) { h.s.invalidateDiffs(project) }
+
+func (h *worktreeHost) RecordTaskBaseSHA(ctx context.Context, project, taskID, worktree string) {
+	h.s.recordTaskBaseSHA(ctx, project, taskID, worktree, h.store)
+}
+
+func (h *worktreeHost) EmitBoard(project, msg string) { h.s.srvEmitBoard(project, msg) }

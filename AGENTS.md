@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3q — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3r — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -443,6 +443,31 @@ merge-base), `gitProjectDiff` (кэш по `project|ref|base`, обход саб
 submodules-multirepo}.md` (ссылки на разбор → `domain/diff`). Остаток Этапа 6 —
 F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
 `chatassist`/`actions`/`server`. Коммит F3q `9bb6b6a`.
+
+Срез **F3r** — жизненный цикл worktree задачи/эпика вынесен из
+`server/gitflow_auto.go` в `application/gitflow` (`lifecycle.go`):
+`WorktreeManager` (порт `WorktreeHost`) — `TaskWorktree` (Ф-3: синхрон релизной
+ветки эпика с main, rebase ветки задачи на эпик, создание worktree
+`ai/task/<id>`, подъём worktree сабмодулей + их регистрация, checkpoint base_sha,
+индекс изменений ветки задачи), `EpicWorktree` (4.1: ленивый worktree релизной
+ветки эпика `ai/epic/<id>` под пер-проектным локом) и
+`DropEpicWorktreeLocked` (снятие worktree эпика с авто-коммитом правок
+архитектора). `server/gitflow_auto.go` оставил адаптер `worktreeHost` (поверх
+`reg`/`repoOf`/`gitExec`/`mergeLock`/RAG-хуков/`srvEmitBoard`/
+`recordTaskBaseSHA`) и тонкие обёртки `s.taskWorktree`/`s.epicWorktree`/
+`s.dropEpicWorktreeLocked` (потребители `server/gitflow.go`, `gitflow_ar.go`,
+`gitflow_sync.go`, `session.go` не менялись). Тесты: новые герметичные
+`application/gitflow/lifecycle_test.go` (пропуски не-git/пустого ID/готового
+worktree, полный цикл задачи, отсутствие ветки эпика, сбой `git worktree add`,
+worktree эпика — существующий/создание, снятие); серверные
+`gitflow_epic_worktree_test.go`/`gitflow_submodule_test.go`/
+`gitflow_done_guard_test.go`/`gitflow_auto_e2e_test.go` не менялись. Верификация:
+канонический набор зелёный (28 пакетов), `-race` по `application/gitflow` чист,
+`gofmt` по правкам чист. Документация: план (шапка + таблица F3r + narrative),
+`docs/00-overview/project-map.md` (строка `application/gitflow/` расширена
+`WorktreeManager`/`lifecycle.go`). Остаток Этапа 6 — F3+: RAG-хуки
+(`server/ragref.go`), `server/session.go` (оркестрация/HITL/событийность),
+`chatassist`/`actions`/`server`. Коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

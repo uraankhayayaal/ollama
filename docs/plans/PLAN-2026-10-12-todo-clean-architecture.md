@@ -93,7 +93,10 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 логов кнопкой «Разобрать» (`BuildAnalysis`/`PickFiles`/`DigestPrompt`/
 `Cooldown`) вынесен из `server/loganalysis.go` в `application/logs`; срез
 **F3q ✅** — разбор unified-диффа git (`Parse`/`ParseBlock`/`PrefixPath`)
-вынесен из `server/diff.go` в новый пакет `domain/diff`.
+вынесен из `server/diff.go` в новый пакет `domain/diff`; срез **F3r ✅** —
+жизненный цикл worktree задачи/эпика (`TaskWorktree`/`EpicWorktree`/
+`DropEpicWorktreeLocked`) вынесен из `server/gitflow_auto.go` в
+`application/gitflow` (порт `WorktreeHost`).
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -575,6 +578,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3o | Панель логов (Logboard): сбор `*.log`, отбор «своих» из общего каталога и дедупликация (`CollectProject`), чтение хвоста с `MaxBytes` (`ReadTail`), типы `Entry`/`Response` вынесены из `server/logs.go` в `application/logs`; в `server` остались HTTP-хендлеры, `logDirs`/`logsDir`, брокер и алиасы типов | ✅ |
 | F3p | Разбор логов кнопкой «Разобрать»: выборка файлов (`PickFiles`), фильтры поиска/уровня и дайджест (`BuildAnalysis`), контракт ответа (`DigestPrompt`), cooldown повторов (`Cooldown`) вынесены из `server/loganalysis.go` в `application/logs`; `server` оставил алиасы типов, обвязку проекта и адаптер cooldown | ✅ |
 | F3q | Разбор unified-диффа git (`Parse`/`Split`/`ParseBlock`/`PathOf`/`PrefixPath`, статусы `Added`/`Modified`/`Removed`/`Renamed`/`Submodule`, типы `FileEntry`/`Diff`) вынесен из `server/diff.go` в новый stdlib-only пакет `domain/diff`; `server` оставил git-вызовы (`branchDiff`/`gitProjectDiff`), кэш `cachedDiff` и алиасы | ✅ |
+| F3r | Жизненный цикл worktree задачи/эпика (`TaskWorktree` — создание worktree задачи + rebase на эпик + сабмодули, `EpicWorktree` — ленивый worktree релизной ветки эпика, `DropEpicWorktreeLocked` — снятие worktree эпика) вынесен из `server/gitflow_auto.go` в `application/gitflow` (`WorktreeManager`, порт `WorktreeHost`); `server` оставил адаптер `worktreeHost` и тонкие обёртки | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -815,6 +819,26 @@ merge-base), `gitProjectDiff` (кэш по `project|ref|base`, обход саб
 `domain/diff` чист, `gofmt` по правкам чист. Доки: `project-map.md`
 (`domain/diff/`), `contextual-diff.md`, `gitops-workflow.md`, `web-ui.md`,
 `submodules-multirepo.md` (ссылки на разбор → `domain/diff`).
+
+**F3r ✅** — жизненный цикл worktree задачи и эпика вынесен из
+`server/gitflow_auto.go` в `application/gitflow/lifecycle.go`:
+`WorktreeManager` (порт `WorktreeHost`) с методами `TaskWorktree` (Ф-3:
+синхрон релизной ветки эпика с main, rebase ветки задачи на эпик, создание
+worktree `ai/task/<id>`, подъём worktree сабмодулей и их регистрация,
+checkpoint base_sha, RAG-хуки), `EpicWorktree` (4.1: ленивый worktree релизной
+ветки эпика `ai/epic/<id>` под локом) и `DropEpicWorktreeLocked` (снятие
+worktree эпика с авто-коммитом правок архитектора). `server/gitflow_auto.go`
+оставил адаптер `worktreeHost` поверх `reg`/`repoOf`/`gitExec`/`mergeLock`/
+RAG-хуков/`srvEmitBoard`/`recordTaskBaseSHA` и тонкие обёртки `taskWorktree`/
+`epicWorktree`/`dropEpicWorktreeLocked` (вызовы `server/gitflow.go`,
+`gitflow_ar.go`, `gitflow_sync.go`, `session.go` не менялись). Тесты: новые
+герметичные `application/gitflow/lifecycle_test.go` (пропуски не-git/пустого ID/
+готового worktree, полный цикл задачи, отсутствие ветки эпика, сбой `git
+worktree add`, worktree эпика — существующий/создание, снятие); серверные
+`gitflow_epic_worktree_test.go`/`gitflow_submodule_test.go`/
+`gitflow_done_guard_test.go`/`gitflow_auto_e2e_test.go` не менялись. Верификация:
+канонический набор зелёный (28 пакетов), `-race` по `application/gitflow` чист,
+`gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
 
