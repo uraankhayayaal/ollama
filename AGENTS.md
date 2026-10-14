@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3aa — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3ab — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -664,6 +664,22 @@ approve, отказ, отмена контекста → `Reset`, останов
 (шапка + таблица F3aa + narrative), `docs/00-overview/project-map.md` (строка
 `application/logs/` расширена `applog.go`). Остаток Этапа 6 — F3+:
 `server`-хендлеры. Коммит F3aa `067c46d`.
+
+Срез **F3ab** — инкрементальный хвост лог-файлов вынесен из `server/logbroker.go`
+в `application/logtail/tail.go`: `Broker` (`Run`/`Subscribe`/`Broadcast`/`Rescan`),
+`SubFile` (`OpenAtEnd`/`OpenFromStart`/`Rotated`/`ReadNew`/`Close`), `Line`,
+`ListLogFiles`, константы `ScanEvery`/`HeadLen`/`TickInterval`; порт —
+`Publish func(project, line Line)`. Серверный `logBroker` стал тонким адаптером,
+публикующим строки в хаб (`logMessage`). Тесты: перенесены
+`server/logbroker_test.go` → `application/logtail/tail_test.go` (package
+`logtail`, экспортированные имена, `recordingBroker`; добавлен
+`TestBrokerRunPublishesAndStops`); серверный `TestLogBrokerBroadcastPublishesNewLines`
+(WS-хаб) не менялся. Верификация: канонический набор зелёный (на живом прогоне
+чат-ассистентские флаки ушли — окружение вернулось), `-race` по
+`application/logtail` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3ab + narrative), `docs/00-overview/project-map.md` (новая строка
+`application/logtail/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3ab —
+ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

@@ -115,7 +115,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 сборка сводки доски для промпта ассистента (`BoardSummary`/
 `OrchestrationStatus`/`BoardRevisionLine`) вынесена в `application/chatassist`;
 срез **F3aa ✅** — кольцевой буфер логов рантайма вынесен из `server/applog.go` в
-`application/logs`. Остальное (git-flow хуки, остальная оркестрация, RAG-хуки)
+`application/logs`; срез **F3ab ✅** — инкрементальный хвост лог-файлов
+(позиция/remainder/отпечаток, ротация, рескан) вынесен из `server/logbroker.go` в
+новый пакет `application/logtail` (порт `Publish func(project, line)`). Остальное (git-flow хуки, остальная оркестрация, RAG-хуки)
 — в плане; разбивка в разделе «Этап 6» ниже.
 
 ## Проблема
@@ -606,6 +608,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3y | Read-model доски: сборка упорядоченного снимка (`View` — эпики в эффективном порядке очереди через `infrastructure/board.SortEpics`, задачи, баги, meta), пагинация со счётчиками (`ViewPage`/`SlicePage`), `TruncateText`, типы `Snapshot`/`Total` вынесены из `server/session.go` в новый пакет `application/board` (`view.go`, порт `Store`); `server` оставил `boardSnapshot` (встраивает `appboard.Snapshot` + `Git *gitView`) и тонкие обёртки | ✅ |
 | F3z | Детерминированная сборка сводки доски для промпта чат-ассистента (`BoardSummary` — исходная задача/эпики/задачи по статусам + в работе/конфликты мёрджа/баги, `OrchestrationStatus`, `BoardRevisionLine`, тип `BoardView`) вынесена из `server/chatassist.go` (`chatPromptFor`) в `application/chatassist` (`boardprompt.go`); `server` оставил чтение рантайма сессии, вызов `boardView`, fallback «Kanban-доска недоступна» и дайджест логов | ✅ |
 | F3aa | Кольцевой буфер логов рантайма (`appLogBuffer`/`appLogLine`/`appLogBufferLines`/`appLogDefaultTail`/`appLogMaxTail`) вынесен из `server/applog.go` в `application/logs` (`RingBuffer`/`Line`/`BufferLines`/`DefaultTail`/`MaxTail`); `server` оставил адаптер `appLogBuffer` с методами `push`/`tail`/`takeDirty` | ✅ |
+| F3ab | Инкрементальный хвост лог-файлов проектов (`Broker`: позиция/remainder/отпечаток начала, детекция ротации — усечение/copytruncate или подмена содержимого, идемпотентная подписка, рескан новых файлов, `Run`/`Subscribe`/`Broadcast`/`Rescan`, `ListLogFiles`, `SubFile.OpenAtEnd`/`OpenFromStart`/`Rotated`/`ReadNew`/`Close`, `Line`) вынесен из `server/logbroker.go` в новый пакет `application/logtail` (порт `Publish func(project, line Line)`); `server/logbroker.go` оставил адаптер, публикующий строки в хаб | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -1003,6 +1006,18 @@ approve, отказ, отмена контекста → `Reset`, останов
 тестов `TestChatAssistant*` на живом прогоне; на изоляции и на более старых
 коммитах стабильно падают), `-race` по `application/logs` чист, `gofmt` чист.
 Доки: `project-map.md`.
+
+**F3ab ✅** — инкрементальный хвост лог-файлов вынесен из `server/logbroker.go`
+в `application/logtail/tail.go`: `Broker` (`Run`/`Subscribe`/`Broadcast`/`Rescan`),
+`SubFile` (`OpenAtEnd`/`OpenFromStart`/`Rotated`/`ReadNew`/`Close`), `Line`,
+`ListLogFiles`, константы `ScanEvery`/`HeadLen`/`TickInterval`; порт —
+`Publish func(project, line Line)`. Серверный `logBroker` стал тонким адаптером,
+публикующим строки в хаб (`logMessage`). Тесты: перенесены
+`server/logbroker_test.go` → `application/logtail/tail_test.go` (package
+`logtail`, экспортированные имена, `recordingBroker`; добавлен
+`TestBrokerRunPublishesAndStops`); серверный `TestLogBrokerBroadcastPublishesNewLines`
+( WS-хаб) не менялся. Верификация: канонический набор зелёный, `-race` по
+`application/logtail` чист, `gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
 
