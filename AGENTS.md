@@ -535,7 +535,7 @@ mutex) с `List` (копия наружу), `Add`, `Upsert` (перезапис�
 чист. Документация: план (шапка + таблица F3u + narrative),
 `docs/00-overview/project-map.md` (строка `domain/` расширена `injectionset.go`).
 Остаток Этапа 6 — F3+: HITL-гейт и read-model доски в `server/session.go`,
-`chatassist`/`actions`/`server`. Коммит F3u — ниже.
+`chatassist`/`actions`/`server`. Коммит F3u `ddae990`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
