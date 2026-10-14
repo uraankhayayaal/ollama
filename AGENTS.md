@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3t — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3u — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -516,6 +516,26 @@ session.go` (оркестрация/HITL/событийность), `chatassist`
 (`refreshRagIndex*`/`syncAgentBranchAsync`/`afterMainChanged`), `server/
 session.go` (оркестрация/HITL/событийность), `chatassist`/`actions`/`server`.
 Коммит F3t `eeea0a5`.
+
+Срез **F3u** — набор сессионных промпт-инъекций вынесен из `server/session.go` в
+`domain` (`injectionset.go`): `InjectionSet` (потокобезопасный, под собственным
+mutex) с `List` (копия наружу), `Add`, `Upsert` (перезапись записи с тем же ID —
+повторная запись правит, а не плодит дубли; пустой ID → ошибка) и `Remove`
+(честный признак наличия). `Session` делегирует
+`SessionInjections`/`AddSessionInjection`/`UpsertSessionInjection`/
+`RemoveSessionInjection` через ленивый `injections()` (набор создаётся при первом
+обращении) — нулевая `Session` (её собирают тесты) остаётся работоспособной.
+Поле `sessionInjections` сменило тип `[]board.Injection` → `*domain.InjectionSet`.
+Тесты: новые герметичные `domain/injectionset_test.go` (пустой набор → nil, копия
+не мутирует набор, upsert-добавление/перезапись без дубля, удаление/отсутствие);
+серверный `TestSessionInjectionHotApply` (идёт через `Session`) не менялся.
+Верификация: канонический набор зелёный (28 пакетов; один прогон упал на
+пред-существующем флаке `TestChatAssistantRejectBranchAfterConfirm` — в изоляции
+и на повторе `./server/` зелёный), `-race` по `domain` чист, `gofmt` по правкам
+чист. Документация: план (шапка + таблица F3u + narrative),
+`docs/00-overview/project-map.md` (строка `domain/` расширена `injectionset.go`).
+Остаток Этапа 6 — F3+: HITL-гейт и read-model доски в `server/session.go`,
+`chatassist`/`actions`/`server`. Коммит F3u — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

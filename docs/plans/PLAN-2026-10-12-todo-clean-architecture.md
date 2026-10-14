@@ -100,7 +100,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`) вынесена
 из `server/ragref.go` в `application/rag` (порт `SyncSink`); срез **F3t ✅** —
 конкретные фоновые прогоны индексации (`RefJob`/`RefDiffJob`/`DirJob`) вынесены
-из `server/ragref.go`/`server/ragindex.go` в `application/rag` (`jobs.go`).
+из `server/ragref.go`/`server/ragindex.go` в `application/rag` (`jobs.go`);
+срез **F3u ✅** — набор сессионных промпт-инъекций (`InjectionSet`) вынесен из
+`server/session.go` в `domain`.
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -585,6 +587,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3r | Жизненный цикл worktree задачи/эпика (`TaskWorktree` — создание worktree задачи + rebase на эпик + сабмодули, `EpicWorktree` — ленивый worktree релизной ветки эпика, `DropEpicWorktreeLocked` — снятие worktree эпика) вынесен из `server/gitflow_auto.go` в `application/gitflow` (`WorktreeManager`, порт `WorktreeHost`); `server` оставил адаптер `worktreeHost` и тонкие обёртки | ✅ |
 | F3s | Политика синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`: пропуск при грязном дереве/занятом checkout, откат конфликтного merge, признак сдвига HEAD) вынесена из `server/ragref.go` в `application/rag` (`WorkingCopySyncer`, порт `SyncSink`, `sync.go`); `server` оставил адаптер `syncSink` и тонкую обёртку | ✅ |
 | F3t | Конкретные фоновые прогоны индексации RAG (`RefJob` — содержимое ветки по ref, `RefDiffJob` — изменения ветки относительно базы, `DirJob` — каталог под его веткой; загрузка снапшота + пропуск актуального индекса + отчёт) вынесены из `server/ragref.go`/`server/ragindex.go` в `application/rag` (`jobs.go`); `server` оставил адаптеры загрузчиков/фабрики и тонкие обёртки `Index*Background` | ✅ |
+| F3u | Набор сессионных промпт-инъекций (`SessionInjections`/`Add`/`Upsert`/`Remove`: адресация по ID, честный признак удаления, потокобезопасная копия) вынесен из `server/session.go` в `domain` (`InjectionSet`, `injectionset.go`); `Session` делегирует и лениво создаёт набор (нулевая сессия работоспособна) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -874,6 +877,19 @@ worktree add`, worktree эпика — существующий/создание
 полный прогон/пропуск/ошибка загрузчика, `RefDiffJob`, `DirJob`). Верификация:
 канонический набор зелёный (28 пакетов), `-race` по `application/rag` чист,
 `gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3u ✅** — набор сессионных промпт-инъекций вынесен из `server/session.go` в
+`domain` (`injectionset.go`): `InjectionSet` (потокобезопасный, под mutex) с
+методами `List` (копия), `Add`, `Upsert` (перезапись по ID, пустой ID — ошибка)
+и `Remove` (честный признак наличия). `Session` делегирует
+`SessionInjections`/`AddSessionInjection`/`UpsertSessionInjection`/
+`RemoveSessionInjection` через ленивый `injections()` — нулевая сессия (тесты)
+остаётся работоспособной. Тесты: новые герметичные `domain/injectionset_test.go`
+(пустой набор, копия, upsert-добавление/перезапись, удаление/отсутствие); серверный
+`TestSessionInjectionHotApply` (через `Session`) не менялся. Верификация:
+канонический набор зелёный (28 пакетов; один прогон упал на пред-существующем
+флаке `TestChatAssistantRejectBranchAfterConfirm` — в изоляции зелёный), `-race`
+по `domain` чист, `gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
 
