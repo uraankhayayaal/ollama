@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F2 — `server` → `application/usecases`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3a — `server` → `application/usecases`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -31,8 +31,24 @@ cooldown); `server/actions_logs.go` зовёт `logpkg.TruncateLogText`;
 `server/chatassist.go` не трогались). Документация: раздел «Этап 6» и шапка
 плана (`PLAN-2026-10-12`), `docs/20-features/chat-assistant.md` (путь
 `buildLogDigest` → `domain/log`), `docs/00-overview/project-map.md` (новая
-секция `domain/`/`application/`). Остаток Этапа 6 — F3+: git-flow хуки,
-сессии/оркестрация, RAG-хуки. Коммита нет (спросить пользователя).
+секция `domain/`/`application/`).
+
+Срез **F3a** — гард «phantom done» (`board.Store.TaskDoneGuard`, инцидент
+FEL-04) вынесен из `server/` в `application/usecases/doneguard.go`:
+`GuardTaskDone` + `IsOrchestratorArtifact`, порт
+`DoneGuardSource{IsGitProject; TaskBranch; EpicBase; CommitsAhead; DirtyPaths;
+Warn}`. `server/gitflow_done_guard.go` стал адаптером (`doneGuardSource` поверх
+`reg`/`repoOf`/`worktreeWorkPaths`, env `KANBAN_DONE_REQUIRES_COMMIT`); гард
+по-прежнему внедряется в `attachGitHooks` и зовётся через тонкий
+`s.guardTaskDone`. Тесты: новые герметичные
+`application/usecases/doneguard_test.go` (заглушка источника; пустая задача
+блокируется, коммит/правки/выключение пропускают, ошибка git → warn+разрешение,
+таблица артефактов); серверные интеграционные
+`server/gitflow_done_guard_test.go` не менялись и проходят через адаптер.
+Верификация: канонический набор зелёный, `-race` по новым тестам чист, `gofmt`
+по правкам чист. План обновлён (таблица срезов + шапка). Остаток Этапа 6 —
+F3+: остальные git-flow хуки, сессии/оркестрация, RAG-хуки. Коммита нет
+(спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

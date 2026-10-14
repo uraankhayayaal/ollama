@@ -1,28 +1,20 @@
 package server
 
-// Гард «phantom done» (Ф-6, инцидент mytrip/FEL-04).
+// Гард «phantom done» (Ф-6, инцидент mytrip/FEL-04): перед переводом задачи в
+// done проверяем, что работа реально есть (свои коммиты в ветке задачи или
+// правки в worktree). Статус done терминален, поэтому fallback оркестратора не
+// должен закрывать пустую задачу.
 //
-// Что произошло: задача FEL-04 ни разу не запускала разработчика по делу,
-// её ветка осталась на коммите предыдущей задачи, worktree был чистым — но
-// fallback оркестратора («в работе → выполнена (агент не сменил статус)»)
-// перевёл её в done. В итоге доска показывала «выполнено», MR был пустым,
-// а эпик ждал работу, которой не было. Статус done терминальный: откатить
-// такой финал без ручного вмешательства нельзя, поэтому проверять надо ДО
-// перехода.
-//
-// Правило: задача git-проекта не может стать done, пока в её ветке нет
-// ни одного своего коммита относительно базы эпика И worktree не содержит
-// незакоммиченных правок. Любой из двух признаков означает, что работа была.
-// Ошибки git считаем «нет доказательств» только когда ветка существует;
-// если ветки нет (задача без git-flow) — проверка не применяется.
+// Само правило живёт в application/usecases (GuardTaskDone, Этап 6); здесь —
+// адаптер DoneGuardSource поверх реестра проектов и git.Repo, env-флаг
+// KANBAN_DONE_REQUIRES_COMMIT и внедрение гарда в board.Store.
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"ai/application/usecases"
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/logging"
@@ -47,55 +39,52 @@ func doneRequiresCommitEnabled() bool {
 // guardTaskDone — проверка перед переводом задачи в done. Внедряется в
 // board.Store.TaskDoneGuard. Не git-проект или гард выключен — пропускает.
 func (s *Server) guardTaskDone(ctx context.Context, project string, t *board.Task) error {
-	if t == nil || t.TaskID == "" || !doneRequiresCommitEnabled() {
-		return nil
+	return usecases.GuardTaskDone(ctx, doneGuardSource{s: s}, doneRequiresCommitEnabled(), project, t)
+}
+
+// doneGuardSource — адаптер usecases.DoneGuardSource поверх сервера: реестр
+// проектов, реестр веток и git.Repo проекта.
+type doneGuardSource struct{ s *Server }
+
+func (src doneGuardSource) IsGitProject(project string) bool {
+	inf, err := src.s.reg.Get(project)
+	return err == nil && inf.Kind == workspace.KindGit
+}
+
+func (src doneGuardSource) TaskBranch(project, taskID string) (string, bool) {
+	ref, err := src.s.reg.TaskBranch(project, taskID)
+	if err != nil || strings.TrimSpace(ref.Branch) == "" {
+		return "", false
 	}
-	inf, err := s.reg.Get(project)
-	if err != nil || inf.Kind != workspace.KindGit {
-		return nil
-	}
-	taskRef, err := s.reg.TaskBranch(project, t.TaskID)
+	return ref.Branch, true
+}
+
+func (src doneGuardSource) EpicBase(project, epicID string) string {
+	inf, err := src.s.reg.Get(project)
 	if err != nil {
-		// Ветки задачи нет — не наша забота: done у задачи без ветки
-		// легально (аналитика, решение), гард не блокирует.
-		return nil
+		return ""
 	}
 	base := inf.GitBase
-	if epicRef, eerr := s.reg.EpicBranch(project, t.EpicID); eerr == nil && strings.TrimSpace(epicRef.Branch) != "" {
-		base = epicRef.Branch
+	if ref, eerr := src.s.reg.EpicBranch(project, epicID); eerr == nil && strings.TrimSpace(ref.Branch) != "" {
+		base = ref.Branch
 	}
+	return base
+}
 
-	repo, err := s.repoOf(ctx, project)
+func (src doneGuardSource) CommitsAhead(ctx context.Context, project, base, branch string) (int, error) {
+	repo, err := src.s.repoOf(ctx, project)
 	if err != nil {
-		return nil
+		return 0, err
 	}
+	return repo.CountCommits(ctx, base, branch)
+}
 
-	// Признак 1: в worktree есть незакоммиченные правки агента — работа велась,
-	// авто-коммит при done её зафиксирует. Служебные файлы оркестратора
-	// (.gitignore, который сам пишет ensureTaskGitignore) доказательством
-	// работы не считаются, иначе гард был бы слепым.
-	if paths, derr := s.worktreeWorkPaths(ctx, project, t.TaskID); derr == nil {
-		for _, p := range paths {
-			if !isOrchestratorArtifact(p) {
-				return nil
-			}
-		}
-	}
+func (src doneGuardSource) DirtyPaths(ctx context.Context, project, taskID string) ([]string, error) {
+	return src.s.worktreeWorkPaths(ctx, project, taskID)
+}
 
-	// Признак 2: ветка задачи ушла от базы эпика.
-	n, cerr := repo.CountCommits(ctx, base, taskRef.Branch)
-	if cerr != nil {
-		// Не смогли доказать, что работа была, — но и не смогли доказать,
-		// что её не было: блокировать переход человека опасно, логируем.
-		logging.For(project).Warnf("[гард done] задача %s: не удалось посчитать коммиты (%s..%s): %v — переход разрешён",
-			t.TaskID, base, taskRef.Branch, cerr)
-		return nil
-	}
-	if n > 0 {
-		return nil
-	}
-	return fmt.Errorf("задача %s не может стать выполненной: в ветке %s нет ни одного коммита относительно %s, и worktree пуст — работа фактически не сделана (инцидент FEL-04). Запусти задачу в работу или закрой её как отменённую; если задача закрывается без кода — KANBAN_DONE_REQUIRES_COMMIT=0",
-		t.TaskID, taskRef.Branch, base)
+func (src doneGuardSource) Warn(project, format string, args ...any) {
+	logging.For(project).Warnf(format, args...)
 }
 
 // worktreeWorkPaths — пути незакоммиченных изменений в worktree ветки задачи.
@@ -114,15 +103,4 @@ func (s *Server) worktreeWorkPaths(ctx context.Context, project, taskID string) 
 		return nil, nil // worktree нет
 	}
 	return git.RepoFromState(s.gitExec, dir, "", "", "").DirtyPaths(ctx)
-}
-
-// isOrchestratorArtifact — служебные пути, которые кладёт сам оркестратор.
-// Неизменённый .gitignore, добавленный при создании worktree задачи, не должен
-// превращать пустую задачу в «выполненную» (инцидент FEL-04).
-func isOrchestratorArtifact(path string) bool {
-	p := filepath.ToSlash(strings.TrimSpace(path))
-	if p == "" {
-		return true
-	}
-	return p == gitIgnoreFileName || strings.HasSuffix(p, "/"+gitIgnoreFileName)
 }

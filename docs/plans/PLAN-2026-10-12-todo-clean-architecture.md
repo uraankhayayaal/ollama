@@ -51,8 +51,10 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 прогноз токенов (`NewTokenEstimator`) вынесены из `server/` в
 `application/usecases`; срез **F2 ✅** — детерминированная обработка логов
 вынесена в новый пакет `domain/log` (stdlib-only), `server/loganalysis.go`
-оставляет только чтение файлов и сборку промпта. Остальное (git-flow хуки,
-сессии/оркестрация, RAG-хуки) — в плане; разбивка в разделе «Этап 6» ниже.
+оставляет только чтение файлов и сборку промпта; срез **F3a ✅** — гард
+«phantom done» (`GuardTaskDone`) вынесен в `application/usecases` с портом
+`DoneGuardSource`. Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
+плане; разбивка в разделе «Этап 6» ниже.
 
 ## Проблема
 
@@ -515,6 +517,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 |---|---|---|
 | F1 | Ручной откат задачи и прогноз токенов вынесены из `server/` в `application/usecases` (`rollback.go`, `tokenestimate.go`); `server/taskrollback.go`/`tokenestimate.go` стали тонкими обёртками | ✅ |
 | F2 | Детерминированная обработка логов вынесена из `server/` в `domain/log` (разбор строк/уровней/стека, шаблонизация, `BuildLogDigest`, `MergeLogFindings`, фильтры, `TruncateLogText`); `server/loganalysis.go` читает файлы и собирает промпт | ✅ |
+| F3a | Гард «phantom done» (`board.Store.TaskDoneGuard`) вынесен из `server/` в `application/usecases` (порт `DoneGuardSource`); `server/gitflow_done_guard.go` — адаптер | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -531,6 +534,15 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 импортирует `logpkg "ai/domain/log"` и держит только чтение файлов, выборку,
 промпт (`LogDigestPrompt`) и cooldown; временный shim `server/logdigest.go`
 удалён. Канонический набор зелёный, `-race` по `domain/log` чист.
+**F3a ✅** — правило гарда «phantom done» (`GuardTaskDone`/`IsOrchestratorArtifact`,
+порт `DoneGuardSource`: `IsGitProject`/`TaskBranch`/`EpicBase`/`CommitsAhead`/
+`DirtyPaths`/`Warn`) в `application/usecases/doneguard.go`, покрыто
+unit-тестами `doneguard_test.go` (герметичная заглушка источника, без git);
+`server/gitflow_done_guard.go` — адаптер `DoneGuardSource` поверх реестра и
+`git.Repo` + env-флаг `KANBAN_DONE_REQUIRES_COMMIT` и внедрение в
+`board.Store.TaskDoneGuard` (в `attachGitHooks`); серверные интеграционные
+тесты гарда (`server/gitflow_done_guard_test.go`) ходят через адаптер и
+проходят без правок.
 
 ## Ключевые решения
 
