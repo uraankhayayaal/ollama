@@ -2,7 +2,6 @@ package board
 
 import (
 	"context"
-	"encoding/json"
 
 	"ai/domain"
 )
@@ -23,17 +22,7 @@ type Comments = domain.Comments
 
 // DecodeComments decodes JSON comments.
 func DecodeComments(data []byte) (Comments, error) {
-	if len(data) == 0 {
-		return nil, nil
-	}
-	var cs Comments
-	if err := json.Unmarshal(data, &cs); err != nil {
-		return nil, err
-	}
-	for i := range cs {
-		cs[i].Normalize()
-	}
-	return cs, nil
+	return domain.DecodeComments(data)
 }
 
 // ---- Контекст комментариев ----

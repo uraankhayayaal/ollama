@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 — каркас `infrastructure/`)
+## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a — каркас `infrastructure/`)
 
 Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы
 E1–E6 (таблица в разделе «Этап 4» плана). Срез **E1** закрыт: создан каталог
@@ -57,8 +57,12 @@ tokens, tools/*, main.go и харнессы). Правка чисто меха�
 `tokens-and-metrics.md`, `adding-a-feature.md`, `development.md`, `testing.md`,
 `troubleshooting.md`).
 
-Остался срез Этапа 4 — E6 (разбиение `tools/` по доменам и перевод на
-`domain/services`). Верификация: канонический набор (в него добавлен
+Остался срез Этапа 4 — E6 (перевести `tools/` на `domain/services` и разбить
+пакет по доменам); он разбит на под-срезы E6a–E6e. **E6a** закрыт: `tools`
+(non-test) больше не импортирует `ai/infrastructure/board` — `DecodeComments`
+перенесён в `domain` (`domain/comment.go`), `board.DecodeComments` делегирует,
+`tools/board_tools.go` берёт `domain.{ErrExists,DecodeInjections,ValidateInjections,
+DecodeComments}`. Верификация: канонический набор (в него добавлен
 `./infrastructure/...`, убраны `./sandbox/` и `./board/`) зелёный, `-race` по
 `infrastructure/{llm,rag,git,sandbox}` чист, `gofmt -l` по своим файлам чист.
 Документация: раздел «Этап 4» + шапка плана, пути `models/` →
@@ -71,8 +75,8 @@ tokens, tools/*, main.go и харнессы). Правка чисто меха�
 `configuration.md`, `installation.md`, `quickstart.md`, `infrastructure.md`,
 `makefile-contract.md`, `troubleshooting.md`, `adding-a-feature.md`,
 `development.md`, `testing.md`), канонический набор и примечание в этом файле.
-Коммиты E1 (`4279c9f`), E2 (`2e71139`), E3 (`3e01f8f`), E4 (`ab39ad6`) сделаны;
-E5 — коммитится следом.
+Коммиты E1 (`4279c9f`), E2 (`2e71139`), E3 (`3e01f8f`), E4 (`ab39ad6`),
+E5 (`91ca525`) сделаны; E6a — коммитится следом.
 
 ## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
 

@@ -41,7 +41,9 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 канонических типов домена, поэтому `*LocalWorkspace`/`*DockerWorkspace`
 реализуют порт напрямую (assertion в `infrastructure/sandbox/port.go`). Срез
 **E5 ✅** — `board` → `infrastructure/board` (пакет `board`), 75 импортёров на
-`ai/infrastructure/board`.
+`ai/infrastructure/board`. Срез **E6** разбит на под-срезы (E6a…E6e, таблица
+ниже); **E6a ✅** — `tools/` больше не импортирует `ai/infrastructure/board`
+(переведён на `domain`).
 Разбивка этапа на срезы E1–E6 — в разделе «Этап 4» ниже.
 
 ## Проблема
@@ -311,7 +313,18 @@ infrastructure/   — реализации (llm, rag, git, sandbox, board)
 | **E3** | `gitops` → `infrastructure/git` (пакет `git`), порт `services.GitOperations` реализуется `*git.Repo` напрямую | ✅ |
 | **E4** | `sandbox` → `infrastructure/sandbox` (пакет `sandbox`), порт `services.SandboxWorkspace` реализуется `*LocalWorkspace`/`*DockerWorkspace` напрямую через alias типов домена | ✅ |
 | **E5** | `board` → `infrastructure/board` (самый крупный: ~75 импортёров) | ✅ |
-| **E6** | Разбить `tools/` по доменам (`tools/lsp`, fileops/git/rag/board-подпакеты) и перевести их на `domain/services` вместо прямых импортов `ai/board`/`ai/rag`/`ai/sandbox`/`ai/infrastructure/git` | ⏳ |
+| **E6** | Разбить `tools/` по доменам (`tools/lsp`, fileops/git/rag/board-подпакеты) и перевести их на `domain/services` вместо прямых импортов `ai/board`/`ai/rag`/`ai/sandbox`/`ai/infrastructure/git` — разбит на под-срезы E6a…E6e (ниже) | 🔄 (E6a ✅) |
+
+Под-срезы E6 (tools тесно связан сам с собой: `FileOps` несёт методы LSP,
+`sandbox`, RAG, поэтому «разбить одним куском» нельзя):
+
+| Под-срез | Что | Статус |
+|---|---|---|
+| **E6a** | `tools/` → `domain` вместо `ai/infrastructure/board`: `ErrExists`/`DecodeInjections`/`ValidateInjections` — из `domain` (уже были алиасами), `DecodeComments` перенесён в `domain` (`domain/comment.go`), `board.DecodeComments` делегирует. `tools` (non-test) больше не импортирует `infrastructure/board` | ✅ |
+| **E6b** | `tools/` (codesearch/ragstatus) → `domain/services` вместо `ai/infrastructure/rag`. Требует вынести рабочий RAG-контракт (`Searcher`, `SearchParams`, `SearchResult`, `Search`, `IsUnavailable`, `UnavailableError`, `DetectBranch`/`MainBranch`, лимиты) в `domain/services` — иначе под-пакет `tools/rag` продолжит зависеть от инфраструктуры | ⏳ |
+| **E6c** | `tools/` (sandbox/destructive/fileops) → `services.SandboxWorkspace`/`SandboxResult` (alias'ы E4) там, где возможно; пакетные функции (`Config`/`LoadConfig`/`EnsureImage`/`DetectStack`/`BaseEnv`…) остаются у `infrastructure/sandbox` → под-пакет `tools/sandbox` | ⏳ |
+| **E6d** | `tools/gitresolve`/`tool.go` → `services.GitOperations`; `git.Executor`/`CLIExecutor`/`RepoFromState`/`TrivialResolve`/`HasConflictMarkers` в порт не входят → под-пакет `tools/git` | ⏳ |
+| **E6e** | Собственно разбиение `tools/` на под-пакеты (`tools/lsp`, `tools/rag`, `tools/sandbox`, `tools/git`, …) с инверсией зависимости от `FileOps` (интерфейс `Runner`/`Project` в под-пакете, методы `FileOps` делегируют) | ⏳ |
 
 **E1 ✅ (каркас `infrastructure/`, `models` → `infrastructure/llm`).**
 `git mv models infrastructure/llm`, пакет переименован `models` → `llm`;
@@ -404,6 +417,18 @@ Stderr, ExitCode, TimedOut, ExitErr}`. Чтобы обойтись без ада
 `board/` → `infrastructure/board/`. Верификация: канонический набор зелёный
 (`./application/planner` и `./infrastructure/board` — ok), `gofmt` по своим
 файлам чист.
+
+**E6a ✅ (`tools/` → `domain` вместо `ai/infrastructure/board`).** `tools` уже
+работал с доской через порт `services.BoardStore`, а единственной связью с
+`infrastructure/board` были `ErrExists`/`DecodeInjections`/`ValidateInjections`
+(уже алиасы/обёртки `domain`) и `DecodeComments`. Перенесён `DecodeComments` в
+`domain` (`domain/comment.go` — `func DecodeComments([]byte) (Comments, error)`),
+`board.DecodeComments` стал делегатом (`infrastructure/board/comment.go`,
+удалён неиспользуемый импорт `encoding/json`), а `tools/board_tools.go` вызывает
+`domain.{ErrExists,DecodeInjections,ValidateInjections,DecodeComments}` и больше
+не импортирует `ai/infrastructure/board` (тесты `tools/board_*_test.go` по-прежнему
+поднимают реальный store — это только тестовый бинарник). Верификация:
+`./tools`, `./domain`, `./infrastructure/board`, `./server` зелёные.
 
 ### Этап 5: Рефакторинг агентов
 

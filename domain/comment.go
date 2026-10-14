@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -84,6 +85,21 @@ type Comments []Comment
 func (cs Comments) Len() int           { return len(cs) }
 func (cs Comments) Swap(i, j int)      { cs[i], cs[j] = cs[j], cs[i] }
 func (cs Comments) Less(i, j int) bool { return cs[i].CreatedAt.Before(cs[j].CreatedAt) }
+
+// DecodeComments разбирает JSON-комментарии и нормализует их.
+func DecodeComments(data []byte) (Comments, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var cs Comments
+	if err := json.Unmarshal(data, &cs); err != nil {
+		return nil, err
+	}
+	for i := range cs {
+		cs[i].Normalize()
+	}
+	return cs, nil
+}
 
 // ---- Контекст комментариев ----
 

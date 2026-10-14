@@ -6,7 +6,6 @@ package tools
 // Единый источник определений — реестр (registry.go) и этот файл.
 
 import (
-	"ai/infrastructure/board"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/logging"
@@ -413,7 +412,7 @@ func (t *boardCreateEpicTool) Execute(args map[string]any) ([]byte, error) {
 		RequiresReview: true, // Ф-8: каждый созданный эпик проходит обязательную ревизию архитектора.
 	}
 	if err := t.b.CreateEpic(ctx, epic); err != nil {
-		if errors.Is(err, board.ErrExists) {
+		if errors.Is(err, domain.ErrExists) {
 			// Подсказываем модели выход из тупика «ID уже занят»: проверить
 			// доску, взять другой ID или обновить существующий эпик. Без
 			// подсказки модель часто зацикливается, повторно создавая те же
@@ -747,11 +746,11 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 	// уже идущему циклу), поэтому применять их нужно осознанно.
 	injectionsChanged := false
 	if raw, ok := args["injections"]; ok {
-		list, err := board.DecodeInjections(raw)
+		list, err := domain.DecodeInjections(raw)
 		if err != nil {
 			return boardErr(BoardUpdateTask, fmt.Errorf("injections: %w", err))
 		}
-		if err := board.ValidateInjections(list); err != nil {
+		if err := domain.ValidateInjections(list); err != nil {
 			return boardErr(BoardUpdateTask, fmt.Errorf("injections: %w", err))
 		}
 		tk.Injections = make([]domain.Injection, len(list))
@@ -762,7 +761,7 @@ func (t *boardUpdateTaskTool) Execute(args map[string]any) ([]byte, error) {
 	}
 	commentsChanged := false
 	if raw, ok := args["comments"]; ok {
-		cms, err := board.DecodeComments(toCommentsRaw(raw))
+		cms, err := domain.DecodeComments(toCommentsRaw(raw))
 		if err != nil {
 			return boardErr(BoardUpdateTask, fmt.Errorf("comments: %w", err))
 		}
