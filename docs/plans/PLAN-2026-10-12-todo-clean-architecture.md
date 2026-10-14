@@ -65,7 +65,9 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 порт `EpicMainHost`) вынесен в `application/gitflow`; срез **F3g ✅** — политика
 ветвления (`Brancher`: создание/идемпотентный `EnsureBranch`, авто-ветки эпика и
 задачи, снятие веток+MR при удалении эпика) вынесена в `application/gitflow`
-(порты `BranchRepo`/`BranchRegistry`).
+(порты `BranchRepo`/`BranchRegistry`); срез **F3h ✅** — политика вливания ветки
+задачи в релиз эпика (`TaskMerger.MergeTaskBranch`) вынесена в
+`application/gitflow` (порт `MergeTaskHost`).
 Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -537,6 +539,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3e | Авто-шаги завершения задачи (`TaskFinalizer.Finalize`: авто-коммит worktree → авто-MR → мёрдж в релиз эпика → снятие worktree) вынесены в `application/gitflow` (порт `TaskFinalizerHost`) | ✅ |
 | F3f | Авто-синхрон релизной ветки эпика с main (`EpicMainSyncer`: быстрый путь MergeFeature / авто-резолв тривиальных конфликтов / LLM-резолв сложных) вынесен в `application/gitflow` (порт `EpicMainHost`) | ✅ |
 | F3g | Политика ветвления (`Brancher`: `EnsureBranch`/`CreateEpicBranch`/`CreateTaskBranch`/`AutoCreateEpicBranch`/`AutoCreateTaskBranch`/`RemoveEpicBranches`, `ErrEpicBranchMissing`/`ErrBranchCreate`) вынесена в `application/gitflow` (порты `BranchRepo`/`BranchRegistry`) | ✅ |
+| F3h | Политика вливания ветки задачи в релиз эпика (`TaskMerger.MergeTaskBranch`: проверка проекта/веток, снятие worktree эпика, `MergeFeature` под локом, инвалидация диффов) вынесена в `application/gitflow` (порт `MergeTaskHost`) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -623,7 +626,17 @@ best-effort авто-ветки хуков, `RemoveEpicBranches` — сняти�
 удалена, хендлеры/хуки переведены на use-case с сохранением кодов (404/400/502/
 500). Герметичные тесты `branches_test.go` (создание/идемпотентность/пустая
 база/сбой git/ветка задачи от эпика/нет ветки эпика → `ErrEpicBranchMissing`/
-авто-хуки/снятие веток/`EnsureBranch`).
+авто-хуки/снятие веток/`EnsureBranch`). **F3h ✅** — политика вливания ветки задачи в релизную ветку
+эпика (`TaskMerger.MergeTaskBranch`) вынесена из `server/gitflow.go` в
+`application/gitflow/release.go`: проверка `t`/эпика/проекта (`MergeProject`:
+`IsGit`/`Kind`/`Base`/`PushURL`), недостающих веток эпика и задачи, снятие
+worktree эпика (`DropEpicWorktreeLocked`), `MergeFeature` под пер-проектным
+локом (`Locked`) и инвалидация диффов на успехе. Порт `MergeTaskHost` +
+`MergeRepo`. `server/gitflow.go` оставил адаптер `mergeTaskHost` и тонкую
+обёртку `s.mergeTaskBranch`; HTTP-хендлер/ассистент/finalizer (три потребителя)
+не менялись. Герметичные тесты `release_test.go` (успех с проверкой аргументов
+слияния, nil/без эпика, не-git/нет проекта/нет репозитория, нет веток,
+конфликт не инвалидирует диффы).
 
 ## Ключевые решения
 

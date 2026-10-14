@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3g — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3h — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -187,6 +187,26 @@ gitflow.go` оставил адаптер `branchRegistry` поверх `*worksp
 Остаток Этапа 6 — F3+: `gitflow.go` (releaseEpic/mergeTaskBranch),
 `gitflow_resolve.go`, сессии/оркестрация, RAG-хуки. Коммита нет (спросить
 пользователя).
+
+Срез **F3h** — политика вливания ветки задачи в релизную ветку эпика
+(`TaskMerger.MergeTaskBranch`) вынесена из `server/gitflow.go` в
+`application/gitflow/release.go`: проверка задачи/эпика/проекта (порт
+`MergeProject`: `IsGit`/`Kind`/`Base`/`PushURL`), недостающих веток эпика и
+задачи, снятие worktree эпика (`DropEpicWorktreeLocked` — 4.1: архитектор держит
+релизную ветку checked-out), `MergeFeature` под пер-проектным локом (`Locked`) и
+инвалидация диффов на успехе. Порт `MergeTaskHost` + `MergeRepo`
+(`MergeFeature`). `server/gitflow.go` оставил адаптер `mergeTaskHost` (поверх
+`reg`/`repoOf`/`mergeLock`/`dropEpicWorktreeLocked`/`invalidateDiffs`) и тонкую
+обёртку `s.mergeTaskBranch`; три потребителя (HTTP `handleMergeTask`, ассистент
+`Session.TaskMerge`, finalizer `gitflow_auto.go`) не менялись — `errors.As`
+`*git.MergeConflictError` и коды (409 conflicts / 400 прочее) сохранены. Тесты:
+новые герметичные `application/gitflow/release_test.go` (успех с проверкой
+аргументов слияния, nil/без эпика, не-git/нет проекта/нет репозитория, нет ветки
+эпика/задачи, конфликт не инвалидирует диффы). Верификация: канонический набор
+зелёный (26 пакетов), `-race` по `application/gitflow` чист, `gofmt` по правкам
+чист. Документация: план (шапка + таблица F3h), `docs/00-overview/project-map.md`.
+Остаток Этапа 6 — F3+: `gitflow.go` (`releaseEpic`), `gitflow_resolve.go`,
+сессии/оркестрация, RAG-хуки. Коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

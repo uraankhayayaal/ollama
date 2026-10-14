@@ -430,50 +430,62 @@ func (s *Server) epicBranch(project string, task *board.Task) string {
 	return ref.Branch
 }
 
-// mergeTaskBranch вливает ветку задачи в ветку её эпика (общая механика для
-// REST-эндпоинта и авто-хука done→merge). Возвращает результат слияния или
-// *git.MergeConflictError при конфликтах. Потокобезопасно: слияния проекта
-// сериализуются пер-проектным локом.
-func (s *Server) mergeTaskBranch(ctx context.Context, project string, t *board.Task) (*git.MergeResult, error) {
-	if t == nil || t.EpicID == "" {
-		return nil, fmt.Errorf("задача без эпика")
-	}
-	inf, err := s.reg.Get(project)
-	if err != nil {
-		return nil, fmt.Errorf("проект не найден: %v", err)
-	}
-	if inf.Kind != workspace.KindGit {
-		return nil, fmt.Errorf("мёрдж веток доступен только git-проектам (kind=%s)", inf.Kind)
-	}
-	repo, err := s.repoOf(ctx, project)
-	if err != nil {
-		return nil, err
-	}
-	epicRef, err := s.reg.EpicBranch(project, t.EpicID)
-	if err != nil {
-		return nil, fmt.Errorf("сначала создайте ветку эпика %s: %v", t.EpicID, err)
-	}
-	taskRef, err := s.reg.TaskBranch(project, t.TaskID)
-	if err != nil {
-		return nil, fmt.Errorf("сначала создайте ветку задачи %s: %v", t.TaskID, err)
-	}
+// mergeTaskHost — адаптер gitflow.MergeTaskHost поверх server (срез F3h).
+type mergeTaskHost struct {
+	s *Server
+}
 
-	lock := s.mergeLock(project)
+func (h mergeTaskHost) Project(project string) (gitflow.MergeProject, error) {
+	inf, err := h.s.reg.Get(project)
+	if err != nil {
+		return gitflow.MergeProject{}, err
+	}
+	return gitflow.MergeProject{
+		IsGit:   inf.Kind == workspace.KindGit,
+		Kind:    string(inf.Kind),
+		Base:    strings.TrimSpace(inf.GitBase),
+		PushURL: remotePushURL(inf),
+	}, nil
+}
+
+func (h mergeTaskHost) Repo(ctx context.Context, project string) (gitflow.MergeRepo, error) {
+	return h.s.repoOf(ctx, project)
+}
+
+func (h mergeTaskHost) EpicBranch(project, epicID string) (gitflow.BranchRef, error) {
+	ref, err := h.s.reg.EpicBranch(project, epicID)
+	if err != nil {
+		return gitflow.BranchRef{}, err
+	}
+	return gitflow.BranchRef{Branch: ref.Branch, Base: ref.Base}, nil
+}
+
+func (h mergeTaskHost) TaskBranch(project, taskID string) (gitflow.BranchRef, error) {
+	ref, err := h.s.reg.TaskBranch(project, taskID)
+	if err != nil {
+		return gitflow.BranchRef{}, err
+	}
+	return gitflow.BranchRef{Branch: ref.Branch, Base: ref.Base}, nil
+}
+
+func (h mergeTaskHost) Locked(project string, fn func()) {
+	lock := h.s.mergeLock(project)
 	lock.Lock()
 	defer lock.Unlock()
+	fn()
+}
 
-	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
-	// checked-out — MergeFeature не смог бы поставить её во временный worktree.
-	s.dropEpicWorktreeLocked(ctx, project, t.EpicID)
+func (h mergeTaskHost) DropEpicWorktreeLocked(ctx context.Context, project, epicID string) {
+	h.s.dropEpicWorktreeLocked(ctx, project, epicID)
+}
 
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, git.MergeFeatureOptions{
-		Message: fmt.Sprintf("задача %s: влитие в релиз эпика %s", t.TaskID, t.EpicID),
-		PushURL: remotePushURL(inf),
-	})
-	if err == nil {
-		s.invalidateDiffs(project)
-	}
-	return res, err
+func (h mergeTaskHost) InvalidateDiffs(project string) { h.s.invalidateDiffs(project) }
+
+// mergeTaskBranch вливает ветку задачи в ветку её эпика (общая механика для
+// REST-эндпоинта и авто-хука done→merge). Политика — в
+// application/gitflow.TaskMerger; адаптер — mergeTaskHost.
+func (s *Server) mergeTaskBranch(ctx context.Context, project string, t *board.Task) (*git.MergeResult, error) {
+	return gitflow.TaskMerger{Host: mergeTaskHost{s: s}}.MergeTaskBranch(ctx, project, t)
 }
 
 // remotePushURL выбирает URL push релизной ветки: токенизированный HTTPS-URL
