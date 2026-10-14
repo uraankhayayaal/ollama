@@ -467,7 +467,7 @@ worktree эпика — существующий/создание, снятие)
 `docs/00-overview/project-map.md` (строка `application/gitflow/` расширена
 `WorktreeManager`/`lifecycle.go`). Остаток Этапа 6 — F3+: RAG-хуки
 (`server/ragref.go`), `server/session.go` (оркестрация/HITL/событийность),
-`chatassist`/`actions`/`server`. Коммита нет (спросить пользователя).
+`chatassist`/`actions`/`server`. Коммит F3r `8346cfa`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
