@@ -23,9 +23,9 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
+	appask "ai/application/ask"
 	"ai/chat"
 	"ai/tools"
 )
@@ -98,7 +98,7 @@ func (t *askTool) Execute(args map[string]any) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), askAnswerTimeout)
 	defer cancel()
 
-	questions, err := parseAskQuestions(args)
+	questions, err := appask.ParseQuestions(args)
 	if err != nil {
 		return json.Marshal(map[string]any{"status": "error", "ask_user": "invalid_arguments", "message": err.Error()})
 	}
@@ -114,226 +114,32 @@ func (t *askTool) Execute(args map[string]any) ([]byte, error) {
 // (например, отвечает по умолчанию). Вопросы при этом остаются в истории чата.
 const askAnswerTimeout = 15 * time.Minute
 
-// parseAskQuestions извлекает пачку вопросов из аргументов инструмента.
-func parseAskQuestions(args map[string]any) ([]chat.AskQuestion, error) {
-	raw, ok := args["questions"]
-	if !ok {
-		return nil, fmt.Errorf("нет ключа questions")
-	}
-	items, ok := raw.([]any)
-	if !ok || len(items) == 0 {
-		return nil, fmt.Errorf("questions: нужен непустой массив")
-	}
-	seen := map[string]bool{}
-	qs := make([]chat.AskQuestion, 0, len(items))
-	for _, it := range items {
-		m, ok := it.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("questions: элемент не объект")
-		}
-		q := chat.AskQuestion{
-			ID:   strAny(m, "id"),
-			Text: strAny(m, "text"),
-		}
-		if q.ID == "" || q.Text == "" {
-			return nil, fmt.Errorf("questions: id и text обязательны")
-		}
-		if seen[q.ID] {
-			return nil, fmt.Errorf("questions: дубликат id %q", q.ID)
-		}
-		seen[q.ID] = true
-		switch chat.AskKind(strAny(m, "kind")) {
-		case chat.AskSingle, chat.AskMulti:
-			q.Kind = chat.AskKind(strAny(m, "kind"))
-		case "":
-			q.Kind = chat.AskSingle
-		default:
-			return nil, fmt.Errorf("questions[%s].kind: только single|multi", q.ID)
-		}
-		q.AllowCustom = boolAny(m, "allow_custom", true)
-		optsRaw, ok := m["options"].([]any)
-		if !ok || len(optsRaw) == 0 {
-			return nil, fmt.Errorf("questions[%s].options: нужен непустой массив", q.ID)
-		}
-		optsSeen := map[string]bool{}
-		for _, oi := range optsRaw {
-			om, ok := oi.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("questions[%s].options: элемент не объект", q.ID)
-			}
-			o := chat.AskOption{
-				ID:          strAny(om, "id"),
-				Label:       strAny(om, "label"),
-				Recommended: boolAny(om, "recommended", false),
-			}
-			if o.ID == "" || o.Label == "" {
-				return nil, fmt.Errorf("questions[%s].options: id и label обязательны", q.ID)
-			}
-			if optsSeen[o.ID] {
-				return nil, fmt.Errorf("questions[%s].options: дубликат id %q", q.ID, o.ID)
-			}
-			optsSeen[o.ID] = true
-			q.Options = append(q.Options, o)
-		}
-		qs = append(qs, q)
-	}
-	return qs, nil
-}
-
-// strAny/boolAny — безопасные чтения из разобранных аргументов инструмента.
-func strAny(m map[string]any, k string) string {
-	s, _ := m[k].(string)
-	return s
-}
-
-func boolAny(m map[string]any, k string, def bool) bool {
-	if v, ok := m[k].(bool); ok {
-		return v
-	}
-	return def
-}
-
 // --- реализация AskBackend на Session ---
 
-// pendingAsk — ожидающая ответа пачка вопросов (один активный вопрос на
-// сессию): askTool блокирует agendский цикл до ответа на все вопросы.
-type pendingAsk struct {
-	id        string
-	questions []chat.AskQuestion
-	answers   map[string]chat.AskAnswer // по question_id
-	resolved  chan []chat.AskAnswer     // буфер 1 — разблокировка AskUser
+// askAnnouncer — адаптер порта appask.Announcer поверх сессии: публикует
+// карточку-вардинг в чат, протокольную статус-строку в историю и лог.
+type askAnnouncer struct{ sess *Session }
+
+func (a askAnnouncer) Ask(ask chat.Ask) {
+	a.sess.appendMsg(chat.Message{Role: chat.RoleAsk, Agent: "assistant", Ask: &ask})
 }
 
-// AskUser публикует вопросы в чат (role=ask) и блокируется до ответа на все
-// из них. Один активный вопрос на сессию: повторный вызов при уже заданном —
-// ошибка (модель должна сначала дождаться ответа).
+func (a askAnnouncer) Status(msg string) {
+	a.sess.append(chat.RoleStatus, msg, "", "", nil)
+}
+
+func (a askAnnouncer) Info(msg string) {
+	a.sess.log.Infof("%s", msg)
+}
+
+// AskUser публикует вопросы в чат и блокируется до ответа на все из них
+// (делегирует состояние appask.Pending).
 func (sess *Session) AskUser(ctx context.Context, questions []chat.AskQuestion) ([]chat.AskAnswer, error) {
-	askID := fmt.Sprintf("ask-%d", time.Now().UnixMilli())
-
-	sess.mu.Lock()
-	if sess.pendingAsk != nil {
-		sess.mu.Unlock()
-		return nil, fmt.Errorf("уже задан вопрос %s — дождись ответа или отмени его", sess.pendingAsk.id)
-	}
-	p := &pendingAsk{
-		id:        askID,
-		questions: questions,
-		answers:   make(map[string]chat.AskAnswer),
-		resolved:  make(chan []chat.AskAnswer, 1),
-	}
-	sess.pendingAsk = p
-	sess.mu.Unlock()
-
-	// Публикуем вопрос в чат (role=ask, payload — пачка вопросов): фронт
-	// показывает карточку-вардин, WebSocket туда же доставит её live.
-	sess.appendMsg(chat.Message{Role: chat.RoleAsk, Agent: "assistant", Ask: &chat.Ask{ID: askID, Questions: questions}})
-	sess.log.Infof("assistant: задаёт вопрос %s (%d вопросов)", askID, len(questions))
-
-	select {
-	case ans := <-p.resolved:
-		return ans, nil
-	case <-ctx.Done():
-		sess.mu.Lock()
-		if sess.pendingAsk == p {
-			sess.pendingAsk = nil
-		}
-		sess.mu.Unlock()
-		return nil, ctx.Err()
-	}
+	return sess.pending.Ask(ctx, questions)
 }
 
 // AnswerAsk принимает ответ пользователя на один вопрос пачки. Возвращает
-// счётчик ответивших/всего. Когда отвечены все вопросы — передаёт ответы
-// разблокированному AskUser и помечает вопрос закрытым.
+// счётчик ответивших/всего; по последнему ответу разблокирует AskUser.
 func (sess *Session) AnswerAsk(askID, questionID string, selected []string, custom string) (int, int, error) {
-	sess.mu.Lock()
-	p := sess.pendingAsk
-	if p == nil || p.id != askID {
-		sess.mu.Unlock()
-		return 0, 0, fmt.Errorf("нет активного вопроса %s (может, уже отвечен или истёк по таймауту)", askID)
-	}
-	q := findAskQuestion(p.questions, questionID)
-	if q == nil {
-		sess.mu.Unlock()
-		return 0, 0, fmt.Errorf("вопрос %s не найден в пачке %s", questionID, askID)
-	}
-	// Выбранные варианты должны существовать (custom — отдельное поле).
-	for _, sid := range selected {
-		if !hasAskOption(q, sid) {
-			sess.mu.Unlock()
-			return 0, 0, fmt.Errorf("вариант %q не существует в вопросе %s", sid, questionID)
-		}
-	}
-	p.answers[questionID] = chat.AskAnswer{
-		QuestionID: questionID,
-		Selected:   selected,
-		Custom:     custom,
-	}
-	answered, total := len(p.answers), len(p.questions)
-	done := answered == total
-	if done {
-		sess.pendingAsk = nil
-	}
-	sess.mu.Unlock()
-
-	if done {
-		// Ответы в порядке вопросов — модель видит их так же, как задавала.
-		out := make([]chat.AskAnswer, 0, total)
-		for _, qq := range p.questions {
-			out = append(out, p.answers[qq.ID])
-		}
-		p.resolved <- out
-		sess.append(chat.RoleStatus, fmt.Sprintf("Получены ответы на %d вопрос(ов) ассистента: %s", total, summarizeAsk(p.questions, out)), "", "", nil)
-		sess.log.Infof("assistant: вопрос %s отвечен (%d/%d)", askID, answered, total)
-	} else {
-		sess.log.Infof("assistant: вопрос %s: получен ответ на %d/%d", askID, answered, total)
-	}
-	return answered, total, nil
-}
-
-// findAskQuestion ищет вопрос по id в пачке.
-func findAskQuestion(qs []chat.AskQuestion, id string) *chat.AskQuestion {
-	for i := range qs {
-		if qs[i].ID == id {
-			return &qs[i]
-		}
-	}
-	return nil
-}
-
-// hasAskOption сообщает, есть ли вариант с указанным id у вопроса.
-func hasAskOption(q *chat.AskQuestion, id string) bool {
-	for _, o := range q.Options {
-		if o.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-// summarizeAsk — компактный протокол ответов для status-строки истории чата.
-func summarizeAsk(qs []chat.AskQuestion, ans []chat.AskAnswer) string {
-	byQ := make(map[string]string, len(ans))
-	for _, a := range ans {
-		s := ""
-		for _, o := range findAskQuestion(qs, a.QuestionID).Options {
-			for _, sid := range a.Selected {
-				if o.ID == sid {
-					s += o.Label + ", "
-				}
-			}
-		}
-		if a.Custom != "" {
-			s += "свой ответ: " + a.Custom
-		}
-		if s == "" {
-			s = "без выбора"
-		}
-		byQ[a.QuestionID] = s
-	}
-	var b string
-	for _, q := range qs {
-		b += fmt.Sprintf("%s: %s; ", q.Text, byQ[q.ID])
-	}
-	return b
+	return sess.pending.Answer(askID, questionID, selected, custom)
 }

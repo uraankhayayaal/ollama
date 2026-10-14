@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ai/agents/architect"
+	appask "ai/application/ask"
 	"ai/application/planner"
 	apprag "ai/application/rag"
 	"ai/chat"
@@ -59,9 +60,9 @@ type Session struct {
 	// принять решение ДО того, как runner дошёл до затвора).
 	decide chan planner.GateDecision
 
-	// pendingAsk — активный структурированный вопрос ассистента (AskUser):
+	// pending — активный структурированный вопрос ассистента (AskUser):
 	// один на сессию, блокирует агентский цикл до ответа на все вопросы.
-	pendingAsk *pendingAsk
+	pending *appask.Pending
 
 	router *runevents.Router
 	// metrics — реестр телеметрии агентского цикла проекта (Ф-1). Подписан на
@@ -172,6 +173,9 @@ func (s *Server) newSession(project string) (*Session, error) {
 	// идут и в кольцевой буфер (UI/REST), и в шину (живая трансляция).
 	sess.appLog = &appLogBuffer{}
 	sess.registerAppLogSink(context.Background())
+	// Ф-1 «спроси пользователя»: состояние активного структурированного
+	// вопроса; публикация/статус/лог идут через адаптер askAnnouncer.
+	sess.pending = appask.NewPending(askAnnouncer{sess: sess})
 	// Ф-5/Р-2: оркестратор фоновой индексации RAG (single-flight по ветке,
 	// отчёты в лог/чат). Прогоны строит сервер (см. ragindex.go/ragref.go).
 	sess.bgIndex = apprag.NewBackgroundIndexer(project, ragIndexSink{sess: sess}, sess.newProjectIndexer)

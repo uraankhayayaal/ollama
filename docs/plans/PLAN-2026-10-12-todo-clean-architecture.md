@@ -84,7 +84,10 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 `application/gitflow` (порт `OpenRegistry`); срез **F3m ✅** — оркестрация
 фоновой индексации RAG (`BackgroundIndexer`: single-flight по ветке, горутина,
 отчёты в лог/чат) вынесена из `server/ragindex.go` в `application/rag`
-(порты `IndexSink`/`IndexerFactory`).
+(порты `IndexSink`/`IndexerFactory`); срез **F3n ✅** — структурированный
+вопрос ассистента (`AskUser`: разбор пачки вопросов `ParseQuestions`,
+блокирующий цикл `AskUser`↔`AnswerAsk` в `Pending`) вынесен из `server/ask.go`
+в новый пакет `application/ask` (порт `Announcer`).
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -562,6 +565,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3k | RAG-хуки: чтение файлов ветки из git (`LoadRefItems`/`LoadRefDiff`/`ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/`RefFileSize`), сбор файлов каталога (`CollectIndexItems`) и полная индексация проекта (`IndexProjectRAG`), проверка актуальности (`BranchIndexUpToDate`) вынесены из `server/ragref.go`/`server/ragindex.go` в новый пакет `application/rag` (порт `Indexer`, `RefSnapshot`, `MaxRefFileBytes`); оркестрация фоновых прогонов и хуки остаются в `server` | ✅ |
 | F3l | Политика открытия git-проекта (`ProjectOpener.Open`: имя из URL `GitProjectName`, клон, распознавание полу-клона `discardHalfClone`, регистрация проекта и сабмодулей; `SubmoduleProjectName`/`SameGitRemote`) вынесена из `server/git.go` в `application/gitflow` (порт `OpenRegistry`, сентинелы `ErrGitURLName`/`ErrDirNotEmpty`(+`DirNotEmptyError`)/`ErrCloneFailed`/`ErrRegisterFailed`); `handleOpenGitProject` — тонкая обёртка | ✅ |
 | F3m | Оркестрация фоновой индексации RAG (`BackgroundIndexer`: single-flight по ветке/источнику, запуск в горутине, отчёты в лог и чат) вынесена из `server/ragindex.go` в `application/rag` (порты `IndexSink`/`IndexerFactory`, тип `IndexRun`); `server` строит конкретный прогон (каталог/ветка/дифф) | ✅ |
+| F3n | Структурированный вопрос ассистента (`AskUser`): разбор/валидация пачки вопросов (`ParseQuestions`), состояние одного активного вопроса (блокирующий цикл `AskUser`↔`AnswerAsk`, `Pending`), протокол ответов (`Summarize`) вынесены из `server/ask.go` в `application/ask` (порт `Announcer`); `Session` делегирует, адаптер `askAnnouncer` публикует карточку/статус/лог | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -739,6 +743,21 @@ show`/`git diff`), `ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/
 пропуск/ошибка/сбой фабрики, параллельные ветки). Серверные
 `ragindex_test.go`/`ragref_test.go` не менялись и зелёные (переопределяют
 `buildProjectIndexer`/`loadRefItems`/`loadRefDiff`).
+
+**F3n ✅** — серверная логика структурированного вопроса `AskUser` вынесена из
+`server/ask.go` в новый пакет `application/ask`: `ParseQuestions` (разбор и
+валидация пачки вопросов из аргументов инструмента), `Pending` (состояние
+одного активного вопроса на сессию — блокирующий цикл `Ask`↔`Answer`),
+`Summarize` (протокол ответов), `StrAny`/`BoolAny`; порт `Announcer`
+(`Ask`/`Status`/`Info`). `server/ask.go` оставил инструмент-мост `askTool`
+(`tools.Tool`), `AskBackend`, схему `Definition`, таймаут `askAnswerTimeout` и
+адаптер `askAnnouncer` (карточка-вардинг в чат, статус-строка, лог); `Session`
+держит `pending *appask.Pending` (создаётся в `newSession`) и делегирует
+`AskUser`/`AnswerAsk`. Тесты: новые герметичные `application/ask/ask_test.go`
+(`recAnnouncer`: разбор/дефолты/ошибки схемы, блокирующий цикл, охрана «один
+активный вопрос» и валидация ответа, отмена по контексту с повторным вопросом,
+`Summarize`); серверные `ask_test.go` не менялись и зелёные (идут через
+`Session`/REST).
 
 ## Ключевые решения
 

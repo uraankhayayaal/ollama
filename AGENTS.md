@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3m — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3n — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -357,6 +357,27 @@ accept/reject), удалены локальные `discardHalfClone`/`sameGitRem
 `docs/00-overview/project-map.md` (строка `application/rag/`). Остаток Этапа 6
 — F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
 `chatassist`/`ask`/`actions`/`logs`/`diff`/`server`. Коммит F3m `492f3df`.
+
+Срез **F3n** — серверная логика структурированного вопроса `AskUser` вынесена
+из `server/ask.go` в новый пакет **`application/ask`**: `ParseQuestions` (разбор
+и валидация пачки вопросов из аргументов инструмента), `Pending` (состояние
+одного активного вопроса на сессию — блокирующий цикл `Ask`↔`Answer`),
+`Summarize` (протокол ответов), `StrAny`/`BoolAny`; порт `Announcer`
+(`Ask`/`Status`/`Info`). `server/ask.go` оставил инструмент-мост `askTool`
+(`tools.Tool`), интерфейс `AskBackend`, схему `Definition`, таймаут
+`askAnswerTimeout` и адаптер `askAnnouncer` (карточка-вардинг в чат `role=ask`,
+статус-строка, лог); `Session` держит `pending *appask.Pending` (создаётся в
+`newSession`) и делегирует `AskUser`/`AnswerAsk`. Тесты: новые герметичные
+`application/ask/ask_test.go` (`recAnnouncer`: разбор/дефолты/ошибки схемы,
+блокирующий цикл, охрана «один активный вопрос» и валидация ответа, отмена по
+контексту с повторным вопросом, `Summarize`); серверные `ask_test.go` не
+менялись и зелёные (идут через `Session`/REST). Верификация: канонический набор
+зелёный (27 пакетов), `-race` по `application/ask` чист, `gofmt` по правкам
+чист. Документация: план (шапка + таблица F3n + narrative),
+`docs/00-overview/project-map.md` (новая строка `application/ask/`),
+`docs/20-features/chat-assistant.md` (ссылки на `application/ask`). Остаток
+Этапа 6 — F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow
+хуки, `chatassist`/`actions`/`logs`/`diff`/`server`. Коммит F3n — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
