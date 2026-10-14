@@ -559,7 +559,7 @@ truncate больших файлов, чистые файлы без марке�
 таблица F3v + narrative), `docs/00-overview/project-map.md` (строка
 `application/gitflow/` расширена `conflictfiles.go`). Остаток Этапа 6 — F3+:
 HITL-гейт и read-model доски в `server/session.go`, `chatassist`/`actions`/
-`server`. Коммит F3v — ниже.
+`server`. Коммит F3v `00d29e1`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
