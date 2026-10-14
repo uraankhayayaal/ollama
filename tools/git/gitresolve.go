@@ -1,9 +1,9 @@
 // Инструмент ResolveGitConflicts — авто-резолв конфликтов мерджа (Ф-4).
 //
 // Работает в каталоге незавершённого `git merge` (постоянный конфликтный
-// worktree Ф-4 или любой другой клон со stage-конфликтами): OutputDir (FileOps)
-// инструмента указывает на этот каталог. Модель получает конфликтный
-// unified-дифф (`git diff`), правит файлы штатными пишущими инструментами
+// worktree Ф-4 или любой другой клон со stage-конфликтами): Dir инструмента
+// указывает на этот каталог. Модель получает конфликтный unified-дифф
+// (`git diff`), правит файлы штатными пишущими инструментами
 // (SearchReplace/WriteFiles — те же помечают файлы в FileOps.touched для
 // повторной ЛСП-проверки), затем действием resolve проверяет готовность,
 // запускает ЛСП по затронутым файлам и коммитит резолв (завершая merge).
@@ -11,14 +11,13 @@
 // Действия:
 //
 //	conflicts (по умолчанию) — список конфликтных путей + авто-резолв
-//	    тривиальных блоков (git.TrivialResolve) + их stage; возвращает
+//	    тривиальных блоков (gitops.TrivialResolve) + их stage; возвращает
 //	    «сложные» файлы (с маркерами) и diff для правок моделью;
 //	resolve — повторный авто-резолв, проверка «маркеров не осталось»,
 //	    ЛСП по затронутым файлам, git add -A + git commit (конец merge).
-package tools
+package git
 
 import (
-	"ai/infrastructure/git"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,26 +25,41 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"ai/domain"
+	gitops "ai/infrastructure/git"
 )
 
-// ResolveGitConflicts — имя инструмента в реестре (см. registry.go newTool).
-const ResolveGitConflicts = "ResolveGitConflicts"
+// ResolveToolName — имя инструмента в реестре (см. tools/registry.go newTool).
+const ResolveToolName = "ResolveGitConflicts"
 
-// resolveGitConflictsTool — обёртка инструмента в реестре. ex nil → git CLI.
-type resolveGitConflictsTool struct {
-	ops *FileOps
-	ex  git.Executor
+// Ops — часть файлового контекста (FileOps), нужная резолву: очередь файлов,
+// затронутых мутациями, и ЛСП-проверка по ним. Реализуется *tools.FileOps;
+// может быть nil (тогда ЛСП-шаг пропускается).
+type Ops interface {
+	TakeTouched() []string
+	LspCheckFiles(files []string) ([]string, bool)
 }
 
-func (t *resolveGitConflictsTool) Name() string { return ResolveGitConflicts }
+// ResolveTool — инструмент резолва конфликтов. Ex nil → git CLI.
+type ResolveTool struct {
+	// Dir — конфликтный рабочий каталог (прежде FileOps.OutputDir).
+	Dir string
+	// Ops — файловый контекст (может быть nil).
+	Ops Ops
+	// Ex — исполнитель git (nil → CLIExecutor).
+	Ex gitops.Executor
+}
 
-func (t *resolveGitConflictsTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name: ResolveGitConflicts,
+func (t *ResolveTool) Name() string { return ResolveToolName }
+
+func (t *ResolveTool) Definition() domain.ToolDefinition {
+	return domain.ToolDefinition{
+		Name: ResolveToolName,
 		Description: "Используй этот инструмент, когда нужно решить конфликты git-мерджа (Ф-4): " +
 			"находит конфликтующие файлы, автоматически разрешает тривиальные блоки (идентичные/типа " +
 			"форматтеров/одна сторона пустая), сложные отдаёт тебе (unified-дифф с маркерами) для правки " +
-			"через SearchReplace/WriteFiles. Внимание: OutputDir инструмента — это конфликтный worktree проекта, " +
+			"через SearchReplace/WriteFiles. Внимание: рабочий каталог инструмента — это конфликтный worktree проекта, " +
 			"изменения применяются ТОЛЬКО к нему. После правок вызови с action=resolve: инструмент проверит, " +
 			"что маркеров не осталось, прогонит ЛСП по затронутым файлам и закоммитит резолв (завершит merge). " +
 			"Коммит на удалённый сервер НЕ пушит — финальный merge в main делает сервер после обязательной приёмки.",
@@ -80,23 +94,23 @@ type resolveParams struct {
 	Message string   `json:"message"`
 }
 
-func (t *resolveGitConflictsTool) Execute(args map[string]any) ([]byte, error) {
+func (t *ResolveTool) Execute(args map[string]any) ([]byte, error) {
 	var p resolveParams
 	if raw, err := json.Marshal(args); err == nil {
 		_ = json.Unmarshal(raw, &p)
 	}
-	if t.ops == nil || t.ops.OutputDir == "" {
+	if t.Dir == "" {
 		return resolveJSON(map[string]any{
 			"status":  "error",
-			"message": "OutputDir не задан — инструмент работает в каталоге незавершённого merge (конфликтный worktree проекта)",
+			"message": "рабочий каталог не задан — инструмент работает в каталоге незавершённого merge (конфликтный worktree проекта)",
 		}), nil
 	}
 
-	ex := t.ex
+	ex := t.Ex
 	if ex == nil {
-		ex = git.CLIExecutor{}
+		ex = gitops.CLIExecutor{}
 	}
-	repo := git.RepoFromState(ex, t.ops.OutputDir, "", "", "")
+	repo := gitops.RepoFromState(ex, t.Dir, "", "", "")
 	ctx := context.Background()
 
 	switch strings.TrimSpace(p.Action) {
@@ -109,7 +123,7 @@ func (t *resolveGitConflictsTool) Execute(args map[string]any) ([]byte, error) {
 
 // actionConflicts — конфликты конфликтного каталога: список, авто-резолв
 // тривиальных, stage резолвов, diff «сложных» для модели.
-func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *git.Repo) ([]byte, error) {
+func (t *ResolveTool) actionConflicts(ctx context.Context, repo *gitops.Repo) ([]byte, error) {
 	files, err := repo.UnmergedFiles(ctx)
 	if err != nil {
 		return resolveJSON(map[string]any{
@@ -124,7 +138,7 @@ func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *git
 		}), nil
 	}
 
-	resolved, hard, err := git.TrivialResolve(t.ops.OutputDir, sortDedup(files))
+	resolved, hard, err := gitops.TrivialResolve(t.Dir, sortDedup(files))
 	if err != nil {
 		return resolveJSON(map[string]any{"status": "error", "message": "авто-резолв: " + err.Error()}), nil
 	}
@@ -144,7 +158,7 @@ func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *git
 	// Если комбинированный diff пуст (файл добавлен/удалён одной стороной) —
 	// покажем его содержимое с маркерами как есть.
 	if diff == "" {
-		if body := markeredBody(t.ops.OutputDir, hard); body != "" {
+		if body := markeredBody(t.Dir, hard); body != "" {
 			diff = body
 		}
 	}
@@ -160,7 +174,7 @@ func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *git
 
 // actionResolve — финализация резолва: разупрощает остатки, проверяет, что
 // маркеров не осталось, прогоняет ЛСП по затронутым файлам и коммитит.
-func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *git.Repo, p resolveParams) ([]byte, error) {
+func (t *ResolveTool) actionResolve(ctx context.Context, repo *gitops.Repo, p resolveParams) ([]byte, error) {
 	files := p.Files
 	if len(files) == 0 {
 		if unmerged, err := repo.UnmergedFiles(ctx); err == nil {
@@ -169,7 +183,7 @@ func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *git.R
 	}
 
 	// Повторный авто-резолв: модель могла не тронуть тривиальные остатки.
-	resolved, _, err := git.TrivialResolve(t.ops.OutputDir, files)
+	resolved, _, err := gitops.TrivialResolve(t.Dir, files)
 	if err != nil {
 		return resolveJSON(map[string]any{"status": "error", "message": "авто-резолв: " + err.Error()}), nil
 	}
@@ -180,7 +194,7 @@ func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *git.R
 	}
 
 	unmerged, _ := repo.UnmergedFiles(ctx)
-	markers, err := git.HasConflictMarkers(t.ops.OutputDir, files)
+	markers, err := gitops.HasConflictMarkers(t.Dir, files)
 	if err != nil {
 		return resolveJSON(map[string]any{"status": "error", "message": "проверка маркеров: " + err.Error()}), nil
 	}
@@ -196,15 +210,18 @@ func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *git.R
 	}
 
 	// ЛСП по затронутым мутациями файлам (SearchReplace/WriteFiles) + конфликтным.
-	touched := t.ops.TakeTouched()
+	var touched []string
+	if t.Ops != nil {
+		touched = t.Ops.TakeTouched()
+	}
 	check := append([]string(nil), touched...)
 	for _, f := range files {
 		if !sliceContains(check, f) {
 			check = append(check, f)
 		}
 	}
-	if len(check) > 0 {
-		diags, hadMutation := t.ops.LspCheckFiles(check)
+	if len(check) > 0 && t.Ops != nil {
+		diags, hadMutation := t.Ops.LspCheckFiles(check)
 		if hadMutation && len(diags) > 0 {
 			return resolveJSON(map[string]any{
 				"status":      "lsp",

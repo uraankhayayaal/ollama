@@ -324,7 +324,7 @@ infrastructure/   — реализации (llm, rag, git, sandbox, board)
 | **E6b** | `tools/` (codesearch/ragstatus) → `domain/services` вместо `ai/infrastructure/rag`. Требует вынести рабочий RAG-контракт (`Searcher`, `SearchParams`, `SearchResult`, `Search`, `IsUnavailable`, `UnavailableError`, `DetectBranch`/`MainBranch`, лимиты) в `domain/services` — иначе под-пакет `tools/rag` продолжит зависеть от инфраструктуры | ⏳ |
 | **E6c** | `tools/` (sandbox/destructive/fileops) → `services.SandboxWorkspace`/`SandboxResult` (alias'ы E4) там, где возможно; пакетные функции (`Config`/`LoadConfig`/`EnsureImage`/`DetectStack`/`BaseEnv`…) остаются у `infrastructure/sandbox` → под-пакет `tools/sandbox` | ⏳ |
 | **E6d** | `tools/gitresolve`/`tool.go` → `services.GitOperations`; `git.Executor`/`CLIExecutor`/`RepoFromState`/`TrivialResolve`/`HasConflictMarkers` в порт не входят → под-пакет `tools/git` | ⏳ |
-| **E6e** | Собственно разбиение `tools/` на под-пакеты (`tools/lsp`, `tools/rag`, `tools/sandbox`, `tools/git`, …) с инверсией зависимости от `FileOps` (интерфейс `Runner`/`Project` в под-пакете, методы `FileOps` делегируют) | ⏳ |
+| **E6e** | Собственно разбиение `tools/` на под-пакеты (`tools/lsp`, `tools/rag`, `tools/sandbox`, `tools/git`, …) с инверсией зависимости от `FileOps` (интерфейс `Runner`/`Project`/`Ops` в под-пакете, методы/поля `FileOps` делегируют). Под-пакеты реализуют `services.Tool` напрямую (`Definition() domain.ToolDefinition`) и вправе импортировать `infrastructure/*`. Выполняется по одному под-пакету (E6e1…); **E6e1 ✅** — `tools/git` | 🔄 (E6e1 ✅) |
 
 **E1 ✅ (каркас `infrastructure/`, `models` → `infrastructure/llm`).**
 `git mv models infrastructure/llm`, пакет переименован `models` → `llm`;
@@ -430,6 +430,27 @@ Stderr, ExitCode, TimedOut, ExitErr}`. Чтобы обойтись без ада
 поднимают реальный store — это только тестовый бинарник). Верификация:
 `./tools`, `./domain`, `./infrastructure/board`, `./server` зелёные.
 
+**E6e1 ✅ (`tools/git` — ResolveGitConflicts).** Направление выбрано по запросу:
+E6 читается как **разбиение `tools/` на под-пакеты по доменам** (под-пакеты
+вправе импортировать `infrastructure/*`; «без прямых импортов инфраструктуры»
+для rich-API — rag/git/sandbox — недостижимо без загрязнения `domain`). Ключ к
+отсутствию цикла: `Tool`/`ToolDefinition` уже живут в
+`domain`/`domain/services` (`services.Tool`, `domain.ToolDefinition`), поэтому
+под-пакет реализует `services.Tool` напрямую и не импортирует `ai/tools`.
+Первый под-пакет — `tools/git` (`package git`): из `tools/gitresolve.go`
+перенесена вся логика резолва конфликтов (`Execute`/`actionConflicts`/
+`actionResolve`, `markeredBody`, `resolveJSON`, `sortDedup`/`union`/
+`sliceContains`), инфраструктурный git импортируется как
+`gitops "ai/infrastructure/git"`. Обратная зависимость от `FileOps` инвертирована
+интерфейсом `git.Ops{TakeTouched; LspCheckFiles}` + полем `Dir string`
+(вместо `ops.OutputDir`). Экспортированы `git.ResolveTool` и
+`git.ResolveToolName`; в `tools` остался тонкий алиас
+`const ResolveGitConflicts = git.ResolveToolName`, а `registry.go` собирает
+`&git.ResolveTool{Dir:…, Ops: deps.FileOps, Ex: deps.GitExec}`. Тест
+`tools/gitresolve_test.go` переехал в `tools/git` (`package git`, `fakeGitExec`
+без изменений). Верификация: `./tools/...` (в т.ч. новый `ai/tools/git`),
+`./server`, канонический набор — зелёные, `gofmt` чист.
+
 ### Этап 5: Рефакторинг агентов
 
 **Цель:** Устранить дублирование между специализациями агентов.
@@ -476,9 +497,9 @@ Stderr, ExitCode, TimedOut, ExitErr}`. Чтобы обойтись без ада
 После каждого этапа:
 
 ```bash
-go build . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go vet . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go test . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go build . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
 ```
 
 Дополнительно:

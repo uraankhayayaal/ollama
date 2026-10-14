@@ -1,4 +1,4 @@
-package tools
+package git
 
 import (
 	"context"
@@ -22,23 +22,23 @@ func (f *fakeGitExec) Exec(_ context.Context, dir string, argv ...string) (strin
 	return f.resp[call], nil
 }
 
-// newResolveTool собирает инструмент с заданным OutputDir и фейковым git.
-func newResolveTool(dir string, ex *fakeGitExec) *resolveGitConflictsTool {
+// newResolveTool собирает инструмент с заданным рабочим каталогом и фейковым git.
+func newResolveTool(dir string, ex *fakeGitExec) *ResolveTool {
 	if ex == nil {
 		ex = &fakeGitExec{}
 	}
-	return &resolveGitConflictsTool{ops: &FileOps{OutputDir: dir}, ex: ex}
+	return &ResolveTool{Dir: dir, Ex: ex}
 }
 
 func TestResolveGitConflictsNoOutputDir(t *testing.T) {
-	tool := &resolveGitConflictsTool{}
+	tool := &ResolveTool{}
 	data, err := tool.Execute(map[string]any{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	var out map[string]any
 	if json.Unmarshal(data, &out) != nil || out["status"] != "error" {
-		t.Fatalf("ответ без OutputDir = %s", data)
+		t.Fatalf("ответ без Dir = %s", data)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestResolveGitConflictsActionResolveStillConflicts(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "hard.txt"), []byte("a\n<<<<<<< HEAD\nA\n=======\nB\n>>>>>>> b\n"), 0o644)
 
 	ex := &fakeGitExec{resp: map[string]string{
-		dir + " | git ls-files -u": "100644 2 2\thard.txt\n100644 3 3\thard.txt\n",
+		dir + " | git ls-files -u":      "100644 2 2\thard.txt\n100644 3 3\thard.txt\n",
 		dir + " | git diff -- hard.txt": "diff --git a/hard.txt b/hard.txt\n",
 	}}
 	tool := newResolveTool(dir, ex)
@@ -136,8 +136,8 @@ func TestResolveGitConflictsActionResolveSuccess(t *testing.T) {
 	}}
 	tool := newResolveTool(dir, ex)
 	data, err := tool.Execute(map[string]any{
-		"action": "resolve",
-		"files":  []any{"clean.go"},
+		"action":  "resolve",
+		"files":   []any{"clean.go"},
 		"message": "резолв main",
 	})
 	if err != nil {
@@ -176,11 +176,11 @@ func TestResolveGitConflictsRejectsEscapingPaths(t *testing.T) {
 	if json.Unmarshal(data, &out) != nil || out.Status != "conflicts" {
 		t.Fatalf("JSON = %s", data)
 	}
-	// Путь за пределами OutputDir: не должен попадать в files и не пишемся на диск.
+	// Путь за пределами рабочего каталога: не должен попадать в files и не пишемся на диск.
 	if strings.Join(out.Files, ",") != "../escaped.txt" {
 		t.Fatalf("files = %v", out.Files)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "escaped.txt")); err == nil {
-		t.Fatal("не должны были создать файл вне OutputDir")
+		t.Fatal("не должны были создать файл вне рабочего каталога")
 	}
 }

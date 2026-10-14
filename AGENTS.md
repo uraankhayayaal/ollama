@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a — каркас `infrastructure/`)
+## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6e1 — каркас `infrastructure/`)
 
 Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы
 E1–E6 (таблица в разделе «Этап 4» плана). Срез **E1** закрыт: создан каталог
@@ -62,9 +62,21 @@ tokens, tools/*, main.go и харнессы). Правка чисто меха�
 (non-test) больше не импортирует `ai/infrastructure/board` — `DecodeComments`
 перенесён в `domain` (`domain/comment.go`), `board.DecodeComments` делегирует,
 `tools/board_tools.go` берёт `domain.{ErrExists,DecodeInjections,ValidateInjections,
-DecodeComments}`. Верификация: канонический набор (в него добавлен
-`./infrastructure/...`, убраны `./sandbox/` и `./board/`) зелёный, `-race` по
-`infrastructure/{llm,rag,git,sandbox}` чист, `gofmt -l` по своим файлам чист.
+DecodeComments}`. **E6e1** закрыт (пользователь выбрал направление «разбиение
+`tools/` на под-пакеты по доменам, под-пакеты вправе импортировать
+`infrastructure/*`»; «без инфра-импортов» для rich-API rag/git/sandbox
+недостижимо без загрязнения `domain`): создан `tools/git` (`package git`) —
+вся логика `ResolveGitConflicts` перенесена из `tools/gitresolve.go`, инфра-git
+импортируется как `gitops`, зависимость от `FileOps` инвертирована интерфейсом
+`git.Ops{TakeTouched;LspCheckFiles}` + `Dir string`; в `tools` остался алиас
+`const ResolveGitConflicts = git.ResolveToolName`, `registry.go` собирает
+`&git.ResolveTool{…}`. Ключ к отсутствию цикла: `Tool`/`ToolDefinition` уже в
+`domain`/`domain/services`, под-пакет реализует `services.Tool` напрямую.
+Осталось: E6b (`tools/rag`), E6c (`tools/sandbox`), E6d (git-часть вне
+ResolveGitConflicts), E6e-остаток (`tools/lsp` и др.). Верификация: канонический
+набор (в него добавлены `./tools/...`, `./infrastructure/...`; убраны `./sandbox/`
+и `./board/`) зелёный, `-race` по `infrastructure/{llm,rag,git,sandbox}` чист,
+`gofmt -l` по своим файлам чист.
 Документация: раздел «Этап 4» + шапка плана, пути `models/` →
 `infrastructure/llm/`, `rag/` → `infrastructure/rag/`, `gitops/` →
 `infrastructure/git/` (и квалификатор `gitops.` → `git.`), `sandbox/` →
@@ -76,7 +88,7 @@ DecodeComments}`. Верификация: канонический набор (�
 `makefile-contract.md`, `troubleshooting.md`, `adding-a-feature.md`,
 `development.md`, `testing.md`), канонический набор и примечание в этом файле.
 Коммиты E1 (`4279c9f`), E2 (`2e71139`), E3 (`3e01f8f`), E4 (`ab39ad6`),
-E5 (`91ca525`) сделаны; E6a — коммитится следом.
+E5 (`91ca525`), E6a (`1f87352`) сделаны; E6e1 — коммитится следом.
 
 ## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
 
@@ -127,9 +139,9 @@ Acceptor-порт вынесен из `acceptor`: отчёт приёмки — 
 Рабочая сборка (обходит известный блокер в `temp/`):
 
 ```
-go build . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go vet . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go test . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go build . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
 ```
 
 Примечание: `./application/planner` — бывший `agents/planner` (перенос по
@@ -138,7 +150,8 @@ PLAN-2026-10-12, этап 3); предсуществовавшие падени�
 `./infrastructure/rag` — бывший `rag/` (срез E2); `./infrastructure/git` —
 бывший `gitops/` (срез E3); `./infrastructure/sandbox` — бывший `sandbox/`
 (срез E4); `./infrastructure/board` — бывший `board/` (срез E5, `./board/`
-убран из перечня).
+убран из перечня). `./tools/...` — с под-пакетами `tools/git` (E6e1),
+`tools/lspclient`, `tools/binpath`.
 
 Живая проверка сессионной песочницы (нужен Docker; вне рабочего набора,
 по образцу `E2E_LIVE`):

@@ -1,6 +1,14 @@
 package tools
 
-import "fmt"
+import (
+	"fmt"
+
+	"ai/tools/git"
+)
+
+// ResolveGitConflicts — имя инструмента в реестре; каноническое значение
+// и реализация вынесены в подпакет ai/tools/git (E6e1).
+const ResolveGitConflicts = git.ResolveToolName
 
 // Set — набор инструментов, выбранных агентом из общего реестра.
 // Агент держит его в себе и использует для трёх вещей:
@@ -127,7 +135,12 @@ func newTool(name string, deps Deps) Tool {
 	case "SearchReplace":
 		return &searchReplaceTool{ops: deps.FileOps}
 	case ResolveGitConflicts:
-		return &resolveGitConflictsTool{ops: deps.FileOps, ex: deps.GitExec}
+		var dir string
+		var ops git.Ops
+		if deps.FileOps != nil {
+			dir, ops = deps.FileOps.OutputDir, deps.FileOps
+		}
+		return &git.ResolveTool{Dir: dir, Ops: ops, Ex: deps.GitExec}
 	case LspCheck:
 		return &lspCheckTool{ops: deps.FileOps}
 	case LspDefinition:
