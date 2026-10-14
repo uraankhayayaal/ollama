@@ -5,9 +5,8 @@ import (
 	"ai/domain"
 	"ai/domain/services"
 	"ai/logging"
-	"ai/models"
+	"ai/rag"
 	"ai/tokens"
-	"ai/tools"
 	"context"
 	"errors"
 	"fmt"
@@ -35,7 +34,7 @@ const maxKanbanRounds = 100
 // BoardCreateTask/BoardUpdateTask/BoardDeleteTask) и ревизуют задачи при
 // изменении содержимого эпика.
 type KanbanRunner struct {
-	provider models.LLMProvider
+	provider LLMProvider
 	store    services.BoardStore
 	gate     HumanGate
 	// boardOnly — режим запуска по доске (кнопка «Продолжить»): новая работа
@@ -69,11 +68,11 @@ type KanbanRunner struct {
 	// rag — клиент векторной памяти для фаз архитектора (Ф-1/Ф-4): CodeSearch/
 	// RagIndexStatus и блок «релевантный код» в промпте. nil — архитектор
 	// работает без RAG (degrade, как раньше).
-	rag tools.RAGSearcher
+	rag rag.Searcher
 	// architectExtras — серверные мосты-инструменты для архитектора (Ф-4/Р-5):
 	// например AskUser для уточняющего вопроса до публикации бэклога.
 	// nil/пустой — автономный режим (консоль), архитектор работает без них.
-	architectExtras []tools.Tool
+	architectExtras []services.Tool
 	// tokens — счётчик токенов проекта (Ф-2/Ф-3): по scope единицы работы
 	// оркестратор снимает накопленный расход и записывает факт в доску при
 	// фиксации итогов задачи/эпика. nil — учёта нет (консольный режим):
@@ -221,7 +220,7 @@ func (k *KanbanRunner) SetTokens(t *tokens.Store) *KanbanRunner {
 // CodeSearch/RagIndexStatus и блок «релевантный код» в промпте начинают
 // работать по индексу. nil — архитектор работает без RAG (degrade). Клиент
 // ленивый и nil-safe: недоступный Qdrant/эмбеддинги не роняют фазу.
-func (k *KanbanRunner) SetRAG(r tools.RAGSearcher) *KanbanRunner {
+func (k *KanbanRunner) SetRAG(r rag.Searcher) *KanbanRunner {
 	k.rag = r
 	return k
 }
@@ -231,8 +230,8 @@ func (k *KanbanRunner) SetRAG(r tools.RAGSearcher) *KanbanRunner {
 // вопроса до публикации бэклога. nil/пустой список возвращает автономный
 // режим (консоль). Применяется в фазе архитектора, ревизии черновиков и
 // экспертизы багрепортов.
-func (k *KanbanRunner) SetArchitectExtras(extra ...tools.Tool) *KanbanRunner {
-	k.architectExtras = append([]tools.Tool{}, extra...)
+func (k *KanbanRunner) SetArchitectExtras(extra ...services.Tool) *KanbanRunner {
+	k.architectExtras = append([]services.Tool{}, extra...)
 	return k
 }
 
@@ -258,7 +257,7 @@ func (k *KanbanRunner) Wake() {
 }
 
 // NewKanbanRunner создаёт Kanban-оркестратор поверх хранилища доски.
-func NewKanbanRunner(provider models.LLMProvider, store services.BoardStore) *KanbanRunner {
+func NewKanbanRunner(provider LLMProvider, store services.BoardStore) *KanbanRunner {
 	return &KanbanRunner{provider: provider, store: store, wake: make(chan struct{}, 1)}
 }
 

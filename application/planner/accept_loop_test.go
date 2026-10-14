@@ -1,8 +1,8 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/acceptor"
+	"ai/agents"
 	"ai/domain"
 	"ai/projects"
 	"ai/runner"
@@ -74,7 +74,7 @@ func TestAcceptanceLoopApprove(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(&fixPlanProvider{}, plan)
+	exec := NewExecutor(&fixPlanProvider{}, plan).SetAcceptor(acceptor.PlannerAdapter{})
 	if err := exec.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestAcceptanceLoopRejectsAfterRound(t *testing.T) {
 	}
 
 	fp := &fixPlanProvider{}
-	exec := NewExecutor(fp, plan)
+	exec := NewExecutor(fp, plan).SetAcceptor(acceptor.PlannerAdapter{})
 	err := exec.Run(ctx)
 	if err == nil {
 		t.Fatal("ожидали ошибку: приёмка не пройдена после раунда исправлений")
@@ -142,7 +142,7 @@ func TestAcceptanceLoopNormalizesLeadFixStep(t *testing.T) {
 	}
 
 	leadFix := &fixPlanLeadProvider{}
-	exec := NewExecutor(leadFix, plan)
+	exec := NewExecutor(leadFix, plan).SetAcceptor(acceptor.PlannerAdapter{})
 	err := exec.Run(ctx)
 	if err == nil {
 		t.Fatal("ожидали ошибку: приёмка не пройдена")
@@ -192,7 +192,7 @@ func TestAcceptanceLoopEmptyFixPlan(t *testing.T) {
 	}
 
 	// Провайдер возвращает пустую историю: ParsePlan завершится ошибкой.
-	exec := NewExecutor(&stubProvider{}, plan)
+	exec := NewExecutor(&stubProvider{}, plan).SetAcceptor(acceptor.PlannerAdapter{})
 	err := exec.Run(ctx)
 	if err == nil {
 		t.Fatal("ожидали ошибку при пустом плане исправлений")

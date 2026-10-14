@@ -9,11 +9,12 @@ import (
 	"ai/runner"
 	"ai/stackdetect"
 	"context"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // stackProvider — фейковый провайдер, симулирующий архитектора, который

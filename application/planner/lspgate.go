@@ -10,8 +10,8 @@ package planner
 // срабатывает (деградация, как у LspCheck). Управление: LSP_STEP_GATE.
 
 import (
+	"ai/domain/services"
 	"ai/logging"
-	"ai/tools"
 	"context"
 	"fmt"
 	"io/fs"
@@ -30,12 +30,17 @@ func stepLSPGateEnabled() bool {
 	return true
 }
 
-// stepLSPFind — точка входа гейта к нативным диагностикам (подменяется в
-// тестах). files — относительные пути от проекта. handled=false — сервера нет,
-// гейт неактивен.
-var stepLSPFind = func(projectDir string, files []string) ([]tools.LSPDiag, bool) {
-	diags, _, handled := (&tools.FileOps{OutputDir: projectDir}).LSPDiagnostics(files)
-	return diags, handled
+var lspDiagnoser services.LSPDiagnoser
+
+func SetLSPDiagnoser(d services.LSPDiagnoser) {
+	lspDiagnoser = d
+}
+
+var stepLSPFind = func(projectDir string, files []string) ([]services.LSPDiag, bool) {
+	if lspDiagnoser == nil {
+		return nil, false
+	}
+	return lspDiagnoser.Diagnostics(projectDir, files)
 }
 
 // scopeSourceDirs — служебные директории, не участвующие в расширении scope

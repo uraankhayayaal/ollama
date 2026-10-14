@@ -12,8 +12,15 @@ planner мигрированы на `domain.*`/`services.*`. Стор-порт �
 `architect`) переведён на `services.BoardStore`. Вызовы `NewKanbanRunner` в
 `server/session.go` и `main.go` обёрнуты в `board.NewDomainStore`. Верификация:
 `go build`/`go vet`/`go test` по каноническому набору зелёные, кроме ровно 17
-базовых падений `application/planner` (состав не менялся — не регресс). Остаток
-пункта 3: `agents/acceptor` в `executor.go`, порты `Runner`/`Models`/`Tools`.
+базовых падений `application/planner` (состав не менялся — не регресс).
+Models-порт вынесен из `models` (порт `planner.LLMProvider`,
+`domain.WithHeavyModel`/`domain.HeavyModelFor`, `models/force.go` удалён);
+Acceptor-порт вынесен из `acceptor`: отчёт приёмки — `domain.Report`
+(`domain/acceptance.go`), порт `planner.Acceptor` (`MaxRounds`/`Accept`),
+адаптер `acceptor.PlannerAdapter` подключается в `main.go`; `executor.go`
+больше не импортирует `acceptor`. Остаток пункта 3: Tools-порт (planner
+по-прежнему импортирует `tools`); `runner` в non-test коде planner
+отсутствует.
 
 ## `temp/` — хранилище проектов (не трогать)
 

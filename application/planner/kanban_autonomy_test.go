@@ -8,17 +8,17 @@ import (
 	"ai/agents/architect"
 	"ai/board"
 	"ai/domain"
-	"ai/models"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
 	"context"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // --- watchdog по heartbeat ---
@@ -225,7 +225,7 @@ func (p *heavyProbeProvider) Generate(ctx context.Context, agent agents.Agent) (
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		if models.HeavyModelFor(ctx) {
+		if domain.HeavyModelFor(ctx) {
 			p.note("large")
 			// Сильная модель доводит задачу до конца.
 			return &runner.AgentResponse{

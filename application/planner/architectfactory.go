@@ -4,7 +4,7 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/domain/services"
-	"ai/tools"
+	"ai/rag"
 )
 
 // architectFactory — архитектурная часть AgentFactory поверх agents/architect.
@@ -25,7 +25,7 @@ func (architectFactory) ArchitectBugExpert(project, prompt string, store service
 	return architect.NewArchitectWithStore(project, prompt, store).AsBugExpert()
 }
 
-func (architectFactory) ConfigureArchitect(a agents.Agent, rag tools.RAGSearcher, extras ...tools.Tool) agents.Agent {
+func (architectFactory) ConfigureArchitect(a agents.Agent, rag rag.Searcher, extras ...services.Tool) agents.Agent {
 	arch, ok := a.(*architect.Architect)
 	if !ok {
 		return a

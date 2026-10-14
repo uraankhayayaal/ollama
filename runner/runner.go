@@ -61,28 +61,18 @@ type RequiredToolGroupsAgent = usecases.RequiredToolGroupsAgent
 // (полная история и число потраченных раундов).
 type ResumeState = usecases.ResumeState
 
-// resumeStateKey — тип ключа контекста для передачи состояния resume.
-type resumeStateKey struct{}
-
-// resumeOffKey — тип ключа контекста для принудительного сброса resume
-// (WithoutResumeState): задача берётся «с другой стороны», заново.
-type resumeOffKey struct{}
-
 // WithResumeState помещает состояние возобновления агентского цикла в контекст.
 // Провайдеры сами не меняются: runner.Generate читает состояние из контекста.
+// Ключ контекста принадлежит application/usecases, поэтому runner и models
+// используют один и тот же resume-канал.
 func WithResumeState(ctx context.Context, state *ResumeState) context.Context {
-	return context.WithValue(ctx, resumeStateKey{}, state)
+	return usecases.WithResumeState(ctx, state)
 }
 
 // ResumeStateFromContext извлекает состояние возобновления из контекста.
 func ResumeStateFromContext(ctx context.Context) *ResumeState {
-	if off, _ := ctx.Value(resumeOffKey{}).(bool); off {
-		return nil
-	}
-	if st, ok := ctx.Value(resumeStateKey{}).(*ResumeState); ok {
-		return st
-	}
-	return nil
+	st, _ := usecases.ResumeStateFromContext(ctx)
+	return st
 }
 
 // WithoutResumeState убирает состояние возобновления из контекста: следующий
@@ -91,7 +81,7 @@ func ResumeStateFromContext(ctx context.Context) *ResumeState {
 // Нужен там, где задачу берут «с другой стороны»: продолжение того же
 // застрявшего диалога после срыва воспроизводит ту же петлю.
 func WithoutResumeState(ctx context.Context) context.Context {
-	return context.WithValue(ctx, resumeOffKey{}, true)
+	return usecases.WithoutResumeState(ctx)
 }
 
 // requiredRetries — сколько раз переспрашиваем модель, если она не вызвала
@@ -246,10 +236,10 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 					ToolCalls: msg.ToolCalls,
 				}
 			}
-			
+
 			// Call the original function with type conversion
 			compressedMessages, report := compressHistoryForRound(ctx, provider, runnerMessages, lastInputTokens)
-			
+
 			// Convert back to domain.Message
 			domainMessages := make([]domain.Message, len(compressedMessages))
 			for i, msg := range compressedMessages {
@@ -259,10 +249,10 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 					ToolCalls: msg.ToolCalls,
 				}
 			}
-			
+
 			return domainMessages, report
 		}),
-		Resume:     resume,
+		Resume: resume,
 		Config: usecases.RunConfig{
 			MaxRounds:           maxRounds(),
 			ParallelEnabled:     parallelToolCallsEnabled(),

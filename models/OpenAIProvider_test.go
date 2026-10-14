@@ -1,7 +1,7 @@
 package models
 
 import (
-	"ai/runner"
+	"ai/domain"
 	"testing"
 )
 
@@ -85,14 +85,14 @@ func TestNewOpenAIProvider_NoPrefix(t *testing.T) {
 }
 
 func TestHasToolResult(t *testing.T) {
-	msgs := []runner.Message{
+	msgs := []domain.Message{
 		{Role: "user", Content: "test"},
 	}
 	if hasToolResult(msgs) {
 		t.Error("Expected false for messages without tool result")
 	}
 
-	msgs = append(msgs, runner.Message{Role: "tool", Content: "result"})
+	msgs = append(msgs, domain.Message{Role: "tool", Content: "result"})
 	if !hasToolResult(msgs) {
 		t.Error("Expected true for messages with tool result")
 	}

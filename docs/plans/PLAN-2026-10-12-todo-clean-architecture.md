@@ -11,8 +11,11 @@
 C4 (контекст-плумбинг), C5 (порт `services.BoardStore`), C6 (унификация
 моделей `board.*` ↔ `domain.*`, перенос компараторов/разбора в `domain`,
 `KanbanRunner.store` → `services.BoardStore`, миграция всех `board.*`-
-обращений planner на `domain.*`/`services.*`). Остался `acceptor` — см.
-«Остаток работ» в конце.
+обращений planner на `domain.*`/`services.*`). Models-порт вынесен из
+`models` (порт `planner.LLMProvider`, `domain.WithHeavyModel`/
+`domain.HeavyModelFor`, `models/force.go` удалён); Acceptor-порт вынесен из
+`acceptor` (`domain.Report`, `planner.Acceptor`, `acceptor.PlannerAdapter`);
+остался Tools-порт — см. «Остаток работ» в конце.
 
 ## Проблема
 
@@ -225,8 +228,9 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
         `EpicLess`/`EpicPhase`/`SortEpics`/`UnmarshalTasks` перенесены в `domain`;
         `KanbanRunner.store` → `services.BoardStore`; все `board.*`-обращения
         planner мигрированы на `domain.*`/`services.*`.
-     - `executor.go` всё ещё импортирует `agents/acceptor` (приёмка — не только
-       конструкция агента, а цикл с `acceptor.Report`).
+      - `executor.go` больше не импортирует `agents/acceptor`: приёмка идёт
+        через порт `planner.Acceptor` и отчёт `domain.Report` (адаптер
+        `acceptor.PlannerAdapter` подключается в `main.go` и в тестах).
 
 **Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask` ✅
 (`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
@@ -370,11 +374,18 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
         → `services.BoardStore`; все `board.*`-обращения planner мигрированы
         на `domain.*`/`services.*`; вызовы `NewKanbanRunner` в `server/session.go`
         и `main.go` обёрнуты в `board.NewDomainStore`.
-  - **`agents/acceptor`** в `executor.go`: приёмка — цикл с `acceptor.Report`,
-    а не только конструкция агента.
-  - **Порты `Runner`/`Models`/`Tools`**: planner по-прежнему зависит от
-    `runner` и `models`/`tools` напрямую (LLM-исполнение, учёт токенов,
-    project-map/RAG).
+    - **Acceptor-порт ✅**: `executor.go` больше не импортирует
+      `agents/acceptor`; отчёт приёмки — `domain.Report`, порт —
+      `planner.Acceptor` (`MaxRounds`/`Accept`), адаптер
+      `acceptor.PlannerAdapter` подключается в `main.go` и в тестах.
+   - **Порт `Models` ✅**: planner больше не импортирует `models`; LLM-порт
+     объявлен как `planner.LLMProvider` (только `Generate`), «тяжёлая модель»
+     через контекст — `domain.WithHeavyModel`/`domain.HeavyModelFor`
+     (`models/force.go` удалён, `models.LLMProvider` структурно совместим).
+    - **Порт `Tools`**: planner по-прежнему зависит от `tools` напрямую
+      (снимки/откаты, Public API, LSP, project-map/RAG). `runner` в non-test
+      коде planner отсутствует; в тестах используются алиасы
+      `runner.AgentResponse`/`runner.ModelReply` и helpers.
 - **`runner` не «тонкий» по объёму.** Делегирование есть, но адаптеры портов
   (`autofix.go`, `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`,
   `reindex.go`) остаются в пакете.

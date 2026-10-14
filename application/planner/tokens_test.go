@@ -14,9 +14,10 @@ import (
 	"ai/tokens"
 	"ai/tools"
 	"context"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // scopeProvider — провайдер, который в каждом раунде эмитит расход токенов.

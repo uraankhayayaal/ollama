@@ -41,11 +41,12 @@ func llmAlwaysHeavy() bool {
 	return strings.TrimSpace(os.Getenv("LLM_ALWAYS_HEAVY")) == "1"
 }
 
-// heavyForContext — требование сильной модели из контекста (models.WithHeavyModel).
-// Источник — запись задачи доски (model_tier), накопленная за прошлые прогоны:
-// внутри одного вызова Generate её нет, а переживать рестарт она обязана.
+// heavyForContext — требование сильной модели из контекста
+// (domain.WithHeavyModel). Источник — запись задачи доски (model_tier),
+// накопленная за прошлые прогоны: внутри одного вызова Generate её нет, а
+// переживать рестарт она обязана.
 func heavyForContext(ctx context.Context) bool {
-	return HeavyModelFor(ctx)
+	return domain.HeavyModelFor(ctx)
 }
 
 // NewLayeredProvider собирает двухслойный провайдер. Если large не задан —
@@ -107,7 +108,7 @@ func (l *LayeredProvider) heavyForRequest(req domain.ChatRequest) bool {
 // Зацикливание (AgentResponse.Looped) — такой же повод для эскалации, как
 // срыв по лимиту раундов: разрыв петли не помог, модель не поняла свою ошибку
 // и повторяет то же самое. Задачу с другой стороны выполняет БОЛЬШАЯ модель —
-// с чистой историей (runner.WithoutResumeState), потому что продолжение того же
+// с чистой историей (usecases.WithoutResumeState), потому что продолжение того же
 // застрявшего диалога воспроизвело бы ту же петлю.
 func (l *LayeredProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
 	// Требование задачи из контекста сильнее эвристики по агенту: если доска
@@ -184,12 +185,12 @@ func mergeModelLimits(small, large LLMProvider) domain.ModelLimits {
 // ChatOnce маршрутизирует отдельный запрос по тому же правилу слоёв (без
 // эскалации раунда — финальные решения принимает Generate). Используется,
 // когда провайдера зовут напрямую как ChatProvider.
-func (l *LayeredProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
+func (l *LayeredProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*domain.ModelReply, error) {
 	layer := l.Small
 	if l.heavyForRequest(req) || heavyForContext(ctx) {
 		layer = l.Large
 	}
-	cp, ok := layer.(runner.ChatProvider)
+	cp, ok := layer.(usecases.ChatProvider)
 	if !ok {
 		return nil, fmt.Errorf("слой %T не является ChatProvider", layer)
 	}
@@ -198,15 +199,15 @@ func (l *LayeredProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) 
 
 // ChatStream — потоковая версия ChatOnce для слоёв: делегирует выбранному слою,
 // если тот поддерживает стриминг, иначе fallback на разовый ChatOnce.
-func (l *LayeredProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(runner.StreamChunk)) (*runner.ModelReply, error) {
+func (l *LayeredProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(domain.StreamChunk)) (*domain.ModelReply, error) {
 	layer := l.Small
 	if l.heavyForRequest(req) || heavyForContext(ctx) {
 		layer = l.Large
 	}
-	if sp, ok := layer.(runner.StreamChatProvider); ok {
+	if sp, ok := layer.(usecases.StreamChatProvider); ok {
 		return sp.ChatStream(ctx, req, onChunk)
 	}
-	cp, ok := layer.(runner.ChatProvider)
+	cp, ok := layer.(usecases.ChatProvider)
 	if !ok {
 		return nil, fmt.Errorf("слой %T не является ChatProvider", layer)
 	}

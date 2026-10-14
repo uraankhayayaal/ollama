@@ -681,8 +681,12 @@ func WithoutResumeState(ctx context.Context) context.Context {
 }
 
 // ResumeStateFromContext извлекает состояние возобновления из контекста.
+// Если контекст помечен WithoutResumeState, состояние не возвращается.
 func ResumeStateFromContext(ctx context.Context) (*ResumeState, bool) {
 	if ctx == nil {
+		return nil, false
+	}
+	if off, _ := ctx.Value(resumeOffKey{}).(bool); off {
 		return nil, false
 	}
 	if st, ok := ctx.Value(resumeStateKey{}).(*ResumeState); ok {

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"ai/domain/services"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,22 +13,9 @@ import (
 	"unicode"
 )
 
-// APIEntry — одна публичная декларация пакета (функция, тип, константа,
-// переменная). Sign — детерминированно нормализованная сигнатура: из
-// параметров/полей убираются имена, остаются только типы, поэтому переименование
-// аргументов не даёт ложного «изменения контракта».
-type APIEntry struct {
-	Kind string // "func" | "type" | "const" | "var"
-	Name string
-	Sign string // нормализованная сигнатура
-}
+type APIEntry = services.APIEntry
 
-// PublicAPISnapshot — снимок публичной поверхности проекта (Go-пакеты):
-// детерминированно отсортированный список деклараций. Используется для
-// сравнения API до и после шага разработчика (см. ComparePublicAPI).
-type PublicAPISnapshot struct {
-	Entries []APIEntry
-}
+type PublicAPISnapshot = services.PublicAPISnapshot
 
 // BuildPublicAPISnapshot собирает публичные декларации всех Go-файлов проекта
 // в dir (рекурсивно, кроме .git/vendor/cache). Тест-файлы не учитываются.

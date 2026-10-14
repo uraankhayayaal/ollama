@@ -5,7 +5,6 @@ import (
 	"ai/application/usecases"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/models"
 	"ai/runevents"
 	"ai/tokens"
 	"context"
@@ -124,7 +123,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		// переживает рестарт сервера, потому что живёт в записи задачи, а не
 		// внутри одного вызова Generate.
 		if t.ModelTier == domain.ModelTierLarge {
-			taskCtx = models.WithHeavyModel(taskCtx)
+			taskCtx = domain.WithHeavyModel(taskCtx)
 			k.log.Detailf("[задача %s] модель: LARGE (требование задачи)", t.TaskID)
 		}
 

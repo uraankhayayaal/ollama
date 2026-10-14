@@ -1,8 +1,8 @@
 package main
 
 import (
-	"ai/agents"
 	"ai/acceptor"
+	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/backendlead"
 	"ai/agents/codereviewer"
@@ -28,6 +28,7 @@ import (
 	"ai/server"
 	"ai/services/mrlistener"
 	"ai/tokens"
+	"ai/tools"
 	"context"
 	"fmt"
 	"os"
@@ -49,6 +50,12 @@ func main() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		logging.Warnf("Предупреждение: .env не загружен (%v)", err)
 	}
+
+	planner.SetPlannerToolBuilder(tools.PlannerToolSet)
+	planner.SetOllamaToolConverter(tools.ToOllama)
+	planner.SetLSPDiagnoser(tools.LSPDiagnoserAdapter{})
+	planner.SetSnapshotFactory(tools.SnapshotAdapterFactory{})
+	planner.SetPublicAPIAuditor(tools.PublicAPIAuditorAdapter{})
 
 	// Сервис мониторинга новых MR — не требует провайдера модели.
 	if len(os.Args) > 1 && os.Args[1] == "listen" {
@@ -642,6 +649,7 @@ func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, 
 	}
 
 	exec := planner.NewExecutor(provider, plan)
+	exec.SetAcceptor(acceptor.PlannerAdapter{})
 	exec.SetCheckpoint(store, resume)
 	// Ф-1: именованные метрики шагов — в единый реестр телеметрии, откуда их
 	// видно в /metrics. Реестр в памяти процесса: без внешних сервисов, поэтому

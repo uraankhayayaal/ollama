@@ -42,15 +42,7 @@ import (
 // CodeSearch — имя инструмента в реестре (см. registry.go newTool).
 const CodeSearch = "CodeSearch"
 
-// RAGSearcher — минимальный интерфейс семантического поиска, используемый
-// инструментом. Реализуется *rag.Client; выделен, чтобы hermetic-тесты
-// работали с fake-реализацией без сети (ProjectInfo — статус индекса для
-// RagIndexStatus, Ф-1 PLAN-2026-09-24-done-architect-intelligence.md).
-type RAGSearcher interface {
-	Ping(ctx context.Context) error
-	Search(ctx context.Context, p rag.SearchParams) ([]rag.SearchResult, error)
-	ProjectInfo(ctx context.Context, projectName string) (rag.ProjectInfo, error)
-}
+type RAGSearcher = rag.Searcher
 
 // codeSearchTool — обёртка инструмента CodeSearch в реестре.
 type codeSearchTool struct {

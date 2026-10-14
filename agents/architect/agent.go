@@ -17,6 +17,7 @@ import (
 	"ai/board"
 	"ai/domain/services"
 	"ai/projects"
+	"ai/rag"
 	"ai/tools"
 	"context"
 	"encoding/json"
@@ -64,7 +65,7 @@ type Architect struct {
 	Store services.BoardStore
 	// RAG — клиент векторной памяти (CodeSearch + блок «релевантный код» в
 	// промпте). Опционален: nil — инструменты деградируют в skipped, блока нет.
-	RAG tools.RAGSearcher
+	RAG rag.Searcher
 	// ReviewMode — режим экспертизы багрепортов (фаза phaseBugs оркестратора):
 	// обязательный первый раунд submit_architecture_backlog отключается,
 	// системный промпт меняется на экспертную оценку багов.
@@ -116,7 +117,7 @@ func NewArchitectWithStore(projectName, prompt string, store services.BoardStore
 // SetRAG подключает клиент векторной памяти и пересобирает набор инструментов
 // с ним (CodeSearch/RagIndexStatus начинают искать по индексу). Повторный вызов
 // безопасен: типизации инструментов восстанавливаются из реестра.
-func (a *Architect) SetRAG(r tools.RAGSearcher) *Architect {
+func (a *Architect) SetRAG(r rag.Searcher) *Architect {
 	a.RAG = r
 	if a.Store != nil {
 		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, Board: a.Store, RAG: r})

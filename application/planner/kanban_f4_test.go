@@ -11,10 +11,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // fakeAskTool — герметичный аналог серверного моста askTool{Session} для

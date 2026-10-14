@@ -1,8 +1,8 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/acceptor"
+	"ai/agents"
 	"ai/checkpoint"
 	"ai/domain"
 	"ai/projects"
@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // stubProvider — фейковый провайдер, который падает при вызове. Используется,
@@ -304,7 +305,7 @@ func TestExecutorAcceptorScopedToSubproject(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(&fixPlanProvider{}, plan)
+	exec := NewExecutor(&fixPlanProvider{}, plan).SetAcceptor(acceptor.PlannerAdapter{})
 	if err := exec.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

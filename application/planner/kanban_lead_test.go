@@ -9,11 +9,12 @@ import (
 	"ai/runner"
 	"context"
 	"errors"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // leadFailProvider — на «Декомпозируй эпик» провайдер падает: 5.4 должен

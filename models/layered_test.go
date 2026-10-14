@@ -2,8 +2,8 @@ package models
 
 import (
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/domain"
-	"ai/runner"
 	"ai/tools"
 	"context"
 	"github.com/ollama/ollama/api"
@@ -21,12 +21,13 @@ type layerStub struct {
 	genCalls int
 	// resumeSeen — resume-состояние, которое видел слой (проверяем, что
 	// эскалация начинает цикл заново, а не продолжает застрявший диалог).
-	resumeSeen *runner.ResumeState
+	resumeSeen *usecases.ResumeState
 }
 
-func (s *layerStub) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (s *layerStub) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
 	s.genCalls++
-	s.resumeSeen = runner.ResumeStateFromContext(ctx)
+	st, _ := usecases.ResumeStateFromContext(ctx)
+	s.resumeSeen = st
 	if s.genErr != nil {
 		return nil, s.genErr
 	}
@@ -35,16 +36,16 @@ func (s *layerStub) Generate(ctx context.Context, agent agents.Agent) (*runner.A
 		if why == "" {
 			why = "повтор одного и того же вызова"
 		}
-		return &runner.AgentResponse{Looped: true, LoopReason: why, Rounds: 5}, nil
+		return &domain.AgentResponse{Looped: true, LoopReason: why, Rounds: 5}, nil
 	}
 	if s.trunc {
-		return &runner.AgentResponse{Content: "частично", Truncated: true, Rounds: 5}, nil
+		return &domain.AgentResponse{Content: "частично", Truncated: true, Rounds: 5}, nil
 	}
-	return &runner.AgentResponse{Content: "ответ_" + s.name}, nil
+	return &domain.AgentResponse{Content: "ответ_" + s.name}, nil
 }
 
-func (s *layerStub) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
-	return &runner.ModelReply{}, nil
+func (s *layerStub) ChatOnce(context.Context, domain.ChatRequest) (*domain.ModelReply, error) {
+	return &domain.ModelReply{}, nil
 }
 
 // testAgent — минимальный agents.Agent для тестов слоёв.
@@ -159,8 +160,8 @@ func TestLayeredEscalatesOnLoop(t *testing.T) {
 	large := &layerStub{name: "large"}
 	prov := NewLayeredProvider(small, large).(*LayeredProvider)
 
-	resume := &runner.ResumeState{Rounds: 120, Messages: []runner.Message{{Role: "system", Content: "s"}}}
-	ctx := runner.WithResumeState(context.Background(), resume)
+	resume := &usecases.ResumeState{Rounds: 120, Messages: []domain.Message{{Role: "system", Content: "s"}}}
+	ctx := usecases.WithResumeState(context.Background(), resume)
 
 	resp, err := prov.Generate(ctx, &testAgent{name: "developer"})
 	if err != nil {

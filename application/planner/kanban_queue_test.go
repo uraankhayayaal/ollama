@@ -10,10 +10,11 @@ import (
 	"ai/runner"
 	"ai/tools"
 	"context"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // TestKanbanLeadQueueWaitsUntilTasksDone: декомпозиция идёт по очереди. Пока у

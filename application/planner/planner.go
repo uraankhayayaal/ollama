@@ -2,46 +2,47 @@ package planner
 
 import (
 	"ai/agents"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/rag"
-	"ai/tools"
 	"fmt"
 
 	"github.com/ollama/ollama/api"
 )
 
-// plannerToolNames — минимальный набор инструментов для анализа состояния проекта.
-var plannerToolNames = []string{"List", "ReadFiles", tools.LspDefinition, tools.LspReferences, tools.LspHover}
+var (
+	plannerToolBuilder  services.ToolSetBuilder
+	ollamaToolConverter func([]domain.ToolDefinition) []api.Tool
+)
 
-// Planner — агент-планировщик, разбивает запрос пользователя на поэтапный план.
-// Использует минимальный набор инструментов (List, ReadFiles) для анализа
-// текущего состояния проекта перед составлением плана.
+func SetPlannerToolBuilder(b services.ToolSetBuilder) {
+	plannerToolBuilder = b
+}
+
+func SetOllamaToolConverter(f func([]domain.ToolDefinition) []api.Tool) {
+	ollamaToolConverter = f
+}
+
 type Planner struct {
 	Prompt      string
 	ProjectName string
-	// ProjectMap — компактная карта проекта (структура, размеры, языки),
-	// собирается детерминированно до вызова модели. Нужна для декомпозиции
-	// задачи на шаги с точным scope.
-	ProjectMap string
-	Tools      *tools.Set
+	ProjectMap  string
+	Tools       services.ToolSet
 }
 
-// NewPlanner создаёт планировщик для заданного проекта.
-// Инструменты планировщика указывают на директорию проекта temp/<projectName>,
-// чтобы модель могла изучить существующий код перед составлением плана.
-// Карта проекта обогащается блоком «релевантный код по задаче» (Ф-4):
-// семантическая выборка по тексту промпта из RAG, если Qdrant/эмбеддинги
-// доступны (клиент ленивый, недоступность — деградация к обычной карте).
 func NewPlanner(projectName, prompt string) *Planner {
 	dir := projects.ProjectDir(projectName)
-	ops := &tools.FileOps{OutputDir: dir}
 	ragClient := rag.NewClientSafe(rag.Config{})
-	return &Planner{
+	p := &Planner{
 		Prompt:      prompt,
 		ProjectName: projectName,
 		ProjectMap:  BuildProjectMapRAG(projectName, prompt, ragClient),
-		Tools:       tools.Select(plannerToolNames, tools.Deps{FileOps: ops}),
 	}
+	if plannerToolBuilder != nil {
+		p.Tools = plannerToolBuilder(dir)
+	}
+	return p
 }
 
 func (p *Planner) GetUserMessages() []agents.Message {
@@ -168,14 +169,23 @@ func (p *Planner) GetSystemMessages(_ []agents.Message) []agents.Message {
 	}
 }
 
-func (p *Planner) GetTools() []tools.ToolDefinition {
+func (p *Planner) GetTools() []domain.ToolDefinition {
+	if p.Tools == nil {
+		return nil
+	}
 	return p.Tools.Definitions()
 }
 
 func (p *Planner) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(p.GetTools())
+	if p.Tools == nil || ollamaToolConverter == nil {
+		return nil
+	}
+	return ollamaToolConverter(p.GetTools())
 }
 
 func (p *Planner) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
+	if p.Tools == nil {
+		return nil, fmt.Errorf("инструменты планировщика не подключены")
+	}
 	return p.Tools.Execute(functionName, functionArgs)
 }

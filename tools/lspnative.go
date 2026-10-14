@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"ai/domain/services"
 	"ai/stackdetect"
 	"ai/tools/lspclient"
 )
@@ -28,15 +29,7 @@ func nativeEnabled() bool {
 	return true
 }
 
-// LSPDiag — одна строка нативной (publishDiagnostics) диагностики для внешних
-// потребителей (приёмка, scope-гейт шагов плана). Пути — относительно OutputDir.
-type LSPDiag struct {
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	Col      int    `json:"col"`
-	Severity string `json:"severity"`
-	Message  string `json:"message"`
-}
+type LSPDiag = services.LSPDiag
 
 // LSPDiagnostics выдаёт нативные диагностики по файлам (пути относительно
 // OutputDir), используя publishDiagnostics языкового сервера. CLI-чекер не

@@ -4,7 +4,6 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/models"
 	"ai/tokens"
 	"context"
 	"fmt"
@@ -252,7 +251,7 @@ func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
 		}
 		taskCtx = domain.WithInjectionScope(taskCtx, domain.InjectionScope{Project: k.store.Project(), TaskID: t.TaskID, Role: t.Assignee})
 		if t.ModelTier == domain.ModelTierLarge {
-			taskCtx = models.WithHeavyModel(taskCtx)
+			taskCtx = domain.WithHeavyModel(taskCtx)
 		}
 		k.markActive(t.TaskID)
 		resp, genErr := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)

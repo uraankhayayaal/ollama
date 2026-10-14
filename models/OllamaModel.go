@@ -4,6 +4,7 @@ import (
 	"ai/agents"
 	"ai/application/usecases"
 	"ai/domain"
+	"ai/logging"
 	"ai/tools"
 	"context"
 	"encoding/json"
@@ -23,9 +24,6 @@ import (
 type OllamaProvider struct {
 	client *api.Client
 	model  string
-	// runner — агентский раннер (порт usecases.AgentRunner), выполняет полный
-	// агентский цикл. Подключается через SetRunner; nil — Generate недоступен.
-	runner usecases.AgentRunner
 	// settings — ключевые лимиты модели: входящий контекст (num_ctx), выход
 	// (num_predict) и бюджет thinking. Задаются секцией settings провайдера в
 	// providers.json (см. ModelSettings), НЕ переменными окружения. Вход
@@ -33,12 +31,6 @@ type OllamaProvider struct {
 	// nudge-цикла может раздуваться до десятков тысяч, из-за чего модель
 	// возвращает 400 exceeded_context_size.
 	settings ModelSettings
-}
-
-// SetRunner подключает агентский раннер (порт usecases.AgentRunner) к
-// провайдеру. Вызывается оркестратором при создании провайдера.
-func (o *OllamaProvider) SetRunner(r usecases.AgentRunner) {
-	o.runner = r
 }
 
 func NewOllamaProvider(model string, cfg ProviderConfig) (*OllamaProvider, error) {
@@ -65,11 +57,8 @@ func NewOllamaProvider(model string, cfg ProviderConfig) (*OllamaProvider, error
 	}, nil
 }
 
-func (o *llamaProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
-	if o.runner == nil {
-		return nil, fmt.Errorf("OllamaProvider: агентский раннер не подключён (SetRunner)")
-	}
-	return o.runner.Generate(ctx, agent)
+func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
+	return usecases.RunAgent(ctx, o, agent)
 }
 
 // ModelName — имя модели, реально выбранной для этого провайдера. Раннер
@@ -167,7 +156,7 @@ func streamIdleInterval() time.Duration {
 
 // ChatStream выполняет один запрос к модели Ollama в потоковом режиме: фрагменты
 // текста отдаются через onChunk (накопленный Partial), полный текст возвращается
-// в ModelReply. Реализует runner.StreamChatProvider.
+// в ModelReply. Реализует usecases.StreamChatProvider.
 func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(domain.StreamChunk)) (*domain.ModelReply, error) {
 	ollamaTools := tools.ToOllama(req.Tools)
 	msgs := req.Messages

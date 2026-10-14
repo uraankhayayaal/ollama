@@ -4,6 +4,7 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"context"
+	"fmt"
 )
 
 // ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели по
@@ -88,9 +89,22 @@ type RoundStateReporter interface {
 }
 
 // AgentRunner — порт агентского раннера: выполняет полный агентский цикл
-// (диалог + инструменты) и возвращает ответ модели. Реализуется
+// (диалог + инструменты) для конкретного провайдера и агента. Реализуется
 // инфраструктурой (runner).
 type AgentRunner interface {
-	Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error)
+	Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*domain.AgentResponse, error)
 }
 
+// agentRunner — подключённая реализация AgentRunner (инфраструктура).
+var agentRunner AgentRunner
+
+// SetAgentRunner подключает реализацию агентского раннера.
+func SetAgentRunner(r AgentRunner) { agentRunner = r }
+
+// RunAgent запускает полный агентский цикл через подключённый раннер.
+func RunAgent(ctx context.Context, provider ChatProvider, agent agents.Agent) (*domain.AgentResponse, error) {
+	if agentRunner == nil {
+		return nil, fmt.Errorf("агентский раннер не подключён (usecases.SetAgentRunner)")
+	}
+	return agentRunner.Generate(ctx, provider, agent)
+}

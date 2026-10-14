@@ -2,16 +2,14 @@ package planner
 
 import (
 	"ai/agents"
-	"ai/acceptor"
 
 	"ai/application/usecases"
 	"ai/checkpoint"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/logging"
-	"ai/models"
 	"ai/projects"
 	"ai/runevents"
-	"ai/tools"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,6 +21,19 @@ import (
 
 	"github.com/ollama/ollama/api"
 )
+
+var (
+	defaultSnapshotFactory  services.SnapshotFactory
+	defaultPublicAPIAuditor services.PublicAPIAuditor
+)
+
+func SetSnapshotFactory(f services.SnapshotFactory) {
+	defaultSnapshotFactory = f
+}
+
+func SetPublicAPIAuditor(a services.PublicAPIAuditor) {
+	defaultPublicAPIAuditor = a
+}
 
 // toDomainTaskSpecs переводит декомпозицию лида (domain.TaskSpec) в доменный
 // domain.TaskSpec, который хранится в Step.Tasks и сериализуется в
@@ -44,7 +55,7 @@ func toDomainTaskSpecs(tasks []domain.TaskSpec) []domain.TaskSpec {
 // каждого шага сохраняется в Redis, что позволяет возобновить работу
 // с места остановки (resume).
 type Executor struct {
-	provider models.LLMProvider
+	provider LLMProvider
 	plan     *Plan
 	// completed — шаги, успешно завершённые в текущем запуске (в т.ч.
 	// восстановленные из чекпоинта при resume).
@@ -53,7 +64,10 @@ type Executor struct {
 	// acceptReports — отчёты приёмки по шагам acceptor (ID шага → отчёт).
 	// Заполняются runAcceptorAgent и читаются циклом приёмки при создании
 	// плана исправлений.
-	acceptReports map[string]*acceptor.Report
+	acceptReports map[string]*domain.Report
+	// acceptor — порт детерминированной приёмки (acceptor.PlannerAdapter).
+	// nil — приёмка по шагам qa отключена.
+	acceptor Acceptor
 	// store — Redis-хранилище чекпоинтов; nil — контрольные точки отключены.
 	store *checkpoint.Store
 	// resume — возобновлять ли выполнение с чекпоинта.
@@ -72,21 +86,23 @@ type Executor struct {
 	// несколько проектов, поэтому сообщения исполнителя пишутся в файл своего
 	// проекта, а не в общий файл процесса.
 	log *logging.Logger
-	// rag — клиент векторной памяти для подмешивания контекста RAG в промпты
-	// шагов (Ф-4). nil — подмешивание выключено (исполнитель работает как
-	// раньше); недоступный Qdrant/эмбеддинги — graceful degrade (шаг без блока).
 	rag RAGSearcher
+
+	snapshotFactory services.SnapshotFactory
+	apiAuditor      services.PublicAPIAuditor
 }
 
 // NewExecutor создаёт исполнителя плана.
-func NewExecutor(provider models.LLMProvider, plan *Plan) *Executor {
+func NewExecutor(provider LLMProvider, plan *Plan) *Executor {
 	return &Executor{
-		provider:      provider,
-		plan:          plan,
-		completed:     make(map[string]bool),
-		statuses:      make(map[string]string),
-		acceptReports: make(map[string]*acceptor.Report),
-		log:           logging.For(planProject(plan)),
+		provider:        provider,
+		plan:            plan,
+		completed:       make(map[string]bool),
+		statuses:        make(map[string]string),
+		acceptReports:   make(map[string]*domain.Report),
+		log:             logging.For(planProject(plan)),
+		snapshotFactory: defaultSnapshotFactory,
+		apiAuditor:      defaultPublicAPIAuditor,
 	}
 }
 
@@ -126,12 +142,29 @@ func (e *Executor) SetMetrics(sink MetricSink) *Executor {
 	return e
 }
 
+// SetAcceptor подключает порт детерминированной приёмки (acceptor).
+// nil — приёмка по шагам qa отключена.
+func (e *Executor) SetAcceptor(a Acceptor) *Executor {
+	e.acceptor = a
+	return e
+}
+
 // SetRAG подключает клиент векторной памяти для контекста RAG по шагам (Ф-4):
 // промпт кодирующего шага обогащается блоком «релевантный код по шагу»
 // (семантический поиск по тексту шага с фильтром его scope). nil — выключено.
 // Возвращает сам исполнитель для цепочек вызовов.
 func (e *Executor) SetRAG(r RAGSearcher) *Executor {
 	e.rag = r
+	return e
+}
+
+func (e *Executor) SetSnapshotFactory(f services.SnapshotFactory) *Executor {
+	e.snapshotFactory = f
+	return e
+}
+
+func (e *Executor) SetPublicAPIAuditor(a services.PublicAPIAuditor) *Executor {
+	e.apiAuditor = a
 	return e
 }
 
@@ -456,13 +489,16 @@ func contractAuditEnabled() bool {
 // разработчика и логирует изменения контракта (добавленные/удалённые/
 // изменённые сигнатуры). Это диагностика, а не блокирующая проверка: вердикт
 // об ошибке шага выносят приёмка и анализатор (acceptor).
-func (e *Executor) auditContractStep(ctx context.Context, step *Step, projectName string, before *tools.PublicAPISnapshot) {
-	after, err := tools.BuildPublicAPISnapshot(projects.ProjectDir(projectName))
+func (e *Executor) auditContractStep(ctx context.Context, step *Step, projectName string, before *services.PublicAPISnapshot) {
+	if e.apiAuditor == nil {
+		return
+	}
+	after, err := e.apiAuditor.Snapshot(projects.ProjectDir(projectName))
 	if err != nil {
 		e.log.Detailf("[%s] шаг %s: не удалось снять повторный снимок API: %v", agentLabel(step.Agent, step.Role), step.ID, err)
 		return
 	}
-	diff := tools.ComparePublicAPI(before, after)
+	diff := e.apiAuditor.Compare(before, after)
 	if len(diff) == 0 {
 		return
 	}
@@ -483,7 +519,7 @@ func (e *Executor) auditContractStep(ctx context.Context, step *Step, projectNam
 // auditFileChanges выводит дайджест файловых правок шага (что субагент
 // создал/изменил/удалил) и сохраняет счётчики в метрики чекпоинта. Ничего не
 // откатывает — это аудит, а не контроль: код на всякий случай не трогается.
-func (e *Executor) auditFileChanges(ctx context.Context, step *Step, snap *tools.Snap) {
+func (e *Executor) auditFileChanges(ctx context.Context, step *Step, snap services.Snapshot) {
 	added, modified, removed, err := snap.Diff()
 	if err != nil {
 		e.log.Detailf("[%s] шаг %s: не удалось вычислить diff правок: %v", agentLabel(step.Agent, step.Role), step.ID, err)
@@ -519,7 +555,7 @@ func (e *Executor) auditFileChanges(ctx context.Context, step *Step, snap *tools
 // сохранённая история диалога ссылается на уже существующие файлы).
 //
 // Возвращает true, если откат реально что-то изменил.
-func (e *Executor) rollbackStep(projectName, stepID string, snap *tools.Snap) bool {
+func (e *Executor) rollbackStep(projectName, stepID string, snap services.Snapshot) bool {
 	if snap == nil || !rollbackEnabled() {
 		return false
 	}
@@ -612,14 +648,16 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// по области шага (NewSnapScoped): при параллельном выполнении волны откат
 	// одного шага не должен трогать файлы соседних. PLAN.md исключается — им
 	// управляет исполнитель, и параллельный шаг не удаляет его при откате.
-	var snap *tools.Snap
+	var snap services.Snapshot
 	if rollbackEnabled() {
-		var s *tools.Snap
+		var s services.Snapshot
 		var serr error
-		if len(scope) > 0 {
-			s, serr = tools.NewSnapScoped(projects.ProjectDir(projectName), scope, planDocName)
+		if e.snapshotFactory == nil {
+			serr = fmt.Errorf("фабрика снимков не подключена")
+		} else if len(scope) > 0 {
+			s, serr = e.snapshotFactory.NewScoped(projects.ProjectDir(projectName), scope, planDocName)
 		} else {
-			s, serr = tools.NewSnap(projects.ProjectDir(projectName))
+			s, serr = e.snapshotFactory.New(projects.ProjectDir(projectName))
 		}
 		if serr == nil {
 			snap = s
@@ -655,9 +693,9 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	// удаление/изменение публичных деклараций. Не ошибка плана, а сигнал для
 	// человека (см. auditContractStep); при CODEGEN_CONTRACT_ENFORCE=1 уровень
 	// лога поднимается до предупреждения.
-	var apiBefore *tools.PublicAPISnapshot
-	if contractAuditEnabled() {
-		if s, serr := tools.BuildPublicAPISnapshot(projects.ProjectDir(projectName)); serr == nil {
+	var apiBefore *services.PublicAPISnapshot
+	if contractAuditEnabled() && e.apiAuditor != nil {
+		if s, serr := e.apiAuditor.Snapshot(projects.ProjectDir(projectName)); serr == nil {
 			apiBefore = s
 		} else {
 			e.log.Detailf("[%s] шаг %s: не удалось снять снимок API: %v", agentLabel(step.Agent, step.Role), step.ID, serr)
@@ -764,14 +802,17 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	// шаги волны не пересекаются по файлам, поэтому откат одного из них не
 	// станет откатывать чужую работу. PLAN.md исключается — им управляет
 	// исполнитель.
-	var snap *tools.Snap
+	var snap services.Snapshot
 	if rollbackEnabled() {
-		var s *tools.Snap
+		var s services.Snapshot
 		var serr error
-		if scope := leadStepScope(projects.ProjectDir(projectName), step); len(scope) > 0 {
-			s, serr = tools.NewSnapScoped(projects.ProjectDir(projectName), scope, planDocName)
+		scope := leadStepScope(projects.ProjectDir(projectName), step)
+		if e.snapshotFactory == nil {
+			serr = fmt.Errorf("фабрика снимков не подключена")
+		} else if len(scope) > 0 {
+			s, serr = e.snapshotFactory.NewScoped(projects.ProjectDir(projectName), scope, planDocName)
 		} else {
-			s, serr = tools.NewSnap(projects.ProjectDir(projectName))
+			s, serr = e.snapshotFactory.New(projects.ProjectDir(projectName))
 		}
 		if serr == nil {
 			snap = s
@@ -1045,7 +1086,10 @@ func (e *Executor) persistRoundState(ctx context.Context, step *Step, resp *doma
 func (e *Executor) runAcceptorAgent(ctx context.Context, step *Step, projectName string) error {
 	root := projects.ProjectDir(projectName)
 	dir := acceptanceDir(root, step.Scope)
-	rep := acceptor.Accept(dir, acceptor.LoadConfig())
+	if e.acceptor == nil {
+		return fmt.Errorf("приёмка: порт acceptor не подключён")
+	}
+	rep := e.acceptor.Accept(dir)
 	e.mu.Lock()
 	e.acceptReports[step.ID] = rep
 	e.mu.Unlock()
@@ -1087,7 +1131,7 @@ func (e *Executor) runAcceptorAgent(ctx context.Context, step *Step, projectName
 	}
 	e.trackStepMetrics(ctx, step.ID, m)
 
-	if rep.Verdict == acceptor.VerdictApprove {
+	if rep.Verdict == domain.VerdictApprove {
 		e.log.Infof("[приёмка] шаг %s: приёмка %q пройдена (%s)", step.ID, dir, rep.Summary)
 	} else {
 		e.log.Infof("[приёмка] шаг %s: приёмка %q НЕ пройдена (%s)", step.ID, dir, rep.Summary)
@@ -1218,8 +1262,11 @@ func effectiveCreationScope(projectDir string, scope []string) []string {
 // тот составляет шаги исправления разработчиками backend/frontend,
 // исполнитель их прогоняет и повторяет приёмку.
 func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
-	cfg := acceptor.LoadConfig()
-	if cfg.MaxRounds <= 0 {
+	if e.acceptor == nil {
+		return nil
+	}
+	maxRounds := e.acceptor.MaxRounds()
+	if maxRounds <= 0 {
 		return nil
 	}
 
@@ -1235,13 +1282,13 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 		return nil
 	}
 
-	for round := 1; round <= cfg.MaxRounds; round++ {
+	for round := 1; round <= maxRounds; round++ {
 		var failing []*Step
 		for _, s := range acceptSteps {
 			switch rep := e.acceptReports[s.ID]; {
 			case rep == nil:
 				failing = append(failing, s)
-			case rep.Verdict != acceptor.VerdictApprove:
+			case rep.Verdict != domain.VerdictApprove:
 				failing = append(failing, s)
 			}
 		}
@@ -1254,9 +1301,9 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 			rep := e.acceptReports[s.ID]
 			// Check if report is nil before proceeding with fixes
 			if rep == nil {
-				e.log.Warnf("[приёмка] раунд %d/%d: отчёт приёмки отсутствует для шага %q", round, cfg.MaxRounds, s.Description)
+				e.log.Warnf("[приёмка] раунд %d/%d: отчёт приёмки отсутствует для шага %q", round, maxRounds, s.Description)
 				// Try to re-run acceptor for this step
-				e.log.Infof("[приёмка] раунд %d/%d: повторный запуск приёмки для шага %q", round, cfg.MaxRounds, s.Description)
+				e.log.Infof("[приёмка] раунд %d/%d: повторный запуск приёмки для шага %q", round, maxRounds, s.Description)
 				if err := e.runAcceptorAgent(ctx, s, e.plan.ProjectName); err != nil {
 					return fmt.Errorf("раунд приёмки %d: повторный запуск приёмки для шага %q: %w", round, s.Description, err)
 				}
@@ -1267,7 +1314,7 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 				}
 			}
 
-			e.log.Infof("[приёмка] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, cfg.MaxRounds, s.Description)
+			e.log.Infof("[приёмка] раунд %d/%d: приёмка %q не пройдена — вызываю планировщик исправлений", round, maxRounds, s.Description)
 
 			fixes, err := e.planFixSteps(ctx, rep)
 			if err != nil {
@@ -1341,14 +1388,14 @@ func (e *Executor) runAcceptanceLoop(ctx context.Context) error {
 		}
 	}
 
-	e.log.Warnf("[приёмка] исчерпан бюджет раундов приёмки (%d) — остались неисправленные замечания", cfg.MaxRounds)
-	return fmt.Errorf("приёмка не пройдена после %d раундов исправлений, см. лог приёмки", cfg.MaxRounds)
+	e.log.Warnf("[приёмка] исчерпан бюджет раундов приёмки (%d) — остались неисправленные замечания", maxRounds)
+	return fmt.Errorf("приёмка не пройдена после %d раундов исправлений, см. лог приёмки", maxRounds)
 }
 
 // planFixSteps отдаёт планировщику отчёт приёмки и получает шаги исправления.
 // Формат — тот же JSON-план, но планировщику запрещено добавлять acceptor:
 // повторную приёмку запускает цикл приёмки исполнителя.
-func (e *Executor) planFixSteps(ctx context.Context, rep *acceptor.Report) ([]Step, error) {
+func (e *Executor) planFixSteps(ctx context.Context, rep *domain.Report) ([]Step, error) {
 	// Обновлённая область видимости для задач исправления: исходит из тех
 	// файлов, на которые реально указывает приёмка (acceptor не ограничен
 	// областью видимости и видит весь модуль). Эти локации передаём
@@ -1416,7 +1463,7 @@ func (h *leadHintAgent) GetSystemMessages(text []agents.Message) []agents.Messag
 }
 
 func (h *leadHintAgent) GetUserMessages() []agents.Message { return h.inner.GetUserMessages() }
-func (h *leadHintAgent) GetTools() []tools.ToolDefinition  { return h.inner.GetTools() }
+func (h *leadHintAgent) GetTools() []domain.ToolDefinition { return h.inner.GetTools() }
 func (h *leadHintAgent) GetToolsForOllama() []api.Tool     { return h.inner.GetToolsForOllama() }
 func (h *leadHintAgent) CallFunction(name string, args map[string]any) ([]byte, error) {
 	return h.inner.CallFunction(name, args)

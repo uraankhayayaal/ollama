@@ -8,10 +8,11 @@ import (
 	"ai/projects"
 	"ai/runner"
 	"context"
-	"github.com/alicebob/miniredis/v2"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // loopedProvider повторяет поведение kanbanProvider (архитектор публикует

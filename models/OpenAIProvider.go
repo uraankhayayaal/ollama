@@ -2,8 +2,8 @@ package models
 
 import (
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/domain"
-	"ai/runner"
 	"ai/tools"
 	"context"
 	"fmt"
@@ -67,8 +67,8 @@ func NewOpenAIProvider(name ProviderName, model string, cfg ProviderConfig) (*Op
 	}, nil
 }
 
-func (p *OpenAIProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
-	return runner.Generate(ctx, p, agent)
+func (p *OpenAIProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
+	return usecases.RunAgent(ctx, p, agent)
 }
 
 // ModelName — имя модели провайдера (контекст промпт-инъекций, см. ModelName
@@ -78,15 +78,15 @@ func (p *OpenAIProvider) ModelName() string { return p.model }
 // ProviderName — имя провайдера из providers.json (yandex/openai/trim/reg/…).
 func (p *OpenAIProvider) ProviderName() string { return string(p.name) }
 
-func (p *OpenAIProvider) ModelLimits() runner.ModelLimits {
-	return runner.ModelLimits{
+func (p *OpenAIProvider) ModelLimits() domain.ModelLimits {
+	return domain.ModelLimits{
 		InputTokens:  p.settings.InputTokens,
 		OutputTokens: p.settings.OutputTokens,
 		ThinkTokens:  p.settings.ThinkTokens,
 	}
 }
 
-func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*runner.ModelReply, error) {
+func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*domain.ModelReply, error) {
 	msgs := req.Messages
 	oaTools := make([]openai.ChatCompletionToolParam, 0, len(req.Tools))
 	for _, t := range req.Tools {
@@ -200,15 +200,15 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (
 		})
 	}
 
-	var usage *runner.Usage
+	var usage *domain.Usage
 	if response.Usage.JSON.PromptTokens.Valid() && response.Usage.JSON.CompletionTokens.Valid() {
-		usage = &runner.Usage{
+		usage = &domain.Usage{
 			InputTokens:  int(response.Usage.PromptTokens),
 			OutputTokens: int(response.Usage.CompletionTokens),
 		}
 	}
 
-	return &runner.ModelReply{
+	return &domain.ModelReply{
 		Content:      message.Content,
 		ToolCalls:    toolCalls,
 		FinishReason: string(response.Choices[0].FinishReason),
@@ -220,7 +220,7 @@ func (p *OpenAIProvider) GetModelName(ctx context.Context) string {
 	return p.model
 }
 
-func hasToolResult(msgs []runner.Message) bool {
+func hasToolResult(msgs []domain.Message) bool {
 	for _, m := range msgs {
 		if m.Role == "tool" {
 			return true

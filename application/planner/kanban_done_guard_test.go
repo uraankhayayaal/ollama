@@ -16,8 +16,9 @@ import (
 	"testing"
 
 	"ai/projects"
-	"github.com/alicebob/miniredis/v2"
 	"os"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // idleProvider ведёт себя как loopedProvider, но специалист просто

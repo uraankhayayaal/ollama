@@ -2,7 +2,6 @@ package models
 
 import (
 	"ai/domain"
-	"ai/runner"
 	"context"
 	"errors"
 	"fmt"
@@ -31,7 +30,7 @@ func TestChatStreamCanceledContextIsWrappable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = p.ChatStream(ctx, domain.ChatRequest{Messages: []runner.Message{{Role: "user", Content: "привет"}}}, nil)
+	_, err = p.ChatStream(ctx, domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "привет"}}}, nil)
 	if err == nil {
 		t.Fatal("ожидалась ошибка отменённого контекста")
 	}
@@ -87,7 +86,7 @@ func TestChatStreamRetriesInvalidToolCallArgs(t *testing.T) {
 	}
 	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
 
-	rep, err := p.ChatStream(context.Background(), domain.ChatRequest{Messages: []runner.Message{{Role: "user", Content: "привет"}}}, nil)
+	rep, err := p.ChatStream(context.Background(), domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "привет"}}}, nil)
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -115,7 +114,7 @@ func TestChatStreamRetriesExhausted(t *testing.T) {
 	}
 	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
 
-	_, err = p.ChatStream(context.Background(), domain.ChatRequest{Messages: []runner.Message{{Role: "user", Content: "привет"}}}, nil)
+	_, err = p.ChatStream(context.Background(), domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "привет"}}}, nil)
 	if err == nil {
 		t.Fatal("ожидалась ошибка при исчерпании повторов")
 	}
@@ -155,7 +154,7 @@ func TestChatStreamNoRetryOnNonRetryableError(t *testing.T) {
 	}
 	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
 
-	_, err = p.ChatStream(context.Background(), domain.ChatRequest{Messages: []runner.Message{{Role: "user", Content: "привет"}}}, nil)
+	_, err = p.ChatStream(context.Background(), domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "привет"}}}, nil)
 	if err == nil {
 		t.Fatal("ожидалась ошибка")
 	}
@@ -227,7 +226,7 @@ func TestChatStreamIdleWatchdogAbortsSilentBackend(t *testing.T) {
 	}
 	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
 
-	_, err = p.ChatStream(context.Background(), domain.ChatRequest{Messages: []runner.Message{{Role: "user", Content: "привет"}}}, nil)
+	_, err = p.ChatStream(context.Background(), domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "привет"}}}, nil)
 	if err == nil {
 		t.Fatal("ожидалась ошибка замолчавшего стрима")
 	}
@@ -275,7 +274,7 @@ func TestChatStreamIdleWatchdogHealthyStream(t *testing.T) {
 	}
 	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
 
-	rep, err := p.ChatStream(context.Background(), domain.ChatRequest{Messages: []runner.Message{{Role: "user", Content: "привет"}}}, nil)
+	rep, err := p.ChatStream(context.Background(), domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "привет"}}}, nil)
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
