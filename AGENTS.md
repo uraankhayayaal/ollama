@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3z — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3aa — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -650,6 +650,20 @@ approve, отказ, отмена контекста → `Reset`, останов
 + таблица F3z + narrative), `docs/00-overview/project-map.md` (строка
 `application/chatassist/` расширена). Остаток Этапа 6 — F3+: `server`-хендлеры.
 Коммит F3z `eb9935e`.
+
+Срез **F3aa** — кольцевой буфер логов рантайма вынесен из `server/applog.go` в
+`application/logs/applog.go`: `Line`/`RingBuffer` (`Push`/`Tail`/`TakeDirty`) +
+константы `BufferLines`/`DefaultTail`/`MaxTail`. Серверный `appLogBuffer` стал
+адаптером с прежними именами методов (`push`/`tail`/`takeDirty`), поэтому код
+сессии и REST-хендлера не менялся. Тесты: новые
+`application/logs/applog_test.go`; серверные `applog_test.go` не менялись (идут
+через адаптер). Верификация: канонический набор зелёный (на живом прогоне 6 тестов
+`TestChatAssistant*` упали на предсуществующем флаке окружения — подтверждено на
+`ace1ba7`, до Этапа 6; в изоляции и на повторе стабильно падают),
+`-race` по `application/logs` чист, `gofmt` по правкам чист. Документация: план
+(шапка + таблица F3aa + narrative), `docs/00-overview/project-map.md` (строка
+`application/logs/` расширена `applog.go`). Остаток Этапа 6 — F3+:
+`server`-хендлеры. Коммит F3aa — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

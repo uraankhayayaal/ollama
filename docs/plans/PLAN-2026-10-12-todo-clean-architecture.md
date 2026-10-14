@@ -113,9 +113,10 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 (сборка упорядоченного снимка + пагинация) вынесен из `server/session.go` в новый
 пакет `application/board` (порт `Store`); срез **F3z ✅** — детерминированная
 сборка сводки доски для промпта ассистента (`BoardSummary`/
-`OrchestrationStatus`/`BoardRevisionLine`) вынесена в `application/chatassist`.
-Остальное (git-flow хуки, остальная оркестрация, RAG-хуки) — в
-плане; разбивка в разделе «Этап 6» ниже.
+`OrchestrationStatus`/`BoardRevisionLine`) вынесена в `application/chatassist`;
+срез **F3aa ✅** — кольцевой буфер логов рантайма вынесен из `server/applog.go` в
+`application/logs`. Остальное (git-flow хуки, остальная оркестрация, RAG-хуки)
+— в плане; разбивка в разделе «Этап 6» ниже.
 
 ## Проблема
 
@@ -604,6 +605,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3x | HITL-затвор (`Epics`/`Tasks` — `Wait` c публикацией события/статуса и блокировкой до решения, `Approve` — разрешение/отказ, `Reset`, состояние `State`) вынесен из `server/session.go` в новый пакет `application/hitl` (`gate.go`, порт `GateHost`: `Stopped`/`Running`/`BroadcastStatus`/`PublishGate`); `Session` оставил адаптер эффектов и тонкие обёртки, `gateEvent` — алиас `hitl.GateEvent` | ✅ |
 | F3y | Read-model доски: сборка упорядоченного снимка (`View` — эпики в эффективном порядке очереди через `infrastructure/board.SortEpics`, задачи, баги, meta), пагинация со счётчиками (`ViewPage`/`SlicePage`), `TruncateText`, типы `Snapshot`/`Total` вынесены из `server/session.go` в новый пакет `application/board` (`view.go`, порт `Store`); `server` оставил `boardSnapshot` (встраивает `appboard.Snapshot` + `Git *gitView`) и тонкие обёртки | ✅ |
 | F3z | Детерминированная сборка сводки доски для промпта чат-ассистента (`BoardSummary` — исходная задача/эпики/задачи по статусам + в работе/конфликты мёрджа/баги, `OrchestrationStatus`, `BoardRevisionLine`, тип `BoardView`) вынесена из `server/chatassist.go` (`chatPromptFor`) в `application/chatassist` (`boardprompt.go`); `server` оставил чтение рантайма сессии, вызов `boardView`, fallback «Kanban-доска недоступна» и дайджест логов | ✅ |
+| F3aa | Кольцевой буфер логов рантайма (`appLogBuffer`/`appLogLine`/`appLogBufferLines`/`appLogDefaultTail`/`appLogMaxTail`) вынесен из `server/applog.go` в `application/logs` (`RingBuffer`/`Line`/`BufferLines`/`DefaultTail`/`MaxTail`); `server` оставил адаптер `appLogBuffer` с методами `push`/`tail`/`takeDirty` | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -990,6 +992,17 @@ approve, отказ, отмена контекста → `Reset`, останов
 менялись (текст воспроизведён дословно). Верификация: канонический набор зелёный
 (31 пакет), `-race` по `application/chatassist` чист, `gofmt` чист. Доки:
 `project-map.md`.
+
+**F3aa ✅** — кольцевой буфер логов рантайма вынесен из `server/applog.go` в
+`application/logs/applog.go`: `Line`/`RingBuffer` (`Push`/`Tail`/`TakeDirty`) +
+константы `BufferLines`/`DefaultTail`/`MaxTail`. Серверный `appLogBuffer` стал
+адаптером с прежними именами методов (`push`/`tail`/`takeDirty`), поэтому код
+сессии и REST-хендлера не менялся. Тесты: новые
+`application/logs/applog_test.go`; серверные `applog_test.go` не менялись (идут
+через адаптер). Верификация: канонический набор зелёный (предсуществующий флак 6
+тестов `TestChatAssistant*` на живом прогоне; на изоляции и на более старых
+коммитах стабильно падают), `-race` по `application/logs` чист, `gofmt` чист.
+Доки: `project-map.md`.
 
 ## Ключевые решения
 

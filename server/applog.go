@@ -23,21 +23,22 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	applogs "ai/application/logs"
 	"ai/projects"
 	"ai/runevents"
 	"ai/tools"
 )
 
-// Границы кольцевого буфера логов рантайма. Меньше — потеряем причину падения
-// (она всегда в конце), больше — распухает память на проектах с болтливым
-// выводом вроде сборки фронтенда.
+// Кольцевой буфер строк логов рантайма проекта и его границы вынесены в
+// application/logs (RingBuffer/BufferLines/DefaultTail/MaxTail). Ниже —
+// алиасы под прежние серверные имена, чтобы код сессии и REST-хендлер не
+// менялись.
 const (
-	appLogBufferLines = 2000
-	appLogDefaultTail = 300
-	appLogMaxTail     = 2000
+	appLogBufferLines = applogs.BufferLines
+	appLogDefaultTail = applogs.DefaultTail
+	appLogMaxTail     = applogs.MaxTail
 	// appLogIdleFlush — период сброса накопленных строк в лог проекта.
 	// Писать в файл на каждую строку значило бы захлёбывать диск логами от
 	// рантайма; копим и пишем пачками.
@@ -45,65 +46,17 @@ const (
 )
 
 // appLogLine — строка лога рантайма в API.
-type appLogLine struct {
-	// Time — момент получения строки (не время приложения): логи сторонних
-	// приложений часто вообще без таймстемпов.
-	Time time.Time `json:"time"`
-	// Source — откуда строка: local (процесс) или docker (сервис compose).
-	Source string `json:"source,omitempty"`
-	// Line — сама строка.
-	Line string `json:"line"`
-}
+type appLogLine = applogs.Line
 
-// appLogBuffer — кольцевой буфер строк логов рантайма проекта.
-type appLogBuffer struct {
-	mu    sync.Mutex
-	lines []appLogLine
-	// dirty — есть несохранённые строки (для лога проекта).
-	dirty int
-}
+// appLogBuffer — обёртка над application/logs.RingBuffer с сохранением прежних
+// серверных имён методов (push/tail/takeDirty).
+type appLogBuffer struct{ applogs.RingBuffer }
 
-func (b *appLogBuffer) push(source, line string) {
-	now := time.Now()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.lines = append(b.lines, appLogLine{Time: now, Source: source, Line: line})
-	if len(b.lines) > appLogBufferLines {
-		n := copy(b.lines, b.lines[len(b.lines)-appLogBufferLines:])
-		b.lines = b.lines[:n]
-	}
-	b.dirty++
-}
+func (b *appLogBuffer) push(source, line string) { b.Push(source, line) }
 
-// tail возвращает последние n строк (n <= 0 — умолчание).
-func (b *appLogBuffer) tail(n int) []appLogLine {
-	if n <= 0 {
-		n = appLogDefaultTail
-	}
-	if n > appLogMaxTail {
-		n = appLogMaxTail
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if n > len(b.lines) {
-		n = len(b.lines)
-	}
-	out := make([]appLogLine, n)
-	copy(out, b.lines[len(b.lines)-n:])
-	return out
-}
+func (b *appLogBuffer) tail(n int) []appLogLine { return b.Tail(n) }
 
-// takeDirty забирает и обнуляет счётчик несохранённых строк: вернёт true, если
-// в лог проекта есть что дописать.
-func (b *appLogBuffer) takeDirty() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.dirty == 0 {
-		return false
-	}
-	b.dirty = 0
-	return true
-}
+func (b *appLogBuffer) takeDirty() bool { return b.TakeDirty() }
 
 // appLogFlusherLoop дописывает накопленные строки в лог проекта пачками и
 // подмешивает хвост в цикл самокоррекции агента.
