@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3j — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3k — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -266,8 +266,42 @@ busy/still_conflicts/acceptance_failed/final conflict/merge fatal); сервер
 Верификация: канонический набор зелёный (26 пакетов), `-race` по
 `application/gitflow` чист, `gofmt` по правкам чист. Документация: план (шапка +
 таблица F3j), `docs/00-overview/project-map.md`. Остаток Этапа 6 — F3+:
-сессии/оркестрация, RAG-хуки. Коммиты F3g `fd6c49b`, F3h `f3ed4e6`, F3i
-`606becf` сделаны; F3j — коммита нет (спросить пользователя).
+сессии/оркестрация, остальные RAG-хуки. Коммиты F3g `fd6c49b`, F3h `f3ed4e6`,
+F3i `606becf`, F3j `1c84b84` сделаны.
+
+Срез **F3k** — RAG-хуки вынесены из `server/ragref.go` (490) и
+`server/ragindex.go` (264) в новый пакет **`application/rag`**: `ref.go` —
+`LoadRefItems`/`LoadRefDiff` (чтение содержимого ветки из git-объектов:
+`git ls-tree`+`git show`, `git diff base...ref`+`git cat-file`),
+`ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/`RefFileSize` (отбор
+путей/файлов), `BranchIndexUpToDate` (пропуск свежего индекса), типы
+`RefSnapshot`{Branch,CommitSHA,Items}/`Indexer`(`EnsureCollection`/`IndexProject`/
+`BranchIndexed`)/`MaxRefFileBytes=2_000_000`; `index.go` — `CollectIndexItems`
+(обход каталога через `WalkerFn`) и `IndexProjectRAG` (коллекция + `IndexProject`).
+В `server` осталась оркестрация фоновых прогонов (`Session.startIndexBackground`,
+single-flight по ветке, отчёты в чат), git-flow хуки
+(`refreshRagIndexBranch`/`refreshRagIndexDir`/`refreshRagTaskBranch`/
+`afterMainChanged`), синхрон рабочей копии (`syncAgentBranchWithMain`/
+`syncAgentBranchAsync`/`headSHA`/`abortMerge`) — это срез F3m. Адаптеры:
+`server/ragindex.go` — `type projectIndexer = apprag.Indexer`,
+`buildProjectIndexer`/`startIndexBackground` без изменений (индексатор-кловер
+`projectIndexerCloser`); `server/ragref.go` — `var loadRefItems = apprag.LoadRefItems`,
+`var loadRefDiff = apprag.LoadRefDiff`, `refItemsLoader`/`refDiffLoader` возвращают
+`apprag.RefSnapshot`; загрузчики-проверки вызывают `apprag.BranchIndexUpToDate`
+(лог сохранён), `IndexDirBackground` — `apprag.IndexProjectRAG`. Тесты:
+новые герметичные `application/rag/ref_test.go` (`refGit`-исполнитель,
+`TestLoadRefItemsParsesAndFilters`, `TestLoadRefItemsBinaryAndErrors`,
+`TestLoadRefDiffOnlyChanged`) и `application/rag/index_test.go`
+(`TestCollectIndexItemsHermetic`, `TestIndexProjectRAGHermetic`,
+`TestBranchIndexUpToDate`, `fakeProjectIndexer`, `writeTestFile`); серверные
+`ragref_test.go`/`ragindex_test.go` потеряли переехавшие тесты и хелперы
+(`refGit`/`lsTreeEntry`), `refSnapshot`→`apprag.RefSnapshot`, остальные
+хуки/REST/сессия без изменений. Верификация: канонический набор зелёный (26
+пакетов), `-race` по `application/rag` чист, `gofmt` по правкам чист.
+Документация: план (шапка + таблица F3k + narrative),
+`docs/00-overview/project-map.md` (новая строка `application/rag/`). Остаток
+Этапа 6 — F3+: git-flow хуки, сессии/оркестрация, остальные RAG-хуки. Коммита
+F3k нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

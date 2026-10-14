@@ -21,13 +21,11 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
-	"ai/forges"
+	apprag "ai/application/rag"
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 	"ai/logging"
@@ -35,150 +33,12 @@ import (
 	"time"
 )
 
-// maxRefFileBytes — предел размера файла, который читается из ветки (аналог
-// rag.maxIndexFileSize: крупные вендоренные блоки в индекс не идут).
-const maxRefFileBytes = 2_000_000
-
-// refSnapshot — содержимое ветки/ref, готовое к индексации.
-type refSnapshot struct {
-	// Branch — имя ветки, под которым точки попадут в индекс (payload branch).
-	Branch string
-	// CommitSHA — коммит, снятый снапшот (версия индексации); пусто — без git.
-	CommitSHA string
-	// Items — файлы ветки для полной индексации.
-	Items []rag.IndexItem
-}
-
 // refItemsLoader — снапшот ветки по ref. Аргументы: git-исполнитель сервера,
 // каталог репозитория и имя ветки. Заменяется в hermetic-тестах.
-type refItemsLoader func(ctx context.Context, ex git.Executor, dir, ref string) (refSnapshot, error)
+type refItemsLoader func(ctx context.Context, ex git.Executor, dir, ref string) (apprag.RefSnapshot, error)
 
 // loadRefItems — текущий загрузчик снапшота (пакетная переменная для тестов).
-var loadRefItems refItemsLoader = collectRefItems
-
-// branchIndexUpToDate — активные точки ветки на этом коммите уже есть:
-// переиндексация не нужна (проверка дешевле прогона и индекс не трогает).
-func branchIndexUpToDate(ctx context.Context, indexer projectIndexer, project, branch, commit string) (bool, error) {
-	if strings.TrimSpace(commit) == "" {
-		return false, nil
-	}
-	done, err := indexer.BranchIndexed(ctx, project, branch, commit)
-	if err != nil {
-		return false, err
-	}
-	if done {
-		logging.For(project).Infof("rag: индекс ветки %s (%s) актуален — повторная индексация не нужна",
-			branch, commit[:min(len(commit), 8)])
-	}
-	return done, nil
-}
-
-// collectRefItems читает файлы ветки прямо из git: `git ls-tree -r -z --long`
-// даёт список blob-ов с размерами, содержимое — `git show ref:<путь>`. Рабочая
-// копия не читается и не меняется, поэтому индекс ветки всегда соответствует
-// её содержимому, даже если checkout проекта отстал от main.
-func collectRefItems(ctx context.Context, ex git.Executor, dir, ref string) (refSnapshot, error) {
-	if ex == nil {
-		return refSnapshot{}, fmt.Errorf("не задан git-исполнитель")
-	}
-	if strings.TrimSpace(dir) == "" || strings.TrimSpace(ref) == "" {
-		return refSnapshot{}, fmt.Errorf("не заданы каталог и ветка для индексации")
-	}
-	snap := refSnapshot{Branch: ref}
-
-	out, err := ex.Exec(ctx, dir, "git", "ls-tree", "-r", "-z", "--long", ref)
-	if err != nil {
-		return refSnapshot{}, fmt.Errorf("git ls-tree %s: %w", ref, err)
-	}
-	for _, rec := range strings.Split(out, "\x00") {
-		if strings.TrimSpace(rec) == "" {
-			continue
-		}
-		path, size, ok := parseLsTreeEntry(rec)
-		if !ok || !indexablePath(path) {
-			continue
-		}
-		// Размер известен из ls-tree: пустые и крупные файлы не читаем вовсе.
-		if size <= 0 || size > maxRefFileBytes {
-			continue
-		}
-		content, cerr := ex.Exec(ctx, dir, "git", "show", ref+":"+path)
-		if cerr != nil {
-			logging.Warnf("rag: git show %s:%s: %v", ref, path, cerr)
-			continue
-		}
-		if !indexableContent(content) {
-			continue
-		}
-		snap.Items = append(snap.Items, rag.IndexItem{
-			Path:    path,
-			Scope:   rag.ScopeForPath(path),
-			Content: content,
-		})
-	}
-
-	// Коммит ветки — версия индексации. Без него точки всё равно заменяют друг
-	// друга (проект без git), но с ним повторный прогон идемпотентен.
-	if sha, serr := ex.Exec(ctx, dir, "git", "rev-parse", ref); serr == nil {
-		snap.CommitSHA = strings.TrimSpace(sha)
-	}
-	return snap, nil
-}
-
-// parseLsTreeEntry разбирает запись `git ls-tree --long`: метаданные до табуляции
-// (mode type sha size) и путь после. Возвращает путь, размер и признак, что
-// запись разобрана и это обычный blob (не симлинк и не поддерево).
-func parseLsTreeEntry(rec string) (path string, size int64, ok bool) {
-	meta, path, found := strings.Cut(rec, "\t")
-	if !found {
-		return "", 0, false
-	}
-	fields := strings.Fields(meta)
-	if len(fields) < 4 || fields[1] != "blob" || fields[0] == "120000" {
-		return "", 0, false
-	}
-	n, err := strconv.ParseInt(strings.TrimSpace(fields[3]), 10, 64)
-	if err != nil {
-		return "", 0, false
-	}
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return "", 0, false
-	}
-	return path, n, true
-}
-
-// indexablePath повторяет политику отбора rag.WalkProject для пути из ветки:
-// служебные каталоги (.git, node_modules, build, ...) и скрытые файлы/каталоги
-// (.env, .github) не индексируются.
-func indexablePath(path string) bool {
-	path = strings.TrimSpace(path)
-	if path == "" || strings.HasPrefix(path, "/") {
-		return false
-	}
-	for _, seg := range strings.Split(path, "/") {
-		if seg == "" {
-			return false
-		}
-		if strings.HasPrefix(seg, ".") || forges.IsIgnoredDir(seg) {
-			return false
-		}
-	}
-	return true
-}
-
-// indexableContent отбрасывает пустые, крупные и бинарные (NUL в префиксе)
-// файлы — те же правила, что у обхода рабочей копии.
-func indexableContent(content string) bool {
-	if content == "" || len(content) > maxRefFileBytes {
-		return false
-	}
-	probe := content
-	if len(probe) > 1024 {
-		probe = probe[:1024]
-	}
-	return !bytes.ContainsRune([]byte(probe), 0)
-}
+var loadRefItems refItemsLoader = apprag.LoadRefItems
 
 // IndexRefBackground индексирует содержимое ветки проекта из git (по ref), а не
 // рабочую копию. Основной сценарий — главная ветка после merge эпика: без
@@ -201,7 +61,7 @@ func (sess *Session) IndexRefBackground(ctx context.Context, ref string) error {
 			if err != nil {
 				return nil, ref, false, err
 			}
-			skip, err := branchIndexUpToDate(bgctx, indexer, sess.project, snap.Branch, snap.CommitSHA)
+			skip, err := apprag.BranchIndexUpToDate(bgctx, indexer, sess.project, snap.Branch, snap.CommitSHA)
 			if err != nil || skip {
 				return &rag.IndexResult{}, snap.Branch, skip, err
 			}
@@ -238,7 +98,7 @@ func (sess *Session) IndexRefDiffBackground(ctx context.Context, ref, base strin
 			if err != nil {
 				return nil, ref, false, err
 			}
-			skip, err := branchIndexUpToDate(bgctx, indexer, sess.project, snap.Branch, snap.CommitSHA)
+			skip, err := apprag.BranchIndexUpToDate(bgctx, indexer, sess.project, snap.Branch, snap.CommitSHA)
 			if err != nil || skip {
 				return &rag.IndexResult{}, snap.Branch, skip, err
 			}
@@ -256,77 +116,10 @@ func (sess *Session) IndexRefDiffBackground(ctx context.Context, ref, base strin
 }
 
 // loadRefDiff — загрузчик изменений ветки (инъекция для hermetic-тестов).
-var loadRefDiff refDiffLoader = collectRefDiff
+var loadRefDiff refDiffLoader = apprag.LoadRefDiff
 
 // refDiffLoader — файлы, отличающиеся ref от base.
-type refDiffLoader func(ctx context.Context, ex git.Executor, dir, ref, base string) (refSnapshot, error)
-
-// collectRefDiff собирает файлы `git diff --name-only base...ref` и читает их
-// содержимое из ref: содержимое рабочей копии не используется (она может
-// отставать), коммит берётся по ref.
-func collectRefDiff(ctx context.Context, ex git.Executor, dir, ref, base string) (refSnapshot, error) {
-	if ex == nil {
-		return refSnapshot{}, fmt.Errorf("не задан git-исполнитель")
-	}
-	if strings.TrimSpace(dir) == "" || strings.TrimSpace(ref) == "" || strings.TrimSpace(base) == "" {
-		return refSnapshot{}, fmt.Errorf("не заданы каталог и ветки для индексации изменений")
-	}
-	out, err := ex.Exec(ctx, dir, "git", "diff", "--name-only", "-z", base+"..."+ref)
-	if err != nil {
-		return refSnapshot{}, fmt.Errorf("git diff %s...%s: %w", base, ref, err)
-	}
-	files := make([]string, 0, 8)
-	for _, p := range strings.Split(out, "\x00") {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		size, ok := refFileSize(ctx, ex, dir, ref, p)
-		if !ok || size > maxRefFileBytes {
-			continue
-		}
-		files = append(files, p)
-	}
-	snap := refSnapshot{Branch: ref, Items: []rag.IndexItem{}}
-	if sha, serr := ex.Exec(ctx, dir, "git", "rev-parse", ref); serr == nil {
-		snap.CommitSHA = strings.TrimSpace(sha)
-	}
-	for _, p := range files {
-		content, cerr := ex.Exec(ctx, dir, "git", "show", ref+":"+p)
-		if cerr != nil {
-			logging.Warnf("rag: git show %s:%s: %v", ref, p, cerr)
-			continue
-		}
-		if !indexableContent(content) {
-			continue
-		}
-		snap.Items = append(snap.Items, rag.IndexItem{
-			Path:    p,
-			Scope:   rag.ScopeForPath(p),
-			Content: content,
-		})
-	}
-	return snap, nil
-}
-
-// refFileSize — размер blob-а файла в ветке (`git cat-file -s ref:path`):
-// нужен, чтобы не читать крупные файлы и не заводить одинаковые точки для
-// удалённых/переименованных путей. ok=false — пути в ветке нет (удалён) либо
-// путь не индексируется.
-func refFileSize(ctx context.Context, ex git.Executor, dir, ref, path string) (int64, bool) {
-	if !indexablePath(path) {
-		return 0, false
-	}
-	out, err := ex.Exec(ctx, dir, "git", "cat-file", "-s", ref+":"+path)
-	if err != nil {
-		return 0, false
-	}
-	n, perr := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
-	if perr != nil {
-		return 0, false
-	}
-	return n, true
-}
+type refDiffLoader func(ctx context.Context, ex git.Executor, dir, ref, base string) (apprag.RefSnapshot, error)
 
 // --- Хуки поддержания индекса и рабочей копии в актуальном состоянии ---
 

@@ -74,8 +74,12 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 `StartRebase`/`FinishResolve`, порты `ConflictHost`/`ConflictRepo`/
 `ConflictWorktree`) вынесен из `server/gitflow_resolve.go` в
 `application/gitflow` (сентинелы `ErrResolveBusy`/`ErrNoResolve`/
-`ErrResolveStateSave`).
-Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
+`ErrResolveStateSave`); срез **F3k ✅** — RAG-хуки: чтение содержимого ветки из
+git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`CollectIndexItems`) и
+полная индексация проекта (`IndexProjectRAG`), проверка актуальности
+(`BranchIndexUpToDate`) вынесены из `server/ragref.go`/`server/ragindex.go` в
+новый пакет `application/rag` (порт `Indexer`).
+Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
 ## Проблема
@@ -549,7 +553,8 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3h | Политика вливания ветки задачи в релиз эпика (`TaskMerger.MergeTaskBranch`: проверка проекта/веток, снятие worktree эпика, `MergeFeature` под локом, инвалидация диффов) вынесена в `application/gitflow` (порт `MergeTaskHost`) | ✅ |
 | F3i | Политика релиза эпика в main (`Releaser.ReleaseEpic`: проверка git/базы/статуса done/ветки эпика, `MergeFeature` под локом, инвалидация диффов + хук «main изменился») вынесена в `application/gitflow` (порт `ReleaseHost`, доменные sentinel-ошибки вместо `apiError`); `apiError` удалён | ✅ |
 | F3j | Конфликтный резолв «main ↔ релизная ветка эпика» (`ConflictResolver.StartRebase`/`FinishResolve`: прогноз merge-tree, постоянный конфликтный worktree, авто-резолв тривиальных блоков, обязательная приёмка, коммит резолва, финальный merge+push) вынесен из `server/gitflow_resolve.go` в `application/gitflow` (порты `ConflictHost`/`ConflictRepo`/`ConflictWorktree`); `conflictHost`/`serverConflictRepo` — серверные адаптеры | ✅ |
-| F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
+| F3k | RAG-хуки: чтение файлов ветки из git (`LoadRefItems`/`LoadRefDiff`/`ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/`RefFileSize`), сбор файлов каталога (`CollectIndexItems`) и полная индексация проекта (`IndexProjectRAG`), проверка актуальности (`BranchIndexUpToDate`) вынесены из `server/ragref.go`/`server/ragindex.go` в новый пакет `application/rag` (порт `Indexer`, `RefSnapshot`, `MaxRefFileBytes`); оркестрация фоновых прогонов и хуки остаются в `server` | ✅ |
+| F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
 `WorktreeRollbacker`-порт, доменные ошибки `ErrTaskNotFound`/`ErrNoWorktree`/
@@ -675,7 +680,20 @@ resolve), сентинелы `ErrResolveBusy`/`ErrNoResolve`/`ErrResolveStateSav
 (встроен). Герметичные тесты `conflict_test.go` (16 шт.): no-conflicts/repeat/
 busy/все sentinel'ы состояния rebase, сбой прогноза и сбой записи состояния с
 cleanup; resolve ok (dirty/clean), no_resolve/нет worktree/busy/still_conflicts/
-acceptance_failed/final conflict/merge fatal.
+acceptance_failed/final conflict/merge fatal. **F3k ✅** — RAG-хуки вынесены из
+`server/ragref.go`/`server/ragindex.go` в новый пакет `application/rag`:
+`LoadRefItems`/`LoadRefDiff` (чтение содержимого ветки из `git ls-tree`/`git
+show`/`git diff`), `ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/
+`RefFileSize` (отбор путей/файлов), `CollectIndexItems` (обход каталога),
+`IndexProjectRAG` (коллекция + `IndexProject`), `BranchIndexUpToDate` (пропуск
+свежего индекса), типы `RefSnapshot`/`Indexer`/`MaxRefFileBytes`. Оркестрация
+фоновых прогонов (`Session.startIndexBackground`, single-flight по ветке,
+отчёты в чат), git-flow хуки (`refreshRagIndex*`/`refreshRagTaskBranch`/
+`afterMainChanged`) и синхрон рабочей копии (`syncAgentBranchWithMain`) остаются
+в `server` (срез F3m); `server`-адаптеры `loadRefItems`/`loadRefDiff` —
+пакетные переменные поверх `apprag.*`; `projectIndexer` — алиас
+`apprag.Indexer`. Тесты чистых функций переехали в `application/rag`
+(`ref_test.go`, `index_test.go`), серверные хуки/REST/сессия — как раньше.
 
 ## Ключевые решения
 

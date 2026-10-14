@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	apprag "ai/application/rag"
 	"ai/chat"
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
@@ -71,34 +72,6 @@ func TestIndexBackgroundBridgeError(t *testing.T) {
 	}
 }
 
-// TestCollectIndexItemsHermetic — сбор IndexItem'ов из списка файлов: путь,
-// scope (ScopeForPath) и содержимое; нечитаемые файлы пропускаются.
-func TestCollectIndexItemsHermetic(t *testing.T) {
-	dir := t.TempDir()
-	writeTestFile(t, dir, "server/api.go", "package main\n")
-	writeTestFile(t, dir, "web/index.ts", "const x = 1\n")
-
-	items, err := collectIndexItems(context.Background(), dir, func(dir string) ([]string, error) {
-		return []string{"server/api.go", "web/index.ts", "gone.go"}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("items = %d, want 2 (gone.go не читается и пропускается)", len(items))
-	}
-	byPath := map[string]rag.IndexItem{}
-	for _, it := range items {
-		byPath[it.Path] = it
-	}
-	if byPath["server/api.go"].Scope != "server" || byPath["server/api.go"].Content != "package main\n" {
-		t.Fatalf("server/api.go неправильно собран: %+v", byPath["server/api.go"])
-	}
-	if byPath["web/index.ts"].Scope != "web" {
-		t.Fatalf("web/index.ts scope = %q, want web", byPath["web/index.ts"].Scope)
-	}
-}
-
 // fakeProjectIndexer — hermetic-индексатор (реализует projectIndexerCloser):
 // записывает вызовы EnsureCollection/IndexProject, без сети.
 type fakeProjectIndexer struct {
@@ -135,54 +108,6 @@ func (f *fakeProjectIndexer) BranchIndexed(context.Context, string, string, stri
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.indexed, nil
-}
-
-// TestIndexProjectRAGHermetic — indexProjectRAG подготавливает коллекцию,
-// собирает файлы реального каталога и вызывает IndexProject по имени проекта.
-// Повторный прогон успешен (на уровне IndexClient идемпотентен: старые точки
-// удаляются до загрузки) — фоновый вызов не «накапливает» состояние.
-func TestIndexProjectRAGHermetic(t *testing.T) {
-	dir := t.TempDir()
-	writeTestFile(t, dir, "main.go", "package main\n")
-	writeTestFile(t, dir, "server/handler.go", "package server\n")
-
-	idx := &fakeProjectIndexer{}
-	opts := rag.IndexOptions{Branch: rag.MainBranch, CommitSHA: "c0ffee"}
-	res, err := indexProjectRAG(context.Background(), idx, "proj-lg", dir, opts)
-	if err != nil {
-		t.Fatalf("первый прогон: %v", err)
-	}
-	if res.Files != 2 {
-		t.Fatalf("Files = %d, want 2", res.Files)
-	}
-	if res.Chunks != 4 {
-		t.Fatalf("Chunks = %d, want 4", res.Chunks)
-	}
-
-	// Повторный прогон: успешен и пишет те же данные (идемпотентность вызова).
-	res2, err := indexProjectRAG(context.Background(), idx, "proj-lg", dir, opts)
-	if err != nil || res2.Files != 2 {
-		t.Fatalf("повторный прогон: err=%v Files=%d", err, res2.Files)
-	}
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	if len(idx.calls) != 2 {
-		t.Fatalf("IndexProject вызван %d раз(а), want 2", len(idx.calls))
-	}
-	for i, c := range idx.calls {
-		if c.project != "proj-lg" {
-			t.Fatalf("вызов %d: проект %q, want proj-lg", i, c.project)
-		}
-		if len(c.items) != 2 {
-			t.Fatalf("вызов %d: files %d, want 2", i, len(c.items))
-		}
-		if c.opts != opts {
-			t.Fatalf("вызов %d: опции индексации %+v, want %+v", i, c.opts, opts)
-		}
-	}
-	if idx.ensured != 2 {
-		t.Fatalf("EnsureCollection вызван %d раз(а), want 2", idx.ensured)
-	}
 }
 
 // blockingIndexer — индексатор, блокирующийся в IndexProject до release:
@@ -230,15 +155,15 @@ func (i *blockingIndexer) Close() error {
 // stubRefItems подменяет загрузчик содержимого ветки: отдаёт фиксированный
 // снапшот (без git). Принимает optional refErr — имитация недоступной ветки.
 // Возвращает указатель на последний запрошенный ref.
-func stubRefItems(t *testing.T, snap refSnapshot, refErr error) *string {
+func stubRefItems(t *testing.T, snap apprag.RefSnapshot, refErr error) *string {
 	t.Helper()
 	orig := loadRefItems
 	t.Cleanup(func() { loadRefItems = orig })
 	got := ""
-	loadRefItems = func(_ context.Context, _ git.Executor, _, ref string) (refSnapshot, error) {
+	loadRefItems = func(_ context.Context, _ git.Executor, _, ref string) (apprag.RefSnapshot, error) {
 		got = ref
 		if refErr != nil {
-			return refSnapshot{}, refErr
+			return apprag.RefSnapshot{}, refErr
 		}
 		snap.Branch = ref
 		return snap, nil
@@ -259,7 +184,7 @@ func TestSessionIndexBackground(t *testing.T) {
 
 	bi := newBlockingIndexer()
 	buildProjectIndexer = func() (projectIndexerCloser, error) { return bi, nil }
-	gotRef := stubRefItems(t, refSnapshot{
+	gotRef := stubRefItems(t, apprag.RefSnapshot{
 		CommitSHA: "abc123",
 		Items:     []rag.IndexItem{{Path: "main.go", Scope: "root", Content: "package main"}},
 	}, nil)
@@ -349,7 +274,7 @@ func TestRESTProjectIndex(t *testing.T) {
 
 	idx := &fakeProjectIndexer{}
 	buildProjectIndexer = func() (projectIndexerCloser, error) { return idx, nil }
-	stubRefItems(t, refSnapshot{
+	stubRefItems(t, apprag.RefSnapshot{
 		CommitSHA: "abc123",
 		Items:     []rag.IndexItem{{Path: "main.go", Scope: "root", Content: "package main\n"}},
 	}, nil)

@@ -19,10 +19,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
+	apprag "ai/application/rag"
 	"ai/chat"
 	"ai/infrastructure/rag"
 	"ai/projects"
@@ -30,13 +29,8 @@ import (
 
 // projectIndexer — узкий интерфейс векторной памяти для полной индексации
 // проекта (реализует *rag.Client; выделен для hermetic-тестов без сети).
-type projectIndexer interface {
-	EnsureCollection(ctx context.Context) (int, error)
-	IndexProject(ctx context.Context, projectName string, files []rag.IndexItem, opts rag.IndexOptions) (*rag.IndexResult, error)
-	// BranchIndexed — есть ли активные точки ветки на этом коммите: хуки
-	// поддержания индекса не должны переиндексировать ветку без изменений.
-	BranchIndexed(ctx context.Context, projectName, branch, commit string) (bool, error)
-}
+// Алиас порта application/rag.Indexer (срез F3k).
+type projectIndexer = apprag.Indexer
 
 // projectIndexerCloser — индексатор, который нужно закрыть после работы.
 // *rag.Client реализует обе части (Close закрывает gRPC-соединение).
@@ -176,7 +170,7 @@ func (sess *Session) IndexDirBackground(ctx context.Context, dir, what string) e
 		func(bgctx context.Context, indexer projectIndexerCloser) (*rag.IndexResult, string, bool, error) {
 			sess.log.Infof("rag: фоновая индексация %s (%s): обход %s (ветка %s, коммит %s)",
 				sess.project, what, dir, opts.Branch, orEmpty(opts.CommitSHA))
-			res, err := indexProjectRAG(bgctx, indexer, sess.project, dir, opts)
+			res, err := apprag.IndexProjectRAG(bgctx, indexer, sess.project, dir, opts)
 			return res, opts.Branch, false, err
 		})
 }
@@ -216,49 +210,4 @@ func orEmpty(s string) string {
 		return "-"
 	}
 	return s
-}
-
-// indexProjectRAG индексирует проект целиком: сначала коллекция (create-if-
-// not-exists), затем сбор файлов и IndexProject с веткой/коммитом (полная
-// переиндексация ветки — прежние версии чанков помечаются устаревшими,
-// прогон идемпотентен).
-func indexProjectRAG(ctx context.Context, indexer projectIndexer, project, dir string, opts rag.IndexOptions) (*rag.IndexResult, error) {
-	if _, err := indexer.EnsureCollection(ctx); err != nil {
-		return nil, fmt.Errorf("подготовка коллекции: %w", err)
-	}
-	items, err := collectIndexItems(ctx, dir, rag.WalkProject)
-	if err != nil {
-		return nil, fmt.Errorf("обход %s: %w", dir, err)
-	}
-	return indexer.IndexProject(ctx, project, items, opts)
-}
-
-// walkerFn — функция обхода проекта (обычно rag.WalkProject; инъекция для
-// hermetic-тестов, чтобы не создавать реальные файлы).
-type walkerFn func(dir string) ([]string, error)
-
-// collectIndexItems обходит проект (walker) и собирает файлы в IndexItem'ы:
-// путь, область (ScopeForPath) и содержимое. Нечитаемые файлы пропускаются,
-// прерывание контекста распространяется наружу.
-func collectIndexItems(ctx context.Context, dir string, walk walkerFn) ([]rag.IndexItem, error) {
-	files, err := walk(dir)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]rag.IndexItem, 0, len(files))
-	for _, rel := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		content, rerr := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
-		if rerr != nil {
-			continue
-		}
-		items = append(items, rag.IndexItem{
-			Path:    rel,
-			Scope:   rag.ScopeForPath(rel),
-			Content: string(content),
-		})
-	}
-	return items, nil
 }
