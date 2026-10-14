@@ -173,7 +173,7 @@ POST /api/projects/{id}/ask/{askID}/answer
 служебная строка статуса «Разбор логов: <файл>».
 
 `server/loganalysis.go` собирает разбор: читает те же файлы, что показывает
-Logboard (`collectProjectLogs`), применяет фильтры поиска и минимальной
+Logboard (`application/logs.CollectProject`), применяет фильтры поиска и минимальной
 тяжести к строкам **до** группировки. Детерминированная обработка логов живёт
 в `domain/log` — разбор строк (`ParseLogLine`), эвристики уровня, кадры стека,
 фильтры (`FilterLogLines`/`FilterLogByLevel`), склейка находок

@@ -87,7 +87,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 (порты `IndexSink`/`IndexerFactory`); срез **F3n ✅** — структурированный
 вопрос ассистента (`AskUser`: разбор пачки вопросов `ParseQuestions`,
 блокирующий цикл `AskUser`↔`AnswerAsk` в `Pending`) вынесен из `server/ask.go`
-в новый пакет `application/ask` (порт `Announcer`).
+в новый пакет `application/ask` (порт `Announcer`); срез **F3o ✅** — сборка и
+отбор лог-файлов проекта (`CollectProject`/`CollectFiles`/`ReadTail`) вынесены
+из `server/logs.go` в новый пакет `application/logs`.
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -566,6 +568,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3l | Политика открытия git-проекта (`ProjectOpener.Open`: имя из URL `GitProjectName`, клон, распознавание полу-клона `discardHalfClone`, регистрация проекта и сабмодулей; `SubmoduleProjectName`/`SameGitRemote`) вынесена из `server/git.go` в `application/gitflow` (порт `OpenRegistry`, сентинелы `ErrGitURLName`/`ErrDirNotEmpty`(+`DirNotEmptyError`)/`ErrCloneFailed`/`ErrRegisterFailed`); `handleOpenGitProject` — тонкая обёртка | ✅ |
 | F3m | Оркестрация фоновой индексации RAG (`BackgroundIndexer`: single-flight по ветке/источнику, запуск в горутине, отчёты в лог и чат) вынесена из `server/ragindex.go` в `application/rag` (порты `IndexSink`/`IndexerFactory`, тип `IndexRun`); `server` строит конкретный прогон (каталог/ветка/дифф) | ✅ |
 | F3n | Структурированный вопрос ассистента (`AskUser`): разбор/валидация пачки вопросов (`ParseQuestions`), состояние одного активного вопроса (блокирующий цикл `AskUser`↔`AnswerAsk`, `Pending`), протокол ответов (`Summarize`) вынесены из `server/ask.go` в `application/ask` (порт `Announcer`); `Session` делегирует, адаптер `askAnnouncer` публикует карточку/статус/лог | ✅ |
+| F3o | Панель логов (Logboard): сбор `*.log`, отбор «своих» из общего каталога и дедупликация (`CollectProject`), чтение хвоста с `MaxBytes` (`ReadTail`), типы `Entry`/`Response` вынесены из `server/logs.go` в `application/logs`; в `server` остались HTTP-хендлеры, `logDirs`/`logsDir`, брокер и алиасы типов | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -758,6 +761,17 @@ show`/`git diff`), `ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/
 активный вопрос» и валидация ответа, отмена по контексту с повторным вопросом,
 `Summarize`); серверные `ask_test.go` не менялись и зелёные (идут через
 `Session`/REST).
+
+**F3o ✅** — логика панели логов вынесена из `server/logs.go` в новый пакет
+`application/logs`: `CollectProject` (сбор `*.log` по каталогам, отбор «своих»
+из общего каталога, дедупликация, сортировка), `CollectFiles`, `ReadTail`
+(хвост с ограничением `MaxBytes`), `Filter`, `FileExists`, типы `Entry`/`Response`,
+константы `MaxBytes`/`ClearMarker`. В `server/logs.go` остались HTTP-хендлеры
+(`handleGetLogs`/`handleDeleteLogs`), `logDirs`/`logsDir`, подписка брокера и
+алиасы типов (`logFileEntry`/`logsResponse`, `logMaxBytes`) — серверные
+`logs_test.go`/`actions_logs_test.go` не менялись. Тесты: новые герметичные
+`application/logs/logs_test.go` (отбор/дедупликация/приоритет общего каталога,
+только `*.log` и пропуск каталогов, обрезка хвоста и пустой файл).
 
 ## Ключевые решения
 

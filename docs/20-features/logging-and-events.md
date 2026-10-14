@@ -13,8 +13,9 @@ APP_LOG_MAX_FEED_ROUNDS=2       # сколько раз за цикл логи �
 
 ## 1. Логи процесса агента
 
-`server/logs.go`. `GET /api/projects/{id}/logs` отдаёт файлы `*.log` из двух
-каталогов: глобального (`LOG_DIR`) и внутри каталога проекта.
+`server/logs.go` (HTTP-обвязка) + `application/logs` (сбор/отбор/чтение).
+`GET /api/projects/{id}/logs` отдаёт файлы `*.log` из двух каталогов:
+глобального (`LOG_DIR`) и внутри каталога проекта.
 
 ```json
 {
@@ -25,11 +26,12 @@ APP_LOG_MAX_FEED_ROUNDS=2       # сколько раз за цикл логи �
 }
 ```
 
-Содержимое обрезается до **1 МБ** (`logMaxBytes`, `logs.go:27`); факт
+Содержимое обрезается до **1 МБ** (`application/logs.MaxBytes`); факт
 обрезания отдаётся полем `truncated`, а не флагом внутри файла.
 
-`logsDir()` (`logs.go:125`) и `collectLogFiles` (`:151`) собирают список;
-`readLogTail` (`:180`) читает хвост.
+`logsDir()` (`server/logs.go:115`) задаёт общий каталог;
+`application/logs.CollectFiles` собирает список, `application/logs.CollectProject`
+отбирает «свои» файлы и дедуплицирует, `application/logs.ReadTail` читает хвост.
 
 ## 2. Логи рантайма приложения
 

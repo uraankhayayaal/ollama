@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3n — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3o — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -378,6 +378,26 @@ accept/reject), удалены локальные `discardHalfClone`/`sameGitRem
 `docs/20-features/chat-assistant.md` (ссылки на `application/ask`). Остаток
 Этапа 6 — F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow
 хуки, `chatassist`/`actions`/`logs`/`diff`/`server`. Коммит F3n `fcdc298`.
+
+Срез **F3o** — логика панели логов вынесена из `server/logs.go` в новый пакет
+**`application/logs`**: `CollectProject` (сбор `*.log` по каталогам, отбор
+«своих» из общего каталога, дедупликация, сортировка), `CollectFiles`,
+`ReadTail` (хвост с ограничением `MaxBytes`), `Filter`, `FileExists`, типы
+`Entry`/`Response`, константы `MaxBytes`/`ClearMarker`. В `server/logs.go`
+остались HTTP-хендлеры (`handleGetLogs`/`handleDeleteLogs`), `logDirs`/
+`logsDir`, подписка брокера и алиасы типов (`logFileEntry`/`logsResponse`,
+`logMaxBytes`) — серверные `logs_test.go`/`actions_logs_test.go` не менялись;
+`server/actions_logs.go` и `server/loganalysis.go` продолжают звать
+`collectProjectLogs` (тонкая обёртка над `applogs.CollectProject`). Тесты:
+новые герметичные `application/logs/logs_test.go` (отбор/дедупликация/приоритет
+общего каталога, только `*.log` и пропуск каталогов, обрезка хвоста и пустой
+файл). Верификация: канонический набор зелёный (28 пакетов), `-race` по
+`application/logs` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3o + narrative), `docs/00-overview/project-map.md` (новая строка
+`application/logs/`), `docs/20-features/logging-and-events.md` (ссылки на
+`application/logs`), `docs/20-features/chat-assistant.md`. Остаток Этапа 6 —
+F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
+`chatassist`/`actions`/`diff`/`server`. Коммит F3o — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
