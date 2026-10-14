@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3r — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3s — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -468,6 +468,30 @@ worktree эпика — существующий/создание, снятие)
 `WorktreeManager`/`lifecycle.go`). Остаток Этапа 6 — F3+: RAG-хуки
 (`server/ragref.go`), `server/session.go` (оркестрация/HITL/событийность),
 `chatassist`/`actions`/`server`. Коммит F3r `8346cfa`.
+
+Срез **F3s** — политика синхронизации рабочей копии агентов с main вынесена из
+`server/ragref.go` в `application/rag/sync.go`: `WorkingCopySyncer` (порт
+`SyncSink` с `Detail`/`Warn`/`Info`) с методом `Sync` — подтягивание `main` в
+ветку рабочей копии: пропуск при не-git/совпадении веток, при занятом checkout
+(`repo.Branch != agentBranch`) и грязном дереве (`git status --porcelain`);
+конфликтный merge откатывается (`git merge --abort`); признак реального
+обновления — сдвиг HEAD; helpers `headSHA`/`abortMerge` над `git.Executor`.
+`server/ragref.go` оставил адаптер `syncSink` (лог проекта) и тонкую обёртку
+`s.syncAgentBranchWithMain` — сигнатура сохранена, `server/ragref_test.go` не
+менялся; `syncAgentBranchAsync`/`afterMainChanged`/`refreshRagIndex*` остались в
+`server` (завязаны на `Session`). Тесты: новые герметичные
+`application/rag/sync_test.go` (`syncExec`/`syncSinkRec`: пропуски пустой
+базы/ветки/nil repo, занятый checkout, грязное дерево, откат конфликта, сдвиг
+HEAD → true, без сдвига → false, текст merge). Верификация: канонический набор
+зелёный (28 пакетов; один прогон упал на пред-существующем флаке
+`TestChatAssistantRejectBranchAfterConfirm` — в изоляции и на повторе `./server/`
+зелёный), `-race` по `application/rag` чист, `gofmt` по правкам чист.
+Документация: план (шапка + таблица F3s + narrative),
+`docs/00-overview/project-map.md` (строка `application/rag/` расширена
+`WorkingCopySyncer`/`sync.go`). Остаток Этапа 6 — F3+: RAG-хуки
+(`refreshRagIndex*`/`syncAgentBranchAsync`/`afterMainChanged`), `server/
+session.go` (оркестрация/HITL/событийность), `chatassist`/`actions`/`server`.
+Коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

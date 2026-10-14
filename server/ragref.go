@@ -178,74 +178,20 @@ func (s *Server) refreshRagTaskBranch(project, taskBranch, main string) {
 	}
 }
 
-// syncAgentBranchWithMain подтягивает рабочую копию агентов (temp/<имя> на ветке
-// ai/<имя>) к актуальному main: `git merge --no-ff` main в ветку проекта.
-// Пропуск (только лог) при грязном дереве, отсутствии main или конфликте —
-// незакоммиченные правки агентов теряться не должны: перед merge проверяется
-// чистота, а конфликтный merge откатывается (git merge --abort), иначе рабочая
-// копия осталась бы с конфликтными маркерами. Возвращает true, только если
-// рабочая копия реально обновилась (HEAD сдвинулся) — иначе переиндексация её
-// ветки была бы напрасной: она стоит эмбеддингов всего проекта.
+// syncAgentBranchWithMain — обёртка над apprag.WorkingCopySyncer (Этап 6, срез
+// F3s): политика синхронизации рабочей копии с main переехала в
+// application/rag. Сигнатура сохранена для существующих вызовов/тестов.
 func (s *Server) syncAgentBranchWithMain(ctx context.Context, project string, inf workspace.Info, repo *git.Repo) bool {
-	main := strings.TrimSpace(inf.GitBase)
-	agentBranch := strings.TrimSpace(inf.GitBranch)
-	if repo == nil || main == "" || agentBranch == "" || main == agentBranch {
-		return false
-	}
-	if repo.Branch != "" && repo.Branch != agentBranch {
-		// checkout занят другой веткой (например, служебный checkout перед
-		// созданием worktree) — переключение делает вызывающий код.
-		logging.For(project).Detailf("rag: синхрон рабочей копии с main пропущен — checkout на ветке %s", repo.Branch)
-		return false
-	}
-	dirty, err := repo.Dirty(ctx)
-	if err != nil {
-		logging.For(project).Detailf("rag: синхрон рабочей копии с main: %v", err)
-		return false
-	}
-	if dirty {
-		logging.For(project).Detailf("rag: синхрон рабочей копии с main пропущен — есть незакоммиченные правки")
-		return false
-	}
-	headBefore := s.headSHA(ctx, repo.Root)
-	if _, err := repo.MergeBranch(ctx, main, fmt.Sprintf("%s: синхрон рабочей копии с %s", agentBranch, main)); err != nil {
-		// Конфликт: возвращаем дерево к состоянию до merge, иначе следующий
-		// агент увидит конфликтные маркеры, а индекс — мусор.
-		s.abortMerge(ctx, repo.Root)
-		logging.For(project).Warnf("rag: синхрон рабочей копии с %s: %v", main, err)
-		return false
-	}
-	if head := s.headSHA(ctx, repo.Root); headBefore != "" && head == headBefore {
-		logging.For(project).Detailf("rag: рабочая копия %s уже актуальна относительно %s", agentBranch, main)
-		return false
-	}
-	logging.For(project).Infof("gitflow: рабочая копия %s синхронизирована с %s", agentBranch, main)
-	return true
+	sy := apprag.WorkingCopySyncer{Exec: s.gitExec, Sink: syncSink{project: project}}
+	return sy.Sync(ctx, apprag.SyncProject{Base: inf.GitBase, Branch: inf.GitBranch}, repo)
 }
 
-// headSHA — текущий коммит рабочей копии (пустая строка, если не git или нет
-// коммитов).
-func (s *Server) headSHA(ctx context.Context, dir string) string {
-	if s.gitExec == nil || strings.TrimSpace(dir) == "" {
-		return ""
-	}
-	out, err := s.gitExec.Exec(ctx, dir, "git", "rev-parse", "HEAD")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out)
-}
+// syncSink — адаптер apprag.SyncSink поверх лога проекта.
+type syncSink struct{ project string }
 
-// abortMerge откатывает неудачный merge в рабочей копии. Ошибка игнорируется:
-// состояние merge и так лучше, чем паника, но молча не оставляем.
-func (s *Server) abortMerge(ctx context.Context, dir string) {
-	if s.gitExec == nil || strings.TrimSpace(dir) == "" {
-		return
-	}
-	if _, err := s.gitExec.Exec(ctx, dir, "git", "merge", "--abort"); err != nil {
-		logging.For(dir).Detailf("rag: git merge --abort: %v", err)
-	}
-}
+func (s syncSink) Detail(format string, args ...any) { logging.For(s.project).Detailf(format, args...) }
+func (s syncSink) Warn(format string, args ...any)   { logging.For(s.project).Warnf(format, args...) }
+func (s syncSink) Info(format string, args ...any)   { logging.For(s.project).Infof(format, args...) }
 
 // syncAgentBranchAsync — фоновой вариант syncAgentBranchWithMain для хуков
 // git-flow: не блокирует переход статуса/релиз. После успешного обновления

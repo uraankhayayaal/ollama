@@ -96,7 +96,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 вынесен из `server/diff.go` в новый пакет `domain/diff`; срез **F3r ✅** —
 жизненный цикл worktree задачи/эпика (`TaskWorktree`/`EpicWorktree`/
 `DropEpicWorktreeLocked`) вынесен из `server/gitflow_auto.go` в
-`application/gitflow` (порт `WorktreeHost`).
+`application/gitflow` (порт `WorktreeHost`); срез **F3s ✅** — политика
+синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`) вынесена
+из `server/ragref.go` в `application/rag` (порт `SyncSink`).
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -579,6 +581,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3p | Разбор логов кнопкой «Разобрать»: выборка файлов (`PickFiles`), фильтры поиска/уровня и дайджест (`BuildAnalysis`), контракт ответа (`DigestPrompt`), cooldown повторов (`Cooldown`) вынесены из `server/loganalysis.go` в `application/logs`; `server` оставил алиасы типов, обвязку проекта и адаптер cooldown | ✅ |
 | F3q | Разбор unified-диффа git (`Parse`/`Split`/`ParseBlock`/`PathOf`/`PrefixPath`, статусы `Added`/`Modified`/`Removed`/`Renamed`/`Submodule`, типы `FileEntry`/`Diff`) вынесен из `server/diff.go` в новый stdlib-only пакет `domain/diff`; `server` оставил git-вызовы (`branchDiff`/`gitProjectDiff`), кэш `cachedDiff` и алиасы | ✅ |
 | F3r | Жизненный цикл worktree задачи/эпика (`TaskWorktree` — создание worktree задачи + rebase на эпик + сабмодули, `EpicWorktree` — ленивый worktree релизной ветки эпика, `DropEpicWorktreeLocked` — снятие worktree эпика) вынесен из `server/gitflow_auto.go` в `application/gitflow` (`WorktreeManager`, порт `WorktreeHost`); `server` оставил адаптер `worktreeHost` и тонкие обёртки | ✅ |
+| F3s | Политика синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`: пропуск при грязном дереве/занятом checkout, откат конфликтного merge, признак сдвига HEAD) вынесена из `server/ragref.go` в `application/rag` (`WorkingCopySyncer`, порт `SyncSink`, `sync.go`); `server` оставил адаптер `syncSink` и тонкую обёртку | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -838,6 +841,21 @@ worktree add`, worktree эпика — существующий/создание
 `gitflow_epic_worktree_test.go`/`gitflow_submodule_test.go`/
 `gitflow_done_guard_test.go`/`gitflow_auto_e2e_test.go` не менялись. Верификация:
 канонический набор зелёный (28 пакетов), `-race` по `application/gitflow` чист,
+`gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3s ✅** — политика синхронизации рабочей копии агентов с main вынесена из
+`server/ragref.go` в `application/rag/sync.go`: `WorkingCopySyncer` (порт
+`SyncSink`) с методом `Sync` — подтягивание `main` в ветку рабочей копии
+(пропуск при не-git/совпадении веток, при занятом checkout и грязном дереве;
+откат конфликтного merge через `git merge --abort`; признак реального обновления
+через сдвиг HEAD), плюс helpers `headSHA`/`abortMerge` над `git.Executor`.
+`server/ragref.go` оставил адаптер `syncSink` (лог проекта) и тонкую обёртку
+`s.syncAgentBranchWithMain` (сигнатура сохранена — `server/ragref_test.go` не
+менялся); `syncAgentBranchAsync`/`afterMainChanged`/`refreshRagIndex*` — в
+`server`. Тесты: новые герметичные `application/rag/sync_test.go` (пропуски
+пустой базы/ветки/nil repo, занятый checkout, грязное дерево, откат конфликта,
+сдвиг HEAD → true, без сдвига → false, сообщение merge). Верификация:
+канонический набор зелёный (28 пакетов), `-race` по `application/rag` чист,
 `gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
