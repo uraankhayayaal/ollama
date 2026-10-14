@@ -81,8 +81,12 @@ DecodeComments}`. **E6e1** закрыт (пользователь выбрал �
 `&rag.SearchTool`/`&rag.StatusTool`; в `FileOps` добавлен `WorkingDir()`,
 nil-проверка `ProjectName` поправлена; тесты переехали в `tools/rag`, фолбэк
 имени проекта покрыт `tools/fileops_projectname_test.go`.
-Осталось: E6c (`tools/sandbox`), E6d (git-часть вне
-ResolveGitConflicts), E6e-остаток (`tools/lsp` и др.). Верификация: канонический
+Осталось: E6e-остаток (`tools/lsp` и др.). E6d выполнен в E6e1 (отдельного
+git-инструмента больше нет); E6c (`tools/sandbox`) отложен: `sandbox`-исполнение
+завязано на `tools` (`runCommand` остаётся в `tools`, сессионная песочница
+`Activate`/`Deactivate`/`SandboxNetwork` и её тесты `sandbox_session_test.go`
+живут в `tools` и вызывают `runCommand`) — чистого листа для выноса нет.
+Верификация: канонический
 набор (в него добавлены `./tools/...`, `./infrastructure/...`; убраны `./sandbox/`
 и `./board/`) зелёный, `-race` по `infrastructure/{llm,rag,git,sandbox}` чист,
 `gofmt -l` по своим файлам чист.
@@ -97,8 +101,7 @@ ResolveGitConflicts), E6e-остаток (`tools/lsp` и др.). Верифик�
 `makefile-contract.md`, `troubleshooting.md`, `adding-a-feature.md`,
 `development.md`, `testing.md`), канонический набор и примечание в этом файле.
 Коммиты E1 (`4279c9f`), E2 (`2e71139`), E3 (`3e01f8f`), E4 (`ab39ad6`),
-E5 (`91ca525`), E6a (`1f87352`), E6e1 (`c78f039`) сделаны; E6b — коммитится
-следом.
+E5 (`91ca525`), E6a (`1f87352`), E6b (`a5444c5`), E6e1 (`c78f039`) сделаны.
 
 ## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
 

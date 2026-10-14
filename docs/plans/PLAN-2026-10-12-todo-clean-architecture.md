@@ -323,8 +323,8 @@ infrastructure/   — реализации (llm, rag, git, sandbox, board)
 |---|---|---|
 | **E6a** | `tools/` → `domain` вместо `ai/infrastructure/board`: `ErrExists`/`DecodeInjections`/`ValidateInjections` — из `domain` (уже были алиасами), `DecodeComments` перенесён в `domain` (`domain/comment.go`), `board.DecodeComments` делегирует. `tools` (non-test) больше не импортирует `infrastructure/board` | ✅ |
 | **E6b** | `tools/rag` — CodeSearch/RagIndexStatus вынесены в подпакет `ai/tools/rag` (package `rag`), инфра-RAG импортируется как `infrarag`; зависимость от `FileOps` инвертирована интерфейсом `rag.Context{ProjectName; WorkingDir}` (лениво — `SetProjectName`/`SetOutputDir` зовутся уже после сборки набора) | ✅ |
-| **E6c** | `tools/` (sandbox/destructive/fileops) → `services.SandboxWorkspace`/`SandboxResult` (alias'ы E4) там, где возможно; пакетные функции (`Config`/`LoadConfig`/`EnsureImage`/`DetectStack`/`BaseEnv`…) остаются у `infrastructure/sandbox` → под-пакет `tools/sandbox` | ⏳ |
-| **E6d** | `tools/gitresolve`/`tool.go` → `services.GitOperations`; `git.Executor`/`CLIExecutor`/`RepoFromState`/`TrivialResolve`/`HasConflictMarkers` в порт не входят → под-пакет `tools/git` | ⏳ |
+| **E6c** | `tools/sandbox` не выделен: `sandbox`-исполнение завязано на `tools` (`runCommand` остаётся в `tools`; сессионная песочница `Activate`/`Deactivate`/`SandboxNetwork` и её тесты `sandbox_session_test.go` живут в `tools` и вызывают `runCommand`, поэтому чистого листа для выноса нет) | ⏳ (отложен) |
+| **E6d** | `tools/gitresolve`/`tool.go` → `tools/git` — выполнено в **E6e1** (отдельного git-инструмента больше нет) | ✅ (в E6e1) |
 | **E6e** | Собственно разбиение `tools/` на под-пакеты (`tools/lsp`, `tools/rag`, `tools/sandbox`, `tools/git`, …) с инверсией зависимости от `FileOps` (интерфейс `Runner`/`Project`/`Ops` в под-пакете, методы/поля `FileOps` делегируют). Под-пакеты реализуют `services.Tool` напрямую (`Definition() domain.ToolDefinition`) и вправе импортировать `infrastructure/*`. Выполняется по одному под-пакету (E6e1…); **E6e1 ✅** — `tools/git` | 🔄 (E6e1 ✅) |
 
 **E1 ✅ (каркас `infrastructure/`, `models` → `infrastructure/llm`).**
