@@ -58,12 +58,14 @@ GET /api/projects/{id}/diff?ref=<ветка>&vs=<base>&file=<путь>
 
 ### Статусы файлов
 
-`server/diff.go:23-29`: `added`, `modified`, `removed`, `renamed`,
+`domain/diff` (`Status`): `added`, `modified`, `removed`, `renamed`,
 `submodule`.
 
 ## Как считается дифф
 
-`server/diff.go:51-89`, две ветки:
+Разбор unified-диффа на файлы — `domain/diff` (`Parse`/`ParseBlock`/`PathOf`/
+`PrefixPath`); git-вызовы и кэш — `server/diff.go` (`branchDiff`/`gitProjectDiff`),
+две ветки:
 
 ### Ветка с worktree (задача)
 

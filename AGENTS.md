@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3p — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3q — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -424,6 +424,26 @@ F3+: `server/session.go` (оркестрация/HITL/событийность),
 Остаток Этапа 6 — F3+: `server/session.go` (оркестрация/HITL/событийность),
 git-flow хуки, `chatassist`/`actions`/`diff`/`server`. Коммит F3p `856f451`.
 
+Срез **F3q** — разбор unified-диффа git вынесен из `server/diff.go` в новый
+stdlib-only пакет **`domain/diff`** (`diff.go`): `Parse` (разбиение на файлы),
+`Split` (блоки по `diff --git`/`diff --cc`), `ParseBlock` (метаданные + патч,
+статус по `---`/`+++` и `rename to`, подсчёт `+`/`-`), `PathOf` (срез `a/`/`b/`,
+git-кавычки), `PrefixPath` (префикс сабмодуля), тип `Status` с константами
+`Added`/`Modified`/`Removed`/`Renamed`/`Submodule`, типы `FileEntry`/`Diff`.
+В `server/diff.go` остались git-вызовы и кэш: `branchDiff` (worktree vs
+merge-base), `gitProjectDiff` (кэш по `project|ref|base`, обход сабмодулей),
+`invalidateDiffs`; `cachedDiff.Files` теперь `[]diff.FileEntry`, алиасы
+`diffFileEntry`/`diffModified` сохранены для хендлеров `server/git.go`. Тесты
+`server/diff_test.go` переехали в `domain/diff/diff_test.go` (`git mv`) и
+дополнены (статусы/счётчики added/removed/modified, rename и кавычки, `Split`).
+Верификация: канонический набор + `./domain/...` зелёные, `-race` по
+`domain/diff` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3q + narrative), `docs/00-overview/project-map.md` (новая строка
+`domain/diff/`), `docs/20-features/{contextual-diff,gitops-workflow,web-ui,
+submodules-multirepo}.md` (ссылки на разбор → `domain/diff`). Остаток Этапа 6 —
+F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
+`chatassist`/`actions`/`server`. Коммита нет (спросить пользователя).
+
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
 Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы
@@ -576,9 +596,9 @@ Acceptor-порт вынесен из `acceptor`: отчёт приёмки — 
 Рабочая сборка (обходит известный блокер в `temp/`):
 
 ```
-go build . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go vet . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go test . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go build . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/... ./domain/...
+go vet . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/... ./domain/...
+go test . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/... ./domain/...
 ```
 
 Примечание: `./application/planner` — бывший `agents/planner` (перенос по
@@ -588,7 +608,8 @@ PLAN-2026-10-12, этап 3); предсуществовавшие падени�
 бывший `gitops/` (срез E3); `./infrastructure/sandbox` — бывший `sandbox/`
 (срез E4); `./infrastructure/board` — бывший `board/` (срез E5, `./board/`
 убран из перечня). `./tools/...` — с под-пакетами `tools/git` (E6e1),
-`tools/lspclient`, `tools/binpath`.
+`tools/lspclient`, `tools/binpath`. `./domain/...` — доменные пакеты с тестами
+(`domain/log`, `domain/diff`), добавлен на Этапе 6.
 
 Живая проверка сессионной песочницы (нужен Docker; вне рабочего набора,
 по образцу `E2E_LIVE`):

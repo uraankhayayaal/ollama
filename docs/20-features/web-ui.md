@@ -146,11 +146,12 @@ npm --prefix web run typecheck
 ## Диффы
 
 `server/diff.go` — ленивая разборка `git diff` на
-`{path, status, added, deleted}`. Статусы: `added`, `modified`, `removed`,
-`renamed`, `submodule` (`:23-29`). Патч одного файла запрашивается отдельно.
+`{path, status, added, deleted}` (разбор блоков — `domain/diff`). Статусы:
+`added`, `modified`, `removed`, `renamed`, `submodule` (`domain/diff.Status`).
+Патч одного файла запрашивается отдельно.
 
-Кэш `cachedDiff` с ключом `project|ref|base` (`:41-47,107`), инвалидация —
-`invalidateDiffs` (`:93`).
+Кэш `cachedDiff` с ключом `project|ref|base`, инвалидация —
+`invalidateDiffs` (`server/diff.go`).
 
 ## Команды в UI
 

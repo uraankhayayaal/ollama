@@ -91,7 +91,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 отбор лог-файлов проекта (`CollectProject`/`CollectFiles`/`ReadTail`) вынесены
 из `server/logs.go` в новый пакет `application/logs`; срез **F3p ✅** — разбор
 логов кнопкой «Разобрать» (`BuildAnalysis`/`PickFiles`/`DigestPrompt`/
-`Cooldown`) вынесен из `server/loganalysis.go` в `application/logs`.
+`Cooldown`) вынесен из `server/loganalysis.go` в `application/logs`; срез
+**F3q ✅** — разбор unified-диффа git (`Parse`/`ParseBlock`/`PrefixPath`)
+вынесен из `server/diff.go` в новый пакет `domain/diff`.
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -572,6 +574,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3n | Структурированный вопрос ассистента (`AskUser`): разбор/валидация пачки вопросов (`ParseQuestions`), состояние одного активного вопроса (блокирующий цикл `AskUser`↔`AnswerAsk`, `Pending`), протокол ответов (`Summarize`) вынесены из `server/ask.go` в `application/ask` (порт `Announcer`); `Session` делегирует, адаптер `askAnnouncer` публикует карточку/статус/лог | ✅ |
 | F3o | Панель логов (Logboard): сбор `*.log`, отбор «своих» из общего каталога и дедупликация (`CollectProject`), чтение хвоста с `MaxBytes` (`ReadTail`), типы `Entry`/`Response` вынесены из `server/logs.go` в `application/logs`; в `server` остались HTTP-хендлеры, `logDirs`/`logsDir`, брокер и алиасы типов | ✅ |
 | F3p | Разбор логов кнопкой «Разобрать»: выборка файлов (`PickFiles`), фильтры поиска/уровня и дайджест (`BuildAnalysis`), контракт ответа (`DigestPrompt`), cooldown повторов (`Cooldown`) вынесены из `server/loganalysis.go` в `application/logs`; `server` оставил алиасы типов, обвязку проекта и адаптер cooldown | ✅ |
+| F3q | Разбор unified-диффа git (`Parse`/`Split`/`ParseBlock`/`PathOf`/`PrefixPath`, статусы `Added`/`Modified`/`Removed`/`Renamed`/`Submodule`, типы `FileEntry`/`Diff`) вынесен из `server/diff.go` в новый stdlib-only пакет `domain/diff`; `server` оставил git-вызовы (`branchDiff`/`gitProjectDiff`), кэш `cachedDiff` и алиасы | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -795,6 +798,23 @@ show`/`git diff`), `ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/
 контракт `DigestPrompt`, окно `Cooldown`, `Dirs`); серверные
 `loganalysis_test.go`/`actions_logs_test.go` не менялись по существу. Дока
 `docs/20-features/chat-assistant.md` обновлена (разбор → `application/logs`).
+
+**F3q ✅** — разбор unified-диффа git вынесен из `server/diff.go` в новый
+stdlib-only пакет `domain/diff` (`diff.go`): `Parse` (разбиение на файлы),
+`Split` (блоки по `diff --git`), `ParseBlock` (метаданные + патч, статус по
+`---`/`+++` и `rename to`, подсчёт `+`/`-`), `PathOf` (срез `a/`/`b/`,
+git-кавычки), `PrefixPath` (префикс сабмодуля), тип `Status` с константами
+`Added`/`Modified`/`Removed`/`Renamed`/`Submodule`, типы `FileEntry`/`Diff`.
+В `server/diff.go` остались git-вызовы и кэш: `branchDiff` (worktree vs
+merge-base), `gitProjectDiff` (кэш по `project|ref|base`, обход сабмодулей),
+`invalidateDiffs`; `cachedDiff.Files` теперь `[]diff.FileEntry`, алиасы
+`diffFileEntry`/`diffModified` сохранены для хендлеров `server/git.go`.
+Тесты `server/diff_test.go` переехали в `domain/diff/diff_test.go` (`git mv`)
+и дополнены (статусы/счётчики added/removed/modified, rename и кавычки,
+`Split`). Верификация: канонический набор + `./domain/...` зелёные, `-race` по
+`domain/diff` чист, `gofmt` по правкам чист. Доки: `project-map.md`
+(`domain/diff/`), `contextual-diff.md`, `gitops-workflow.md`, `web-ui.md`,
+`submodules-multirepo.md` (ссылки на разбор → `domain/diff`).
 
 ## Ключевые решения
 

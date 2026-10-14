@@ -148,7 +148,7 @@ GITLAB_URL=...                  # адрес GitLab без завершающе�
 
 ## Диффы
 
-`server/diff.go` — ленивая разборка `git diff`:
+`server/diff.go` — ленивая разборка `git diff` (разбор блоков — `domain/diff`):
 
 | Статус | Значение |
 |---|---|
@@ -158,9 +158,9 @@ GITLAB_URL=...                  # адрес GitLab без завершающе�
 | `renamed` | Переименован |
 | `submodule` | Сабмодуль |
 
-Структура `diffFileEntry{path, status, added, deleted}` (`:32-37`).
+Структура `diffFileEntry` (= `domain/diff.FileEntry`: `{path, status, added, deleted}`).
 Патч одного файла запрашивается отдельно. Кэш `cachedDiff` с ключом
-`project|ref|base` (`:41-47,107`), инвалидация — `invalidateDiffs` (`:93`).
+`project|ref|base`, инвалидация — `invalidateDiffs` (`server/diff.go`).
 
 Подробнее — [Контекстные диффы](contextual-diff.md).
 

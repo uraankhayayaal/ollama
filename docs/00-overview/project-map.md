@@ -115,6 +115,7 @@
 |---|---|
 | `domain/` | Сущности и политики без зависимостей от проектных пакетов: `status.go` (FSM доски), `order.go`/`unmarshal.go` (порядок эпиков, разбор задач), `acceptance.go` (отчёт приёмки), `comment.go`/`injection.go`, `board_types.go`/`epic.go`/`task.go`, `agent.go`/`plan.go` |
 | `domain/log/` | Детерминированная обработка логов: разбор строк/уровней/стека, шаблонизация, `BuildLogDigest`, `MergeLogFindings`, `FilterLogLines`/`FilterLogByLevel`, `TruncateLogText` |
+| `domain/diff/` | Разбор unified-диффа git на per-file блоки: `Parse`/`Split`/`ParseBlock`, `PathOf`, `PrefixPath`, статусы `Added`/`Modified`/`Removed`/`Renamed`/`Submodule`, типы `FileEntry`/`Diff` (stdlib-only) |
 | `domain/services/` | Порты: `LLMClient`, `RAGClient`, `GitOperations`, `SandboxWorkspace`, `BoardStore`, инструменты |
 | `application/usecases/` | Use-cases: `RunTask`, `CompressHistory`, `BreakLoop`, `Escalate`, `RollbackTask`, `NewTokenEstimator`, `GuardTaskDone` |
 | `application/planner/` | Планировщик и оркестрация доски (бывший `agents/planner`) |
