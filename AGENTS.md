@@ -581,7 +581,7 @@ bare-согласие, отчёт о записи, вопрос, смена те
 `application/chatassist` чист, `gofmt` по правкам чист. Документация: план
 (шапка + таблица F3w + narrative), `docs/00-overview/project-map.md` (новая
 строка `application/chatassist/`). Остаток Этапа 6 — F3+: HITL-гейт и read-model
-доски в `server/session.go`, `server`-хендлеры. Коммит F3w — ниже.
+доски в `server/session.go`, `server`-хендлеры. Коммит F3w `de5642b`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
