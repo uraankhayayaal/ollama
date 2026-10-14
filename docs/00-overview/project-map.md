@@ -118,7 +118,7 @@
 | `domain/services/` | Порты: `LLMClient`, `RAGClient`, `GitOperations`, `SandboxWorkspace`, `BoardStore`, инструменты |
 | `application/usecases/` | Use-cases: `RunTask`, `CompressHistory`, `BreakLoop`, `Escalate`, `RollbackTask`, `NewTokenEstimator`, `GuardTaskDone` |
 | `application/planner/` | Планировщик и оркестрация доски (бывший `agents/planner`) |
-| `application/gitflow/` | Use-cases git-flow: LLM-разрешение конфликтов (`Resolver`, порты `Store`/`Developer`/`Acceptor`/`Markers`), политика MR (`MRCreator`, порты `MRGateway`/`Forge`/`MRRegistry`) и раскладка worktree + артефактная политика `.gitignore` (`worktree.go`) |
+| `application/gitflow/` | Use-cases git-flow: LLM-разрешение конфликтов (`Resolver`, порты `Store`/`Developer`/`Acceptor`/`Markers`), политика MR (`MRCreator`, порты `MRGateway`/`Forge`/`MRRegistry`), раскладка worktree + артефактная политика `.gitignore` (`worktree.go`) и авто-шаги завершения задачи (`TaskFinalizer`, порт `TaskFinalizerHost`, `finalize.go`) |
 
 ### Сервер и веб — `server/`, `web/`
 

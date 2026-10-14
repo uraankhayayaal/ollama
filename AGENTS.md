@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3d — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3e — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -112,6 +112,31 @@ doneguard.go` и `infrastructure/git/gitops.go`. Верификация: кан�
 `docs/40-operations/troubleshooting.md`. Остаток Этапа 6 — F3+: остальные
 git-flow хуки (авто-коммит/merge, sync main), сессии/оркестрация, RAG-хуки.
 Коммита нет (спросить пользователя).
+
+Срез **F3e** — авто-шаги завершения задачи вынесены из `server/gitflow_auto.go`
+в `application/gitflow/finalize.go`: `TaskFinalizer.Finalize` (авто-коммит
+worktree → авто-MR задачи ДО мёрджа → штатный мёрдж ветки в релиз эпика →
+снятие worktree, с LLM-авторезолвом конфликта) и порт `TaskFinalizerHost`
+(`Project`/`TaskBranch`/`CommitWorktree`/`CreateTaskMR`/`BranchAlreadyMerged`/
+`MergeTaskBranch`/`ResolveTaskConflict`/`SaveTask`/`RemoveTaskWorktree`/
+`EmitBoard`/`AppendStatus`), типы `Project`/`BranchRef`/`MergeOutcome`, доменная
+ошибка `ErrMergeConflict`. `server/gitflow_auto.go` оставил адаптер
+`taskFinalizerHost` (поверх `reg`/`repoOf`/`commitTaskWorktree`/
+`createTaskMROnce`/`mergeTaskBranch`/`tryTaskLLMResolve`/`store`/`srvEmitBoard`/
+`session`): `mergeLock` берётся в адаптере (`ResolveTaskConflict`), разбор
+`*git.MergeConflictError` → `ErrMergeConflict`+`ConflictFiles` тоже в адаптере.
+Порядок и тексты сообщений сохранены. Тесты: новые герметичные
+`application/gitflow/finalize_test.go` (пропуск не-git и без ветки, полный цикл,
+«уже влита в релиз», ошибка авто-MR не мешает мёрджу, конфликт разрешён LLM →
+worktree снят, конфликт не разрешён → задача в `in_progress` без снятия
+worktree + статус в чат, не-конфликтная ошибка мёрджа, пустой worktree, пустая
+задача). Серверные `gitflow_test.go`/`gitflow_mr_test.go`/
+`gitflow_auto_e2e_test.go`/`gitflow_ar_e2e_test.go` (зовут
+`srv.autoCommitAndMergeTask`) не менялись. Верификация: канонический набор
+зелёный (26 пакетов), `-race` по `application/gitflow` чист, `gofmt` по правкам
+чист. Документация: план (шапка + таблица F3e), `docs/00-overview/project-map.md`.
+Остаток Этапа 6 — F3+: `syncEpicMain*`/`gitflow.go`/`gitflow_resolve.go`,
+сессии/оркестрация, RAG-хуки. Коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

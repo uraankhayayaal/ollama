@@ -41,7 +41,7 @@ Worktree}`.
 | Эпик создан | `autoCreateEpicBranch` — ветка от `git_base` | `gitflow_auto.go` |
 | Задача создана | `autoCreateTaskBranch` — от ветки эпика (требует её существования) | `gitflow_auto.go` |
 | Задача → `in_progress` | `taskWorktree` — подготовить worktree | `gitflow_auto.go` |
-| Задача → `done` | `autoCommitAndMergeTask` | `gitflow_auto.go:281-391` |
+| Задача → `done` | `autoCommitAndMergeTask` (→ `gitflow.TaskFinalizer`) | `gitflow_auto.go` → `application/gitflow/finalize.go` |
 | Эпик → `done` | `syncEpicWithMain` (фон, таймаут 5 мин) | `gitflow.go:397-403` |
 
 Хуки поддержания RAG-индекса (`server/ragref.go`) — тоже фоновые и тоже не
@@ -53,7 +53,8 @@ Worktree}`.
 
 ## Порядок авто-merge задачи
 
-`autoCommitAndMergeTask` (`server/gitflow_auto.go:281-391`):
+`autoCommitAndMergeTask` — `gitflow.TaskFinalizer.Finalize`
+(`application/gitflow/finalize.go`; серверный адаптер — `server/gitflow_auto.go`):
 
 ```
 1. Коммит worktree задачи
@@ -72,10 +73,11 @@ Worktree}`.
 
 При конфликте:
 
-1. Попытка LLM-авторезолва (`tryTaskLLMResolve`).
+1. Попытка LLM-авторезолва (`tryTaskLLMResolve`, зовётся адаптером под
+   `mergeLock`).
 2. Если не удалось — записывается `task.MergeConflictFiles`, статус
-   **откатывается в `in_progress`** (`gitflow_auto.go:349-360`), приходит
-   `RoleStatus`-уведомление.
+   **откатывается в `in_progress`** (`application/gitflow/finalize.go`),
+   приходит `RoleStatus`-уведомление.
 
 > **Расхождение с планом:** план merge-conflict-board описывал сохранение
 > `done` с маркировкой конфликта. Код откатывает задачу в `in_progress` —
@@ -88,7 +90,7 @@ Worktree}`.
 ### Эпик
 
 `syncEpicWithMain` при конфликте записывает `epic.MergeConflictFiles`.
-Снятие признака — `clearEpicMergeConflict` (`gitflow_auto.go:471`) при
+Снятие признака — `clearEpicMergeConflict` (`gitflow_auto.go:764`) при
 успешном `EpicResolve` или `EpicRelease`.
 
 ### LLM-авторезолв

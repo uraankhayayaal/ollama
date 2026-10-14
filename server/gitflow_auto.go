@@ -7,6 +7,7 @@ package server
 import (
 	"ai/application/gitflow"
 	"ai/chat"
+	"ai/domain"
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/logging"
@@ -461,139 +462,106 @@ func childTaskKey(project, taskID string) string { return gitflow.ChildTaskKey(p
 // gitflowErrBoard — обёртка над gitflow.GitflowErrBoard.
 func gitflowErrBoard(prefix string, err error) string { return gitflow.GitflowErrBoard(prefix, err) }
 
-// autoCommitAndMergeTask — Ф-2/Ф-3: авто-действия при переводе задачи в done:
+// autoCommitAndMergeTask — обёртка над gitflow.TaskFinalizer (Этап 6, срез F3e):
+// политика авто-шагов «задача → done» переехала в application/gitflow, здесь
+// остаётся адаптер хоста (git, реестр веток, доска, сессия, шина доски).
 //
-//  1. авто-коммит незакоммиченных изменений worktree в ветку задачи;
-//  2. авто-MR задачи (если remote/фордж доступны и MR ещё не создан);
-//  3. штатный мёрдж ветки задачи в релизную ветку эпика (mergeTaskBranch);
-//  4. снятие worktree задачи.
-//
-// Авто-MR создаётся ДО мёрджа в релиз эпика: после влития ветки между ней и
-// релизной веткой не остаётся коммитов, и GitHub/GitLab отклоняют такой MR
-// (422 «No commits between …»). Ветку задачи и базу MR пушит сам
-// createTaskMROnce (ensureRemoteBase), поэтому порядок выполнения безопасен.
-//
-// Ошибки не ломают сам переход статуса (хук) — логируются, ручные кнопки
+// Порядок шагов (см. gitflow.TaskFinalizer.Finalize): авто-коммит worktree →
+// авто-MR задачи ДО мёрджа в релиз эпика → штатный мёрдж done→релиз → снятие
+// worktree. Ошибки не ломают переход статуса (хук) — логируются, ручные кнопки
 // остаются страховкой.
 func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, task *board.Task, store *board.Store) {
-	if task == nil || task.TaskID == "" {
-		return
-	}
-	inf, err := s.reg.Get(project)
-	if err != nil || inf.Kind != workspace.KindGit {
-		return
-	}
-	taskRef, err := s.reg.TaskBranch(project, task.TaskID)
+	f := &gitflow.TaskFinalizer{Host: &taskFinalizerHost{s: s, project: project, store: store}}
+	f.Finalize(ctx, project, task)
+}
+
+// taskFinalizerHost — адаптер gitflow.TaskFinalizerHost поверх серверных
+// помощников (git-операции, side-реестр веток, доска, сессия, шина доски).
+type taskFinalizerHost struct {
+	s       *Server
+	project string
+	store   *board.Store
+}
+
+func (h *taskFinalizerHost) Project() gitflow.Project {
+	inf, err := h.s.reg.Get(h.project)
 	if err != nil {
-		logging.For(project).Detailf("gitflow: авто-шаги %s: ветки нет: %v — пропуск", task.TaskID, err)
-		return
+		return gitflow.Project{}
 	}
+	return gitflow.Project{IsGit: inf.Kind == workspace.KindGit, HasRemote: inf.GitRemote != ""}
+}
 
-	// 1) Коммит в worktree ветки задачи (если специалист оставил изменения).
-	worktree := strings.TrimSpace(taskRef.Worktree)
-	if worktree != "" {
-		s.commitTaskWorktree(ctx, project, task, worktree)
+func (h *taskFinalizerHost) TaskBranch(taskID string) (gitflow.BranchRef, bool) {
+	ref, err := h.s.reg.TaskBranch(h.project, taskID)
+	if err != nil {
+		return gitflow.BranchRef{}, false
 	}
+	return gitflow.BranchRef{Branch: ref.Branch, Base: ref.Base, Worktree: ref.Worktree}, true
+}
 
-	// 2) Авто-MR задачи ДО мёрджа в релиз эпика (см. комментарий функции):
-	// пока ветка задачи несёт свои коммиты, фордж может открыть MR.
-	if inf.GitRemote != "" {
-		if mrURL, created, merr := s.createTaskMROnce(ctx, project, task.TaskID, task); merr != nil {
-			logging.For(project).Warnf("gitflow: авто-MR задачи %s: %v", task.TaskID, merr)
-			// Ошибка push/MR видна на доске: без неё коммиты задачи
-			// остаются локальными, а пользователь видит только «done».
-			s.srvEmitBoard(project, gitflowErrBoard(fmt.Sprintf("авто-MR задачи %s не создан", task.TaskID), merr))
-		} else if created {
-			logging.For(project).Infof("gitflow: задача %s → авто-MR %s", task.TaskID, mrURL)
-		}
+func (h *taskFinalizerHost) CommitWorktree(ctx context.Context, task *domain.Task, worktree string) {
+	h.s.commitTaskWorktree(ctx, h.project, task, worktree)
+}
+
+func (h *taskFinalizerHost) CreateTaskMR(ctx context.Context, task *domain.Task) (string, bool, error) {
+	return h.s.createTaskMROnce(ctx, h.project, task.TaskID, task)
+}
+
+func (h *taskFinalizerHost) BranchAlreadyMerged(ctx context.Context, epicID, taskBranch string) (bool, bool) {
+	epicRef, err := h.s.reg.EpicBranch(h.project, epicID)
+	if err != nil {
+		return false, false
 	}
-
-	// 2.5) Задача без коммитов в ветке (например, QA-проверка) — уже влита
-	// в релиз, мердж не нужен. Считаем смердженной, не блокируя процесс.
-	epicRef, err := s.reg.EpicBranch(project, task.EpicID)
-	if err == nil {
-		if repo, rerr := s.repoOf(ctx, project); rerr == nil {
-			if merged, _ := repo.MergedInto(ctx, epicRef.Branch, taskRef.Branch); merged {
-				logging.For(project).Infof("gitflow: задача %s: ветка уже влита в релиз (нет коммитов) — считаем смердженной", task.TaskID)
-				if worktree != "" {
-					s.removeTaskWorktree(project, task.TaskID, worktree)
-				}
-				s.srvEmitBoard(project, "gitflow: задача без коммитов — смерджена")
-				return
-			}
-		}
+	repo, err := h.s.repoOf(ctx, h.project)
+	if err != nil {
+		return false, false
 	}
+	merged, _ := repo.MergedInto(ctx, epicRef.Branch, taskBranch)
+	return merged, true
+}
 
-	// 3) Штатный мёрдж done→релиз.
-	res, err := s.mergeTaskBranch(ctx, project, task)
+func (h *taskFinalizerHost) MergeTaskBranch(ctx context.Context, task *domain.Task) (gitflow.MergeOutcome, error) {
+	res, err := h.s.mergeTaskBranch(ctx, h.project, task)
 	if err != nil {
 		var ce *git.MergeConflictError
 		if errors.As(err, &ce) {
-			logging.For(project).Warnf("gitflow: авто-мёрдж %s: конфликт в %s — пробуем LLM-авторезолвинг",
-				task.TaskID, strings.Join(ce.Files, ", "))
-			// Попытка авторезолвина через LLM: worktree релизной ветки + merge задачи.
-			// LLM-резолв живёт под mergeLock (как в handleTaskLLMResolve): внутри он
-			// снимает worktree эпика (4.1) перед checkout релизной ветки.
-			lock := s.mergeLock(project)
-			lock.Lock()
-			resolved := s.tryTaskLLMResolve(ctx, project, task, ce.Files)
-			lock.Unlock()
-			if resolved {
-				logging.For(project).Infof("gitflow: авто-мёрдж %s: конфликт разрешён LLM", task.TaskID)
-				if len(task.MergeConflictFiles) > 0 {
-					task.MergeConflictFiles = nil
-					if serr := store.SaveTask(ctx, task); serr != nil {
-						logging.For(project).Warnf("gitflow: авто-мёрдж %s: очистка конфликта: %v", task.TaskID, serr)
-					}
-				}
-				if worktree != "" {
-					s.removeTaskWorktree(project, task.TaskID, worktree)
-				}
-				s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи: конфликт разрешён LLM")
-				return
-			}
-			// LLM не справился — задача НЕ считается выполненной: откат в in_progress,
-			// конфликт виден на доске, специалист решает сам.
-			task.MergeConflictFiles = ce.Files
-			task.Status = board.StatusInProgress
-			if serr := store.SaveTask(ctx, task); serr != nil {
-				logging.For(project).Warnf("gitflow: авто-мёрдж %s: запись конфликта на доске: %v", task.TaskID, serr)
-			}
-			if sess := s.session(project); sess != nil {
-				sess.append(chat.RoleStatus,
-					fmt.Sprintf("Задача %s: мёрдж в релиз эпика %s не прошёл — конфликт в файлах [%s]. Задача возвращена в in_progress: реши конфликт в своей ветке и повтори мёрдж.",
-						task.TaskID, task.EpicID, strings.Join(ce.Files, ", ")), "", "", nil)
-			}
-		} else {
-			logging.For(project).Warnf("gitflow: авто-мёрдж %s: %v", task.TaskID, err)
-			// Worktree задачи снимаем в любом случае: правки уже в ветке
-			// (авто-коммит выше), работа специалиста завершена.
-			if worktree != "" {
-				s.removeTaskWorktree(project, task.TaskID, worktree)
-			}
-			s.srvEmitBoard(project, gitflowErrBoard("авто-мёрдж задачи завершён с ошибкой", err))
-			return
+			return gitflow.MergeOutcome{ConflictFiles: ce.Files}, gitflow.ErrMergeConflict
 		}
-		// Конфликт не разрешён: задача откачена в in_progress, worktree НЕ
-		// снимаем — специалист решает конфликт в своей ветке и повторяет мёрдж.
-		s.srvEmitBoard(project, "gitflow: авто-мёрдж задачи: конфликт, откат в in_progress")
-		return
+		return gitflow.MergeOutcome{}, err
 	}
-	logging.For(project).Infof("gitflow: задача %s → done: авто-мёрдж в релиз эпика %s (already=%v)",
-		task.TaskID, task.EpicID, res.AlreadyMerged)
-	// Успешный мёрдж снимает признак конфликта с задачи (если он был).
-	if len(task.MergeConflictFiles) > 0 {
-		task.MergeConflictFiles = nil
-		if serr := store.SaveTask(ctx, task); serr != nil {
-			logging.For(project).Warnf("gitflow: авто-мёрдж %s: очистка конфликта: %v", task.TaskID, serr)
-		}
+	out := gitflow.MergeOutcome{}
+	if res != nil {
+		out.AlreadyMerged = res.AlreadyMerged
 	}
+	return out, nil
+}
 
-	// 4) Снимаем worktree задачи.
-	if worktree != "" {
-		s.removeTaskWorktree(project, task.TaskID, worktree)
+func (h *taskFinalizerHost) ResolveTaskConflict(ctx context.Context, task *domain.Task, files []string) bool {
+	lock := h.s.mergeLock(h.project)
+	lock.Lock()
+	defer lock.Unlock()
+	return h.s.tryTaskLLMResolve(ctx, h.project, task, files)
+}
+
+func (h *taskFinalizerHost) SaveTask(ctx context.Context, task *domain.Task) error {
+	if h.store == nil {
+		return nil
 	}
-	s.srvEmitBoard(project, "gitflow: готовность задачи завершена (done → релиз)")
+	return h.store.SaveTask(ctx, task)
+}
+
+func (h *taskFinalizerHost) RemoveTaskWorktree(taskID, worktree string) {
+	h.s.removeTaskWorktree(h.project, taskID, worktree)
+}
+
+func (h *taskFinalizerHost) EmitBoard(msg string) {
+	h.s.srvEmitBoard(h.project, msg)
+}
+
+func (h *taskFinalizerHost) AppendStatus(msg string) {
+	if sess := h.s.session(h.project); sess != nil {
+		sess.append(chat.RoleStatus, msg, "", "", nil)
+	}
 }
 
 // syncEpicWithMain — Ф-4: авто-синхрон релизной ветки эпика с main. Запускается

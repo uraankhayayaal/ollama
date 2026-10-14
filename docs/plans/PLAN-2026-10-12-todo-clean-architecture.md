@@ -59,7 +59,8 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 **F3c ✅** — политика создания MR (`MRCreator`) вынесена в `application/gitflow`
 (порты `MRGateway`/`Forge`/`MRRegistry`); срез **F3d ✅** — раскладка worktree,
 артефактная политика `.gitignore` и презентация git-ошибки вынесены в
-`application/gitflow`.
+`application/gitflow`; срез **F3e ✅** — авто-шаги завершения задачи
+(`TaskFinalizer`, порт `TaskFinalizerHost`) вынесены в `application/gitflow`.
 Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -528,6 +529,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3b | Цикл LLM-разрешения конфликтов (`Resolver.ResolveWithLLM`, промпт, `verify`, `clearConflictField`) вынесен из `server/` в `application/gitflow` (порты `Store`/`Developer`/`Acceptor`/`Markers`); удалён мёртвый код (`buildPrompt`/`collectFiles`/`writeResolved`) | ✅ |
 | F3c | Политика создания MR (`MRCreator.CreateTaskMR`/`CreateEpicMR`, `ErrEmptyBranch`) вынесена из `server/` в `application/gitflow` (порты `MRGateway`/`Forge`/`MRRegistry`) | ✅ |
 | F3d | Раскладка worktree (`TaskWorktreePath`/`EpicWorktreePath`/`ChildTaskKey`), артефактная политика `.gitignore` (`TaskGitignore`/`EnsureTaskGitignore`) и презентация git-ошибки (`GitflowErrBoard`) вынесены в `application/gitflow` | ✅ |
+| F3e | Авто-шаги завершения задачи (`TaskFinalizer.Finalize`: авто-коммит worktree → авто-MR → мёрдж в релиз эпика → снятие worktree) вынесены в `application/gitflow` (порт `TaskFinalizerHost`) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -575,7 +577,18 @@ stage/commit/push) и хендлеры. Герметичные тесты `resol
 (`GitflowErrBoard`) вынесены в `application/gitflow/worktree.go`;
 `server/gitflow_auto.go` оставил тонкие обёртки (`taskWorktreePath`/
 `epicWorktreePath`/`childTaskKey`/`taskGitignore`/`ensureTaskGitignore`/
-`gitflowErrBoard`). Герметичные тесты `worktree_test.go`.
+`gitflowErrBoard`). Герметичные тесты `worktree_test.go`. **F3e ✅** — авто-шаги
+завершения задачи (`TaskFinalizer.Finalize`: авто-коммит worktree → авто-MR →
+мёрдж в релиз эпика → снятие worktree, с LLM-авторезолвом конфликта) вынесены в
+`application/gitflow/finalize.go` за портом `TaskFinalizerHost`
+(`Project`/`TaskBranch`/`CommitWorktree`/`CreateTaskMR`/`BranchAlreadyMerged`/
+`MergeTaskBranch`/`ResolveTaskConflict`/`SaveTask`/`RemoveTaskWorktree`/
+`EmitBoard`/`AppendStatus`); `server/gitflow_auto.go` оставил адаптер
+`taskFinalizerHost` (git, реестр веток, доска, сессия, шина) — mergeLock и
+разбор `git.MergeConflictError` живут в адаптере. Герметичные тесты
+`finalize_test.go` (пропуск не-git/без ветки, полный цикл, «уже влита», ошибка
+MR не мешает мёрджу, конфликт разрешён/не разрешён LLM, ошибка мёрджа, пустой
+worktree, пустая задача).
 
 ## Ключевые решения
 
