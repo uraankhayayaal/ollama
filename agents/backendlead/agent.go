@@ -7,8 +7,6 @@ import (
 	"ai/tools"
 	"os"
 	"path/filepath"
-
-	"github.com/ollama/ollama/api"
 )
 
 // backendLeadToolNames — инструменты Backend Tech Lead, выбираемые из
@@ -35,15 +33,11 @@ var backendLeadToolNames = []string{
 // не пишет. Задачи создаёт инструментами Kanban-доски (Board*); при
 // отсутствии доски отвечает JSON-декомпозицией.
 type BackendLead struct {
-	// *tools.FileOps — разделяемый контекст файловых инструментов
-	// (OutputDir, MaxFiles, NoOverwrite). Поля и методы FileOps промотируются:
-	// l.OutputDir, l.Write(..) и т.п. доступны напрямую.
-	*tools.FileOps
-	Prompt string
+	// *agents.Base — общая часть агента (FileOps, Prompt, Tools): файловый
+	// контекст, задание и выбранные инструменты. Поля промотируются:
+	// l.OutputDir, l.Tools, l.Prompt доступны напрямую.
+	*agents.Base
 	Config Config
-	// Tools — выбранные агентом инструменты из общего реестра
-	// (единый источник для GetTools/GetToolsForOllama и диспетчеризации вызовов).
-	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
 	Store services.BoardStore
@@ -88,7 +82,7 @@ func (l *BackendLead) SetBoardStore(s services.BoardStore) {
 		return
 	}
 	l.Store = s
-	l.Tools = tools.Select(backendLeadToolNames, tools.Deps{FileOps: l.FileOps, Board: s})
+	l.SetTools(backendLeadToolNames, tools.Deps{Board: s})
 }
 
 // newBackendLead создаёт агента в заданной директории: собирает *tools.FileOps
@@ -100,20 +94,9 @@ func newBackendLead(dir, prompt string, cfg Config) *BackendLead {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
 	ops.SetWriteAllowlist(agents.SkeletonWriteAllowlist)
 	return &BackendLead{
-		FileOps:               ops,
-		Prompt:                prompt,
+		Base:                  agents.NewBase(prompt, ops, backendLeadToolNames, tools.Deps{}),
 		Config:                cfg,
-		Tools:                 tools.Select(backendLeadToolNames, tools.Deps{FileOps: ops}),
 		requireTaskPublishing: true,
-	}
-}
-
-func (l *BackendLead) GetUserMessages() []agents.Message {
-	return []agents.Message{
-		{
-			Type:    agents.MessageTypeHuman,
-			Message: l.Prompt,
-		},
 	}
 }
 
@@ -243,32 +226,6 @@ func (l *BackendLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 - Нельзя писать файлы вне OutputDir и вне allowlist записи. Run — только установка зависимостей, сборка/тесты/автостиль и git (коммит/пуш скелетона); другие консольные команды запрещены. Инструменты: List, ReadFiles, ReadMap, LspDefinition, LspReferences, LspHover, WriteFiles, AppendFile, Run и инструменты доски Board*.` + agents.RunTokenEconomy,
 		},
 	}
-}
-
-// GetTools возвращает определения выбранных инструментов (единый JSON Schema
-// формат для OpenAI/Yandex). Источник схем — реестр tools.
-func (l *BackendLead) GetTools() []tools.ToolDefinition {
-	return l.Tools.Definitions()
-}
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama.
-func (l *BackendLead) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(l.GetTools())
-}
-
-func (l *BackendLead) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
-	return l.Tools.Execute(functionName, functionArgs)
-}
-
-// Обёртки доступных инструментов. Наблюдаемые снаружи сигнатуры сохранены
-// и просто делегируют в реестр (единый источник вызовов).
-
-func (l *BackendLead) ReadFiles(args map[string]any) ([]byte, error) {
-	return l.Tools.Execute("ReadFiles", args)
-}
-func (l *BackendLead) List(args map[string]any) ([]byte, error) {
-	return l.Tools.Execute("List", args)
 }
 
 // NeedsHeavyModel — лид декомпозирует эпики на задачи с контрактами,
