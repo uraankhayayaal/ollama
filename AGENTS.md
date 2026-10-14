@@ -649,7 +649,7 @@ approve, отказ, отмена контекста → `Reset`, останов
 `application/chatassist` чист, `gofmt` по правкам чист. Документация: план (шапка
 + таблица F3z + narrative), `docs/00-overview/project-map.md` (строка
 `application/chatassist/` расширена). Остаток Этапа 6 — F3+: `server`-хендлеры.
-Коммит F3z — ниже.
+Коммит F3z `eb9935e`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
