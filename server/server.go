@@ -5,7 +5,7 @@ import (
 	"ai/board"
 	"ai/chat"
 	"ai/forges"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/infrastructure/llm"
 	"ai/logging"
 	"ai/runmetrics"
@@ -39,7 +39,7 @@ type Config struct {
 
 	// GitExec — исполнитель git-команд (по умолчанию git CLI). Переопределяется
 	// в тестах fake-исполнителем для hermetic-прогона.
-	GitExec gitops.Executor
+	GitExec git.Executor
 
 	// ForgeFactory создаёт провайдера форджа по git-remote (по умолчанию —
 	// forges.NewByRemote). Переопределяется в тестах стабом без сети.
@@ -54,7 +54,7 @@ type Server struct {
 	hub  *Hub
 	prov providerResolve
 
-	gitExec      gitops.Executor
+	gitExec      git.Executor
 	forgeFactory func(remoteURL, token string) (forges.Forge, error)
 
 	// auth — аутентификация Web UI (nil/отключена, если пароль не задан).
@@ -122,7 +122,7 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	s.gitExec = cfg.GitExec
 	if s.gitExec == nil {
-		s.gitExec = gitops.CLIExecutor{}
+		s.gitExec = git.CLIExecutor{}
 	}
 	s.forgeFactory = cfg.ForgeFactory
 	if s.forgeFactory == nil {

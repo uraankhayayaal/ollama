@@ -14,14 +14,14 @@ import (
 	"testing"
 
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/workspace"
 )
 
 // setupEpicWorktreeRepo — общий каркас: origin с базовым коммитом → клон
 // ai/myrepo, реестр проекта и ветки эпика ai/epic/e1 (то, что делают
 // handleOpenGitProject и EpicCreatedHook).
-func setupEpicWorktreeRepo(t *testing.T) (context.Context, *Server, *gitops.Repo) {
+func setupEpicWorktreeRepo(t *testing.T) (context.Context, *Server, *git.Repo) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -42,13 +42,13 @@ func setupEpicWorktreeRepo(t *testing.T) (context.Context, *Server, *gitops.Repo
 	}
 
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	setGitUserReal(t, dest)
 
-	srv, _, _ := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, _, _ := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,

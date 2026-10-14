@@ -34,7 +34,7 @@ import (
 	"strings"
 
 	"ai/chat"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/tools"
 )
 
@@ -242,7 +242,7 @@ func (sess *Session) conflictApply(epicID string, files map[string]string, edits
 	if _, err := os.Stat(rs.Worktree); err != nil {
 		return nil, fmt.Errorf("конфликтный worktree %s не существует — начните заново (action=start)", rs.Worktree)
 	}
-	pending, err := gitops.HasConflictMarkers(rs.Worktree, rs.Files)
+	pending, err := git.HasConflictMarkers(rs.Worktree, rs.Files)
 	if err != nil {
 		return nil, fmt.Errorf("проверка маркеров: %v", err)
 	}
@@ -262,7 +262,7 @@ func (sess *Session) conflictApply(epicID string, files map[string]string, edits
 	sort.Strings(touched)
 	// Финализация сама проверит маркеры, но дешевле поймать остаток здесь: так
 	// модели не придётся гадать, что не так с её правкой.
-	left, err := gitops.HasConflictMarkers(rs.Worktree, touched)
+	left, err := git.HasConflictMarkers(rs.Worktree, touched)
 	if err != nil {
 		return nil, fmt.Errorf("проверка маркеров после записи: %v", err)
 	}
@@ -314,7 +314,7 @@ func newConflictView(wt string, files []string) *conflictView {
 	if len(files) > maxConflictFiles {
 		files = files[:maxConflictFiles]
 	}
-	pending, err := gitops.HasConflictMarkers(wt, files)
+	pending, err := git.HasConflictMarkers(wt, files)
 	if err != nil {
 		pending = files
 	}
@@ -468,7 +468,7 @@ func checkConflictFile(wt string, allowed map[string]bool, p string, pending []s
 }
 
 // conflictSafeRel — безопасный относительный путь внутри каталога (аналог
-// gitops.safePathRel, который неэкспортируемый).
+// git.safePathRel, который неэкспортируемый).
 func conflictSafeRel(p string) (string, error) {
 	q := filepath.ToSlash(filepath.Clean(strings.TrimSpace(p)))
 	if q == "" || q == "." || q == ".." || filepath.IsAbs(filepath.FromSlash(p)) {

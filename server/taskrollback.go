@@ -20,7 +20,7 @@ import (
 
 	"ai/board"
 	"ai/chat"
-	"ai/gitops"
+	"ai/infrastructure/git"
 )
 
 // rollbackRequest — тело POST .../rollback. `to` — либо именованная точка
@@ -78,11 +78,11 @@ func (s *Server) handleRollbackTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := gitops.RollbackWorktree(r.Context(), s.gitExec, ref.Worktree, target)
+	res, err := git.RollbackWorktree(r.Context(), s.gitExec, ref.Worktree, target)
 	if err != nil {
 		// Несуществующий коммит — вина запроса (опечатка в SHA, «последняя
 		// рабочая версия» ещё не существует), а не сбой git: 400, а не 502.
-		if errors.Is(err, gitops.ErrNoSuchCommit) {
+		if errors.Is(err, git.ErrNoSuchCommit) {
 			writeErr(w, http.StatusBadRequest, "откат не выполнен: "+err.Error())
 			return
 		}

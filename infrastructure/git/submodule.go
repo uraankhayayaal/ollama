@@ -8,7 +8,7 @@
 //
 //   - ListSubmodules/EnsureSubmodules — чтение `.gitmodules` и инициализация
 //     прямых submodule-ов (`git submodule update --init`);
-//   - task worktree сабмодуля создаётся сервером через gitops.Worktree;
+//   - task worktree сабмодуля создаётся сервером через git.Worktree;
 //   - SubmoduleCommit и Repo.Diff фиксируют и показывают изменения сабмодуля;
 //   - Push — сабмодули пушатся ДО родителя: родительский gitlink поднимается
 //     только после того, как на remote сабмодуля лёг новый SHA, иначе
@@ -16,7 +16,7 @@
 //
 // Сабмодули, как и сам родитель, регистрируются в реестре workspace как
 // отдельные git-проекты с именами `<родитель>--<путь>` (см. Ф-1, Реестр).
-package gitops
+package git
 
 import (
 	"context"
@@ -218,7 +218,7 @@ func PrepareSubmodules(ctx context.Context, ex Executor, root, branchPrefix stri
 	return subs, nil
 }
 
-// SubmoduleTarget возвращает gitops.Repo для работы с сабмодулем: Root — его
+// SubmoduleTarget возвращает git.Repo для работы с сабмодулем: Root — его
 // каталог, Branch — фича-ветка задачи (если задана), Remote родителя остаётся
 // у родителя. Если у сабмодуля нет своей ветки — Branch остаётся пустой и
 // операции идут прямо в его рабочей копии.

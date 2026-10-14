@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/workspace"
 )
 
@@ -146,9 +146,9 @@ func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info, ref, ba
 		s.diffs[key] = c
 		return c, nil
 	}
-	repo := gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
+	repo := git.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
 	if inf.Parent == "" {
-		if subs, err := gitops.ListSubmodules(ctx, s.gitExec, inf.Root); err != nil {
+		if subs, err := git.ListSubmodules(ctx, s.gitExec, inf.Root); err != nil {
 			return nil, err
 		} else {
 			repo.Submodules = subs
@@ -164,7 +164,7 @@ func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info, ref, ba
 		if err != nil {
 			continue
 		}
-		childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+		childRepo := git.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
 		childRaw, err := childRepo.Diff(ctx)
 		if err != nil {
 			return nil, err

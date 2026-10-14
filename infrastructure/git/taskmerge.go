@@ -7,7 +7,7 @@
 // worktree: add → merge --no-ff → push → remove. Ветки живут в одном
 // репозитории (branch-in-place), поэтому результат merge виден в основном
 // клоне сразу после снятия worktree.
-package gitops
+package git
 
 import (
 	"context"

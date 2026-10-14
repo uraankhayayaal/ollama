@@ -1,7 +1,7 @@
 // Git-workflow «эпик = релизная ветка, задача = фича-ветка» (Ф-1).
 //
 // REST-маршруты создания веток эпиков и задач внутри единого клона проекта
-// (branch-in-place, temp/<имя>): git-команды идут через gitops.Repo, а
+// (branch-in-place, temp/<имя>): git-команды идут через git.Repo, а
 // привязка epic_id/task_id → ветка хранится в side-реестре workspace. Сама
 // рабочая копия и текущая ветка НЕ переключаются (CreateBranch создаёт ref),
 // поэтому прежний flow приёмки «Принять → MR» не ломается.
@@ -11,7 +11,7 @@ import (
 	"ai/agents/architect"
 	"ai/board"
 	"ai/chat"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"
 	"context"
@@ -28,7 +28,7 @@ const (
 	// taskBranchPrefix — префикс фича-ветки задачи (база = ветка эпика).
 	// Источник правды — gitops: тем же префиксом проверяется принадлежность
 	// рабочей копии задаче (промежуточные коммиты, ручной откат).
-	taskBranchPrefix = gitops.TaskBranchPrefix
+	taskBranchPrefix = git.TaskBranchPrefix
 )
 
 // boardStore открывает хранилище доски проекта, привязывая авто-действия
@@ -80,7 +80,7 @@ func (s *Server) handleCreateEpicBranch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	branch := epicBranchPrefix + gitops.SanitizeBranchName(epicID)
+	branch := epicBranchPrefix + git.SanitizeBranchName(epicID)
 	base := strings.TrimSpace(inf.GitBase)
 	if base == "" {
 		writeErr(w, http.StatusBadRequest, "у проекта не задана базовая ветка (git_base)")
@@ -153,7 +153,7 @@ func (s *Server) handleCreateTaskBranch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	branch := taskBranchPrefix + gitops.SanitizeBranchName(taskID)
+	branch := taskBranchPrefix + git.SanitizeBranchName(taskID)
 	if err := ensureBranch(r.Context(), repo, branch, epicRef.Branch); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -177,7 +177,7 @@ func (s *Server) handleCreateTaskBranch(w http.ResponseWriter, r *http.Request) 
 }
 
 // ensureBranch создаёт ветку branch от base, если её ещё нет в клоне.
-func ensureBranch(ctx context.Context, repo *gitops.Repo, branch, base string) error {
+func ensureBranch(ctx context.Context, repo *git.Repo, branch, base string) error {
 	exists, err := repo.BranchExists(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("проверка ветки %s: %v", branch, err)
@@ -193,7 +193,7 @@ func ensureBranch(ctx context.Context, repo *gitops.Repo, branch, base string) e
 
 // handleMergeTask вливает фича-ветку задачи в релизную ветку её эпика
 // (Ф-2): REST-путь для ручного/программного «мёрджа». Само слияние делает
-// gitops.MergeFeature во временном worktree — рабочая копия клона не трогается.
+// git.MergeFeature во временном worktree — рабочая копия клона не трогается.
 //
 // Ответы:
 //   - 200 {status:"ok", branch, already_merged} — влита (или уже была влита);
@@ -218,7 +218,7 @@ func (s *Server) handleMergeTask(w http.ResponseWriter, r *http.Request) {
 
 	res, err := s.mergeTaskBranch(r.Context(), project, task)
 	if err != nil {
-		var ce *gitops.MergeConflictError
+		var ce *git.MergeConflictError
 		if errors.As(err, &ce) {
 			// Конфликт на доске: задача помечается списком файлов (виден в UI,
 			// снимется успешным мёрджем).
@@ -259,7 +259,7 @@ func (s *Server) handleMergeTask(w http.ResponseWriter, r *http.Request) {
 // эпика в базовую (main) с быстрым путём без конфликтов. Эпик должен быть
 // в статусе done (ручной затвор человека); сама операция необратима.
 //
-// Слияние выполняется через gitops.MergeFeature: прогноз конфликтов через
+// Слияние выполняется через git.MergeFeature: прогноз конфликтов через
 // merge-tree БЕЗ изменения рабочей копии, затем настоящий merge-коммит
 // во временном worktree и push main на remote. Рабочая копия клона и HEAD
 // агента (ai/<имя>) не трогаются.
@@ -328,7 +328,7 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 // (Ф-3). Ошибки возвращаются с HTTP-кодом (apiError), чтобы оба потребителя
 // отвечали одинаково; конфликт слияния дополнительно несёт *MergeConflictError
 // для ответа status=conflicts с файлами.
-func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*gitops.MergeResult, string, string, error) {
+func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*git.MergeResult, string, string, error) {
 	inf, err := s.reg.Get(project)
 	if err != nil {
 		return nil, "", "", &apiError{code: http.StatusNotFound, msg: "проект не найден"}
@@ -369,7 +369,7 @@ func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*gito
 	if err != nil {
 		return nil, "", "", &apiError{
 			code: http.StatusBadRequest,
-			msg:  fmt.Sprintf("у эпика %s нет релизной ветки — «Залить в main» невозможно (создайте ветку эпика %s)", epicID, epicBranchPrefix+gitops.SanitizeBranchName(epicID)),
+			msg:  fmt.Sprintf("у эпика %s нет релизной ветки — «Залить в main» невозможно (создайте ветку эпика %s)", epicID, epicBranchPrefix+git.SanitizeBranchName(epicID)),
 		}
 	}
 
@@ -377,12 +377,12 @@ func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*gito
 	lock.Lock()
 	defer lock.Unlock()
 
-	res, err := repo.MergeFeature(ctx, main, epicRef.Branch, gitops.MergeFeatureOptions{
+	res, err := repo.MergeFeature(ctx, main, epicRef.Branch, git.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: релиз в main из %s", epicID, epicRef.Branch),
 		PushURL: remotePushURL(inf),
 	})
 	if err != nil {
-		var ce *gitops.MergeConflictError
+		var ce *git.MergeConflictError
 		if errors.As(err, &ce) {
 			return nil, "", "", &apiError{code: http.StatusConflict, msg: ce.Error(), mce: ce}
 		}
@@ -420,9 +420,9 @@ func (s *Server) epicBranch(project string, task *board.Task) string {
 
 // mergeTaskBranch вливает ветку задачи в ветку её эпика (общая механика для
 // REST-эндпоинта и авто-хука done→merge). Возвращает результат слияния или
-// *gitops.MergeConflictError при конфликтах. Потокобезопасно: слияния проекта
+// *git.MergeConflictError при конфликтах. Потокобезопасно: слияния проекта
 // сериализуются пер-проектным локом.
-func (s *Server) mergeTaskBranch(ctx context.Context, project string, t *board.Task) (*gitops.MergeResult, error) {
+func (s *Server) mergeTaskBranch(ctx context.Context, project string, t *board.Task) (*git.MergeResult, error) {
 	if t == nil || t.EpicID == "" {
 		return nil, fmt.Errorf("задача без эпика")
 	}
@@ -454,7 +454,7 @@ func (s *Server) mergeTaskBranch(ctx context.Context, project string, t *board.T
 	// checked-out — MergeFeature не смог бы поставить её во временный worktree.
 	s.dropEpicWorktreeLocked(ctx, project, t.EpicID)
 
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, gitops.MergeFeatureOptions{
+	res, err := repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, git.MergeFeatureOptions{
 		Message: fmt.Sprintf("задача %s: влитие в релиз эпика %s", t.TaskID, t.EpicID),
 		PushURL: remotePushURL(inf),
 	})
@@ -577,7 +577,7 @@ func (s *Server) autoCreateEpicBranch(ctx context.Context, project string, epic 
 	lock.Lock()
 	defer lock.Unlock()
 
-	branch := epicBranchPrefix + gitops.SanitizeBranchName(epic.TaskID)
+	branch := epicBranchPrefix + git.SanitizeBranchName(epic.TaskID)
 	if err := ensureBranch(ctx, repo, branch, base); err != nil {
 		logging.For(project).Warnf("gitflow: авто-ветка эпика %s: %v", epic.TaskID, err)
 		return
@@ -627,7 +627,7 @@ func (s *Server) autoCreateTaskBranch(ctx context.Context, project string, task 
 	lock.Lock()
 	defer lock.Unlock()
 
-	branch := taskBranchPrefix + gitops.SanitizeBranchName(task.TaskID)
+	branch := taskBranchPrefix + git.SanitizeBranchName(task.TaskID)
 	if err := ensureBranch(ctx, repo, branch, epicRef.Branch); err != nil {
 		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: %v", task.TaskID, err)
 		return
@@ -678,7 +678,7 @@ func (s *Server) deleteEpicBranches(project, epicID string, epicTasks []string) 
 type apiError struct {
 	code int
 	msg  string
-	mce  *gitops.MergeConflictError
+	mce  *git.MergeConflictError
 }
 
 func (e *apiError) Error() string { return e.msg }

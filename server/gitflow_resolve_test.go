@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/projects"
 	"ai/workspace"
 )
@@ -570,13 +570,13 @@ func setupRealGitEpicConflict(t *testing.T) (*Server, http.Handler, *Session, st
 	}
 
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	setGitUserReal(t, dest)
 
-	srv, handler, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, handler, mr := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: repo.Remote, GitBranch: repo.Branch, GitBase: repo.Base,

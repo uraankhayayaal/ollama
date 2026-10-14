@@ -30,7 +30,7 @@ npm --prefix web run build
 |---|---|
 | Qdrant | `infrastructure/rag/memstore_test.go` — in-memory `QdrantStore` с семантикой фильтров (must/must_not/should, match, is_null, is_empty, has_id) |
 | Модель эмбеддингов | `textEmbedder` |
-| Git | инъектируемый `rag.gitRunner`, `gitops.Executor` |
+| Git | инъектируемый `rag.gitRunner`, `git.Executor` |
 | RAG-клиент сервера | фабрика `buildProjectIndexer` |
 | Shell | `sandboxConfig.LocalCommand` (заглушка, чтобы тесты не дёргали shell) |
 

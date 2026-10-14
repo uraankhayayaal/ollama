@@ -14,7 +14,7 @@ import (
 
 	"ai/board"
 	"ai/forges"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/workspace"
 
 	"github.com/alicebob/miniredis/v2"
@@ -26,7 +26,7 @@ func (e orderedGitExecutor) Exec(ctx context.Context, dir string, argv ...string
 	if len(argv) > 1 && argv[1] == "push" {
 		*e.events = append(*e.events, "push:"+dir)
 	}
-	return (gitops.CLIExecutor{}).Exec(ctx, dir, argv...)
+	return (git.CLIExecutor{}).Exec(ctx, dir, argv...)
 }
 
 type orderedForge struct {
@@ -79,7 +79,7 @@ func newSubmoduleTaskFixture(t *testing.T) *submoduleTaskFixture {
 	gitFixtureRun(t, parentOrigin, "commit", "-m", "add submodule")
 
 	cloneRoot := filepath.Join(base, "clone")
-	parentRepo, err := gitops.Clone(context.Background(), gitops.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
+	parentRepo, err := git.Clone(context.Background(), git.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func newSubmoduleTaskFixture(t *testing.T) *submoduleTaskFixture {
 		t.Fatal(err)
 	}
 
-	srv := &Server{reg: reg, gitExec: gitops.CLIExecutor{}, mergeLocks: map[string]*sync.Mutex{}, sessions: map[string]*Session{}}
+	srv := &Server{reg: reg, gitExec: git.CLIExecutor{}, mergeLocks: map[string]*sync.Mutex{}, sessions: map[string]*Session{}}
 	task := &board.Task{TaskSpec: board.TaskSpec{TaskID: "t1"}}
 	mr := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "app"})
@@ -333,7 +333,7 @@ func TestAcceptGitProjectCreatesSubmoduleMRBeforeParent(t *testing.T) {
 	gitFixtureRun(t, parentOrigin, "commit", "-m", "add submodule")
 
 	cloneRoot := filepath.Join(base, "clone")
-	cloned, err := gitops.Clone(context.Background(), gitops.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
+	cloned, err := git.Clone(context.Background(), git.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestRejectBranchResetsSubmoduleBeforeParent(t *testing.T) {
 	gitFixtureRun(t, parentOrigin, "add", "-A")
 	gitFixtureRun(t, parentOrigin, "commit", "-m", "add submodule")
 	cloneRoot := filepath.Join(base, "clone")
-	cloned, err := gitops.Clone(context.Background(), gitops.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
+	cloned, err := git.Clone(context.Background(), git.CLIExecutor{}, parentOrigin, "ai/app", cloneRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestRejectBranchResetsSubmoduleBeforeParent(t *testing.T) {
 		GitBranch: sub.Branch, GitBase: sub.Base, GitTarget: sub.DefaultBranch, Parent: "app"}); err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{reg: reg, gitExec: gitops.CLIExecutor{}, sessions: map[string]*Session{}}
+	server := &Server{reg: reg, gitExec: git.CLIExecutor{}, sessions: map[string]*Session{}}
 	req := httptest.NewRequest("POST", "/api/projects/app/reject-branch", nil)
 	req.SetPathValue("id", "app")
 	response := httptest.NewRecorder()

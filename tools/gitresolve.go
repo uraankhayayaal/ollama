@@ -11,14 +11,14 @@
 // Действия:
 //
 //	conflicts (по умолчанию) — список конфликтных путей + авто-резолв
-//	    тривиальных блоков (gitops.TrivialResolve) + их stage; возвращает
+//	    тривиальных блоков (git.TrivialResolve) + их stage; возвращает
 //	    «сложные» файлы (с маркерами) и diff для правок моделью;
 //	resolve — повторный авто-резолв, проверка «маркеров не осталось»,
 //	    ЛСП по затронутым файлам, git add -A + git commit (конец merge).
 package tools
 
 import (
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,7 +34,7 @@ const ResolveGitConflicts = "ResolveGitConflicts"
 // resolveGitConflictsTool — обёртка инструмента в реестре. ex nil → git CLI.
 type resolveGitConflictsTool struct {
 	ops *FileOps
-	ex  gitops.Executor
+	ex  git.Executor
 }
 
 func (t *resolveGitConflictsTool) Name() string { return ResolveGitConflicts }
@@ -94,9 +94,9 @@ func (t *resolveGitConflictsTool) Execute(args map[string]any) ([]byte, error) {
 
 	ex := t.ex
 	if ex == nil {
-		ex = gitops.CLIExecutor{}
+		ex = git.CLIExecutor{}
 	}
-	repo := gitops.RepoFromState(ex, t.ops.OutputDir, "", "", "")
+	repo := git.RepoFromState(ex, t.ops.OutputDir, "", "", "")
 	ctx := context.Background()
 
 	switch strings.TrimSpace(p.Action) {
@@ -109,7 +109,7 @@ func (t *resolveGitConflictsTool) Execute(args map[string]any) ([]byte, error) {
 
 // actionConflicts — конфликты конфликтного каталога: список, авто-резолв
 // тривиальных, stage резолвов, diff «сложных» для модели.
-func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *gitops.Repo) ([]byte, error) {
+func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *git.Repo) ([]byte, error) {
 	files, err := repo.UnmergedFiles(ctx)
 	if err != nil {
 		return resolveJSON(map[string]any{
@@ -124,7 +124,7 @@ func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *git
 		}), nil
 	}
 
-	resolved, hard, err := gitops.TrivialResolve(t.ops.OutputDir, sortDedup(files))
+	resolved, hard, err := git.TrivialResolve(t.ops.OutputDir, sortDedup(files))
 	if err != nil {
 		return resolveJSON(map[string]any{"status": "error", "message": "авто-резолв: " + err.Error()}), nil
 	}
@@ -160,7 +160,7 @@ func (t *resolveGitConflictsTool) actionConflicts(ctx context.Context, repo *git
 
 // actionResolve — финализация резолва: разупрощает остатки, проверяет, что
 // маркеров не осталось, прогоняет ЛСП по затронутым файлам и коммитит.
-func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *gitops.Repo, p resolveParams) ([]byte, error) {
+func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *git.Repo, p resolveParams) ([]byte, error) {
 	files := p.Files
 	if len(files) == 0 {
 		if unmerged, err := repo.UnmergedFiles(ctx); err == nil {
@@ -169,7 +169,7 @@ func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *gitop
 	}
 
 	// Повторный авто-резолв: модель могла не тронуть тривиальные остатки.
-	resolved, _, err := gitops.TrivialResolve(t.ops.OutputDir, files)
+	resolved, _, err := git.TrivialResolve(t.ops.OutputDir, files)
 	if err != nil {
 		return resolveJSON(map[string]any{"status": "error", "message": "авто-резолв: " + err.Error()}), nil
 	}
@@ -180,7 +180,7 @@ func (t *resolveGitConflictsTool) actionResolve(ctx context.Context, repo *gitop
 	}
 
 	unmerged, _ := repo.UnmergedFiles(ctx)
-	markers, err := gitops.HasConflictMarkers(t.ops.OutputDir, files)
+	markers, err := git.HasConflictMarkers(t.ops.OutputDir, files)
 	if err != nil {
 		return resolveJSON(map[string]any{"status": "error", "message": "проверка маркеров: " + err.Error()}), nil
 	}

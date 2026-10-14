@@ -32,8 +32,11 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 привязан к порту `domain/services.LLMClient` compile-assertions
 (`infrastructure/llm/ports.go`). Срез **E2 ✅** — `rag` → `infrastructure/rag`
 (пакет `rag`), адаптер `rag.ProjectAdapter` реализует
-`domain/services.RAGClient` (`infrastructure/rag/port.go`). Разбивка этапа на
-срезы E1–E6 — в разделе «Этап 4» ниже.
+`domain/services.RAGClient` (`infrastructure/rag/port.go`). Срез **E3 ✅** —
+`gitops` → `infrastructure/git` (пакет `gitops` → `git`), порт
+`domain/services.GitOperations` совпадает по подписям с методами `*git.Repo` и
+реализуется напрямую (assertion в `infrastructure/git/port.go`). Разбивка этапа
+на срезы E1–E6 — в разделе «Этап 4» ниже.
 
 ## Проблема
 
@@ -92,7 +95,7 @@ domain/           — предметная область (Task, Plan, Epic, Age
 domain/services/  — интерфейсы сервисов (LLM, RAG, Git, Sandbox, Board)
 application/      — use-cases (RunTask, Escalate, Compress, LoopBreak)
 interfaces/       — адаптеры (server, web, runner/loop, cli)
-infrastructure/   — реализации (models, rag, gitops, sandbox, board)
+infrastructure/   — реализации (llm, rag, git, sandbox, board)
 ```
 
 ### Ключевые принципы
@@ -299,10 +302,10 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 |---|---|---|
 | **E1** | Каркас `infrastructure/`; `models` → `infrastructure/llm` (пакет `models` → `llm`), compile-assertions `services.LLMClient` (`ports.go`) | ✅ |
 | **E2** | `rag` → `infrastructure/rag` (пакет `rag`), адаптер `rag.ProjectAdapter` к порту `services.RAGClient` | ✅ |
-| **E3** | `gitops` → `infrastructure/git` + assertion `services.GitOperations` | ⏳ |
+| **E3** | `gitops` → `infrastructure/git` (пакет `git`), порт `services.GitOperations` реализуется `*git.Repo` напрямую | ✅ |
 | **E4** | `sandbox` → `infrastructure/sandbox` + assertion `services.SandboxEngine` | ⏳ |
 | **E5** | `board` → `infrastructure/board` (самый крупный: ~75 импортёров) | ⏳ |
-| **E6** | Разбить `tools/` по доменам (`tools/lsp`, fileops/git/rag/board-подпакеты) и перевести их на `domain/services` вместо прямых импортов `ai/board`/`ai/rag`/`ai/sandbox`/`ai/gitops` | ⏳ |
+| **E6** | Разбить `tools/` по доменам (`tools/lsp`, fileops/git/rag/board-подпакеты) и перевести их на `domain/services` вместо прямых импортов `ai/board`/`ai/rag`/`ai/sandbox`/`ai/infrastructure/git` | ⏳ |
 
 **E1 ✅ (каркас `infrastructure/`, `models` → `infrastructure/llm`).**
 `git mv models infrastructure/llm`, пакет переименован `models` → `llm`;
@@ -337,6 +340,29 @@ infrastructure/rag`, имя пакета сохранено (`rag`); 25 импо
 `rag` напрямую импортирует `ai/forges` (`forges.IsIgnoredDir` в `walk.go`) —
 инфра→инфра-зависимость, которую нужно убрать при ревизии `forges`
 (кандидат: перенести `IsIgnoredDir` в `domain` или `tools`).
+
+**E3 ✅ (`gitops` → `infrastructure/git` + порт `services.GitOperations`).**
+`git mv gitops infrastructure/git`, пакет `gitops` переименован в `git`; 28
+импортёров переведены на `ai/infrastructure/git` и квалификатор `git.`
+(`server/{git,gitflow*,diff,actions*,ragref,taskrollback,server}.go`,
+`agents/developer`, `runner/adapters/wipcommit.go`, `tools/{tool,gitresolve}.go`
++ тесты). Порт `services.GitOperations` переписан: старая «эскизная» форма
+(`Clone(remote, dir)`, `Merge(dir, branch)`, `[]FileDiff`, `GitStatus`) не
+совпадала с реальным API gitops (последний оперирует `*Repo` с полями
+root/remote/branch/base, а создание копии требует `Executor`). Новая форма —
+набор методов рабочей копии с подписями, **совпадающими** с `*git.Repo`, поэтому
+репозиторий реализует порт напрямую (без адаптера): состояние
+(`CurrentBranch`/`HeadSHA`/`InTaskBranch`/`Dirty`/`DirtyPaths`/`BranchExists`),
+история (`MergeBase`/`MergedInto`/`CountCommits`/`Diff`), изменения
+(`Commit`/`CommitIfDirty`/`Stage`/`Push`), ветки
+(`CreateBranch`/`Checkout`/`RejectBranch`), конфликты
+(`ConflictingFiles`/`UnmergedFiles`/`ConflictDiff`). Операции, возвращающие
+инфраструктурные типы (`MergeResult`, `WorktreeInfo`, `Submodule`) или
+требующие `Executor`, в порт не вошли — остаются у `*Repo`. Compile-assertion
+`var _ services.GitOperations = (*Repo)(nil)` и исполняемый тест
+`infrastructure/git/port_test.go` (репозиторий отдаётся через интерфейс,
+`CurrentBranch`/`Dirty` работают). Верификация: канонический набор зелёный,
+`-race` по `infrastructure/git` чист, `gofmt` по своим файлам чист.
 
 ### Этап 5: Рефакторинг агентов
 
@@ -384,9 +410,9 @@ infrastructure/rag`, имя пакета сохранено (`rag`); 25 импо
 После каждого этапа:
 
 ```bash
-go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
-go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
-go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
+go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
 ```
 
 Дополнительно:

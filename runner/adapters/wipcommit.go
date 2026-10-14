@@ -42,7 +42,7 @@ const WIPCommitFilesMax = 12
 const wipCommitFilesMaxEnv = "KANBAN_WIP_COMMIT_FILES"
 
 // WIPCommitter — необязательный интерфейс агента для фиксации правок раунда
-// (Ф-6). Реализуется агентами-разработчиками поверх gitops.Repo рабочего
+// (Ф-6). Реализуется агентами-разработчиками поверх git.Repo рабочего
 // каталога. Отказываться от реализации можно молча: без неё промежуточные
 // коммиты просто не делаются, поведение прежнее.
 type WIPCommitter = usecases.WIPCommitter

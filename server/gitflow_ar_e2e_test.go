@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/runner"
 	"ai/tools"
 	"ai/workspace"
@@ -51,13 +51,13 @@ func TestTaskLLMResolveE2E(t *testing.T) {
 
 	// 2. Клон проекта.
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	setGitUserReal(t, dest)
 
-	srv, _, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, _, mr := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,

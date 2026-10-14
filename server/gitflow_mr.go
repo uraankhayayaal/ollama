@@ -22,7 +22,7 @@ import (
 	"ai/board"
 	"ai/chat"
 	"ai/forges"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"
 )
@@ -38,7 +38,7 @@ var errMREmptyBranch = errors.New("в ветке нет коммитов отн�
 // Ошибка git (неизвестный реф, сломанный клон) возвращается отдельно:
 // тогда проверка считается непройденной и MR создаётся как раньше —
 // дефекты git не должны блокировать создание MR.
-func branchHasCommits(ctx context.Context, repo *gitops.Repo, base, branch string) (bool, error) {
+func branchHasCommits(ctx context.Context, repo *git.Repo, base, branch string) (bool, error) {
 	if repo == nil {
 		return false, errors.New("gitflow: репозиторий не инициализирован")
 	}
@@ -320,10 +320,10 @@ func (s *Server) createMR(ctx context.Context, project string, inf workspace.Inf
 	return url, nil
 }
 
-// repoForBranch собирает gitops.Repo для произвольной ветки клона (а не
+// repoForBranch собирает git.Repo для произвольной ветки клона (а не
 // проектной фича-ветки): нужен для push веток эпиков/задач перед MR.
-func (s *Server) repoForBranch(inf workspace.Info, branch, base string) *gitops.Repo {
-	return gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, branch, base)
+func (s *Server) repoForBranch(inf workspace.Info, branch, base string) *git.Repo {
+	return git.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, branch, base)
 }
 
 // ensureRemoteBase гарантирует, что базовая ветка (target MR) существует в
@@ -357,7 +357,7 @@ func (s *Server) ensureRemoteBase(ctx context.Context, inf workspace.Info, base 
 
 // gitStatus собирает «ветки + MR» эпиков и задач из side-реестров workspace
 // для снимка доски. Быстрый путь (без сети): только локальные реестры; признак
-// «есть коммиты» (has_commits) считается локально через gitops.CountCommits
+// «есть коммиты» (has_commits) считается локально через git.CountCommits
 // (ошибка git — nil, кнопка MR остаётся). nil — проект не git или ветки не
 // создавались.
 func (s *Server) gitStatus(ctx context.Context, project string, epics []*board.Epic, tasks []*board.Task) *gitView {
@@ -416,7 +416,7 @@ func (s *Server) gitStatus(ctx context.Context, project string, epics []*board.E
 		if wt := strings.TrimSpace(ref.Worktree); wt != "" {
 			if info, serr := os.Stat(wt); serr == nil && info.IsDir() {
 				lv.Worktree = true
-				if subs, suberr := gitops.ListSubmodules(ctx, s.gitExec, wt); suberr == nil {
+				if subs, suberr := git.ListSubmodules(ctx, s.gitExec, wt); suberr == nil {
 					for _, sub := range subs {
 						lv.Submodules = append(lv.Submodules, sub.Path)
 					}

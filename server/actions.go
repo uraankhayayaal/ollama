@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"ai/chat"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/tools"
 )
 
@@ -188,7 +188,7 @@ func actionTools(b ActionsBackend) []tools.Tool {
 		},
 		&actionTool{
 			name: actionBranchReject, b: b, destructive: true,
-			description: "Отклонить текущую фича-ветку git-проекта: удалить ветку на remote и локально, вернуть рабочую копию на базу (gitops.RejectBranch). Деструктивно — требует подтверждения пользователем в чате.",
+			description: "Отклонить текущую фича-ветку git-проекта: удалить ветку на remote и локально, вернуть рабочую копию на базу (git.RejectBranch). Деструктивно — требует подтверждения пользователем в чате.",
 			run: func(ctx context.Context, _ map[string]any) (map[string]any, error) {
 				if err := b.BranchReject(ctx); err != nil {
 					return nil, err
@@ -298,7 +298,7 @@ func (sess *Session) TaskMerge(ctx context.Context, taskID string) (string, erro
 	}
 	res, err := sess.srv.mergeTaskBranch(ctx, sess.project, task)
 	if err != nil {
-		var ce *gitops.MergeConflictError
+		var ce *git.MergeConflictError
 		if errors.As(err, &ce) {
 			// Конфликт фиксируем на доске: задача несёт список файлов и видна
 			// в UI. Результат детерминирован — повторный TaskMerge при том же

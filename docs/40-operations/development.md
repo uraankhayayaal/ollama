@@ -70,7 +70,7 @@ gofmt -w <файл>
 | `board/` | Эпики, задачи, багрепорты, статусы, токены |
 | `server/` | Web UI: REST, WebSocket, git-flow, чат, логи, метрики |
 | `workspace/` | Реестр проектов, ветки, worktree |
-| `gitops/` | Обёртки над git: клон, ветки, worktree, diff, сабмодули |
+| `infrastructure/git/` | Обёртки над git: клон, ветки, worktree, diff, сабмодули |
 | `forges/` | Форджи: GitHub, GitLab, local |
 | `langdetect/` | Определение языка диффа |
 | `stackdetect/` | Определение стека проекта |
@@ -94,7 +94,7 @@ agents/  runner/            ← оркестрация
       ↓
 tools/   infrastructure/rag/   board/      ← инструменты и хранилища
       ↓
-infrastructure/llm/  gitops/  forges/    ← внешний мир
+infrastructure/llm/  infrastructure/git/  forges/    ← внешний мир
 ```
 
 Правило: **`tools` не знает про `server`**. Серверные мосты добавляются

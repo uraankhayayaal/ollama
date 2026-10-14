@@ -15,7 +15,7 @@ GITLAB_URL=...                  # адрес GitLab без завершающе�
 ```
 
 > `GITOPS_SUBMODULES` считается включённым при любом значении, **кроме
-> `"0"`** (`gitops/gitops.go:251,271`). Пустое значение = включено.
+> `"0"`** (`infrastructure/git/gitops.go:251,271`). Пустое значение = включено.
 
 `GIT_ALLOW_PROTOCOL` в Go-коде **не читается** — это внешняя переменная
 самого git.
@@ -131,7 +131,7 @@ Worktree}`.
 остаются в ветке, MR не переписывается.
 
 `POST /api/projects/{id}/tasks/{tid}/rollback` — `{"to":"last_good"|"base"|"<sha>"}`
-(`server/taskrollback.go`, `gitops/rollback.go`). Кнопки «К последней
+(`server/taskrollback.go`, `infrastructure/git/rollback.go`). Кнопки «К последней
 рабочей» / «Снести всё» — в карточке задачи.
 
 | Цель | Смысл |
@@ -205,7 +205,7 @@ HEAD нерождённый, поэтому `git rev-parse --abbrev-ref HEAD` п
 
 Посев пропускается, если база уже есть (обычный клон). Detached HEAD у клона
 (`rev-parse` отдаёт «HEAD») разбирается через `origin/HEAD`. Если имя ветки
-не удалось определить вовсе — берётся `main` (`gitops.DefaultBaseBranch`):
+не удалось определить вовсе — берётся `main` (`git.DefaultBaseBranch`):
 неудачный клон лучше открыть с базой по умолчанию, чем не открыть.
 
 Первый коммит идёт от identity хоста (`~/.gitconfig`), а при его отсутствии —

@@ -2,7 +2,7 @@ package tools
 
 import (
 	"ai/domain/services"
-	"ai/gitops"
+	"ai/infrastructure/git"
 )
 
 // Deps — окружение агента, из которого инструменты получают контекст.
@@ -23,5 +23,5 @@ type Deps struct {
 	Session *ReviewSession
 	Board   services.BoardStore
 	RAG     RAGSearcher
-	GitExec gitops.Executor
+	GitExec git.Executor
 }

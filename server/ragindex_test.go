@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"ai/chat"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 )
 
@@ -235,7 +235,7 @@ func stubRefItems(t *testing.T, snap refSnapshot, refErr error) *string {
 	orig := loadRefItems
 	t.Cleanup(func() { loadRefItems = orig })
 	got := ""
-	loadRefItems = func(_ context.Context, _ gitops.Executor, _, ref string) (refSnapshot, error) {
+	loadRefItems = func(_ context.Context, _ git.Executor, _, ref string) (refSnapshot, error) {
 		got = ref
 		if refErr != nil {
 			return refSnapshot{}, refErr

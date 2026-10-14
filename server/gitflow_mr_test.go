@@ -17,7 +17,7 @@ import (
 
 	"ai/board"
 	"ai/forges"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/workspace"
 
 	"github.com/alicebob/miniredis/v2"
@@ -584,13 +584,13 @@ func TestCreateEpicMREndToEndRealGit(t *testing.T) {
 	}
 
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 
 	stub := &stubMRForge{url: "https://github.com/o/r/pulls/7"}
-	srv, handler, mr := newTestServerGit(t, gitops.CLIExecutor{}, func(remote, token string) (forges.Forge, error) {
+	srv, handler, mr := newTestServerGit(t, git.CLIExecutor{}, func(remote, token string) (forges.Forge, error) {
 		return stub, nil
 	})
 	if _, err := srv.reg.Add(workspace.AddParams{

@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/projects"
 	"ai/workspace"
 )
@@ -37,7 +37,7 @@ func newRollbackFixture(t *testing.T) *rollbackFixture {
 	t.Helper()
 	if _, err := os.Stat("/usr/bin/git"); err != nil {
 		// git может быть не в /usr/bin — проверяем через запуск.
-		ex := gitops.CLIExecutor{}
+		ex := git.CLIExecutor{}
 		if _, err := ex.Exec(t.Context(), "", "git", "--version"); err != nil {
 			t.Skip("git недоступен")
 		}
@@ -75,7 +75,7 @@ func newRollbackFixture(t *testing.T) *rollbackFixture {
 	gitFixtureRun(t, root, "checkout", "-b", "ai/"+project)
 	// Фича-ветка задачи (её создаёт handleCreateTaskBranch; здесь — напрямую,
 	// чтобы проверка была про откат, а не про создание ветки).
-	gitFixtureRun(t, root, "branch", gitops.TaskBranchPrefix+"t1", "main")
+	gitFixtureRun(t, root, "branch", git.TaskBranchPrefix+"t1", "main")
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: project, Kind: workspace.KindGit, Root: root,
 		GitRemote: origin, GitBranch: "ai/" + project, GitBase: "main",
@@ -83,7 +83,7 @@ func newRollbackFixture(t *testing.T) *rollbackFixture {
 		t.Fatal(err)
 	}
 	if err := srv.reg.SetTaskBranch(project, "t1", workspace.BranchRef{
-		Branch: gitops.TaskBranchPrefix + "t1", Base: "ai/epic/e1",
+		Branch: git.TaskBranchPrefix + "t1", Base: "ai/epic/e1",
 	}); err != nil {
 		t.Fatal(err)
 	}

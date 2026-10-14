@@ -3,7 +3,7 @@ package server
 import (
 	"ai/chat"
 	"ai/forges"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/projects"
 	"ai/tools"
 	"ai/workspace"
@@ -54,7 +54,7 @@ func (s *Server) handleOpenGitProject(w http.ResponseWriter, r *http.Request, gi
 		}
 	}
 
-	repo, err := gitops.Clone(r.Context(), s.gitExec, gitURL, branch, dest)
+	repo, err := git.Clone(r.Context(), s.gitExec, gitURL, branch, dest)
 	if err != nil {
 		// Полу-клон оставлять нельзя: следующая попытка упрётся в 409, и
 		// пользователь уже не сможет открыть проект без ручной чистки temp/.
@@ -123,7 +123,7 @@ func (s *Server) discardHalfClone(ctx context.Context, name, dir, gitURL string)
 	if err != nil || !sameGitRemote(strings.TrimSpace(origin), gitURL) {
 		return false
 	}
-	if gitops.HasCommit(ctx, s.gitExec, dir, "HEAD") {
+	if git.HasCommit(ctx, s.gitExec, dir, "HEAD") {
 		return false // есть история — это не мусор
 	}
 	if status, err := s.gitExec.Exec(ctx, dir, "git", "status", "--porcelain"); err != nil || strings.TrimSpace(status) != "" {
@@ -194,9 +194,9 @@ func gitProjectName(url string) string {
 	return u
 }
 
-// repoOf восстанавливает gitops.Repo из реестра (root/remote/branch/base).
+// repoOf восстанавливает git.Repo из реестра (root/remote/branch/base).
 // Не-git проекты отклоняются явной ошибкой.
-func (s *Server) repoOf(ctx context.Context, project string) (*gitops.Repo, error) {
+func (s *Server) repoOf(ctx context.Context, project string) (*git.Repo, error) {
 	inf, err := s.reg.Get(project)
 	if err != nil {
 		return nil, err
@@ -208,9 +208,9 @@ func (s *Server) repoOf(ctx context.Context, project string) (*gitops.Repo, erro
 	if inf.Root == "" || inf.GitRemote == "" || inf.GitBranch == "" {
 		return nil, fmt.Errorf("проект %s: неполные git-данные (root/remote/branch)", project)
 	}
-	repo := gitops.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
+	repo := git.RepoFromState(s.gitExec, inf.Root, inf.GitRemote, inf.GitBranch, inf.GitBase)
 	if inf.Parent == "" {
-		subs, err := gitops.ListSubmodules(ctx, s.gitExec, inf.Root)
+		subs, err := git.ListSubmodules(ctx, s.gitExec, inf.Root)
 		if err != nil {
 			return nil, err
 		}
@@ -258,11 +258,11 @@ func tokenPushURL(remote string) string {
 // в окружении встраивает его в URL push (https://x-access-token:<токен>@host/…):
 // headless-сервер может не иметь credentialed credential-helper, и обычный
 // `git push origin` падает на интерактивном запросе логина. Токен не
-// сохраняется в конфиг git (см. gitops.Repo.PushTo). SSH-remote токеном не
+// сохраняется в конфиг git (см. git.Repo.PushTo). SSH-remote токеном не
 // помогает — там остаётся штатный `git push origin` (SSH-ключ).
-func (s *Server) pushRepo(ctx context.Context, repo *gitops.Repo, remote string) error {
+func (s *Server) pushRepo(ctx context.Context, repo *git.Repo, remote string) error {
 	pushURL := tokenPushURL(remote)
-	return repo.PushToWith(ctx, pushURL, func(ctx context.Context, child *gitops.Repo, childRemote string) error {
+	return repo.PushToWith(ctx, pushURL, func(ctx context.Context, child *git.Repo, childRemote string) error {
 		if u := tokenPushURL(childRemote); u != "" {
 			return child.PushTo(ctx, u)
 		}
@@ -501,7 +501,7 @@ func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+		childRepo := git.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
 		childDiff, err := childRepo.Diff(r.Context())
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, "diff сабмодуля "+sub.Path+": "+err.Error())
@@ -579,7 +579,7 @@ func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRejectBranch отклоняет фича-ветку git-проекта: удаляет её на remote
-// и локально, возвращая рабочую копию на базу (gitops.RejectBranch).
+// и локально, возвращая рабочую копию на базу (git.RejectBranch).
 func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 
@@ -594,7 +594,7 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+		childRepo := git.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
 		if err := childRepo.RejectBranch(r.Context()); err != nil {
 			writeErr(w, http.StatusBadGateway, "отклонение сабмодуля "+sub.Path+": "+err.Error())
 			return

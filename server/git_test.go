@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"ai/forges"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/projects"
 	"ai/workspace"
 
@@ -84,7 +84,7 @@ func (s *stubForge) CreateMergeRequest(o forges.MergeRequestOptions) (string, er
 }
 
 // newTestServerGit создаёт сервер с fake-исполнителем git и стабом форджа.
-func newTestServerGit(t *testing.T, git gitops.Executor, forge func(remote, token string) (forges.Forge, error)) (*Server, http.Handler, *miniredis.Miniredis) {
+func newTestServerGit(t *testing.T, git git.Executor, forge func(remote, token string) (forges.Forge, error)) (*Server, http.Handler, *miniredis.Miniredis) {
 	t.Helper()
 	mr, err := miniredis.Run()
 	if err != nil {
@@ -578,7 +578,7 @@ func TestGetDiffTaskWorktreeRealGit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv, handler, _ := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, handler, _ := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "local-diff", Kind: workspace.KindGit, Root: root,
 		GitRemote: "git@invalid.example:team/local-diff.git", GitBranch: "ai/local-diff", GitBase: "main",

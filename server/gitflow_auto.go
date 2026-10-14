@@ -7,7 +7,7 @@ package server
 import (
 	"ai/board"
 	"ai/chat"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/projects"
 	"ai/workspace"
@@ -24,7 +24,7 @@ import (
 // сосед основного клона (как MergeFeature/конфликтные worktree).
 func (s *Server) taskWorktreePath(repoRoot, project, taskID string) string {
 	return filepath.Join(filepath.Dir(repoRoot),
-		".wt-task-"+project+"-"+gitops.SanitizeBranchName(taskID))
+		".wt-task-"+project+"-"+git.SanitizeBranchName(taskID))
 }
 
 // taskGitignorePatterns — артефакты, которые не должны попасть в историю
@@ -208,7 +208,7 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 		return
 	}
 	ensureTaskGitignore(project, task.TaskID, wtPath)
-	if subs, err := gitops.EnsureSubmodules(ctx, s.gitExec, wt.Root); err != nil {
+	if subs, err := git.EnsureSubmodules(ctx, s.gitExec, wt.Root); err != nil {
 		_ = wt.RemoveWorktree(ctx, wtPath)
 		logging.For(project).Warnf("gitflow: submodule worktree задачи %s: %v", task.TaskID, err)
 		return
@@ -225,13 +225,13 @@ func (s *Server) taskWorktree(ctx context.Context, project string, task *board.T
 				logging.For(project).Warnf("gitflow: base сабмодуля %s задачи %s: %v", sub.Path, task.TaskID, err)
 				return
 			}
-			branch := taskRef.Branch + "/submodule/" + gitops.SanitizeBranchName(filepath.ToSlash(sub.Path))
+			branch := taskRef.Branch + "/submodule/" + git.SanitizeBranchName(filepath.ToSlash(sub.Path))
 			if _, err := s.gitExec.Exec(ctx, wt.Root, "git", "submodule", "deinit", "-f", "--", sub.Path); err != nil {
 				_ = wt.RemoveWorktree(ctx, wtPath)
 				logging.For(project).Warnf("gitflow: deinit сабмодуля %s для task worktree: %v", sub.Path, err)
 				return
 			}
-			if _, err := gitops.Worktree(ctx, s.gitExec, child.Root, branch, strings.TrimSpace(base), sub.Root); err != nil {
+			if _, err := git.Worktree(ctx, s.gitExec, child.Root, branch, strings.TrimSpace(base), sub.Root); err != nil {
 				_ = wt.RemoveWorktree(ctx, wtPath)
 				logging.For(project).Warnf("gitflow: worktree сабмодуля %s задачи %s: %v", sub.Path, task.TaskID, err)
 				return
@@ -276,7 +276,7 @@ func (s *Server) recordTaskBaseSHA(ctx context.Context, project, taskID, worktre
 	if store == nil {
 		return
 	}
-	head, err := gitops.RepoFromState(s.gitExec, worktree, "", "", "").HeadSHA(ctx)
+	head, err := git.RepoFromState(s.gitExec, worktree, "", "", "").HeadSHA(ctx)
 	if err != nil {
 		logging.For(project).Detailf("gitflow: base_sha задачи %s: %v", taskID, err)
 		return
@@ -310,7 +310,7 @@ func (s *Server) taskOutputDir(project, taskID string) string {
 // основного клона, как worktree задачи.
 func (s *Server) epicWorktreePath(repoRoot, project, epicID string) string {
 	return filepath.Join(filepath.Dir(repoRoot),
-		".wt-epic-"+project+"-"+gitops.SanitizeBranchName(epicID))
+		".wt-epic-"+project+"-"+git.SanitizeBranchName(epicID))
 }
 
 // epicWorktree — Этап 4.1: ленивое создание (и повторное подключение)
@@ -415,7 +415,7 @@ func (s *Server) dropEpicWorktreeLocked(ctx context.Context, project, epicID str
 	}
 	if repo, rerr := s.repoOf(ctx, project); rerr == nil {
 		if _, serr := os.Stat(wtPath); serr == nil {
-			wt := gitops.RepoFromState(s.gitExec, wtPath, ref.Branch, ref.Base, "")
+			wt := git.RepoFromState(s.gitExec, wtPath, ref.Branch, ref.Base, "")
 			if _, _, cerr := wt.CommitIfDirty(ctx,
 				fmt.Sprintf("эпик %s: структура проекта (авто-коммит)", epicID)); cerr != nil {
 				logging.For(project).Warnf("gitflow: worktree эпика %s: автокоммит перед снятием: %v", epicID, cerr)
@@ -443,9 +443,9 @@ func (s *Server) dropEpicWorktreeLocked(ctx context.Context, project, epicID str
 // нет (пустой коммит не создаём), но публикация веток сабмодулей всё равно
 // выполняется. Ошибки логируются.
 func (s *Server) commitTaskWorktree(ctx context.Context, project string, task *board.Task, worktree string) {
-	wt := gitops.RepoFromState(s.gitExec, worktree, "", "", "")
+	wt := git.RepoFromState(s.gitExec, worktree, "", "", "")
 	message := fmt.Sprintf("задача %s: работа специалиста (авто-коммит)", task.TaskID)
-	subs, err := gitops.ListSubmodules(ctx, s.gitExec, worktree)
+	subs, err := git.ListSubmodules(ctx, s.gitExec, worktree)
 	if err != nil {
 		logging.For(project).Warnf("gitflow: чтение сабмодулей worktree задачи %s: %v", task.TaskID, err)
 		return
@@ -461,7 +461,7 @@ func (s *Server) commitTaskWorktree(ctx context.Context, project string, task *b
 			continue
 		}
 		subRoot := filepath.Join(worktree, sub.Path)
-		taskRepo := gitops.RepoFromState(s.gitExec, subRoot, child.GitRemote, ref.Branch, ref.Base)
+		taskRepo := git.RepoFromState(s.gitExec, subRoot, child.GitRemote, ref.Branch, ref.Base)
 		dirty, err := taskRepo.Dirty(ctx)
 		if err != nil {
 			logging.For(project).Warnf("gitflow: status сабмодуля %s: %v", sub.Path, err)
@@ -481,8 +481,8 @@ func (s *Server) commitTaskWorktree(ctx context.Context, project string, task *b
 			logging.For(project).Infof("gitflow: задача %s: авто-коммит сабмодуля %s в %s", task.TaskID, sub.Path, subRoot)
 		}
 		if child.GitBranch != "" && ref.Branch != child.GitBranch {
-			childRepo := gitops.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
-			if _, err := childRepo.MergeFeature(ctx, child.GitBranch, ref.Branch, gitops.MergeFeatureOptions{Message: message}); err != nil {
+			childRepo := git.RepoFromState(s.gitExec, child.Root, child.GitRemote, child.GitBranch, child.GitBase)
+			if _, err := childRepo.MergeFeature(ctx, child.GitBranch, ref.Branch, git.MergeFeatureOptions{Message: message}); err != nil {
 				logging.For(project).Warnf("gitflow: merge сабмодуля %s в %s: %v", sub.Path, child.GitBranch, err)
 				return
 			}
@@ -549,10 +549,10 @@ func childTaskKey(project, taskID string) string { return project + "::" + taskI
 // скрыты, многострочный вывод git не тащится), иначе — первая строка ошибки,
 // сжатая до 200 символов. Исходная причина целиком остаётся в логе проекта.
 func gitflowErrBoard(prefix string, err error) string {
-	if errors.Is(err, gitops.ErrWorkflowScope) {
-		return prefix + ": " + gitops.ErrWorkflowScope.Error()
+	if errors.Is(err, git.ErrWorkflowScope) {
+		return prefix + ": " + git.ErrWorkflowScope.Error()
 	}
-	msg := gitops.RedactSecrets(err.Error())
+	msg := git.RedactSecrets(err.Error())
 	if i := strings.IndexByte(msg, '\n'); i >= 0 {
 		msg = msg[:i]
 	}
@@ -628,7 +628,7 @@ func (s *Server) autoCommitAndMergeTask(ctx context.Context, project string, tas
 	// 3) Штатный мёрдж done→релиз.
 	res, err := s.mergeTaskBranch(ctx, project, task)
 	if err != nil {
-		var ce *gitops.MergeConflictError
+		var ce *git.MergeConflictError
 		if errors.As(err, &ce) {
 			logging.For(project).Warnf("gitflow: авто-мёрдж %s: конфликт в %s — пробуем LLM-авторезолвинг",
 				task.TaskID, strings.Join(ce.Files, ", "))
@@ -743,7 +743,7 @@ func (s *Server) syncEpicMainOnce(ctx context.Context, project string, epic *boa
 	// checked-out — MergeFeature не смог бы поставить её во временный worktree.
 	s.dropEpicWorktreeLocked(ctx, project, epic.TaskID)
 
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, gitops.MergeFeatureOptions{
+	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, git.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: синхрон релизной ветки %s с main", epic.TaskID, epicRef.Branch),
 		PushURL: remotePushURL(inf),
 	})
@@ -753,7 +753,7 @@ func (s *Server) syncEpicMainOnce(ctx context.Context, project string, epic *boa
 		s.srvEmitBoard(project, "gitflow: авто-синхрон эпика с main")
 		return
 	}
-	var ce *gitops.MergeConflictError
+	var ce *git.MergeConflictError
 	if !errors.As(err, &ce) {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -769,9 +769,9 @@ func (s *Server) syncEpicMainOnce(ctx context.Context, project string, epic *boa
 // блоков, закрытие merge-коммита и push (всё на релизной ветке эпика). Сложные
 // конфликты — отказ от продвижения: ветка остаётся нетронутой, работает
 // интерактивный флоу handleEpicRebase/handleEpicResolve.
-func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *board.Epic, inf workspace.Info, repo *gitops.Repo, epicRef workspace.BranchRef) {
+func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *board.Epic, inf workspace.Info, repo *git.Repo, epicRef workspace.BranchRef) {
 	wtPath := filepath.Join(filepath.Dir(repo.Root),
-		".conflict-"+project+"-"+gitops.SanitizeBranchName(epic.TaskID))
+		".conflict-"+project+"-"+git.SanitizeBranchName(epic.TaskID))
 	if _, err := os.Stat(wtPath); err == nil {
 		logging.For(project).Warnf("gitflow: удаляю осиротевший конфликтный worktree %s", wtPath)
 		_ = repo.RemoveWorktree(ctx, wtPath)
@@ -795,7 +795,7 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: ls-files -u: %v", epic.TaskID, err)
 		return
 	}
-	resolved, hard, err := gitops.TrivialResolve(wtPath, unmerged)
+	resolved, hard, err := git.TrivialResolve(wtPath, unmerged)
 	if err != nil {
 		removeWT()
 		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: авто-резолв: %v", epic.TaskID, err)
@@ -863,7 +863,7 @@ func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *
 // задачи (без требования done). Задача всегда стартует от свежего кода.
 // Конфликты main ↔ релизная ветка не блокируют старт — они видны на доске.
 // Вызывается под mergeLock (из taskWorktree) — dropEpicWorktreeLocked требует лока.
-func (s *Server) syncEpicMainForTask(ctx context.Context, project, epicID string, inf workspace.Info, repo *gitops.Repo, epicRef workspace.BranchRef) {
+func (s *Server) syncEpicMainForTask(ctx context.Context, project, epicID string, inf workspace.Info, repo *git.Repo, epicRef workspace.BranchRef) {
 	main := strings.TrimSpace(inf.GitBase)
 	if main == "" {
 		return
@@ -872,7 +872,7 @@ func (s *Server) syncEpicMainForTask(ctx context.Context, project, epicID string
 	// 4.1: worktree ветки эпика (архитектор) мешает MergeFeature поставить
 	// релизную ветку во временный worktree — снимаем (автокоммит правок).
 	s.dropEpicWorktreeLocked(ctx, project, epicID)
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, gitops.MergeFeatureOptions{
+	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, git.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: синхрон с main перед стартом задачи", epicID),
 		PushURL: remotePushURL(inf),
 	})
@@ -882,7 +882,7 @@ func (s *Server) syncEpicMainForTask(ctx context.Context, project, epicID string
 		return
 	}
 
-	var ce *gitops.MergeConflictError
+	var ce *git.MergeConflictError
 	if !errors.As(err, &ce) {
 		logging.For(project).Warnf("gitflow: синхрон эпика %s с main перед задачей: %v", epicID, err)
 		return

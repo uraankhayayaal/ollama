@@ -15,7 +15,7 @@
 //   - ConflictDiff / Stage — представление для модели и отметка резолва git-у;
 //   - AddWorktree / RemoveWorktree — постоянный конфликтный worktree, в котором
 //     живёт процесс «main → релизная ветка» до завершения (Ф-4, CSP).
-package gitops
+package git
 
 import (
 	"context"

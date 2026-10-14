@@ -15,7 +15,7 @@ import (
 	"ai/acceptor"
 	"ai/application/planner"
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/infrastructure/llm"
 	"ai/logging"
 	"ai/workspace"
@@ -83,7 +83,7 @@ func (r *resolveCtx) ResolveWithLLM(ctx context.Context, prov llm.LLMProvider, p
 		// переносим их в корень worktree.
 		r.flattenOutputDir()
 
-		markers, _ := gitops.HasConflictMarkers(r.workdir, r.hard)
+		markers, _ := git.HasConflictMarkers(r.workdir, r.hard)
 		if len(markers) > 0 {
 			lastResult = &resolveResult{cleared: false, verifyErr: fmt.Sprintf("остались маркеры конфликта в: %s", strings.Join(markers, ", "))}
 			continue
@@ -427,7 +427,7 @@ func (s *Server) attemptLLMResolve(ctx context.Context, project string, epic *bo
 		return false
 	}
 
-	wt := gitops.RepoFromState(s.gitExec, workdir, inf.GitRemote, branch, strings.TrimSpace(inf.GitBase))
+	wt := git.RepoFromState(s.gitExec, workdir, inf.GitRemote, branch, strings.TrimSpace(inf.GitBase))
 	if err := wt.Stage(ctx, hard); err != nil {
 		logging.For(project).Warnf("gitflow: LLM resolve: stage: %v", err)
 		return false
@@ -471,7 +471,7 @@ func (s *Server) tryTaskLLMResolve(ctx context.Context, project string, task *bo
 		return false
 	}
 
-	wtPath := filepath.Join(filepath.Dir(repo.Root), ".resolve-"+project+"-"+gitops.SanitizeBranchName(task.TaskID))
+	wtPath := filepath.Join(filepath.Dir(repo.Root), ".resolve-"+project+"-"+git.SanitizeBranchName(task.TaskID))
 	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
 	// checked-out — резолвный worktree не смог бы её получить. Вызов под
 	// mergeLock: оба вызывателя (handleTaskLLMResolve, авто-мёрдж) берут лок.
@@ -495,7 +495,7 @@ func (s *Server) tryTaskLLMResolve(ctx context.Context, project string, task *bo
 		return false
 	}
 
-	resolved, hard, err := gitops.TrivialResolve(wtPath, unmerged)
+	resolved, hard, err := git.TrivialResolve(wtPath, unmerged)
 	if err != nil {
 		logging.For(project).Warnf("gitflow: LLM resolve задачи %s: авто-резолв: %v", task.TaskID, err)
 		return false
@@ -627,7 +627,7 @@ func (s *Server) handleEpicLLMResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wtPath := filepath.Join(filepath.Dir(repo.Root), ".conflict-"+project+"-"+gitops.SanitizeBranchName(epicID))
+	wtPath := filepath.Join(filepath.Dir(repo.Root), ".conflict-"+project+"-"+git.SanitizeBranchName(epicID))
 	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
 	// checked-out — резолвный worktree не смог бы её получить (лок взят выше).
 	s.dropEpicWorktreeLocked(r.Context(), project, epicID)
@@ -650,7 +650,7 @@ func (s *Server) handleEpicLLMResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolved, hard, err := gitops.TrivialResolve(wtPath, unmerged)
+	resolved, hard, err := git.TrivialResolve(wtPath, unmerged)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "TrivialResolve: "+err.Error())
 		return

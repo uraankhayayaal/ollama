@@ -28,7 +28,7 @@ import (
 	"strings"
 
 	"ai/forges"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 	"ai/logging"
 	"ai/workspace"
@@ -51,7 +51,7 @@ type refSnapshot struct {
 
 // refItemsLoader — снапшот ветки по ref. Аргументы: git-исполнитель сервера,
 // каталог репозитория и имя ветки. Заменяется в hermetic-тестах.
-type refItemsLoader func(ctx context.Context, ex gitops.Executor, dir, ref string) (refSnapshot, error)
+type refItemsLoader func(ctx context.Context, ex git.Executor, dir, ref string) (refSnapshot, error)
 
 // loadRefItems — текущий загрузчик снапшота (пакетная переменная для тестов).
 var loadRefItems refItemsLoader = collectRefItems
@@ -77,7 +77,7 @@ func branchIndexUpToDate(ctx context.Context, indexer projectIndexer, project, b
 // даёт список blob-ов с размерами, содержимое — `git show ref:<путь>`. Рабочая
 // копия не читается и не меняется, поэтому индекс ветки всегда соответствует
 // её содержимому, даже если checkout проекта отстал от main.
-func collectRefItems(ctx context.Context, ex gitops.Executor, dir, ref string) (refSnapshot, error) {
+func collectRefItems(ctx context.Context, ex git.Executor, dir, ref string) (refSnapshot, error) {
 	if ex == nil {
 		return refSnapshot{}, fmt.Errorf("не задан git-исполнитель")
 	}
@@ -259,12 +259,12 @@ func (sess *Session) IndexRefDiffBackground(ctx context.Context, ref, base strin
 var loadRefDiff refDiffLoader = collectRefDiff
 
 // refDiffLoader — файлы, отличающиеся ref от base.
-type refDiffLoader func(ctx context.Context, ex gitops.Executor, dir, ref, base string) (refSnapshot, error)
+type refDiffLoader func(ctx context.Context, ex git.Executor, dir, ref, base string) (refSnapshot, error)
 
 // collectRefDiff собирает файлы `git diff --name-only base...ref` и читает их
 // содержимое из ref: содержимое рабочей копии не используется (она может
 // отставать), коммит берётся по ref.
-func collectRefDiff(ctx context.Context, ex gitops.Executor, dir, ref, base string) (refSnapshot, error) {
+func collectRefDiff(ctx context.Context, ex git.Executor, dir, ref, base string) (refSnapshot, error) {
 	if ex == nil {
 		return refSnapshot{}, fmt.Errorf("не задан git-исполнитель")
 	}
@@ -313,7 +313,7 @@ func collectRefDiff(ctx context.Context, ex gitops.Executor, dir, ref, base stri
 // нужен, чтобы не читать крупные файлы и не заводить одинаковые точки для
 // удалённых/переименованных путей. ok=false — пути в ветке нет (удалён) либо
 // путь не индексируется.
-func refFileSize(ctx context.Context, ex gitops.Executor, dir, ref, path string) (int64, bool) {
+func refFileSize(ctx context.Context, ex git.Executor, dir, ref, path string) (int64, bool) {
 	if !indexablePath(path) {
 		return 0, false
 	}
@@ -393,7 +393,7 @@ func (s *Server) refreshRagTaskBranch(project, taskBranch, main string) {
 // копия осталась бы с конфликтными маркерами. Возвращает true, только если
 // рабочая копия реально обновилась (HEAD сдвинулся) — иначе переиндексация её
 // ветки была бы напрасной: она стоит эмбеддингов всего проекта.
-func (s *Server) syncAgentBranchWithMain(ctx context.Context, project string, inf workspace.Info, repo *gitops.Repo) bool {
+func (s *Server) syncAgentBranchWithMain(ctx context.Context, project string, inf workspace.Info, repo *git.Repo) bool {
 	main := strings.TrimSpace(inf.GitBase)
 	agentBranch := strings.TrimSpace(inf.GitBranch)
 	if repo == nil || main == "" || agentBranch == "" || main == agentBranch {

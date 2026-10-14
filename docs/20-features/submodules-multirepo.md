@@ -14,15 +14,15 @@ GITOPS_SUBMODULE_DEPTH=        # пусто = полная история; чи�
 ```
 
 > `GITOPS_SUBMODULES` считается включённым при **любом** значении, кроме
-> `"0"` (`gitops/gitops.go:251,271`). Пустое значение = включено.
+> `"0"` (`infrastructure/git/gitops.go:251,271`). Пустое значение = включено.
 
 `GITOPS_SUBMODULE_DEPTH` должен быть **положительным целым**, иначе —
 ошибка конфигурации, а не молчаливый fallback на полную историю
-(`gitops/submodule.go:168-174`).
+(`infrastructure/git/submodule.go:168-174`).
 
 ## Тип сабмодуля
 
-`gitops/submodule.go:31-43`:
+`infrastructure/git/submodule.go:31-43`:
 
 | Поле | Смысл |
 |---|---|
@@ -72,7 +72,7 @@ PrepareSubmodules — изолированные feature-ветки
 
 **Сабмодули пушатся ДО родителя.** Родительский gitlink поднимается только
 после того, как на remote сабмодуля лёг новый SHA — иначе remote родителя
-ссылался бы на несуществующий gitlink (`gitops/submodule.go:9-14`).
+ссылался бы на несуществующий gitlink (`infrastructure/git/submodule.go:9-14`).
 
 Это самый частый источник «сломанных» MR в мульти-репозиторных проектах.
 
@@ -84,7 +84,7 @@ PrepareSubmodules — изолированные feature-ветки
 
 ## Диффы
 
-`gitops.Repo.Diff` и `SubmoduleCommit` фиксируют и показывают изменения
+`git.Repo.Diff` и `SubmoduleCommit` фиксируют и показывают изменения
 сабмодуля. В `server/diff.go` сабмодуль отдаётся со статусом `submodule`
 (`server/diff.go:23-29`) — панель диффов показывает смену SHA, а содержимое
 правок доступно через дифф самого сабмодуля.

@@ -14,7 +14,7 @@
 // Старый формат `git merge-tree <base> <ours> <theirs>` работает во всех
 // git-версиях (в т.ч. < 2.38, где нет `--write-tree`), поэтому выступает
 // единым путём и связывается с перечнем git-команд в hermetic-тестах.
-package gitops
+package git
 
 import (
 	"context"

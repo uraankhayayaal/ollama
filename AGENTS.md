@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E2 — каркас `infrastructure/`)
+## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E3 — каркас `infrastructure/`)
 
 Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы
 E1–E6 (таблица в разделе «Этап 4» плана). Срез **E1** закрыт: создан каталог
@@ -23,17 +23,30 @@ project, dir)`) + compile-assertion; тесты `infrastructure/rag/port_test.go
 (`forges.IsIgnoredDir` в `walk.go`) — кандидат на устранение при ревизии
 `forges`.
 
-Остальные срезы Этапа 4 (E3 `gitops` → `infrastructure/git`, E4 `sandbox` →
-`infrastructure/sandbox`, E5 `board` → `infrastructure/board`, E6 разбиение
-`tools/` и перевод на `domain/services`) не начаты. Верификация: канонический
-набор (в него добавлен `./infrastructure/...`) зелёный, `-race` по
-`infrastructure/llm` и `infrastructure/rag` чист, `gofmt -l` по своим файлам
-чист. Документация: раздел «Этап 4» + шапка плана, пути `models/` →
-`infrastructure/llm/` и `rag/` → `infrastructure/rag/` в живых доках
-(`architecture.md`, `project-map.md`, `providers.md`, `context-compression.md`,
-`agents-and-roles.md`, `glossary.md`, `rag.md`, `troubleshooting.md`,
-`adding-a-feature.md`, `development.md`, `testing.md`), канонический набор и
-примечание в этом файле. Коммит E1 сделан (`4279c9f`); E2 — коммитится следом.
+Срез **E3** закрыт: `git mv gitops infrastructure/git`, пакет `gitops`
+переименован в `git`; 28 импортёров переведены на `ai/infrastructure/git` и
+квалификатор `git.` (в 2 тестах `server/ragref_test.go` локальный fake-исполнитель
+переименован `git` → `fakeExec`, чтобы не затенять пакет). Старая «эскизная»
+форма порта `services.GitOperations` не совпадала с реальным API gitops —
+переписана в набор методов рабочей копии с подписями `*git.Repo`, поэтому порт
+реализуется **напрямую без адаптера** (assertion в `infrastructure/git/port.go`
++ исполняемый `infrastructure/git/port_test.go`). Операции с инфраструктурными
+типами (`MergeResult`/`WorktreeInfo`/`Submodule`) и создание копии (нужен
+`Executor`) в порт не вошли — остаются у `*Repo`.
+
+Остальные срезы Этапа 4 (E4 `sandbox` → `infrastructure/sandbox`, E5 `board` →
+`infrastructure/board`, E6 разбиение `tools/` и перевод на `domain/services`)
+не начаты. Верификация: канонический набор (в него добавлен `./infrastructure/...`)
+зелёный, `-race` по `infrastructure/llm`, `infrastructure/rag`,
+`infrastructure/git` чист, `gofmt -l` по своим файлам чист. Документация:
+раздел «Этап 4» + шапка плана, пути `models/` → `infrastructure/llm/`,
+`rag/` → `infrastructure/rag/`, `gitops/` → `infrastructure/git/` (и
+квалификатор `gitops.` → `git.`) в живых доках (`architecture.md`,
+`project-map.md`, `providers.md`, `context-compression.md`, `agents-and-roles.md`,
+`glossary.md`, `rag.md`, `submodules-multirepo.md`, `gitops-workflow.md`,
+`troubleshooting.md`, `adding-a-feature.md`, `development.md`, `testing.md`),
+канонический набор и примечание в этом файле. Коммиты E1 (`4279c9f`), E2
+(`2e71139`) сделаны; E3 — коммитится следом.
 
 ## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
 
@@ -84,14 +97,15 @@ Acceptor-порт вынесен из `acceptor`: отчёт приёмки — 
 Рабочая сборка (обходит известный блокер в `temp/`):
 
 ```
-go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
-go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
-go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
+go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
 ```
 
 Примечание: `./application/planner` — бывший `agents/planner` (перенос по
 PLAN-2026-10-12, этап 3); предсуществовавшие падения его тестов разобраны —
-набор зелёный. `./infrastructure/llm` — бывший `models/` (Этап 4, срез E1).
+набор зелёный. `./infrastructure/llm` — бывший `models/` (Этап 4, срез E1);
+`./infrastructure/git` — бывший `gitops/` (срез E3).
 
 Живая проверка сессионной песочницы (нужен Docker; вне рабочего набора,
 по образцу `E2E_LIVE`):

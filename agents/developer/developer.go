@@ -9,7 +9,7 @@ import (
 	"ai/agents"
 	"ai/board"
 	"ai/domain/services"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 	"ai/logging"
 	"ai/projects"
@@ -80,7 +80,7 @@ type base struct {
 	// wipSubs — сабмодули рабочего каталога для промежуточных коммитов,
 	// читаются один раз (при первом коммите) и кэшируются: набор сабмодулей
 	// в ходе прогона не меняется, а git-вызов на каждом раунде лишний.
-	wipSubs []gitops.Submodule
+	wipSubs []git.Submodule
 	// wipSubsDone — сабмодули уже читались (в том числе когда их нет).
 	wipSubsDone bool
 	// taskID — id задачи, ради которой построен агент (SetTaskID). Нужен для
@@ -216,7 +216,7 @@ func (d *base) ReindexTouched(touched []string) (int, error) {
 // из единой очереди затронутых файлов.
 //
 // Гард области: коммит создаётся только в изолированной копии задачи
-// (gitops.InTaskBranch). Общий клон temp/<проект>, где агент пишет в режиме
+// (git.InTaskBranch). Общий клон temp/<проект>, где агент пишет в режиме
 // `plan`, стоит на ветке ai/<проект> — там коммит не создаётся, и это
 // правильно: общий клон делят все шаги плана, коммитить его нельзя.
 //
@@ -234,7 +234,7 @@ func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, er
 	// RepoFromState — единственный способ получить Repo с реальным
 	// исполнителем (поле ex не экспортируется): промежуточный коммит —
 	// локальная операция, remote и точка отхода ему не нужны.
-	repo := gitops.RepoFromState(&gitops.CLIExecutor{}, d.OutputDir, "", "", "")
+	repo := git.RepoFromState(&git.CLIExecutor{}, d.OutputDir, "", "", "")
 	inTask, err := repo.InTaskBranch(context.Background())
 	if err != nil {
 		return "", false, err
@@ -243,7 +243,7 @@ func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, er
 		return "", false, nil
 	}
 	if !d.wipSubsDone {
-		subs, err := gitops.ListSubmodules(context.Background(), &gitops.CLIExecutor{}, d.OutputDir)
+		subs, err := git.ListSubmodules(context.Background(), &git.CLIExecutor{}, d.OutputDir)
 		if err != nil {
 			return "", false, err
 		}

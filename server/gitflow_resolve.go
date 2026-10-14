@@ -12,7 +12,7 @@ import (
 	"ai/acceptor"
 	"ai/board"
 	"ai/chat"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"
 	"errors"
@@ -135,7 +135,7 @@ func (s *Server) handleEpicRebase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wtPath := filepath.Join(filepath.Dir(repo.Root),
-		".conflict-"+project+"-"+gitops.SanitizeBranchName(epicID))
+		".conflict-"+project+"-"+git.SanitizeBranchName(epicID))
 
 	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
 	// checked-out — конфликтный worktree не смог бы её получить.
@@ -170,7 +170,7 @@ func (s *Server) handleEpicRebase(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "git ls-files -u: "+err.Error())
 		return
 	}
-	resolved, hard, err := gitops.TrivialResolve(wtPath, unmerged)
+	resolved, hard, err := git.TrivialResolve(wtPath, unmerged)
 	if err != nil {
 		cleanup()
 		writeErr(w, http.StatusBadGateway, "авто-резолв тривиальных конфликтов: "+err.Error())
@@ -293,11 +293,11 @@ func (s *Server) handleEpicResolve(w http.ResponseWriter, r *http.Request) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	wt := gitops.RepoFromState(s.gitExec, rs.Worktree, inf.GitRemote, rs.Branch, strings.TrimSpace(inf.GitBase))
+	wt := git.RepoFromState(s.gitExec, rs.Worktree, inf.GitRemote, rs.Branch, strings.TrimSpace(inf.GitBase))
 
 	// 1) Закрываем всё, что модель успела почистить/не трогала: повторный
 	// авто-резолв + stage всех разрешённых + проверка «остались маркеры».
-	resolved, _, err := gitops.TrivialResolve(rs.Worktree, rs.Files)
+	resolved, _, err := git.TrivialResolve(rs.Worktree, rs.Files)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "авто-резолв: "+err.Error())
 		return
@@ -311,7 +311,7 @@ func (s *Server) handleEpicResolve(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "git ls-files -u: "+err.Error())
 		return
 	}
-	markers, err := gitops.HasConflictMarkers(rs.Worktree, rs.Files)
+	markers, err := git.HasConflictMarkers(rs.Worktree, rs.Files)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "проверка маркеров: "+err.Error())
 		return
@@ -365,12 +365,12 @@ func (s *Server) handleEpicResolve(w http.ResponseWriter, r *http.Request) {
 
 	// 4) Финальный merge main ← релизной ветки (после резолва merge-tree чист,
 	// main уже среди предков релизной ветки — merge-коммит без конфликтов).
-	res, err := repo.MergeFeature(r.Context(), main, rs.Branch, gitops.MergeFeatureOptions{
+	res, err := repo.MergeFeature(r.Context(), main, rs.Branch, git.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: релиз в main после резолва конфликтов", epicID),
 		PushURL: remotePushURL(inf),
 	})
 	if err != nil {
-		var ce *gitops.MergeConflictError
+		var ce *git.MergeConflictError
 		if errors.As(err, &ce) {
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"status":  "conflicts",

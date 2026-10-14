@@ -1,4 +1,4 @@
-package gitops
+package git
 
 // Тесты промежуточных коммитов (Ф-6, PLAN-2026-10-05-todo-kanban-rollback.md,
 // этап 1): CommitIfDirty как единица отката, HeadSHA как цель отката и

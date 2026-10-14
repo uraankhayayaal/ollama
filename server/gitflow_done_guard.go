@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"
 )
@@ -113,7 +113,7 @@ func (s *Server) worktreeWorkPaths(ctx context.Context, project, taskID string) 
 	if st, serr := os.Stat(dir); serr != nil || !st.IsDir() {
 		return nil, nil // worktree нет
 	}
-	return gitops.RepoFromState(s.gitExec, dir, "", "", "").DirtyPaths(ctx)
+	return git.RepoFromState(s.gitExec, dir, "", "", "").DirtyPaths(ctx)
 }
 
 // isOrchestratorArtifact — служебные пути, которые кладёт сам оркестратор.

@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/workspace"
 )
 
@@ -48,13 +48,13 @@ func TestAutoSyncEpicWithMainTrivialResolve(t *testing.T) {
 	// Клон в проектную копию (как handleOpenGitProject), без remote на сервере:
 	// push в sync-тесте не требуется (remote пуст).
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	setGitUserReal(t, dest)
 
-	srv, _, _ := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, _, _ := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,
@@ -161,12 +161,12 @@ func TestAutoCreateBranchesRealGit(t *testing.T) {
 	}
 
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 
-	srv, _, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, _, mr := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,
@@ -232,13 +232,13 @@ func TestAutoCommitAndMergeTaskRealGit(t *testing.T) {
 	}
 
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	setGitUserReal(t, dest)
 
-	srv, _, _ := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, _, _ := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,
@@ -325,13 +325,13 @@ func TestTaskStartSyncsEpicAndRebases(t *testing.T) {
 	}
 
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	setGitUserReal(t, dest)
 
-	srv, _, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, _, mr := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,
@@ -434,13 +434,13 @@ func TestTaskNoCommitsMergedWithoutBlock(t *testing.T) {
 	}
 
 	dest := filepath.Join(base, "myrepo")
-	repo, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/myrepo", dest)
+	repo, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/myrepo", dest)
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	setGitUserReal(t, dest)
 
-	srv, _, mr := newTestServerGit(t, gitops.CLIExecutor{}, nil)
+	srv, _, mr := newTestServerGit(t, git.CLIExecutor{}, nil)
 	if _, err := srv.reg.Add(workspace.AddParams{
 		Name: "myrepo", Kind: workspace.KindGit, Root: repo.Root,
 		GitRemote: origin, GitBranch: repo.Branch, GitBase: repo.Base,

@@ -16,7 +16,7 @@ import (
 	"sync"
 
 	"ai/board"
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/workspace"
 	"github.com/alicebob/miniredis/v2"
 )
@@ -59,7 +59,7 @@ func newDoneGuardFixture(t *testing.T) *doneGuardFixture {
 	gitFixtureRun(t, src, "push", "-u", "origin", "main")
 
 	root := filepath.Join(base, "clone")
-	if _, err := gitops.Clone(ctx, gitops.CLIExecutor{}, origin, "ai/app", root); err != nil {
+	if _, err := git.Clone(ctx, git.CLIExecutor{}, origin, "ai/app", root); err != nil {
 		t.Fatal(err)
 	}
 	setGitUserReal(t, root)
@@ -81,7 +81,7 @@ func newDoneGuardFixture(t *testing.T) *doneGuardFixture {
 	if err := reg.SetTaskBranch("app", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
 		t.Fatal(err)
 	}
-	srv := &Server{reg: reg, gitExec: gitops.CLIExecutor{}, mergeLocks: map[string]*sync.Mutex{}, sessions: map[string]*Session{}}
+	srv := &Server{reg: reg, gitExec: git.CLIExecutor{}, mergeLocks: map[string]*sync.Mutex{}, sessions: map[string]*Session{}}
 	mr := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "app"})
 	if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{TaskID: "e1", Title: "эпик"}}); err != nil {

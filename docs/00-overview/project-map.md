@@ -133,7 +133,7 @@
 
 | Файл/папка | Назначение |
 |---|---|
-| `gitops/` | Git-изоляция: `gitops.go`, `merge.go`, `taskmerge.go`, `conflicts.go`, `submodule.go`, `count.go`, `cli.go` |
+| `infrastructure/git/` | Git-изоляция: `gitops.go`, `merge.go`, `taskmerge.go`, `conflicts.go`, `submodule.go`, `count.go`, `cli.go` |
 | `forges/` | Реестр форджей (`registry.go`), интерфейс `Forge` (`forges.go`), `github/`, `gitlab/`, `local.go`, `scope.go`, `ignore.go` |
 | `board/` | `entity.go` (Epic/Task/BugReport, статусы, переходы), `store.go` (Redis), `tokens.go` |
 | `checkpoint/` | Чекпоинты плана в Redis |

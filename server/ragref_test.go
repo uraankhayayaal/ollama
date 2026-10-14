@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/gitops"
+	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 	"ai/workspace"
 )
@@ -218,7 +218,7 @@ func TestSyncAgentBranchWithMain(t *testing.T) {
 	}}
 	srv, _, _ := newTestServerGit(t, dirtyGit, nil)
 	inf := workspace.Info{Name: "myrepo", GitBranch: "ai/myrepo", GitBase: "main", GitRemote: "git@g:r.git"}
-	repo := gitops.RepoFromState(dirtyGit, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
+	repo := git.RepoFromState(dirtyGit, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
 
 	if srv.syncAgentBranchWithMain(context.Background(), "myrepo", inf, repo) {
 		t.Fatal("при грязном дереве merge выполняться не должен")
@@ -232,7 +232,7 @@ func TestSyncAgentBranchWithMain(t *testing.T) {
 		"git status --porcelain":          "",
 	}}
 	srv2, _, _ := newTestServerGit(t, cleanGit, nil)
-	repo2 := gitops.RepoFromState(cleanGit, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
+	repo2 := git.RepoFromState(cleanGit, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
 	if !srv2.syncAgentBranchWithMain(context.Background(), "myrepo", inf, repo2) {
 		t.Fatalf("чистое дерево: ожидали merge main, вызовы: %v", cleanGit.callsList())
 	}
@@ -252,7 +252,7 @@ func TestSyncAgentBranchWithMain(t *testing.T) {
 // копия агентов не должна остаться с конфликтными маркерами (иначе следующий
 // агент откроет мусор, а индекс — мусорные точки).
 func TestSyncAgentBranchConflictAborts(t *testing.T) {
-	git := &fakeGit{
+	fakeExec := &fakeGit{
 		starts: map[string]string{
 			"git rev-parse --abbrev-ref HEAD": "ai/myrepo\n",
 			"git status --porcelain":          "",
@@ -261,15 +261,15 @@ func TestSyncAgentBranchConflictAborts(t *testing.T) {
 			"git merge": "CONFLICT (content): Merge conflict in server/handler.go",
 		},
 	}
-	srv, _, _ := newTestServerGit(t, git, nil)
+	srv, _, _ := newTestServerGit(t, fakeExec, nil)
 	inf := workspace.Info{Name: "myrepo", GitBranch: "ai/myrepo", GitBase: "main", GitRemote: "git@g:r.git"}
-	repo := gitops.RepoFromState(git, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
+	repo := git.RepoFromState(fakeExec, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
 
 	if srv.syncAgentBranchWithMain(context.Background(), "myrepo", inf, repo) {
 		t.Fatal("при конфликте sync должен сообщить об отказе")
 	}
-	if !git.saw("git merge --abort") {
-		t.Fatalf("конфликтный merge не откатан: %v", git.callsList())
+	if !fakeExec.saw("git merge --abort") {
+		t.Fatalf("конфликтный merge не откатан: %v", fakeExec.callsList())
 	}
 }
 
@@ -277,14 +277,14 @@ func TestSyncAgentBranchConflictAborts(t *testing.T) {
 // внутри ветки проекта), повторная индексация ветки не нужна: она стоит
 // эмбеддингов всего проекта.
 func TestSyncAgentBranchNoChangeSkips(t *testing.T) {
-	git := &fakeGit{starts: map[string]string{
+	fakeExec := &fakeGit{starts: map[string]string{
 		"git rev-parse --abbrev-ref HEAD": "ai/myrepo\n",
 		"git status --porcelain":          "",
 		"git rev-parse HEAD":              "aaaa1111\n",
 	}}
-	srv, _, _ := newTestServerGit(t, git, nil)
+	srv, _, _ := newTestServerGit(t, fakeExec, nil)
 	inf := workspace.Info{Name: "myrepo", GitBranch: "ai/myrepo", GitBase: "main", GitRemote: "git@g:r.git"}
-	repo := gitops.RepoFromState(git, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
+	repo := git.RepoFromState(fakeExec, "/repo", inf.GitRemote, inf.GitBranch, inf.GitBase)
 
 	if srv.syncAgentBranchWithMain(context.Background(), "myrepo", inf, repo) {
 		t.Fatal("без сдвига HEAD повторная индексация не нужна")
@@ -377,7 +377,7 @@ func TestRefreshRagTaskBranchHooks(t *testing.T) {
 	idx := &fakeProjectIndexer{}
 	buildProjectIndexer = func() (projectIndexerCloser, error) { return idx, nil }
 	var gotRef, gotBase string
-	loadRefDiff = func(_ context.Context, _ gitops.Executor, _, ref, base string) (refSnapshot, error) {
+	loadRefDiff = func(_ context.Context, _ git.Executor, _, ref, base string) (refSnapshot, error) {
 		gotRef, gotBase = ref, base
 		return refSnapshot{
 			Branch:    ref,

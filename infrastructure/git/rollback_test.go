@@ -1,4 +1,4 @@
-package gitops
+package git
 
 // Тесты ручного отката задачи (Ф-6, этапы 3 и 5,
 // PLAN-2026-10-05-todo-kanban-rollback.md). Прогоняют настоящий git CLI: гард
