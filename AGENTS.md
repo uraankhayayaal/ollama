@@ -678,8 +678,7 @@ approve, отказ, отмена контекста → `Reset`, останов
 чат-ассистентские флаки ушли — окружение вернулось), `-race` по
 `application/logtail` чист, `gofmt` по правкам чист. Документация: план (шапка +
 таблица F3ab + narrative), `docs/00-overview/project-map.md` (новая строка
-`application/logtail/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3ab —
-ниже.
+`application/logtail/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3ab `1cff506`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
