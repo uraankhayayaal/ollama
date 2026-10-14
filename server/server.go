@@ -592,8 +592,10 @@ func (s *Server) sessionFlags(project string) (running, gating, standby bool) {
 		return false, false, false
 	}
 	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	return sess.running, sess.gating, sess.standby
+	running, standby = sess.running, sess.standby
+	sess.mu.Unlock()
+	gating, _, _ = sess.gateOf().State()
+	return running, gating, standby
 }
 
 // anySessionRunning сообщает, идёт ли где-нибудь оркестрация. Порядок

@@ -338,8 +338,9 @@ func (sess *Session) chatPromptFor(ask chatAsk) string {
 	}
 
 	sess.mu.Lock()
-	running, gating := sess.running, sess.gating
+	running := sess.running
 	sess.mu.Unlock()
+	gating, _, _ := sess.gateOf().State()
 	switch {
 	case gating:
 		b.WriteString("\nСостояние оркестрации: ожидает решения человека по текущему затвору.\n")

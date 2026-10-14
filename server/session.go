@@ -9,6 +9,7 @@ import (
 
 	"ai/agents/architect"
 	appask "ai/application/ask"
+	"ai/application/hitl"
 	applogs "ai/application/logs"
 	"ai/application/planner"
 	apprag "ai/application/rag"
@@ -41,13 +42,6 @@ type Session struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	running bool
-	gating  bool
-	gateTyp string
-	// gateMsg — payload активного затвора (gateEvent). Нужен для повторной
-	// публикации в broadcastSnapshot: событие gate одноразовое, поэтому после
-	// перезагрузки страницы (новая WS-подписка) баннер затвора не появлялся,
-	// хотя runner живо ждёт решения. nil вне затвора.
-	gateMsg *gateEvent
 	// standby — режим ожидания: оркестрация запущена по доске, но брать в
 	// работу нечего (нет эпиков/задач, которые можно исполнить). Сессия жива и
 	// ждёт появления работы; статус в шину — «standby».
@@ -58,9 +52,9 @@ type Session struct {
 	// Разные ветки индексируются параллельно. Один на сессию.
 	bgIndex *apprag.BackgroundIndexer
 
-	// decide — решение человека по текущему HITL-затвору (буфер 1 позволяет
-	// принять решение ДО того, как runner дошёл до затвора).
-	decide chan planner.GateDecision
+	// gate — HITL-затвор (подтверждение эпиков/задач): блокирует runner до
+	// решения человека. Состояние и канал решения живут в application/hitl.
+	gate *hitl.Gate
 
 	// pending — активный структурированный вопрос ассистента (AskUser):
 	// один на сессию, блокирует агентский цикл до ответа на все вопросы.
@@ -158,7 +152,6 @@ func (s *Server) newSession(project string) (*Session, error) {
 	sess := &Session{
 		srv:     s,
 		project: project,
-		decide:  make(chan planner.GateDecision, 1),
 		chat:    chatStore,
 		board:   boardStore,
 		tok:     tokStore,
@@ -166,6 +159,8 @@ func (s *Server) newSession(project string) (*Session, error) {
 		log:     logging.For(project),
 	}
 	sess.router = runevents.NewRouter(sess.routeRunEvent)
+	// HITL-затвор: политика в application/hitl, эффекты — адаптер сессии.
+	sess.gate = hitl.NewGate(sess)
 	// Реестр метрик — общий на проект и живущий дольше сессии (server.metricsFor).
 	sess.metrics = s.metricsFor(project)
 	// Буфер логов рантайма и подписка на них инструмента ReadAppLogs: строки
@@ -389,12 +384,10 @@ func (sess *Session) start(ctx context.Context, taskText string, provider llm.LL
 		err := runner.Run(cctx, sess.project, taskText)
 		sess.mu.Lock()
 		sess.running = false
-		sess.gating = false
-		sess.gateTyp = ""
-		sess.gateMsg = nil
 		sess.standby = false
 		sess.runner = nil
 		sess.mu.Unlock()
+		sess.gateOf().Reset()
 
 		// Завершение: публикуем финальный статус и снимок доски.
 		switch {
@@ -474,96 +467,70 @@ func (sess *Session) Restart(ctx context.Context, provider llm.LLMProvider) erro
 
 // --- HITL-затворы (реализация planner.HumanGate) ---
 
+// --- HITL-затворы (реализация planner.HumanGate) ---
+//
+// Политика затвора живёт в application/hitl; здесь — вычисление ids события,
+// адаптер сессии (эффекты в шину/статус) и тонкие обёртки.
+
 func (sess *Session) Epics(ctx context.Context, epics []*board.Epic) (planner.GateDecision, error) {
-	return sess.waitGate(ctx, "epics", func() {
-		ids := make([]string, 0, len(epics))
-		for _, e := range epics {
-			ids = append(ids, e.TaskID)
-		}
-		sess.publishGate("epics", "Ожидается подтверждение эпиков архитектора", ids)
-	})
+	ids := make([]string, 0, len(epics))
+	for _, e := range epics {
+		ids = append(ids, e.TaskID)
+	}
+	return sess.gateOf().Wait(ctx, "epics", "Ожидается подтверждение эпиков архитектора", ids)
 }
 
 func (sess *Session) Tasks(ctx context.Context, tasks []*board.Task) (planner.GateDecision, error) {
-	return sess.waitGate(ctx, "tasks", func() {
-		ids := make([]string, 0, len(tasks))
-		for _, t := range tasks {
-			ids = append(ids, t.TaskID)
-		}
-		sess.publishGate("tasks", "Ожидается подтверждение задач, готовых к работе", ids)
-	})
+	ids := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		ids = append(ids, t.TaskID)
+	}
+	return sess.gateOf().Wait(ctx, "tasks", "Ожидается подтверждение задач, готовых к работе", ids)
 }
 
-// gateEvent — событие «нужно подтверждение человека».
-type gateEvent struct {
-	Gate    string   `json:"gate"` // epics | tasks
-	Summary string   `json:"summary"`
-	IDs     []string `json:"ids"`
-}
+// gateEvent — payload активного затвора (алиас hitl.GateEvent для шины/тестов).
+type gateEvent = hitl.GateEvent
 
-// publishGate шлёт событие затвора в шину и запоминает его в сессии, чтобы
-// broadcastSnapshot мог переиграть баннер новому клиенту (перезагрузка страницы).
-func (sess *Session) publishGate(gate, summary string, ids []string) {
-	ev := gateEvent{Gate: gate, Summary: summary, IDs: ids}
+// --- адаптер hitl.GateHost ---
+
+// Stopped сообщает, остановлена ли сессия.
+func (sess *Session) Stopped() bool {
 	sess.mu.Lock()
-	sess.gateMsg = &ev
-	sess.mu.Unlock()
+	defer sess.mu.Unlock()
+	return sess.stopped
+}
+
+// Running сообщает, идёт ли сейчас оркестрация.
+func (sess *Session) Running() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.running
+}
+
+// BroadcastStatus — реализация hitl.GateHost (делегирует broadcastStatus).
+func (sess *Session) BroadcastStatus(status, detail string) { sess.broadcastStatus(status, detail) }
+
+// PublishGate — реализация hitl.GateHost: событие затвора в шину.
+func (sess *Session) PublishGate(ev hitl.GateEvent) {
 	sess.srv.hub.publish(sess.project, "gate", ev)
 }
 
-// waitGate блокирует runner до решения (approve/reject) или отмены контекста.
-// Передаёт статус «ждёт подтверждения» и публикует событие затвора.
-func (sess *Session) waitGate(ctx context.Context, typ string, notify func()) (planner.GateDecision, error) {
+// gateOf лениво создаёт затвор: нулевая сессия (её собирают тесты) остаётся
+// работоспособной.
+func (sess *Session) gateOf() *hitl.Gate {
 	sess.mu.Lock()
-	if sess.stopped {
-		sess.mu.Unlock()
-		return planner.GateDecision{}, context.Canceled
+	defer sess.mu.Unlock()
+	if sess.gate == nil {
+		sess.gate = hitl.NewGate(sess)
 	}
-	sess.gating = true
-	sess.gateTyp = typ
-	sess.mu.Unlock()
-
-	// Снимаем возможное решение, присланное ДО затвора (буфер 1), и сообщаем кем.
-	select {
-	case <-sess.decide:
-	default:
-	}
-	notify()
-	sess.broadcastStatus("waiting", typ)
-
-	defer func() {
-		sess.mu.Lock()
-		sess.gating = false
-		sess.gateTyp = ""
-		sess.gateMsg = nil
-		sess.mu.Unlock()
-	}()
-
-	select {
-	case d := <-sess.decide:
-		// approve() уже сбросил gating/gateTyp и положил решение в канал.
-		// Возвращаем статус «running»: затвор разрешён, оркестрация идёт.
-		sess.broadcastStatus("running", "")
-		return d, nil
-	case <-ctx.Done():
-		return planner.GateDecision{}, ctx.Err()
-	}
+	return sess.gate
 }
 
 // approve разрешает текущий затвор: approved + reason → решение в канал.
 func (sess *Session) approve(typ string, approved bool, reason string) error {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	if !sess.running || !sess.gating {
-		return errf("проект %s: нет активного затвора (%s)", sess.project, typ)
+	if err := sess.gateOf().Approve(typ, approved, reason); err != nil {
+		return errf("проект %s: %v", sess.project, err)
 	}
-	if sess.gateTyp != typ {
-		return errf("проект %s: ожидается затвор «%s», пришло «%s»", sess.project, sess.gateTyp, typ)
-	}
-	sess.decide <- planner.GateDecision{Approved: approved, Reason: reason}
-	sess.gating = false
-	sess.gateTyp = ""
-	sess.gateMsg = nil
 	return nil
 }
 
@@ -778,9 +745,9 @@ func (sess *Session) broadcastSnapshot() {
 	defer cancel()
 
 	sess.mu.Lock()
-	running, gating, gateTyp, standby := sess.running, sess.gating, sess.gateTyp, sess.standby
-	gateMsg := sess.gateMsg
+	running, standby := sess.running, sess.standby
 	sess.mu.Unlock()
+	gating, gateTyp, gateMsg := sess.gateOf().State()
 	meta, _ := sess.board.GetMeta(ctx)
 	sess.srv.hub.publish(sess.project, "status", statusEvent{
 		Status: computeStatus(running, gating, standby, meta),
@@ -812,8 +779,8 @@ func (sess *Session) setStandby(v bool) {
 	was := sess.standby
 	sess.standby = v
 	running := sess.running
-	gating := sess.gating
 	sess.mu.Unlock()
+	gating, _, _ := sess.gateOf().State()
 	if was == v {
 		return
 	}
@@ -832,10 +799,7 @@ func (sess *Session) setStandby(v bool) {
 
 // broadcastStatus шлёт статус сессии в шину (type=status).
 func (sess *Session) broadcastStatus(status, detail string) {
-	sess.mu.Lock()
-	gating := sess.gating
-	gateTyp := sess.gateTyp
-	sess.mu.Unlock()
+	gating, gateTyp, _ := sess.gateOf().State()
 	sess.srv.hub.publish(sess.project, "status", statusEvent{
 		Status: status,
 		Detail: detail,

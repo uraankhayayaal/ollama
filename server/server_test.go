@@ -20,8 +20,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
-	"ai/infrastructure/board"
 	"ai/chat"
+	"ai/infrastructure/board"
 	"ai/web"
 )
 
@@ -270,9 +270,7 @@ func TestSessionSnapshotReplaysActiveGate(t *testing.T) {
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		sess.mu.Lock()
-		gating := sess.gating
-		sess.mu.Unlock()
+		gating, _, _ := sess.gateOf().State()
 		if gating {
 			break
 		}
@@ -328,9 +326,7 @@ func TestSessionSnapshotReplaysActiveGate(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("затвор не завершился после approve")
 	}
-	sess.mu.Lock()
-	stored := sess.gateMsg
-	sess.mu.Unlock()
+	_, _, stored := sess.gateOf().State()
 	if stored != nil {
 		t.Fatalf("после решения payload затвора должен быть забыт, got %+v", stored)
 	}

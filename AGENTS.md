@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3w — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3x — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -582,6 +582,33 @@ bare-согласие, отчёт о записи, вопрос, смена те
 (шапка + таблица F3w + narrative), `docs/00-overview/project-map.md` (новая
 строка `application/chatassist/`). Остаток Этапа 6 — F3+: HITL-гейт и read-model
 доски в `server/session.go`, `server`-хендлеры. Коммит F3w `de5642b`.
+
+Срез **F3x** — HITL-затвор (подтверждение человеком публикации эпиков/задач)
+вынесен из `server/session.go` в новый пакет **`application/hitl`**
+(`gate.go`): `Gate.Wait` (публикует событие затвора + статус `waiting`,
+блокирует до решения или отмены контекста, `Reset` по завершении),
+`Gate.Approve` (проверка «идёт оркестрация» + совпадение типа затвора, решение
+в канал буфера 1), `Gate.State` (консистентные `gating`/`typ`/`msg`) и тип
+`GateEvent`. Эффекты сессии инвертированы портом `GateHost`
+(`Stopped`/`Running`/`BroadcastStatus`/`PublishGate`). `server/session.go`
+оставил поле `gate *hitl.Gate` (ленивый `gateOf()` — нулевая сессия
+работоспособна), методы-обёртки `Epics`/`Tasks` (вычисляют ids → `Wait`),
+`approve` (префикс проекта в ошибке) и реализацию `GateHost`;
+`broadcastStatus`/`broadcastSnapshot`/`setStandby`/`server.sessionFlags`/
+`server/chatassist.go` читают состояние через `gate.State()`; `gateEvent` —
+алиас `hitl.GateEvent`. Порядок блокировок: `gate.mu` берётся только на время
+смены состояния, хостовые методы зовутся БЕЗ удержания `gate.mu`. Тесты: новые
+герметичные `application/hitl/gate_test.go` (`fakeHost`: публикация+блокировка+
+approve, отказ, отмена контекста → `Reset`, остановленная сессия → мгновенный
+`context.Canceled` без события, `Approve` без затвора/без оркестрации/чужой тип,
+снятие «залежавшегося» решения, `Reset`); серверный
+`TestSessionSnapshotReplaysActiveGate` поправлен на `gateOf().State()`
+(был доступ к полям `sess.gating`/`sess.gateMsg`). Верификация: канонический
+набор зелёный (30 пакетов), `-race` по `application/hitl` чист, `gofmt` по
+правкам чист. Документация: план (шапка + таблица F3x + narrative),
+`docs/00-overview/project-map.md` (новая строка `application/hitl/`). Остаток
+Этапа 6 — F3+: read-model доски в `server/session.go`, `server`-хендлеры.
+Коммит F3x — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
