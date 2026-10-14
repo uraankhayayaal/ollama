@@ -16,7 +16,7 @@ package planner
 // из lspgate.go.
 
 import (
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"context"
 	"fmt"
 	"os"

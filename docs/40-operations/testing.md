@@ -4,7 +4,7 @@
 
 ```bash
 go test . ./agents/... ./tools/ ./board/          # рабочий набор
-go test ./rag/ ./runner/ ./server/ ./workspace/   # расширенный
+go test ./infrastructure/rag/ ./runner/ ./server/ ./workspace/   # расширенный
 go test -race ./agents/... ./tools/               # с гонками
 go test -run TestName ./tools/                    # один тест
 go test -cover ./tools/                           # покрытие
@@ -28,7 +28,7 @@ npm --prefix web run build
 
 | Что | Чем заменено |
 |---|---|
-| Qdrant | `rag/memstore_test.go` — in-memory `QdrantStore` с семантикой фильтров (must/must_not/should, match, is_null, is_empty, has_id) |
+| Qdrant | `infrastructure/rag/memstore_test.go` — in-memory `QdrantStore` с семантикой фильтров (must/must_not/should, match, is_null, is_empty, has_id) |
 | Модель эмбеддингов | `textEmbedder` |
 | Git | инъектируемый `rag.gitRunner`, `gitops.Executor` |
 | RAG-клиент сервера | фабрика `buildProjectIndexer` |
@@ -74,7 +74,7 @@ tool-calls — на них проверяется, что чат пошёл им
 | `tools/` | 26 | Файловые операции, блокировки, stub-healing, песочница, отбраковка разрушителей, параллельность, LSP |
 | `server/` | 25 | REST-маршруты, git-flow, конфликты, `AskUser`, фоновый RAG-индекс, логи, метрики |
 | `application/planner/` | 17 | Волны, откат, контракт, step-gate, сжатие |
-| `rag/` | 10 | Версионирование по веткам, изоляция веток, идемпотентность индексации, перекрытие версий в выдаче |
+| `infrastructure/rag/` | 10 | Версионирование по веткам, изоляция веток, идемпотентность индексации, перекрытие версий в выдаче |
 | `runner/` | 10 | Сжатие истории, адаптивный бюджет диагностик, автопочинка, переиндексация |
 | `board/` | 3 | Модель сущностей, переходы, токены, JSON-поля |
 | `workspace/` | 3 | Разрешение путей, project-конфигурация |

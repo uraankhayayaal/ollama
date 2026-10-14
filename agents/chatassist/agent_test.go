@@ -3,7 +3,7 @@ package chatassist
 import (
 	"ai/agents"
 	"ai/board"
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"ai/tools"
 	"context"
 	"os"

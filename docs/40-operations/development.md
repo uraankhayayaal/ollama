@@ -23,9 +23,9 @@ go test  . ./agents/... ./tools/ ./board/
 Расширенный набор (когда нужно проверить всё):
 
 ```bash
-go build ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/
-go vet   ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/
-go test  ./agents/... ./tools/ ./board/ ./rag/ ./server/ ./workspace/
+go build ./agents/... ./tools/ ./board/ ./infrastructure/rag/ ./server/ ./workspace/
+go vet   ./agents/... ./tools/ ./board/ ./infrastructure/rag/ ./server/ ./workspace/
+go test  ./agents/... ./tools/ ./board/ ./infrastructure/rag/ ./server/ ./workspace/
 ```
 
 > `go build ./...` падает на `temp/moon-distance/internal/middleware/cors.go`
@@ -66,7 +66,7 @@ gofmt -w <файл>
 | `tools/` | Function-calling инструменты, файловые операции, LSP-обвязка, песочница |
 | `runner/` | Агентский цикл: генерация, раунды, хуки, сжатие, автопочинка, переиндексация |
 | `infrastructure/llm/` | LLM-провайдеры: Ollama, YandexGPT, Trim, layered, `ModelLimits` |
-| `rag/` | RAG: чанки, индекс, поиск, ветки, Qdrant-клиент |
+| `infrastructure/rag/` | RAG: чанки, индекс, поиск, ветки, Qdrant-клиент |
 | `board/` | Эпики, задачи, багрепорты, статусы, токены |
 | `server/` | Web UI: REST, WebSocket, git-flow, чат, логи, метрики |
 | `workspace/` | Реестр проектов, ветки, worktree |
@@ -92,7 +92,7 @@ main.go / server/
       ↓
 agents/  runner/            ← оркестрация
       ↓
-tools/   rag/   board/      ← инструменты и хранилища
+tools/   infrastructure/rag/   board/      ← инструменты и хранилища
       ↓
 infrastructure/llm/  gitops/  forges/    ← внешний мир
 ```

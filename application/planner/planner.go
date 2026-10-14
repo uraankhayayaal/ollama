@@ -4,8 +4,8 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
+	"ai/infrastructure/rag"
 	"ai/projects"
-	"ai/rag"
 	"fmt"
 
 	"github.com/ollama/ollama/api"

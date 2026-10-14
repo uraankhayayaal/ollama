@@ -13,7 +13,7 @@ package tools
 // CodeSearch); шаг не падает.
 
 import (
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"context"
 	"encoding/json"
 )

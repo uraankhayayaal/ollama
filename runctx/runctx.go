@@ -10,13 +10,12 @@ import (
 	"context"
 	"strings"
 
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"ai/runner"
 	"ai/stackdetect"
 	"ai/tools"
 	"ai/tools/lspclient"
 )
-
 
 // WithCompression кладёт в контекст сервисы расширенного сжатия для проекта
 // (dir — корень проекта, ragc — векторная память; nil — только LSP-шапки, но

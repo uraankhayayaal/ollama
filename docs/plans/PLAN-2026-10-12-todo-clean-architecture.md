@@ -30,8 +30,10 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 **Этап 4 (в работе):** срез **E1 ✅** — создан каркас `infrastructure/`,
 пакет `models` переехал в `infrastructure/llm` (пакет `models` → `llm`) и
 привязан к порту `domain/services.LLMClient` compile-assertions
-(`infrastructure/llm/ports.go`). Разбивка этапа на срезы E1–E6 — в разделе
-«Этап 4» ниже.
+(`infrastructure/llm/ports.go`). Срез **E2 ✅** — `rag` → `infrastructure/rag`
+(пакет `rag`), адаптер `rag.ProjectAdapter` реализует
+`domain/services.RAGClient` (`infrastructure/rag/port.go`). Разбивка этапа на
+срезы E1–E6 — в разделе «Этап 4» ниже.
 
 ## Проблема
 
@@ -296,7 +298,7 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 | Срез | Что | Статус |
 |---|---|---|
 | **E1** | Каркас `infrastructure/`; `models` → `infrastructure/llm` (пакет `models` → `llm`), compile-assertions `services.LLMClient` (`ports.go`) | ✅ |
-| **E2** | `rag` → `infrastructure/rag` + assertion `services.RAGClient` | ⏳ |
+| **E2** | `rag` → `infrastructure/rag` (пакет `rag`), адаптер `rag.ProjectAdapter` к порту `services.RAGClient` | ✅ |
 | **E3** | `gitops` → `infrastructure/git` + assertion `services.GitOperations` | ⏳ |
 | **E4** | `sandbox` → `infrastructure/sandbox` + assertion `services.SandboxEngine` | ⏳ |
 | **E5** | `board` → `infrastructure/board` (самый крупный: ~75 импортёров) | ⏳ |
@@ -314,6 +316,27 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 переименование. Верификация: канонический набор (добавлен
 `./infrastructure/...`) зелёный, `-race` по `infrastructure/llm` чист,
 `gofmt -l` по своим файлам чист.
+
+**E2 ✅ (`rag` → `infrastructure/rag` + адаптер порта).** `git mv rag
+infrastructure/rag`, имя пакета сохранено (`rag`); 25 импортёров переведены на
+`ai/infrastructure/rag` (`main.go`, `runctx`, `server/{session,ragindex,ragref,chatassist}`,
+`runner/adapters/reindex.go`, `application/planner`, `agents/{architect,developer,chatassist}`,
+`tools/{codesearch,ragstatus}` + тесты). Порт `services.RAGClient` — узкий и
+не совпадает с богатым API `rag.Client` (явный `projectName`, `SearchParams`,
+`IndexProject`), поэтому добавлен адаптер `rag.ProjectAdapter`
+(`infrastructure/rag/port.go`, `NewProjectAdapter(client, project, dir)`):
+проект и рабочий каталог фиксируются в конструкторе, `Search` переводит
+`SearchResult` → `services.RAGResult` (версионные маркеры в `Metadata`),
+`Index` индексирует дерево каталога (обход `WalkProject` + `IndexProject`,
+ветка/коммит по `DetectIndexOptions`), `BranchIndexed` сравнивает с коммитом
+каталога. Compile-assertion `var _ services.RAGClient = (*ProjectAdapter)(nil)`.
+Тесты `infrastructure/rag/port_test.go` (4 шт., hermetic на `fakeStore`/
+`fakeEmbedder`/`withGit`): маппинг поиска, `BranchIndexed` (git/вне git),
+индексация каталога (Upsert), пустой каталог → ошибка. Верификация: канонический
+набор зелёный, `-race` по `infrastructure/rag` чист. **Осталось на потом:**
+`rag` напрямую импортирует `ai/forges` (`forges.IsIgnoredDir` в `walk.go`) —
+инфра→инфра-зависимость, которую нужно убрать при ревизии `forges`
+(кандидат: перенести `IsIgnoredDir` в `domain` или `tools`).
 
 ### Этап 5: Рефакторинг агентов
 

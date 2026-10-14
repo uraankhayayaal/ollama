@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 4, срез E1 — каркас `infrastructure/`)
+## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E2 — каркас `infrastructure/`)
 
 Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы
 E1–E6 (таблица в разделе «Этап 4» плана). Срез **E1** закрыт: создан каталог
@@ -12,16 +12,28 @@ E1–E6 (таблица в разделе «Этап 4» плана). Срез *
 `domain/services.LLMClient` для `*OllamaProvider`/`*LayeredProvider`
 (`*OpenAIProvider` пока без `ChatStream` — покроется при переводе OpenAI-пути
 на порт). Правка чисто механическая (перенос+переименование), поведение не
-менялось. Остальные срезы Этапа 4 (E2 `rag` → `infrastructure/rag`, E3 `gitops`
-→ `infrastructure/git`, E4 `sandbox` → `infrastructure/sandbox`, E5 `board` →
-`infrastructure/board`, E6 разбиение `tools/` и перевод на `domain/services`)
-не начаты. Верификация: канонический набор (в него добавлен `./infrastructure/...`)
-зелёный, `-race` по `infrastructure/llm` чист, `gofmt -l` по своим файлам чист.
-Документация: раздел «Этап 4» + шапка плана, пути `models/` →
-`infrastructure/llm/` в живых доках (`architecture.md`, `project-map.md`,
-`providers.md`, `context-compression.md`, `agents-and-roles.md`,
-`troubleshooting.md`, `adding-a-feature.md`, `development.md`), канонический
-набор и примечание в этом файле. Коммит не делался (спросить пользователя).
+менялось.
+
+Срез **E2** закрыт: `git mv rag infrastructure/rag` (пакет `rag` сохранён), 25
+импортёров переведены на `ai/infrastructure/rag`. Порт `services.RAGClient` не
+совпадал с богатым API `rag.Client`, поэтому добавлен адаптер
+`rag.ProjectAdapter` (`infrastructure/rag/port.go`, `NewProjectAdapter(client,
+project, dir)`) + compile-assertion; тесты `infrastructure/rag/port_test.go`
+(4 шт., hermetic). Замечена инфра→инфра-зависимость `rag` → `ai/forges`
+(`forges.IsIgnoredDir` в `walk.go`) — кандидат на устранение при ревизии
+`forges`.
+
+Остальные срезы Этапа 4 (E3 `gitops` → `infrastructure/git`, E4 `sandbox` →
+`infrastructure/sandbox`, E5 `board` → `infrastructure/board`, E6 разбиение
+`tools/` и перевод на `domain/services`) не начаты. Верификация: канонический
+набор (в него добавлен `./infrastructure/...`) зелёный, `-race` по
+`infrastructure/llm` и `infrastructure/rag` чист, `gofmt -l` по своим файлам
+чист. Документация: раздел «Этап 4» + шапка плана, пути `models/` →
+`infrastructure/llm/` и `rag/` → `infrastructure/rag/` в живых доках
+(`architecture.md`, `project-map.md`, `providers.md`, `context-compression.md`,
+`agents-and-roles.md`, `glossary.md`, `rag.md`, `troubleshooting.md`,
+`adding-a-feature.md`, `development.md`, `testing.md`), канонический набор и
+примечание в этом файле. Коммит E1 сделан (`4279c9f`); E2 — коммитится следом.
 
 ## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
 

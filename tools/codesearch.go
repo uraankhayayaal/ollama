@@ -28,7 +28,7 @@ package tools
 // ReadMap/ReadFiles; шаг не падает (по образцу ЛСП-инструментов).
 
 import (
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"context"
 	"encoding/json"
 	"errors"

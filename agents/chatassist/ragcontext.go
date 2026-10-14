@@ -12,7 +12,7 @@ package chatassist
 // как раньше (degrade, как в планировщике).
 
 import (
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"context"
 	"fmt"
 	"os"

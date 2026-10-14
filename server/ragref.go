@@ -29,8 +29,8 @@ import (
 
 	"ai/forges"
 	"ai/gitops"
+	"ai/infrastructure/rag"
 	"ai/logging"
-	"ai/rag"
 	"ai/workspace"
 	"time"
 )

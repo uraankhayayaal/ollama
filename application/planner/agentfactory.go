@@ -9,7 +9,7 @@ import (
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/domain/services"
-	"ai/rag"
+	"ai/infrastructure/rag"
 )
 
 // AgentFactory — порт конструирования ролевых агентов оркестратора: лидов

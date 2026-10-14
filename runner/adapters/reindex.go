@@ -31,7 +31,7 @@ import (
 	"strings"
 
 	"ai/application/usecases"
-	"ai/rag"
+	"ai/infrastructure/rag"
 )
 
 // reindexOnEnv — env-флаг авто-обновления RAG-индекса после мутаций (Ф-5).

@@ -95,7 +95,7 @@
 | `parallel.go` | Параллельное выполнение инструментов |
 | `binpath/` | Поиск бинарников (PATH, `~/go/bin`, npm/nvm, Homebrew) |
 
-### RAG — `rag/`
+### RAG — `infrastructure/rag/`
 
 | Файл | Назначение |
 |---|---|

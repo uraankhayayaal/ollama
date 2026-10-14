@@ -2,7 +2,7 @@ package architect
 
 import (
 	"ai/board"
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"ai/tools"
 	"context"
 	"path/filepath"

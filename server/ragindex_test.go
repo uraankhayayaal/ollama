@@ -17,7 +17,7 @@ import (
 
 	"ai/chat"
 	"ai/gitops"
-	"ai/rag"
+	"ai/infrastructure/rag"
 )
 
 // TestIndexBackgroundBridgeSafe — безопасный мост: выполняется БЕЗ

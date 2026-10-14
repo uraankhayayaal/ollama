@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"ai/gitops"
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"ai/workspace"
 )
 

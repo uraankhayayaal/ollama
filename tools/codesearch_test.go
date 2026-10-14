@@ -5,7 +5,7 @@
 package tools
 
 import (
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"context"
 	"encoding/json"
 	"errors"

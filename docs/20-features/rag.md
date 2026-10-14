@@ -42,19 +42,19 @@ ollama pull nomic-embed-text
 
 ## Что индексируется
 
-`rag/walk.go` — детерминированный обход (с сортировкой). Пропускаются:
+`infrastructure/rag/walk.go` — детерминированный обход (с сортировкой). Пропускаются:
 
-- Каталоги `.git`, скрытые, `forges.IsIgnoredDir` (`rag/walk.go:51-52`).
+- Каталоги `.git`, скрытые, `forges.IsIgnoredDir` (`infrastructure/rag/walk.go:51-52`).
 - Совпадения `.gitignore` (собственный парсер с инверсией `!` и
   каталоговыми шаблонами, `:106-231`).
 - Скрытые файлы (`:61-63`).
 - Файлы больше 2 МБ и пустые (`:72-74`, `maxIndexFileSize`).
 - Бинарные (NUL в префиксе 1024 байт, `:90-104`).
 
-**Чанк** — до 100 строк (`rag/chunk.go:21`), нарезка структурная для
+**Чанк** — до 100 строк (`infrastructure/rag/chunk.go:21`), нарезка структурная для
 Go/TS/JS/Python.
 
-**Scope** — первый сегмент пути; корень → `root` (`rag/index.go:503-513`).
+**Scope** — первый сегмент пути; корень → `root` (`infrastructure/rag/index.go:503-513`).
 
 ## Версионирование по веткам
 
@@ -75,7 +75,7 @@ Go/TS/JS/Python.
 ### `chunk_id`
 
 `ChunkID(project, relPath, symbol)` — FNV-1a64 в hex
-(`rag/chunk.go:371-385`). Ключ идентичности — **символ определения**;
+(`infrastructure/rag/chunk.go:371-385`). Ключ идентичности — **символ определения**;
 при линейной нарезке — `L<start_line>` (`chunkKey:387-394`).
 
 Один `chunk_id` делится версиями одной функции **между коммитами и ветками** —
@@ -84,16 +84,16 @@ Go/TS/JS/Python.
 ### `pointID`
 
 FNV-1a64 от `project|relPath|branch|commit|startLine|contentHash`
-(`rag/index.go:474-491`). Включение коммита и хеша обязательно: иначе
+(`infrastructure/rag/index.go:474-491`). Включение коммита и хеша обязательно: иначе
 терялись бы незакоммиченные правки агента (главный сценарий
 `ReindexFiles` после мутации).
 
 ### Индексация
 
-`IndexOptions{Branch, CommitSHA}` (`rag/index.go:70-81`). Пусто → `MainBranch`
+`IndexOptions{Branch, CommitSHA}` (`infrastructure/rag/index.go:70-81`). Пусто → `MainBranch`
 + пустой коммит (обратная совместимость для проектов без Git).
 
-`upsertChunks` (`rag/index.go:220-274`):
+`upsertChunks` (`infrastructure/rag/index.go:220-274`):
 
 1. Scroll активных версий.
 2. `SetPayload(replaced_by = commit)` — **с `Wait: true`**, иначе гонка с
@@ -105,7 +105,7 @@ FNV-1a64 от `project|relPath|branch|commit|startLine|contentHash`
 
 ### Поиск
 
-`rag/search.go:83`:
+`infrastructure/rag/search.go:83`:
 
 - Фильтр «актуальный чанк ветки» (`activeBranchCond:206-224`):
   `Must: replaced_by is_empty` + `Should: branch == <ветка>` (плюс
@@ -119,7 +119,7 @@ FNV-1a64 от `project|relPath|branch|commit|startLine|contentHash`
 > **Тонкость:** `should` внутри `filter` означает «хотя бы одно условие».
 > Если бы условия ветки попали в `Must`, поиск из `main` не возвращал бы
 > ничего. Это была реальная ошибка, пойманная тестами
-> (`rag/memstore_test.go`).
+> (`infrastructure/rag/memstore_test.go`).
 
 ## Инструменты
 
@@ -157,7 +157,7 @@ FNV-1a64 от `project|relPath|branch|commit|startLine|contentHash`
 `tools/ragstatus.go:21`. Без параметров. Ответ:
 `{"status":"ok","indexed":bool,"chunks":int}`.
 
-Считаются только **активные** версии (`rag/status.go:21-29`).
+Считаются только **активные** версии (`infrastructure/rag/status.go:21-29`).
 
 ### `IndexBackground`
 
@@ -173,7 +173,7 @@ FNV-1a64 от `project|relPath|branch|commit|startLine|contentHash`
   же ветки — ошибка (409), разные ветки индексируются параллельно (переиндексация
   `main` не отменяет индексацию ветки задачи).
 - Если активные точки ветки на этом коммите уже есть (`Client.BranchIndexed`,
-  `rag/status.go`) — прогон пропускается, в чате «RAG-индекс проекта актуален,
+  `infrastructure/rag/status.go`) — прогон пропускается, в чате «RAG-индекс проекта актуален,
   повторная индексация не требовалась».
 - Контекст **не наследуется** от вызывающего (иначе `context canceled` на
   первом embed) — используется `context.Background()` с `cancel` (`:87-94`).
@@ -236,7 +236,7 @@ blob-ов с размерами) + `git show ref:<путь>`. Фильтры т�
 
 ## Определение ветки
 
-`rag/branch.go`:
+`infrastructure/rag/branch.go`:
 
 | Функция | Что делает |
 |---|---|

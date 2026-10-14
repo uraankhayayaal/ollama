@@ -7,8 +7,8 @@ package planner
 // контекст по шагу (stepRAGContext). Сеть не используется: поиск — fake.
 
 import (
+	"ai/infrastructure/rag"
 	"ai/projects"
-	"ai/rag"
 	"context"
 	"errors"
 	"os"

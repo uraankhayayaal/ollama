@@ -9,7 +9,7 @@
 | Новый инструмент модели | `tools/` | `tools/registry.go:105` + реализация |
 | Новое поведение агента | `agents/<роль>/` | промпт + `tools.Select` |
 | Новый REST-эндпоинт | `server/` | `mux.HandleFunc` + хендлер |
-| Новый источник данных | `runner/`, `board/`, `rag/` | интерфейс + реализация |
+| Новый источник данных | `runner/`, `board/`, `infrastructure/rag/` | интерфейс + реализация |
 | Новый провайдер | `infrastructure/llm/` | интерфейс + `ResolveProvider` |
 | Новый фордж | `forges/` | реализация + саморегистрация в `init` |
 | Новый стек | `stackdetect/`, `tools/stacktool.go` | детектор + роли |

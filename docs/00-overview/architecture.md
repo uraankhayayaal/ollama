@@ -88,7 +88,7 @@
 | Kanban-доска | Redis, `BOARD_REDIS_ADDR` | `board/` | Эпики, задачи, багрепорты |
 | Чекпоинты плана | Redis, `REDIS_ADDR` | `checkpoint/` | Статусы шагов для `--resume` |
 | История и события чата | Redis Streams | `chat/` | Живой чат в Web UI |
-| RAG-индекс | Qdrant, `QDRANT_ADDR` (gRPC) | `rag/` | Семантический поиск по коду |
+| RAG-индекс | Qdrant, `QDRANT_ADDR` (gRPC) | `infrastructure/rag/` | Семантический поиск по коду |
 | Реестр проектов | Файл `$AI_WORKSPACES` | `workspace/` | Имя проекта → путь, git-метаданные |
 | Логи | Файлы в `LOG_DIR` | `logging/` | Лог каждого проекта и процесса |
 | Проекты агентов | `temp/<имя>/` | `projects/` | Рабочее хранилище (не коммитится) |

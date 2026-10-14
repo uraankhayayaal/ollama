@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"ai/runner/adapters"
 	"ai/tools"
 )

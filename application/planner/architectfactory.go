@@ -4,7 +4,7 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/domain/services"
-	"ai/rag"
+	"ai/infrastructure/rag"
 )
 
 // architectFactory — архитектурная часть AgentFactory поверх agents/architect.

@@ -10,7 +10,7 @@ package architect
 // Qdrant/эмбеддингах — блока нет, архитектор работает как раньше (degrade).
 
 import (
-	"ai/rag"
+	"ai/infrastructure/rag"
 	"context"
 	"fmt"
 	"os"

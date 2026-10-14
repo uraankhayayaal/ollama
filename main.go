@@ -20,9 +20,9 @@ import (
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	_ "ai/forges/all"
 	"ai/infrastructure/llm"
+	"ai/infrastructure/rag"
 	"ai/logging"
 	"ai/projects"
-	"ai/rag"
 	"ai/runctx"
 	"ai/runmetrics"
 	"ai/server"

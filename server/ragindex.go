@@ -24,8 +24,8 @@ import (
 	"strings"
 
 	"ai/chat"
+	"ai/infrastructure/rag"
 	"ai/projects"
-	"ai/rag"
 )
 
 // projectIndexer — узкий интерфейс векторной памяти для полной индексации

@@ -112,7 +112,7 @@ compressHistoryForRound(...)  — перед каждым раундом
 | Свойство | Реализация |
 |---|---|
 | `cc.Notice` | `runner/compression.go` |
-| `cc.Evict` | `ragc.EvictionEpisodes(ctx, p, "dialog", ...)` (`rag/episodes.go`) |
+| `cc.Evict` | `ragc.EvictionEpisodes(ctx, p, "dialog", ...)` (`infrastructure/rag/episodes.go`) |
 | `cc.Rank` | `ragc.Similarity` (cosine) |
 | `cc.Outline` | `lspclient.Shared().Outliner` + `tools.OutlineFromOutliner`; ошибка не fatal |
 | `cc.Compact` | Один вызов провайдера |
