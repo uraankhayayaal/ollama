@@ -491,7 +491,7 @@ HEAD → true, без сдвига → false, текст merge). Верифик�
 `WorkingCopySyncer`/`sync.go`). Остаток Этапа 6 — F3+: RAG-хуки
 (`refreshRagIndex*`/`syncAgentBranchAsync`/`afterMainChanged`), `server/
 session.go` (оркестрация/HITL/событийность), `chatassist`/`actions`/`server`.
-Коммита нет (спросить пользователя).
+Коммит F3s `0ede388`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
