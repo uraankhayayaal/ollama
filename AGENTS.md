@@ -692,7 +692,7 @@ approve, отказ, отмена контекста → `Reset`, останов
 `application/logs` чист, `gofmt` по правкам чист. Документация: план (шапка +
 таблица F3ac + narrative), `docs/00-overview/project-map.md` (строка
 `application/logs/` расширена `readslice.go`). Остаток Этапа 6 — F3+:
-`server`-хендлеры. Коммит F3ac — ниже.
+`server`-хендлеры. Коммит F3ac `6bef367`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
