@@ -78,7 +78,10 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`CollectIndexItems`) и
 полная индексация проекта (`IndexProjectRAG`), проверка актуальности
 (`BranchIndexUpToDate`) вынесены из `server/ragref.go`/`server/ragindex.go` в
-новый пакет `application/rag` (порт `Indexer`).
+новый пакет `application/rag` (порт `Indexer`); срез **F3l ✅** — политика
+открытия git-проекта (`ProjectOpener.Open`: имя из URL, клон, полу-клон,
+регистрация проекта/сабмодулей) вынесена из `server/git.go` в
+`application/gitflow` (порт `OpenRegistry`).
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -554,6 +557,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3i | Политика релиза эпика в main (`Releaser.ReleaseEpic`: проверка git/базы/статуса done/ветки эпика, `MergeFeature` под локом, инвалидация диффов + хук «main изменился») вынесена в `application/gitflow` (порт `ReleaseHost`, доменные sentinel-ошибки вместо `apiError`); `apiError` удалён | ✅ |
 | F3j | Конфликтный резолв «main ↔ релизная ветка эпика» (`ConflictResolver.StartRebase`/`FinishResolve`: прогноз merge-tree, постоянный конфликтный worktree, авто-резолв тривиальных блоков, обязательная приёмка, коммит резолва, финальный merge+push) вынесен из `server/gitflow_resolve.go` в `application/gitflow` (порты `ConflictHost`/`ConflictRepo`/`ConflictWorktree`); `conflictHost`/`serverConflictRepo` — серверные адаптеры | ✅ |
 | F3k | RAG-хуки: чтение файлов ветки из git (`LoadRefItems`/`LoadRefDiff`/`ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/`RefFileSize`), сбор файлов каталога (`CollectIndexItems`) и полная индексация проекта (`IndexProjectRAG`), проверка актуальности (`BranchIndexUpToDate`) вынесены из `server/ragref.go`/`server/ragindex.go` в новый пакет `application/rag` (порт `Indexer`, `RefSnapshot`, `MaxRefFileBytes`); оркестрация фоновых прогонов и хуки остаются в `server` | ✅ |
+| F3l | Политика открытия git-проекта (`ProjectOpener.Open`: имя из URL `GitProjectName`, клон, распознавание полу-клона `discardHalfClone`, регистрация проекта и сабмодулей; `SubmoduleProjectName`/`SameGitRemote`) вынесена из `server/git.go` в `application/gitflow` (порт `OpenRegistry`, сентинелы `ErrGitURLName`/`ErrDirNotEmpty`(+`DirNotEmptyError`)/`ErrCloneFailed`/`ErrRegisterFailed`); `handleOpenGitProject` — тонкая обёртка | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -694,6 +698,25 @@ show`/`git diff`), `ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/
 пакетные переменные поверх `apprag.*`; `projectIndexer` — алиас
 `apprag.Indexer`. Тесты чистых функций переехали в `application/rag`
 (`ref_test.go`, `index_test.go`), серверные хуки/REST/сессия — как раньше.
+
+**F3l ✅** — политика открытия git-проекта вынесена из `server/git.go` в
+`application/gitflow/open.go`: `ProjectOpener.Open` (идемпотентное открытие:
+имя из URL через `GitProjectName`, клон в `temp/<имя>`, распознавание
+«полу-клона» `discardHalfClone` — обычный `.git`, тот же origin, нет коммитов,
+чистое дерево, регистрация проекта и сабмодулей). Порт `OpenRegistry`
+(`Get`/`Add`) реализуется `*workspace.Registry` напрямую; сентинелы
+`ErrGitURLName`/`ErrDirNotEmpty` (+типизированный `DirNotEmptyError` с `Is`)/
+`ErrCloneFailed`/`ErrRegisterFailed`; чистые помощники `GitProjectName`/
+`SubmoduleProjectName`/`SameGitRemote`/`dirIsEmpty`. `server/git.go` оставил
+тонкий `handleOpenGitProject` (маппинг 400/409/502/400 + `writeProjectMetaFromInfo`)
+и адаптер `s.projectOpener()`; обёртки `gitProjectName`/`submoduleProjectName`
+сохранены для остальных файлов `server`, удалены локальные
+`discardHalfClone`/`sameGitRemote`/`dirIsEmpty`. Тесты: новые герметичные
+`application/gitflow/open_test.go` (`fakeExec`/`fakeOpenRegistry`: имя/сабмодуль/
+адрес, плохой URL, идемпотентность, чужой каталог → `ErrDirNotEmpty` без
+разрушения содержимого, авточистка полу-клона, `ErrCloneFailed` с удалением
+каталога, `ErrRegisterFailed`); серверные `git_test.go`/`gitflow_submodule_test.go`
+не менялись и зелёные.
 
 ## Ключевые решения
 

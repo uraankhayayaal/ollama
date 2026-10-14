@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3k — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3l — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -302,6 +302,37 @@ single-flight по ветке, отчёты в чат), git-flow хуки
 `docs/00-overview/project-map.md` (новая строка `application/rag/`). Остаток
 Этапа 6 — F3+: git-flow хуки, сессии/оркестрация, остальные RAG-хуки. Коммит
 F3k `ceecbfd`.
+
+Срез **F3l** — политика открытия git-проекта вынесена из `server/git.go` в
+`application/gitflow/open.go`: `ProjectOpener.Open` (идемпотентное открытие —
+`Registry.Get` → возврат meta; имя из URL `GitProjectName`; клон в
+`temp/<имя>`; распознавание «полу-клона» `discardHalfClone` — обычный `.git`,
+тот же origin через `SameGitRemote`, нет коммитов, чистое дерево → каталог
+убирается и клонируется заново; регистрация проекта и сабмодулей через
+`SubmoduleProjectName`). Порт `OpenRegistry` (`Get`/`Add`) реализуется
+`*workspace.Registry` напрямую; сентинелы `ErrGitURLName`/`ErrDirNotEmpty`
+(+типизированный `DirNotEmptyError` с `Is`, сообщение с путём)/
+`ErrCloneFailed`/`ErrRegisterFailed`; `OpenedProject{Name,Info}`;
+`RemoveAll`-хук для тестов. `server/git.go` оставил тонкий
+`handleOpenGitProject` (маппинг 400 `ErrGitURLName` / 409 `ErrDirNotEmpty` /
+502 `ErrCloneFailed` / 400 `ErrRegisterFailed` / 500 default →
+`writeProjectMetaFromInfo`) и адаптер `s.projectOpener()` (поверх `s.gitExec`/
+`s.reg`/`projects.ProjectDir`); обёртки `gitProjectName`/`submoduleProjectName`
+сохранены (их зовут `git_test.go`/`gitflow_submodule_test.go` и обработчики
+accept/reject), удалены локальные `discardHalfClone`/`sameGitRemote`/
+`dirIsEmpty`. Тесты: новые герметичные `application/gitflow/open_test.go`
+(`fakeExec`/`fakeOpenRegistry`: `GitProjectName`/`SubmoduleProjectName`/
+`SameGitRemote`; плохой URL → `ErrGitURLName`; существующий проект идемпотентен
+без клона; чужой непустой каталог → `ErrDirNotEmpty` с сохранением содержимого;
+авточистка полу-клона (`--verify HEAD` падает, `--verify main` проходит) →
+клон и регистрация; сбой клона → `ErrCloneFailed` и каталог удалён; сбой
+реестра → `ErrRegisterFailed`). Серверные `git_test.go`/
+`gitflow_submodule_test.go` не менялись. Верификация: канонический набор
+зелёный (26 пакетов), `-race` по `application/gitflow` чист, `gofmt` по правкам
+чист. Документация: план (шапка + таблица F3l + narrative),
+`docs/00-overview/project-map.md` (строка `application/gitflow/` расширена
+`ProjectOpener`/`open.go`). Остаток Этапа 6 — F3+: сессии/оркестрация,
+остальные git-flow/RAG-хуки и прочие хендлеры `server/`. Коммит F3l — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

@@ -8,6 +8,7 @@ import (
 	"ai/tools"
 	"ai/workspace"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,140 +16,54 @@ import (
 	"path/filepath"
 	"strings"
 
+	"ai/application/gitflow"
 	"ai/logging"
 )
 
 // --- открытие git-проектов (Ф-2-3) ---
 
-// handleOpenGitProject клонирует git-репозиторий в temp/<имя>, создаёт
-// фича-ветку и регистрирует проект вида KindGit. Агенты работают прямо в
-// этом клоне (projects.ProjectDir(name) == рабочая директория), поэтому
-// вся существующая оркестрация не меняется; приёмка (diff/accept/reject)
-// идёт по git-состоянию клона.
+// projectOpener собирает use-case открытия git-проекта поверх git-исполнителя и
+// реестра сервера (правила — в application/gitflow/open.go).
+func (s *Server) projectOpener() *gitflow.ProjectOpener {
+	return &gitflow.ProjectOpener{
+		Exec:       s.gitExec,
+		Registry:   s.reg,
+		ProjectDir: projects.ProjectDir,
+	}
+}
+
+// handleOpenGitProject клонирует git-репозиторий в temp/<имя> и регистрирует
+// проект (и сабмодули) вида KindGit. Открытие идемпотентно; правила клона,
+// распознавание полу-клона и порядок регистрации — в
+// application/gitflow.ProjectOpener.Open. Здесь только маршрутизация кодов и
+// запись meta.
 func (s *Server) handleOpenGitProject(w http.ResponseWriter, r *http.Request, gitURL string) {
-	name := gitProjectName(gitURL)
-	if name == "" {
-		writeErr(w, http.StatusBadRequest, "не удалось определить имя проекта из git-URL")
-		return
-	}
-
-	// Проект уже открыт — возвращаем meta (открытие идемпотентно).
-	if _, err := s.reg.Get(name); err == nil {
-		s.writeProjectMeta(w, r, name)
-		return
-	}
-
-	branch := "ai/" + name
-	dest := projects.ProjectDir(name)
-	// git clone умеет клонировать в существующий ПУСТОЙ каталог; непустой —
-	// конфликт (чтобы не смешать чужое содержимое с клоном).
-	if st, err := os.Stat(dest); err == nil {
-		if !st.IsDir() || !dirIsEmpty(dest) {
-			// Неудачный клон того же репозитория (мусор прошлой попытки) —
-			// убираем сами, иначе открыть проект второй раз невозможно.
-			if !s.discardHalfClone(r.Context(), name, dest, gitURL) {
-				writeErr(w, http.StatusConflict,
-					fmt.Sprintf("каталог %s уже существует и не пуст: используйте другое имя или удалите его", dest))
-				return
-			}
-		}
-	}
-
-	repo, err := git.Clone(r.Context(), s.gitExec, gitURL, branch, dest)
+	opened, err := s.projectOpener().Open(r.Context(), gitURL)
 	if err != nil {
-		// Полу-клон оставлять нельзя: следующая попытка упрётся в 409, и
-		// пользователь уже не сможет открыть проект без ручной чистки temp/.
-		if rmErr := os.RemoveAll(dest); rmErr != nil {
-			logging.Warnf("git-проект %s: не удалось убрать неудачный клон %s: %v", name, dest, rmErr)
+		switch {
+		case errors.Is(err, gitflow.ErrGitURLName):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, gitflow.ErrDirNotEmpty):
+			writeErr(w, http.StatusConflict, err.Error())
+		case errors.Is(err, gitflow.ErrCloneFailed):
+			writeErr(w, http.StatusBadGateway, err.Error())
+		case errors.Is(err, gitflow.ErrRegisterFailed):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		default:
+			writeErr(w, http.StatusInternalServerError, err.Error())
 		}
-		writeErr(w, http.StatusBadGateway, "ошибка клонирования: "+err.Error())
 		return
 	}
-
-	inf, err := s.reg.Add(workspace.AddParams{
-		Name:      name,
-		Kind:      workspace.KindGit,
-		Root:      repo.Root,
-		GitRemote: repo.Remote,
-		GitBranch: repo.Branch,
-		GitBase:   repo.Base,
-	})
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "ошибка регистрации: "+err.Error())
-		return
-	}
-	logging.For(name).Infof("git-проект %s: клон %s → ветка %s (база %s)", name, repo.Remote, repo.Branch, repo.Base)
-	for _, sub := range repo.Submodules {
-		childName := submoduleProjectName(name, sub.Path)
-		if _, err := s.reg.Add(workspace.AddParams{
-			Name: childName, Kind: workspace.KindGit, Root: sub.Root,
-			GitRemote: sub.Remote, GitBranch: sub.Branch, GitBase: sub.Base,
-			GitTarget: sub.DefaultBranch,
-			Parent:    name,
-		}); err != nil {
-			writeErr(w, http.StatusBadRequest, "ошибка регистрации сабмодуля "+sub.Path+": "+err.Error())
-			return
-		}
-	}
-	s.writeProjectMetaFromInfo(w, inf)
+	s.writeProjectMetaFromInfo(w, opened.Info)
 }
 
+// gitProjectName — тонкая обёртка над правилом application/gitflow (оставлена
+// для совместимости с тестами и другими файлами server).
+func gitProjectName(url string) string { return gitflow.GitProjectName(url) }
+
+// submoduleProjectName — тонкая обёртка над application/gitflow.
 func submoduleProjectName(parent, path string) string {
-	path = strings.Trim(filepath.ToSlash(path), "/")
-	path = strings.NewReplacer("~", "~t", "/", "~s", "\\", "~s").Replace(path)
-	return parent + "--" + path
-}
-
-// discardHalfClone убирает каталог, оставшийся от НЕУДАЧНОГО клона того же
-// репозитория, и сообщает, можно ли продолжать клонирование.
-//
-// Такой мусор появляется, когда клон упал уже после создания каталога
-// (например, раньше — на определении ветки в пустом репозитории), и блокирует
-// все следующие попытки открыть проект (409 «каталог не пуст»).
-//
-// Удаляем только заведомо свой мусор — все четыре признака обязательны:
-//   - обычный клон (каталог .git, не worktree-указатель);
-//   - origin совпадает с запрошенным URL;
-//   - ни одного коммита (unborn HEAD) — истории, которую жалко, нет;
-//   - чистое состояние — нет ни правок, ни неотслеживаемых файлов.
-//
-// Всё остальное (чужой клон, наша работа с коммитами, незакоммиченные правки)
-// не трогаем: возвращаем false и отдаём 409.
-func (s *Server) discardHalfClone(ctx context.Context, name, dir, gitURL string) bool {
-	out, err := s.gitExec.Exec(ctx, dir, "git", "rev-parse", "--git-dir")
-	if err != nil || strings.TrimSpace(out) != ".git" {
-		return false
-	}
-	origin, err := s.gitExec.Exec(ctx, dir, "git", "remote", "get-url", "origin")
-	if err != nil || !sameGitRemote(strings.TrimSpace(origin), gitURL) {
-		return false
-	}
-	if git.HasCommit(ctx, s.gitExec, dir, "HEAD") {
-		return false // есть история — это не мусор
-	}
-	if status, err := s.gitExec.Exec(ctx, dir, "git", "status", "--porcelain"); err != nil || strings.TrimSpace(status) != "" {
-		return false
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		logging.Warnf("git-проект %s: не удалось убрать неудачный клон %s: %v", name, dir, err)
-		return false
-	}
-	logging.For(name).Infof("убран неудачный клон %s (%s) — повторное клонирование", dir, gitURL)
-	return true
-}
-
-// sameGitRemote сравнивает URL remote, игнорируя формы записи одного адреса:
-// с суффиксом .git и без, со слешем и без. Схему/хост/путь не нормализует —
-// git@github.com:u/r и https://github.com/u/r это разные адреса.
-func sameGitRemote(a, b string) bool {
-	norm := func(s string) string {
-		s = strings.TrimSpace(s)
-		s = strings.TrimSuffix(s, "/")
-		s = strings.TrimSuffix(s, ".git")
-		s = strings.TrimSuffix(s, "/")
-		return s
-	}
-	return norm(a) == norm(b)
+	return gitflow.SubmoduleProjectName(parent, path)
 }
 
 func (s *Server) repositoriesForProject(project string) []string {
@@ -159,39 +74,6 @@ func (s *Server) repositoriesForProject(project string) []string {
 		}
 	}
 	return repos
-}
-
-// gitProjectName извлекает стабильное имя проекта из git-URL:
-//
-//	git@gitlab.com:group/sub/proj.git    → proj
-//	https://github.com/owner/repo.git    → repo
-//	https://host/path/to/name            → name
-func gitProjectName(url string) string {
-	u := strings.TrimSpace(url)
-	if u == "" {
-		return ""
-	}
-	// Отрезаем query/fragment (https).
-	if i := strings.IndexAny(u, "?#"); i >= 0 {
-		u = u[:i]
-	}
-	u = strings.TrimSuffix(u, "/")
-	// SSH-вид git@host:group/sub/proj(.git) — начинаем с «:».
-	if strings.HasPrefix(u, "git@") {
-		if i := strings.IndexByte(u, ':'); i >= 0 {
-			u = u[i+1:]
-		}
-	}
-	// Последний сегмент пути для обоих видов.
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[i+1:]
-	}
-	u = strings.TrimSuffix(u, ".git")
-	u = strings.TrimSpace(u)
-	if u == "" || strings.ContainsAny(u, `/\`) {
-		return ""
-	}
-	return u
 }
 
 // repoOf восстанавливает git.Repo из реестра (root/remote/branch/base).
@@ -627,13 +509,4 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 	}
 	s.srvEmitBoard(project, "git: ветка отклонена")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// dirIsEmpty сообщает, пуст ли каталог (нет ни одного элемента).
-func dirIsEmpty(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	return len(entries) == 0
 }
