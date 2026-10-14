@@ -27,19 +27,20 @@ GITLAB_URL=...                  # адрес GitLab без завершающе�
 | Эпик | `ai/epic/<id>` | `git_base` |
 | Задача | `ai/task/<id>` | Ветка эпика |
 
-Префиксы — `server/gitflow.go:27,29`. Side-реестр — `workspace.GitBranchMap`
-(`workspace/branches.go:29-32`): `epics` и `tasks` → `BranchRef{Branch, Base,
-Worktree}`.
+Префиксы — `application/gitflow/branches.go:24,27` (`EpicBranchPrefix`/
+`TaskBranchPrefix`); серверный `epicBranchPrefix` — алиас. Side-реестр —
+`workspace.GitBranchMap` (`workspace/branches.go:29-32`): `epics` и `tasks` →
+`BranchRef{Branch, Base, Worktree}`.
 
 ## Автоматические шаги
 
-Хуки доски устанавливаются сервером (`server/gitflow.go:485-517`).
+Хуки доски устанавливаются сервером (`server/gitflow.go:516`).
 Ошибка git-шага **не ломает** переход статуса.
 
 | Событие | Действие | Где |
 |---|---|---|
-| Эпик создан | `autoCreateEpicBranch` — ветка от `git_base` | `gitflow_auto.go` |
-| Задача создана | `autoCreateTaskBranch` — от ветки эпика (требует её существования) | `gitflow_auto.go` |
+| Эпик создан | `autoCreateEpicBranch` — ветка от `git_base` | `server/gitflow.go` → `application/gitflow/branches.go` |
+| Задача создана | `autoCreateTaskBranch` — от ветки эпика (требует её существования) | `server/gitflow.go` → `application/gitflow/branches.go` |
 | Задача → `in_progress` | `taskWorktree` — подготовить worktree | `gitflow_auto.go` |
 | Задача → `done` | `autoCommitAndMergeTask` (→ `gitflow.TaskFinalizer`) | `gitflow_auto.go` → `application/gitflow/finalize.go` |
 | Эпик → `done` | `syncEpicWithMain` (фон, таймаут 5 мин) | `gitflow_auto.go` → `application/gitflow/sync.go` |

@@ -62,7 +62,10 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 `application/gitflow`; срез **F3e ✅** — авто-шаги завершения задачи
 (`TaskFinalizer`, порт `TaskFinalizerHost`) вынесены в `application/gitflow`;
 срез **F3f ✅** — авто-синхрон релизной ветки эпика с main (`EpicMainSyncer`,
-порт `EpicMainHost`) вынесен в `application/gitflow`.
+порт `EpicMainHost`) вынесен в `application/gitflow`; срез **F3g ✅** — политика
+ветвления (`Brancher`: создание/идемпотентный `EnsureBranch`, авто-ветки эпика и
+задачи, снятие веток+MR при удалении эпика) вынесена в `application/gitflow`
+(порты `BranchRepo`/`BranchRegistry`).
 Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -533,6 +536,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3d | Раскладка worktree (`TaskWorktreePath`/`EpicWorktreePath`/`ChildTaskKey`), артефактная политика `.gitignore` (`TaskGitignore`/`EnsureTaskGitignore`) и презентация git-ошибки (`GitflowErrBoard`) вынесены в `application/gitflow` | ✅ |
 | F3e | Авто-шаги завершения задачи (`TaskFinalizer.Finalize`: авто-коммит worktree → авто-MR → мёрдж в релиз эпика → снятие worktree) вынесены в `application/gitflow` (порт `TaskFinalizerHost`) | ✅ |
 | F3f | Авто-синхрон релизной ветки эпика с main (`EpicMainSyncer`: быстрый путь MergeFeature / авто-резолв тривиальных конфликтов / LLM-резолв сложных) вынесен в `application/gitflow` (порт `EpicMainHost`) | ✅ |
+| F3g | Политика ветвления (`Brancher`: `EnsureBranch`/`CreateEpicBranch`/`CreateTaskBranch`/`AutoCreateEpicBranch`/`AutoCreateTaskBranch`/`RemoveEpicBranches`, `ErrEpicBranchMissing`/`ErrBranchCreate`) вынесена в `application/gitflow` (порты `BranchRepo`/`BranchRegistry`) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -603,6 +607,23 @@ worktree, пустая задача). **F3f ✅** — авто-синхрон р
 (`autoResolveMainSync` удалён — логика в use-case). Герметичные тесты
 `sync_test.go` (пропуск плохого состояния, быстрый путь, ошибка мёрджа,
 тривиальный резолв, сложный конфликт с LLM/без, `SyncMainForTask` без лока).
+**F3g ✅** — политика ветвления вынесена из `server/gitflow.go` в
+`application/gitflow/branches.go`: `Brancher` (`EnsureBranch` — идемпотентное
+создание от базы, `CreateEpicBranch`/`CreateTaskBranch` — создание ветки от
+релизной ветки эпика, запись `BranchRef` в side-реестр, проставление
+`git_branch` на доске, `AutoCreateEpicBranch`/`AutoCreateTaskBranch` —
+best-effort авто-ветки хуков, `RemoveEpicBranches` — снятие веток+MR эпика и
+задач), доменные ошибки `ErrEpicBranchMissing`/`ErrBranchCreate`, префиксы
+`EpicBranchPrefix`/`TaskBranchPrefix`; порты `BranchRepo`
+(`BranchExists`/`CreateBranch`) и `BranchRegistry` (`SetEpicBranch`/`EpicBranch`/
+`SetTaskBranch`/`DeleteEpicBranch`/`DeleteTaskBranch`/`DeleteEpicMR`/
+`DeleteTaskMR`) + существующий `Store` (`SaveEpic`/`SaveTask`) и колбэк
+`Changed`. `server/gitflow.go` оставил адаптер `branchRegistry` поверх
+`*workspace.Registry` и хелпер `s.brancher(...)`; свободная `ensureBranch`
+удалена, хендлеры/хуки переведены на use-case с сохранением кодов (404/400/502/
+500). Герметичные тесты `branches_test.go` (создание/идемпотентность/пустая
+база/сбой git/ветка задачи от эпика/нет ветки эпика → `ErrEpicBranchMissing`/
+авто-хуки/снятие веток/`EnsureBranch`).
 
 ## Ключевые решения
 

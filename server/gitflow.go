@@ -9,8 +9,9 @@ package server
 
 import (
 	"ai/agents/architect"
-	"ai/infrastructure/board"
+	"ai/application/gitflow"
 	"ai/chat"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"
@@ -24,12 +25,60 @@ import (
 
 const (
 	// epicBranchPrefix — префикс релизной ветки эпика (база = main).
-	epicBranchPrefix = "ai/epic/"
-	// taskBranchPrefix — префикс фича-ветки задачи (база = ветка эпика).
-	// Источник правды — gitops: тем же префиксом проверяется принадлежность
-	// рабочей копии задаче (промежуточные коммиты, ручной откат).
-	taskBranchPrefix = git.TaskBranchPrefix
+	epicBranchPrefix = gitflow.EpicBranchPrefix
 )
+
+// branchRegistry — адаптер gitflow.BranchRegistry поверх side-реестра
+// workspace, привязанный к проекту (Этап 6, срез F3g).
+type branchRegistry struct {
+	reg     *workspace.Registry
+	project string
+}
+
+func (a branchRegistry) SetEpicBranch(epicID string, ref gitflow.BranchRef) error {
+	return a.reg.SetEpicBranch(a.project, epicID, workspace.BranchRef{Branch: ref.Branch, Base: ref.Base})
+}
+
+func (a branchRegistry) EpicBranch(epicID string) (gitflow.BranchRef, error) {
+	ref, err := a.reg.EpicBranch(a.project, epicID)
+	if err != nil {
+		return gitflow.BranchRef{}, err
+	}
+	return gitflow.BranchRef{Branch: ref.Branch, Base: ref.Base}, nil
+}
+
+func (a branchRegistry) SetTaskBranch(taskID string, ref gitflow.BranchRef) error {
+	return a.reg.SetTaskBranch(a.project, taskID, workspace.BranchRef{Branch: ref.Branch, Base: ref.Base})
+}
+
+func (a branchRegistry) DeleteEpicBranch(epicID string) error {
+	return a.reg.DeleteEpicBranch(a.project, epicID)
+}
+
+func (a branchRegistry) DeleteTaskBranch(taskID string) error {
+	return a.reg.DeleteTaskBranch(a.project, taskID)
+}
+
+func (a branchRegistry) DeleteEpicMR(epicID string) error {
+	return a.reg.DeleteEpicMR(a.project, epicID)
+}
+
+func (a branchRegistry) DeleteTaskMR(taskID string) error {
+	return a.reg.DeleteTaskMR(a.project, taskID)
+}
+
+// brancher собирает use-case управления ветками проекта: git-репозиторий,
+// side-реестр, доска и инвалидация диффов (Ф-1).
+func (s *Server) brancher(project string, store *board.Store, repo *git.Repo, base string) gitflow.Brancher {
+	return gitflow.Brancher{
+		Project:  project,
+		Base:     base,
+		Repo:     repo,
+		Registry: branchRegistry{reg: s.reg, project: project},
+		Store:    store,
+		Changed:  func() { s.invalidateDiffs(project) },
+	}
+}
 
 // boardStore открывает хранилище доски проекта, привязывая авто-действия
 // git-workflow (Ф-1..Ф-4): создание веток, мёрдж done→релиз, worktree задачи,
@@ -80,33 +129,24 @@ func (s *Server) handleCreateEpicBranch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	branch := epicBranchPrefix + git.SanitizeBranchName(epicID)
 	base := strings.TrimSpace(inf.GitBase)
 	if base == "" {
 		writeErr(w, http.StatusBadRequest, "у проекта не задана базовая ветка (git_base)")
 		return
 	}
 
-	if err := ensureBranch(r.Context(), repo, branch, base); err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	if err := s.reg.SetEpicBranch(project, epicID, workspace.BranchRef{Branch: branch, Base: base}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "ошибка записи ветки в реестр: "+err.Error())
-		return
-	}
-	s.invalidateDiffs(project)
-	if epic.GitBranch == "" {
-		epic.GitBranch = branch
-		if err := store.SaveEpic(r.Context(), epic); err != nil {
-			writeErr(w, http.StatusInternalServerError, "сохранение эпика: "+err.Error())
+	ref, err := s.brancher(project, store, repo, base).CreateEpicBranch(r.Context(), epic)
+	if err != nil {
+		if errors.Is(err, gitflow.ErrBranchCreate) {
+			writeErr(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	logging.For(project).Infof("gitflow: эпик %s → ветка %s (база %s)", epicID, branch, base)
 	s.srvEmitBoard(project, "gitflow: ветка эпика")
-	writeJSON(w, http.StatusOK, map[string]string{"branch": branch, "base": base, "epic_id": epicID})
+	writeJSON(w, http.StatusOK, map[string]string{"branch": ref.Branch, "base": ref.Base, "epic_id": epicID})
 }
 
 // handleCreateTaskBranch создаёт фича-ветку задачи от релизной ветки её эпика:
@@ -146,49 +186,21 @@ func (s *Server) handleCreateTaskBranch(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Ветка задачи создаётся от релизной ветки родительского эпика.
-	epicRef, err := s.reg.EpicBranch(project, task.EpicID)
+	ref, err := s.brancher(project, store, repo, strings.TrimSpace(inf.GitBase)).CreateTaskBranch(r.Context(), task)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("сначала создайте ветку эпика %s: %v", task.EpicID, err))
-		return
-	}
-
-	branch := taskBranchPrefix + git.SanitizeBranchName(taskID)
-	if err := ensureBranch(r.Context(), repo, branch, epicRef.Branch); err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	if err := s.reg.SetTaskBranch(project, taskID, workspace.BranchRef{Branch: branch, Base: epicRef.Branch}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "ошибка записи ветки в реестр: "+err.Error())
-		return
-	}
-	s.invalidateDiffs(project)
-	if task.GitBranch == "" {
-		task.GitBranch = branch
-		if err := store.SaveTask(r.Context(), task); err != nil {
-			writeErr(w, http.StatusInternalServerError, "сохранение задачи: "+err.Error())
-			return
+		switch {
+		case errors.Is(err, gitflow.ErrEpicBranchMissing):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, gitflow.ErrBranchCreate):
+			writeErr(w, http.StatusBadGateway, err.Error())
+		default:
+			writeErr(w, http.StatusInternalServerError, err.Error())
 		}
+		return
 	}
 
-	logging.For(project).Infof("gitflow: задача %s → ветка %s (база %s)", taskID, branch, epicRef.Branch)
 	s.srvEmitBoard(project, "gitflow: ветка задачи")
-	writeJSON(w, http.StatusOK, map[string]string{"branch": branch, "base": epicRef.Branch, "task_id": taskID})
-}
-
-// ensureBranch создаёт ветку branch от base, если её ещё нет в клоне.
-func ensureBranch(ctx context.Context, repo *git.Repo, branch, base string) error {
-	exists, err := repo.BranchExists(ctx, branch)
-	if err != nil {
-		return fmt.Errorf("проверка ветки %s: %v", branch, err)
-	}
-	if exists {
-		return nil
-	}
-	if err := repo.CreateBranch(ctx, branch, base); err != nil {
-		return err
-	}
-	return nil
+	writeJSON(w, http.StatusOK, map[string]string{"branch": ref.Branch, "base": ref.Base, "task_id": taskID})
 }
 
 // handleMergeTask вливает фича-ветку задачи в релизную ветку её эпика
@@ -577,24 +589,9 @@ func (s *Server) autoCreateEpicBranch(ctx context.Context, project string, epic 
 	lock.Lock()
 	defer lock.Unlock()
 
-	branch := epicBranchPrefix + git.SanitizeBranchName(epic.TaskID)
-	if err := ensureBranch(ctx, repo, branch, base); err != nil {
-		logging.For(project).Warnf("gitflow: авто-ветка эпика %s: %v", epic.TaskID, err)
-		return
+	if s.brancher(project, store, repo, base).AutoCreateEpicBranch(ctx, epic) {
+		s.srvEmitBoard(project, "gitflow: авто-ветка эпика")
 	}
-	if err := s.reg.SetEpicBranch(project, epic.TaskID, workspace.BranchRef{Branch: branch, Base: base}); err != nil {
-		logging.For(project).Warnf("gitflow: авто-ветка эпика %s: реестр: %v", epic.TaskID, err)
-		return
-	}
-	s.invalidateDiffs(project)
-	if epic.GitBranch == "" {
-		epic.GitBranch = branch
-		if err := store.SaveEpic(ctx, epic); err != nil {
-			logging.For(project).Warnf("gitflow: авто-ветка эпика %s: сохранение git_branch: %v", epic.TaskID, err)
-		}
-	}
-	logging.For(project).Infof("gitflow: эпик %s → авто-ветка %s (база %s)", epic.TaskID, branch, base)
-	s.srvEmitBoard(project, "gitflow: авто-ветка эпика")
 }
 
 // autoCreateTaskBranch — Ф-1: авто-создание фича-ветки задачи при её добавлении
@@ -609,14 +606,6 @@ func (s *Server) autoCreateTaskBranch(ctx context.Context, project string, task 
 	if err != nil || inf.Kind != workspace.KindGit {
 		return
 	}
-	epicRef, err := s.reg.EpicBranch(project, task.EpicID)
-	if err != nil {
-		// Ветки эпика ещё нет (не-git/не создана) — авто-ветка задачи невозможна.
-		// Кнопка «Создать ветку задачи» остаётся ручной страховкой.
-		logging.For(project).Detailf("gitflow: авто-ветка задачи %s: ветка эпика %s отсутствует: %v",
-			task.TaskID, task.EpicID, err)
-		return
-	}
 	repo, err := s.repoOf(ctx, project)
 	if err != nil {
 		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: %v", task.TaskID, err)
@@ -627,24 +616,9 @@ func (s *Server) autoCreateTaskBranch(ctx context.Context, project string, task 
 	lock.Lock()
 	defer lock.Unlock()
 
-	branch := taskBranchPrefix + git.SanitizeBranchName(task.TaskID)
-	if err := ensureBranch(ctx, repo, branch, epicRef.Branch); err != nil {
-		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: %v", task.TaskID, err)
-		return
+	if s.brancher(project, store, repo, strings.TrimSpace(inf.GitBase)).AutoCreateTaskBranch(ctx, task) {
+		s.srvEmitBoard(project, "gitflow: авто-ветка задачи")
 	}
-	if err := s.reg.SetTaskBranch(project, task.TaskID, workspace.BranchRef{Branch: branch, Base: epicRef.Branch}); err != nil {
-		logging.For(project).Warnf("gitflow: авто-ветка задачи %s: реестр: %v", task.TaskID, err)
-		return
-	}
-	s.invalidateDiffs(project)
-	if task.GitBranch == "" {
-		task.GitBranch = branch
-		if err := store.SaveTask(ctx, task); err != nil {
-			logging.For(project).Warnf("gitflow: авто-ветка задачи %s: сохранение git_branch: %v", task.TaskID, err)
-		}
-	}
-	logging.For(project).Infof("gitflow: задача %s → авто-ветка %s (база %s)", task.TaskID, branch, epicRef.Branch)
-	s.srvEmitBoard(project, "gitflow: авто-ветка задачи")
 }
 
 // deleteEpicBranches снимает из side-реестра ветки эпика и всех его задач
@@ -654,21 +628,11 @@ func (s *Server) deleteEpicBranches(project, epicID string, epicTasks []string) 
 	if err != nil || inf.Kind != workspace.KindGit {
 		return
 	}
-	if err := s.reg.DeleteEpicBranch(project, epicID); err != nil {
-		logging.For(project).Warnf("gitflow: снятие ветки эпика %s: %v", epicID, err)
-	}
-	if err := s.reg.DeleteEpicMR(project, epicID); err != nil {
-		logging.For(project).Warnf("gitflow: снятие MR эпика %s: %v", epicID, err)
-	}
-	for _, tid := range epicTasks {
-		if err := s.reg.DeleteTaskBranch(project, tid); err != nil {
-			logging.For(project).Warnf("gitflow: снятие ветки задачи %s: %v", tid, err)
-		}
-		if err := s.reg.DeleteTaskMR(project, tid); err != nil {
-			logging.For(project).Warnf("gitflow: снятие MR задачи %s: %v", tid, err)
-		}
-	}
-	s.invalidateDiffs(project)
+	gitflow.Brancher{
+		Project:  project,
+		Registry: branchRegistry{reg: s.reg, project: project},
+		Changed:  func() { s.invalidateDiffs(project) },
+	}.RemoveEpicBranches(epicID, epicTasks)
 }
 
 // apiError — ошибка REST-хендлера с HTTP-кодом: единый носитель «каким кодом

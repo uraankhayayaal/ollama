@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3f — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3g — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -157,6 +157,36 @@ worktree + статус в чат, не-конфликтная ошибка мё
 таблица F3f), `docs/00-overview/project-map.md`. Остаток Этапа 6 — F3+:
 `gitflow.go`/`gitflow_resolve.go`, сессии/оркестрация, RAG-хуки. Коммита нет
 (спросить пользователя).
+
+Срез **F3g** — политика ветвления вынесена из `server/gitflow.go` в
+`application/gitflow/branches.go`: `Brancher` (`EnsureBranch` — идемпотентное
+создание ветки от базы, `CreateEpicBranch`/`CreateTaskBranch` — ветка от
+релизной ветки эпика + запись `BranchRef` в side-реестр + проставление
+`git_branch` на доске, `AutoCreateEpicBranch`/`AutoCreateTaskBranch` —
+best-effort авто-ветки хуков, `RemoveEpicBranches` — снятие веток+MR эпика и
+задач), доменные ошибки `ErrEpicBranchMissing`/`ErrBranchCreate`, префиксы
+`EpicBranchPrefix`/`TaskBranchPrefix`, порты `BranchRepo`
+(`BranchExists`/`CreateBranch`) и `BranchRegistry` (`SetEpicBranch`/`EpicBranch`/
+`SetTaskBranch`/`DeleteEpicBranch`/`DeleteTaskBranch`/`DeleteEpicMR`/
+`DeleteTaskMR`) + `Store` (`SaveEpic`/`SaveTask`) и колбэк `Changed`. Авто-методы
+возвращают bool (успех), чтобы сервер по-прежнему слал на доску
+«gitflow: авто-ветка …» только при создании; отсутствие ветки эпика в авто-ветке
+задачи логируется `Detailf`, прочие сбои — `Warnf` (как раньше). `server/
+gitflow.go` оставил адаптер `branchRegistry` поверх `*workspace.Registry`,
+хелпер `s.brancher(...)` и `boardStore`; свободная `ensureBranch` удалена,
+`epicBranchPrefix` — алиас `gitflow.EpicBranchPrefix` (мёртвый
+`taskBranchPrefix` убран), хендлеры/хуки переведены на use-case с сохранением
+кодов (404 unknown epic, 400 не-git/пустая база/`ErrEpicBranchMissing`, 502
+`ErrBranchCreate`, 500 прочее). Тесты: новые герметичные
+`application/gitflow/branches_test.go` (создание/идемпотентность/пустая база/
+сбой git/ветка задачи от эпика/нет ветки эпика/авто-хуки/снятие веток/
+`EnsureBranch`); серверные `gitflow_test.go`/`gitflow_hooks_test.go`/
+`taskrollback_test.go` не менялись и зелёные. Верификация: канонический набор
+зелёный (26 пакетов), `-race` по `application/gitflow` чист, `gofmt` по правкам
+чист. Документация: план (шапка + таблица F3g), `docs/00-overview/project-map.md`.
+Остаток Этапа 6 — F3+: `gitflow.go` (releaseEpic/mergeTaskBranch),
+`gitflow_resolve.go`, сессии/оркестрация, RAG-хуки. Коммита нет (спросить
+пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

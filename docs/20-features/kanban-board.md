@@ -159,7 +159,7 @@ new ──► confirmed ──► fix ──► fixed
 | `TaskDoneHook` | `autoCommitAndMergeTask` — коммит → авто-MR → merge |
 | `EpicDoneHook` | `syncEpicWithMain` — фоновая синхронизация с main |
 
-Устанавливаются в `server/gitflow.go:485-517`. Подробнее —
+Устанавливаются в `server/gitflow.go:516`. Подробнее —
 [Git-flow](gitops-workflow.md).
 
 ## Инструменты
