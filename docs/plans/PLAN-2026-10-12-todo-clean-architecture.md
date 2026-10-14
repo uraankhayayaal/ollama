@@ -60,7 +60,9 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 (порты `MRGateway`/`Forge`/`MRRegistry`); срез **F3d ✅** — раскладка worktree,
 артефактная политика `.gitignore` и презентация git-ошибки вынесены в
 `application/gitflow`; срез **F3e ✅** — авто-шаги завершения задачи
-(`TaskFinalizer`, порт `TaskFinalizerHost`) вынесены в `application/gitflow`.
+(`TaskFinalizer`, порт `TaskFinalizerHost`) вынесены в `application/gitflow`;
+срез **F3f ✅** — авто-синхрон релизной ветки эпика с main (`EpicMainSyncer`,
+порт `EpicMainHost`) вынесен в `application/gitflow`.
 Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -530,6 +532,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3c | Политика создания MR (`MRCreator.CreateTaskMR`/`CreateEpicMR`, `ErrEmptyBranch`) вынесена из `server/` в `application/gitflow` (порты `MRGateway`/`Forge`/`MRRegistry`) | ✅ |
 | F3d | Раскладка worktree (`TaskWorktreePath`/`EpicWorktreePath`/`ChildTaskKey`), артефактная политика `.gitignore` (`TaskGitignore`/`EnsureTaskGitignore`) и презентация git-ошибки (`GitflowErrBoard`) вынесены в `application/gitflow` | ✅ |
 | F3e | Авто-шаги завершения задачи (`TaskFinalizer.Finalize`: авто-коммит worktree → авто-MR → мёрдж в релиз эпика → снятие worktree) вынесены в `application/gitflow` (порт `TaskFinalizerHost`) | ✅ |
+| F3f | Авто-синхрон релизной ветки эпика с main (`EpicMainSyncer`: быстрый путь MergeFeature / авто-резолв тривиальных конфликтов / LLM-резолв сложных) вынесен в `application/gitflow` (порт `EpicMainHost`) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -588,7 +591,18 @@ stage/commit/push) и хендлеры. Герметичные тесты `resol
 разбор `git.MergeConflictError` живут в адаптере. Герметичные тесты
 `finalize_test.go` (пропуск не-git/без ветки, полный цикл, «уже влита», ошибка
 MR не мешает мёрджу, конфликт разрешён/не разрешён LLM, ошибка мёрджа, пустой
-worktree, пустая задача).
+worktree, пустая задача). **F3f ✅** — авто-синхрон релизной ветки эпика с main
+(`EpicMainSyncer`: быстрый путь `MergeFeature`, иначе настоящий merge main во
+временном worktree + авто-резолв тривиальных блоков + push; сложные конфликты не
+продвигают ветку) вынесен в `application/gitflow/sync.go` за портом
+`EpicMainHost` (`ProjectInfo`/`EpicBranch`/`Repo`/`DropEpicWorktreeLocked`/
+`Locked`/`AttemptLLMResolve`/`TrivialResolve`/`SetEpicMergeConflict`/`Notify`/
+`Status`) и типами `EpicRepo`/`WorktreeOps`; `server/gitflow_sync.go` — адаптер
+`epicMainHost` + обёртки `serverEpicRepo`/`serverWorktreeOps` над `*git.Repo`,
+`server/gitflow_auto.go` оставил тонкие `syncEpicMainOnce`/`syncEpicMainForTask`
+(`autoResolveMainSync` удалён — логика в use-case). Герметичные тесты
+`sync_test.go` (пропуск плохого состояния, быстрый путь, ошибка мёрджа,
+тривиальный резолв, сложный конфликт с LLM/без, `SyncMainForTask` без лока).
 
 ## Ключевые решения
 

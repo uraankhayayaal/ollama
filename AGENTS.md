@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3e — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3f — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -137,6 +137,26 @@ worktree + статус в чат, не-конфликтная ошибка мё
 чист. Документация: план (шапка + таблица F3e), `docs/00-overview/project-map.md`.
 Остаток Этапа 6 — F3+: `syncEpicMain*`/`gitflow.go`/`gitflow_resolve.go`,
 сессии/оркестрация, RAG-хуки. Коммита нет (спросить пользователя).
+
+Срез **F3f** — авто-синхрон релизной ветки эпика с main вынесен из
+`server/gitflow_auto.go` в `application/gitflow/sync.go`: `EpicMainSyncer`
+(`SyncEpicMain` под `mergeLock` / `SyncMainForTask` без лока) — быстрый путь
+`MergeFeature`, иначе настоящий merge main во временном worktree + авто-резолв
+тривиальных блоков + push; сложные конфликты не продвигают ветку. Порт
+`EpicMainHost` (`ProjectInfo`/`EpicBranch`/`Repo`/`DropEpicWorktreeLocked`/
+`Locked`/`AttemptLLMResolve`/`TrivialResolve`/`SetEpicMergeConflict`/`Notify`/
+`Status`) + типы `EpicRepo`/`WorktreeOps`. `server/gitflow_sync.go` — адаптер
+`epicMainHost` + обёртки `serverEpicRepo`/`serverWorktreeOps` над `*git.Repo`;
+`server/gitflow_auto.go` оставил тонкие `syncEpicMainOnce`/`syncEpicMainForTask`
+(`autoResolveMainSync` удалён — логика в use-case). Тесты: новые герметичные
+`application/gitflow/sync_test.go` (пропуск плохого состояния, быстрый путь,
+ошибка мёрджа, тривиальный резолв, сложный конфликт с LLM/без, `SyncMainForTask`
+без лока). Серверные `gitflow_auto_e2e_test.go` (зовут `srv.syncEpicMainOnce`)
+не менялись. Верификация: канонический набор зелёный (26 пакетов), `-race` по
+`application/gitflow` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3f), `docs/00-overview/project-map.md`. Остаток Этапа 6 — F3+:
+`gitflow.go`/`gitflow_resolve.go`, сессии/оркестрация, RAG-хуки. Коммита нет
+(спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

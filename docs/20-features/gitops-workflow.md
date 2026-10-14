@@ -42,7 +42,7 @@ Worktree}`.
 | Задача создана | `autoCreateTaskBranch` — от ветки эпика (требует её существования) | `gitflow_auto.go` |
 | Задача → `in_progress` | `taskWorktree` — подготовить worktree | `gitflow_auto.go` |
 | Задача → `done` | `autoCommitAndMergeTask` (→ `gitflow.TaskFinalizer`) | `gitflow_auto.go` → `application/gitflow/finalize.go` |
-| Эпик → `done` | `syncEpicWithMain` (фон, таймаут 5 мин) | `gitflow.go:397-403` |
+| Эпик → `done` | `syncEpicWithMain` (фон, таймаут 5 мин) | `gitflow_auto.go` → `application/gitflow/sync.go` |
 
 Хуки поддержания RAG-индекса (`server/ragref.go`) — тоже фоновые и тоже не
 ломают переход статуса: после реального merge эпика в `main` индекс `main`
@@ -89,9 +89,10 @@ Worktree}`.
 
 ### Эпик
 
-`syncEpicWithMain` при конфликте записывает `epic.MergeConflictFiles`.
-Снятие признака — `clearEpicMergeConflict` (`gitflow_auto.go:764`) при
-успешном `EpicResolve` или `EpicRelease`.
+`EpicMainSyncer` (`application/gitflow/sync.go`) при конфликте записывает
+`epic.MergeConflictFiles` (сложные конфликты не продвигают ветку). Снятие
+признака — `clearEpicMergeConflict` (`gitflow_auto.go:598`) при успешном
+`EpicResolve`/`EpicRelease` или авто-синхроне.
 
 ### LLM-авторезолв
 

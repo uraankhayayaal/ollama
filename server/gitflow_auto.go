@@ -576,187 +576,21 @@ func (s *Server) syncEpicWithMain(ctx context.Context, project string, epic *boa
 	}()
 }
 
-// syncEpicMainOnce — собственно синхрон (под mergeLock). Если конфликтов с main
-// нет — main вливается в релизную ветку быстрым путём (MergeFeature). Если есть
-// — авто-резолв тривиальных блоков; сложные конфликты НЕ продвигают ветку,
-// оставляя рабочую поверхность флоу rebase/резолва (интерактивному процессу
-// ничего не ломаем).
+// syncEpicMainOnce — обёртка над gitflow.EpicMainSyncer (Этап 6, срез F3f):
+// политика синхронизации релизной ветки эпика с main переехала в
+// application/gitflow, здесь остаётся адаптер хоста (git, реестр, доска,
+// сессия, шина).
 func (s *Server) syncEpicMainOnce(ctx context.Context, project string, epic *board.Epic) {
-	if epic == nil || epic.TaskID == "" {
-		return
-	}
-	inf, err := s.reg.Get(project)
-	if err != nil || inf.Kind != workspace.KindGit {
-		return
-	}
-	main := strings.TrimSpace(inf.GitBase)
-	if main == "" {
-		return
-	}
-	epicRef, err := s.reg.EpicBranch(project, epic.TaskID)
-	if err != nil {
-		return
-	}
-	repo, err := s.repoOf(ctx, project)
-	if err != nil {
-		return
-	}
-
-	lock := s.mergeLock(project)
-	lock.Lock()
-	defer lock.Unlock()
-
-	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
-	// checked-out — MergeFeature не смог бы поставить её во временный worktree.
-	s.dropEpicWorktreeLocked(ctx, project, epic.TaskID)
-
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, git.MergeFeatureOptions{
-		Message: fmt.Sprintf("эпик %s: синхрон релизной ветки %s с main", epic.TaskID, epicRef.Branch),
-		PushURL: remotePushURL(inf),
-	})
-	if err == nil {
-		logging.For(project).Infof("gitflow: эпик %s: авто-синхрон с main (already=%v)", epic.TaskID, res.AlreadyMerged)
-		s.clearEpicMergeConflict(ctx, project, epic.TaskID)
-		s.srvEmitBoard(project, "gitflow: авто-синхрон эпика с main")
-		return
-	}
-	var ce *git.MergeConflictError
-	if !errors.As(err, &ce) {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: %v", epic.TaskID, err)
-		return
-	}
-	s.autoResolveMainSync(ctx, project, epic, inf, repo, epicRef)
+	sync := &gitflow.EpicMainSyncer{Host: &epicMainHost{s: s, project: project}}
+	sync.SyncEpicMain(ctx, project, epic)
 }
 
-// autoResolveMainSync — продолжение авто-синхрона при конфликтах: настоящий
-// merge main в постоянном worktree релизной ветки, авто-резолв тривиальных
-// блоков, закрытие merge-коммита и push (всё на релизной ветке эпика). Сложные
-// конфликты — отказ от продвижения: ветка остаётся нетронутой, работает
-// интерактивный флоу handleEpicRebase/handleEpicResolve.
-func (s *Server) autoResolveMainSync(ctx context.Context, project string, epic *board.Epic, inf workspace.Info, repo *git.Repo, epicRef workspace.BranchRef) {
-	wtPath := filepath.Join(filepath.Dir(repo.Root),
-		".conflict-"+project+"-"+git.SanitizeBranchName(epic.TaskID))
-	if _, err := os.Stat(wtPath); err == nil {
-		logging.For(project).Warnf("gitflow: удаляю осиротевший конфликтный worktree %s", wtPath)
-		_ = repo.RemoveWorktree(ctx, wtPath)
-	}
-	// 4.1: релизную ветку эпика перед checkout освобождаем от worktree
-	// архитектора (см. dropEpicWorktreeLocked).
-	s.dropEpicWorktreeLocked(ctx, project, epic.TaskID)
-	wt, err := repo.AddWorktree(ctx, wtPath, epicRef.Branch)
-	if err != nil {
-		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: worktree: %v", epic.TaskID, err)
-		return
-	}
-	removeWT := func() { _ = repo.RemoveWorktree(ctx, wtPath) }
-
-	_, _ = wt.MergeBranch(ctx, inf.GitBase,
-		fmt.Sprintf("эпик %s: влитие main (авто-резолв)", epic.TaskID))
-
-	unmerged, err := wt.UnmergedFiles(ctx)
-	if err != nil {
-		removeWT()
-		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: ls-files -u: %v", epic.TaskID, err)
-		return
-	}
-	resolved, hard, err := git.TrivialResolve(wtPath, unmerged)
-	if err != nil {
-		removeWT()
-		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: авто-резолв: %v", epic.TaskID, err)
-		return
-	}
-	if len(hard) > 0 {
-		// Попытка авторезолвина через LLM: контекст эпика + задачи + файлы.
-		if s.attemptLLMResolve(ctx, project, epic, wtPath, hard, inf, epicRef.Branch, epic.AssignedRole) {
-			removeWT()
-			s.clearEpicMergeConflict(ctx, project, epic.TaskID)
-			logging.For(project).Infof("gitflow: авто-синхрон эпика %s: сложные конфликты разрешены LLM", epic.TaskID)
-			s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: конфликты разрешены LLM")
-			return
-		}
-		// LLM не справился — релизную ветку не трогаем, доступен ручной/модельный rebase + резолв + release (Ф-4).
-		removeWT()
-		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: сложные конфликты [%s] — флоу rebase/резолв",
-			epic.TaskID, strings.Join(hard, ", "))
-		// Помечаем эпик на доске: конфликт main ↔ релизная ветка виден в UI и
-		// ассистенту (флоу rebase/resolve остаётся точкой входа для резолва).
-		epic.MergeConflictFiles = hard
-		if store, err := s.boardStore(ctx, project); err == nil {
-			if e, gerr := store.GetEpic(ctx, epic.TaskID); gerr == nil {
-				e.MergeConflictFiles = hard
-				if serr := store.SaveEpic(ctx, e); serr != nil {
-					logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: запись конфликта: %v", epic.TaskID, serr)
-				}
-			}
-			store.Close()
-		}
-		if sess := s.session(project); sess != nil {
-			sess.append(chat.RoleStatus,
-				fmt.Sprintf("Эпик %s: авто-синхрон релизной ветки с main упёрся в конфликт в файлах [%s]. Доступен флоу rebase/резолв (ResolveGitConflicts).",
-					epic.TaskID, strings.Join(hard, ", ")), "", "", nil)
-		}
-		s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: сложные конфликты")
-		return
-	}
-	if err := wt.Stage(ctx, resolved); err != nil {
-		removeWT()
-		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: git add резолвов: %v", epic.TaskID, err)
-		return
-	}
-	if err := wt.CommitAllowEmpty(ctx,
-		fmt.Sprintf("эпик %s: синхрон с main (авто-резолв %d файлов)", epic.TaskID, len(resolved))); err != nil {
-		removeWT()
-		logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: merge-коммит: %v", epic.TaskID, err)
-		return
-	}
-	if pushURL := remotePushURL(inf); pushURL != "" {
-		if err := wt.PushTo(ctx, pushURL); err != nil {
-			removeWT()
-			logging.For(project).Warnf("gitflow: авто-синхрон эпика %s: push: %v", epic.TaskID, err)
-			return
-		}
-	}
-	removeWT()
-	logging.For(project).Infof("gitflow: эпик %s: авто-синхрон с main: тривиальные конфликты авто-разрешены (%d файлов), ветка продвинута",
-		epic.TaskID, len(resolved))
-	s.clearEpicMergeConflict(ctx, project, epic.TaskID)
-	s.srvEmitBoard(project, "gitflow: авто-синхрон эпика: конфликты разрешены")
-}
-
-// syncEpicMainForTask — синхронизация релизной ветки эпика с main перед стартом
-// задачи (без требования done). Задача всегда стартует от свежего кода.
-// Конфликты main ↔ релизная ветка не блокируют старт — они видны на доске.
-// Вызывается под mergeLock (из taskWorktree) — dropEpicWorktreeLocked требует лока.
+// syncEpicMainForTask — обёртка над gitflow.EpicMainSyncer (Этап 6, срез F3f):
+// синхрон релизной ветки эпика с main перед стартом задачи (вызывающий уже
+// держит mergeLock — Locked внутри не берём).
 func (s *Server) syncEpicMainForTask(ctx context.Context, project, epicID string, inf workspace.Info, repo *git.Repo, epicRef workspace.BranchRef) {
-	main := strings.TrimSpace(inf.GitBase)
-	if main == "" {
-		return
-	}
-
-	// 4.1: worktree ветки эпика (архитектор) мешает MergeFeature поставить
-	// релизную ветку во временный worktree — снимаем (автокоммит правок).
-	s.dropEpicWorktreeLocked(ctx, project, epicID)
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, main, git.MergeFeatureOptions{
-		Message: fmt.Sprintf("эпик %s: синхрон с main перед стартом задачи", epicID),
-		PushURL: remotePushURL(inf),
-	})
-	if err == nil {
-		logging.For(project).Infof("gitflow: эпик %s: синхрон с main перед задачей (already=%v)", epicID, res.AlreadyMerged)
-		s.clearEpicMergeConflict(ctx, project, epicID)
-		return
-	}
-
-	var ce *git.MergeConflictError
-	if !errors.As(err, &ce) {
-		logging.For(project).Warnf("gitflow: синхрон эпика %s с main перед задачей: %v", epicID, err)
-		return
-	}
-
-	// Конфликт: пробуем авто-резолв тривиальных блоков через autoResolveMainSync.
-	s.autoResolveMainSync(ctx, project, &board.Epic{TaskSpec: board.TaskSpec{TaskID: epicID}}, inf, repo, epicRef)
+	sync := &gitflow.EpicMainSyncer{Host: &epicMainHost{s: s, project: project}}
+	sync.SyncMainForTask(ctx, project, epicID)
 }
 
 // clearEpicMergeConflict снимает признак конфликта мёрджа с эпика на доске
