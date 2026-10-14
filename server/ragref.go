@@ -56,7 +56,7 @@ func (sess *Session) IndexRefBackground(ctx context.Context, ref string) error {
 	dir := sess.projectDir()
 	ex := sess.srv.gitExec
 	return sess.startIndexBackground("ветка "+ref, ref,
-		func(bgctx context.Context, indexer projectIndexerCloser) (*rag.IndexResult, string, bool, error) {
+		func(bgctx context.Context, indexer apprag.Indexer) (*rag.IndexResult, string, bool, error) {
 			snap, err := loadRefItems(bgctx, ex, dir, ref)
 			if err != nil {
 				return nil, ref, false, err
@@ -93,7 +93,7 @@ func (sess *Session) IndexRefDiffBackground(ctx context.Context, ref, base strin
 	dir := sess.projectDir()
 	ex := sess.srv.gitExec
 	return sess.startIndexBackground("изменения ветки "+ref, ref,
-		func(bgctx context.Context, indexer projectIndexerCloser) (*rag.IndexResult, string, bool, error) {
+		func(bgctx context.Context, indexer apprag.Indexer) (*rag.IndexResult, string, bool, error) {
 			snap, err := loadRefDiff(bgctx, ex, dir, ref, base)
 			if err != nil {
 				return nil, ref, false, err

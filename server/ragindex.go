@@ -18,7 +18,7 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
+	"io"
 	"strings"
 
 	apprag "ai/application/rag"
@@ -26,6 +26,14 @@ import (
 	"ai/infrastructure/rag"
 	"ai/projects"
 )
+
+// ragIndexSink — приёмник отчётов фоновой индексации (порт
+// application/rag.IndexSink) поверх лога проекта и чата сессии.
+type ragIndexSink struct{ sess *Session }
+
+func (r ragIndexSink) Info(msg string)   { r.sess.log.Infof("%s", msg) }
+func (r ragIndexSink) Warn(msg string)   { r.sess.log.Warnf("%s", msg) }
+func (r ragIndexSink) Status(msg string) { r.sess.append(chat.RoleStatus, msg, "", "", nil) }
 
 // projectIndexer — узкий интерфейс векторной памяти для полной индексации
 // проекта (реализует *rag.Client; выделен для hermetic-тестов без сети).
@@ -77,74 +85,26 @@ func (sess *Session) projectDir() string {
 	return projects.ProjectDir(sess.project)
 }
 
-// indexRun — сама индексация, выполняемая в фоновой горутине: получает клиента
-// RAG и возвращает сводку вместе с фактической веткой индексации. skipped=true —
-// индекс ветки уже актуален, переиндексация не требовалась (прогон без записи
-// точек): отчёт об этом отдельный, чтобы «актуальный индекс» не выглядел как
-// «обновлено 0 файлов».
-type indexRun func(ctx context.Context, indexer projectIndexerCloser) (res *rag.IndexResult, branch string, skipped bool, err error)
-
-// startIndexBackground — общий запуск фоновой индексации: single-flight по
-// сессии (повтор при идущей — ошибка), горутина в wg сессии, отчёт в лог и
-// chat.RoleStatus. note — короткое описание источника для логов, branch —
-// ветка индексации для сообщений пользователю.
-func (sess *Session) startIndexBackground(note, branch string, run indexRun) error {
-	cl, err := buildProjectIndexer()
+// newProjectIndexer — фабрика индексатора для фонового прогона поверх
+// buildProjectIndexer (переменная подменяется в hermetic-тестах). Возвращает
+// индексатор и его closer — оркестратор application/rag закроет его сам.
+func (sess *Session) newProjectIndexer() (apprag.Indexer, io.Closer, error) {
+	c, err := buildProjectIndexer()
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-
-	key := indexSlotKey(note, branch)
-	sess.mu.Lock()
-	if sess.indexing[key] {
-		sess.mu.Unlock()
-		_ = cl.Close()
-		return fmt.Errorf("фоновая индексация RAG уже запущена для проекта %s (%s)", sess.project, branchSuffix(branch))
-	}
-	if sess.indexing == nil {
-		sess.indexing = map[string]bool{}
-	}
-	sess.indexing[key] = true
-	// Горутина в wg сессии: гарантирует, что Stop/wait сессии дождутся
-	// индексации, не оставляя «висячих» соединений после завершения запуска.
-	sess.wg.Add(1)
-	sess.mu.Unlock()
-
-	go func() {
-		defer sess.wg.Done()
-		defer func() {
-			sess.mu.Lock()
-			delete(sess.indexing, key)
-			sess.mu.Unlock()
-		}()
-		defer cl.Close()
-		// Фоновая индексация НЕ привязывается к контексту вызывающего
-		// (REST-запрос/раунд агента завершается сразу после запуска): и то и
-		// другое к первому embed-вызову уже отменено, и прогон падает с
-		// «context canceled» на определение размерности. Бужется контекст
-		// жизненного цикла процесса: индексация сама себя завершает.
-		bgctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		sess.runBackgroundIndex(bgctx, cl, note, run)
-	}()
-
-	sess.append(chat.RoleStatus,
-		fmt.Sprintf("Запущена фоновая индексация RAG-индекса проекта %s%s.", sess.project, branchSuffix(branch)), "", "", nil)
-	return nil
+	return c, c, nil
 }
 
-// indexSlotKey — слот single-flight: индексации разных веток не блокируют друг
-// друга, одной и той же — блокируют. Для каталогов вне git (ветка не
-// определилась) слотом служит путь источника: переиндексация проекта и worktree
-// задачи тогда не отклоняют друг друга.
-func indexSlotKey(note, branch string) string {
-	if b := strings.TrimSpace(branch); b != "" {
-		return "branch:" + b
-	}
-	return "src:" + strings.TrimSpace(note)
+// startIndexBackground — запуск фоновой индексации через оркестратор сессии:
+// single-flight по ветке, горутина и отчёты — в application/rag.
+// BackgroundIndexer. note — описание источника для логов, branch — ветка.
+func (sess *Session) startIndexBackground(note, branch string, run apprag.IndexRun) error {
+	return sess.bgIndex.Start(note, branch, run)
 }
 
-// branchSuffix — « (ветка X)» для сообщений о фоновой индексации.
+// branchSuffix — « (ветка X)» для сообщений о фоновой индексации (нужен
+// серверным хендлерам для ответа пользователю).
 func branchSuffix(branch string) string {
 	if b := strings.TrimSpace(branch); b != "" {
 		return " (ветка " + b + ")"
@@ -167,41 +127,12 @@ func (sess *Session) IndexDirBackground(ctx context.Context, dir, what string) e
 	// а каталог мог исчезнуть уже после (типовая гонка с очисткой temp/).
 	opts := rag.DetectIndexOptions(dir)
 	return sess.startIndexBackground(what, opts.Branch,
-		func(bgctx context.Context, indexer projectIndexerCloser) (*rag.IndexResult, string, bool, error) {
+		func(bgctx context.Context, indexer apprag.Indexer) (*rag.IndexResult, string, bool, error) {
 			sess.log.Infof("rag: фоновая индексация %s (%s): обход %s (ветка %s, коммит %s)",
 				sess.project, what, dir, opts.Branch, orEmpty(opts.CommitSHA))
 			res, err := apprag.IndexProjectRAG(bgctx, indexer, sess.project, dir, opts)
 			return res, opts.Branch, false, err
 		})
-}
-
-// runBackgroundIndex выполняет фоновую индексацию и отчитывается в лог и чат
-// (chat.RoleStatus). Любая ошибка — только отчёт: генерация/цикл не деградируют.
-func (sess *Session) runBackgroundIndex(ctx context.Context, indexer projectIndexerCloser, note string, run indexRun) {
-	res, branch, skipped, err := run(ctx, indexer)
-	if err != nil {
-		sess.log.Warnf("rag: фоновая индексация %s (%s): %v", sess.project, note, err)
-		sess.append(chat.RoleStatus, "Фоновая индексация RAG не удалась: "+err.Error(), "", "", nil)
-		return
-	}
-	if res == nil {
-		res = &rag.IndexResult{}
-	}
-	if skipped {
-		sess.log.Infof("rag: фоновая индексация %s (%s): индекс ветки %s актуален", sess.project, note, branch)
-		sess.append(chat.RoleStatus,
-			fmt.Sprintf("RAG-индекс проекта актуален, повторная индексация не требовалась (ветка %s)", branch),
-			"", "", nil)
-		return
-	}
-	sess.log.Infof("rag: фоновая индексация %s завершена: файлов %d, чанков %d",
-		sess.project, res.Files, res.Chunks)
-	for _, e := range res.Errors {
-		sess.log.Warnf("rag: фоновая индексация %s: %s", sess.project, e)
-	}
-	sess.append(chat.RoleStatus,
-		fmt.Sprintf("RAG-индекс проекта обновлён: файлов %d, чанков %d, ошибок %d (ветка %s)",
-			res.Files, res.Chunks, len(res.Errors), branch), "", "", nil)
 }
 
 // orEmpty — замена пустого значения (для логов).

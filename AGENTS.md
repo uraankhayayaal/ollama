@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3l — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3m — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -333,6 +333,30 @@ accept/reject), удалены локальные `discardHalfClone`/`sameGitRem
 `docs/00-overview/project-map.md` (строка `application/gitflow/` расширена
 `ProjectOpener`/`open.go`). Остаток Этапа 6 — F3+: сессии/оркестрация,
 остальные git-flow/RAG-хуки и прочие хендлеры `server/`. Коммит F3l `6a49fb5`.
+
+Срез **F3m** — оркестрация фоновой индексации RAG вынесена из
+`server/ragindex.go` в новый `application/rag/background.go`:
+`BackgroundIndexer` (single-flight по слоту `indexSlotKey` — ветка/путь
+источника; запуск прогона в горутине; контекст сбрасывается на
+`context.Background()` — индексация не наследует отменённый контекст
+вызывающего; отчёты о старте/завершении/актуальности/ошибке), порты `IndexSink`
+(`Info`/`Warn`/`Status`) и `IndexerFactory` (`Indexer`+`io.Closer`), тип
+`IndexRun`, `Wait()`. `server/ragindex.go` оставил `ragIndexSink` (лог проекта
++ чат), `sess.newProjectIndexer` (поверх `buildProjectIndexer`) и прогон
+`IndexDirBackground` (плюс серверный `branchSuffix` для REST-ответа);
+`server/ragref.go` — прогоны `IndexRefBackground`/`IndexRefDiffBackground`.
+Поле `Session.indexing` заменено на `bgIndex` (`*apprag.BackgroundIndexer`),
+создаётся в `newSession`. Тесты: новые герметичные
+`application/rag/background_test.go` (`recordingSink`/`fakeCloser`/
+`bgBlockingIndexer`: слот, single-flight + закрытие отказавшего клиента,
+пропуск/ошибка/сбой фабрики, параллельные ветки); серверные
+`ragindex_test.go`/`ragref_test.go` не менялись (переопределяют
+`buildProjectIndexer`/`loadRefItems`/`loadRefDiff`) и зелёные. Верификация:
+канонический набор зелёный (26 пакетов), `-race` по `application/rag` чист,
+`gofmt` по правкам чист. Документация: план (шапка + таблица F3m + narrative),
+`docs/00-overview/project-map.md` (строка `application/rag/`). Остаток Этапа 6
+— F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
+`chatassist`/`ask`/`actions`/`logs`/`diff`/`server`. Коммит F3m — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

@@ -9,8 +9,9 @@ import (
 
 	"ai/agents/architect"
 	"ai/application/planner"
-	"ai/infrastructure/board"
+	apprag "ai/application/rag"
 	"ai/chat"
+	"ai/infrastructure/board"
 	"ai/infrastructure/llm"
 	"ai/infrastructure/rag"
 	"ai/logging"
@@ -49,13 +50,10 @@ type Session struct {
 	// ждёт появления работы; статус в шину — «standby».
 	standby bool
 
-	// indexing — идущие фоновые индексации RAG проекта (Ф-5, Р-2), по ключу
-	// ветки (для каталогов без git — по пути): повторный вызов для той же
-	// ветки отклоняется, а разные ветки индексируются параллельно. Иначе
-	// переиндексация main «съедала» бы индексацию ветки задачи, старт которой
-	// следует сразу за релизом эпика, и задача искала бы только по main.
-	// Читается/пишется под mu.
-	indexing map[string]bool
+	// bgIndex — оркестратор фоновой индексации RAG проекта (Ф-5, Р-2): single-
+	// flight по ветке (для каталогов без git — по пути), отчёты в лог и чат.
+	// Разные ветки индексируются параллельно. Один на сессию.
+	bgIndex *apprag.BackgroundIndexer
 
 	// decide — решение человека по текущему HITL-затвору (буфер 1 позволяет
 	// принять решение ДО того, как runner дошёл до затвора).
@@ -174,6 +172,9 @@ func (s *Server) newSession(project string) (*Session, error) {
 	// идут и в кольцевой буфер (UI/REST), и в шину (живая трансляция).
 	sess.appLog = &appLogBuffer{}
 	sess.registerAppLogSink(context.Background())
+	// Ф-5/Р-2: оркестратор фоновой индексации RAG (single-flight по ветке,
+	// отчёты в лог/чат). Прогоны строит сервер (см. ragindex.go/ragref.go).
+	sess.bgIndex = apprag.NewBackgroundIndexer(project, ragIndexSink{sess: sess}, sess.newProjectIndexer)
 	// Ф-5: прогноз расхода токенов для новых единиц доски (эпиков/задач) —
 	// считается по истории завершённых единиц этой же доски. Источник внедряется
 	// в хранилище, поэтому оценка появляется при любом создании записи

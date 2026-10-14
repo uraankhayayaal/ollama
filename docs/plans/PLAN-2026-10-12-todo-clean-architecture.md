@@ -81,7 +81,10 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 новый пакет `application/rag` (порт `Indexer`); срез **F3l ✅** — политика
 открытия git-проекта (`ProjectOpener.Open`: имя из URL, клон, полу-клон,
 регистрация проекта/сабмодулей) вынесена из `server/git.go` в
-`application/gitflow` (порт `OpenRegistry`).
+`application/gitflow` (порт `OpenRegistry`); срез **F3m ✅** — оркестрация
+фоновой индексации RAG (`BackgroundIndexer`: single-flight по ветке, горутина,
+отчёты в лог/чат) вынесена из `server/ragindex.go` в `application/rag`
+(порты `IndexSink`/`IndexerFactory`).
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -558,6 +561,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3j | Конфликтный резолв «main ↔ релизная ветка эпика» (`ConflictResolver.StartRebase`/`FinishResolve`: прогноз merge-tree, постоянный конфликтный worktree, авто-резолв тривиальных блоков, обязательная приёмка, коммит резолва, финальный merge+push) вынесен из `server/gitflow_resolve.go` в `application/gitflow` (порты `ConflictHost`/`ConflictRepo`/`ConflictWorktree`); `conflictHost`/`serverConflictRepo` — серверные адаптеры | ✅ |
 | F3k | RAG-хуки: чтение файлов ветки из git (`LoadRefItems`/`LoadRefDiff`/`ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/`RefFileSize`), сбор файлов каталога (`CollectIndexItems`) и полная индексация проекта (`IndexProjectRAG`), проверка актуальности (`BranchIndexUpToDate`) вынесены из `server/ragref.go`/`server/ragindex.go` в новый пакет `application/rag` (порт `Indexer`, `RefSnapshot`, `MaxRefFileBytes`); оркестрация фоновых прогонов и хуки остаются в `server` | ✅ |
 | F3l | Политика открытия git-проекта (`ProjectOpener.Open`: имя из URL `GitProjectName`, клон, распознавание полу-клона `discardHalfClone`, регистрация проекта и сабмодулей; `SubmoduleProjectName`/`SameGitRemote`) вынесена из `server/git.go` в `application/gitflow` (порт `OpenRegistry`, сентинелы `ErrGitURLName`/`ErrDirNotEmpty`(+`DirNotEmptyError`)/`ErrCloneFailed`/`ErrRegisterFailed`); `handleOpenGitProject` — тонкая обёртка | ✅ |
+| F3m | Оркестрация фоновой индексации RAG (`BackgroundIndexer`: single-flight по ветке/источнику, запуск в горутине, отчёты в лог и чат) вынесена из `server/ragindex.go` в `application/rag` (порты `IndexSink`/`IndexerFactory`, тип `IndexRun`); `server` строит конкретный прогон (каталог/ветка/дифф) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -717,6 +721,24 @@ show`/`git diff`), `ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/
 разрушения содержимого, авточистка полу-клона, `ErrCloneFailed` с удалением
 каталога, `ErrRegisterFailed`); серверные `git_test.go`/`gitflow_submodule_test.go`
 не менялись и зелёные.
+
+**F3m ✅** — оркестрация фоновой индексации RAG вынесена из
+`server/ragindex.go` в новый `application/rag/background.go`:
+`BackgroundIndexer` (single-flight по слоту `indexSlotKey` — ветка или путь
+источника; запуск прогона в горутине; сброс контекста на
+`context.Background()` — индексация не наследует отменённый контекст
+вызывающего; отчёт о старте/завершении/актуальности/ошибке), типы `IndexSink`
+(Info/Warn/Status), `IndexerFactory` (`Indexer`+`io.Closer`), `IndexRun` и
+`Wait()`. `server/ragindex.go` оставил `ragIndexSink` (лог проекта + чат),
+`sess.newProjectIndexer` (поверх `buildProjectIndexer`) и прогоны
+`IndexDirBackground`; `server/ragref.go` — прогоны `IndexRefBackground`/
+`IndexRefDiffBackground`. Поле `Session.indexing` заменено на `bgIndex`
+(`*apprag.BackgroundIndexer`), создаётся в `newSession`. Тесты: новые
+герметичные `application/rag/background_test.go` (`recordingSink`, `fakeCloser`,
+`bgBlockingIndexer`: слот, single-flight + закрытие отказавшего клиента,
+пропуск/ошибка/сбой фабрики, параллельные ветки). Серверные
+`ragindex_test.go`/`ragref_test.go` не менялись и зелёные (переопределяют
+`buildProjectIndexer`/`loadRefItems`/`loadRefDiff`).
 
 ## Ключевые решения
 
