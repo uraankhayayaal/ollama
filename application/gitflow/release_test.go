@@ -192,3 +192,156 @@ func TestTaskMergerConflictNoInvalidate(t *testing.T) {
 		t.Fatalf("конфликт не должен инвалидировать диффы: %d", h.invalidate)
 	}
 }
+
+// fakeReleaseHost — заглушка ReleaseHost (расширяет fakeMergeHost).
+type fakeReleaseHost struct {
+	*fakeMergeHost
+
+	status    domain.Status
+	found     bool
+	statusErr error
+
+	mainChanged       int
+	mainChangedMain   string
+	mainChangedMerged bool
+}
+
+func newFakeReleaseHost() *fakeReleaseHost {
+	return &fakeReleaseHost{
+		fakeMergeHost: okMergeHost(),
+		status:        domain.StatusDone,
+		found:         true,
+	}
+}
+
+func (h *fakeReleaseHost) EpicStatus(context.Context, string, string) (domain.Status, bool, error) {
+	return h.status, h.found, h.statusErr
+}
+
+func (h *fakeReleaseHost) MainChanged(_ string, main string, alreadyMerged bool) {
+	h.mainChanged++
+	h.mainChangedMain = main
+	h.mainChangedMerged = alreadyMerged
+}
+
+// Релиз эпика: MergeFeature(main ← ветка эпика) под локом, инвалидация диффов и
+// хук «main изменился» на успехе.
+func TestReleaserReleaseEpicSuccess(t *testing.T) {
+	h := newFakeReleaseHost()
+	h.epicRef = BranchRef{Branch: "ai/epic/E-1"}
+
+	res, source, main, err := Releaser{Host: h}.ReleaseEpic(context.Background(), "p", "E-1")
+	if err != nil {
+		t.Fatalf("ReleaseEpic: %v", err)
+	}
+	if res == nil || source != "ai/epic/E-1" || main != "main" {
+		t.Fatalf("res=%+v source=%q main=%q", res, source, main)
+	}
+	if h.locked != 1 {
+		t.Fatalf("Locked = %d", h.locked)
+	}
+	if h.repo.base != "main" || h.repo.source != "ai/epic/E-1" {
+		t.Fatalf("merge base/source = %q/%q", h.repo.base, h.repo.source)
+	}
+	if h.invalidate != 1 || h.mainChanged != 1 || h.mainChangedMerged {
+		t.Fatalf("invalidate=%d mainChanged=%d already=%v", h.invalidate, h.mainChanged, h.mainChangedMerged)
+	}
+}
+
+// AlreadyMerged прокидывается в MainChanged.
+func TestReleaserReleaseEpicAlreadyMerged(t *testing.T) {
+	h := newFakeReleaseHost()
+	h.repo.res = &git.MergeResult{AlreadyMerged: true}
+	if _, _, _, err := (Releaser{Host: h}).ReleaseEpic(context.Background(), "p", "E-1"); err != nil {
+		t.Fatalf("ReleaseEpic: %v", err)
+	}
+	if h.mainChanged != 1 || !h.mainChangedMerged {
+		t.Fatalf("mainChanged=%d already=%v", h.mainChanged, h.mainChangedMerged)
+	}
+}
+
+// Ошибки состояния релиза → доменные sentinel'ы.
+func TestReleaserReleaseEpicStateErrors(t *testing.T) {
+	ctx := context.Background()
+
+	notFound := newFakeReleaseHost()
+	notFound.projectErr = errors.New("нет")
+	if _, _, _, err := (Releaser{Host: notFound}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("проект не найден: %v", err)
+	}
+
+	notGit := newFakeReleaseHost()
+	notGit.project = MergeProject{IsGit: false, Kind: "local"}
+	if _, _, _, err := (Releaser{Host: notGit}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrNotGitProject) {
+		t.Fatalf("не git: %v", err)
+	}
+
+	noBase := newFakeReleaseHost()
+	noBase.project.Base = ""
+	if _, _, _, err := (Releaser{Host: noBase}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrNoBaseBranch) {
+		t.Fatalf("нет базы: %v", err)
+	}
+
+	repoErr := newFakeReleaseHost()
+	repoErr.repoErr = errors.New("нет репо")
+	if _, _, _, err := (Releaser{Host: repoErr}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrRepoUnavailable) {
+		t.Fatalf("нет репозитория: %v", err)
+	}
+
+	boardErr := newFakeReleaseHost()
+	boardErr.statusErr = errors.New("redis")
+	if _, _, _, err := (Releaser{Host: boardErr}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrBoardUnavailable) {
+		t.Fatalf("доска недоступна: %v", err)
+	}
+
+	noEpic := newFakeReleaseHost()
+	noEpic.found = false
+	if _, _, _, err := (Releaser{Host: noEpic}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrEpicNotFound) {
+		t.Fatalf("эпик не найден: %v", err)
+	}
+
+	notDone := newFakeReleaseHost()
+	notDone.status = domain.StatusInProgress
+	if _, _, _, err := (Releaser{Host: notDone}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrEpicNotDone) {
+		t.Fatalf("эпик не done: %v", err)
+	}
+
+	noBranch := newFakeReleaseHost()
+	noBranch.epicErr = errors.New("нет ветки")
+	if _, _, _, err := (Releaser{Host: noBranch}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrEpicBranchMissing) {
+		t.Fatalf("нет ветки эпика: %v", err)
+	}
+
+	if notGit.repo.calls != 0 || noBase.repo.calls != 0 {
+		t.Fatal("git не должен вызываться при ошибке состояния")
+	}
+}
+
+// Ошибка слияния: конфликт возвращается как *git.MergeConflictError, прочее —
+// ErrMergeFailed; MainChanged не зовётся.
+func TestReleaserReleaseEpicMergeErrors(t *testing.T) {
+	ctx := context.Background()
+
+	conflict := newFakeReleaseHost()
+	conflict.repo.err = &git.MergeConflictError{Files: []string{"a.go"}}
+	if _, _, _, err := (Releaser{Host: conflict}).ReleaseEpic(ctx, "p", "E-1"); err == nil {
+		t.Fatal("ожидали ошибку конфликта")
+	} else {
+		var ce *git.MergeConflictError
+		if !errors.As(err, &ce) {
+			t.Fatalf("err = %v, want *git.MergeConflictError", err)
+		}
+	}
+	if conflict.mainChanged != 0 || conflict.invalidate != 0 {
+		t.Fatal("при конфликте не должно быть побочных эффектов")
+	}
+
+	failed := newFakeReleaseHost()
+	failed.repo.err = errors.New("git сломался")
+	if _, _, _, err := (Releaser{Host: failed}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrMergeFailed) {
+		t.Fatalf("ошибка слияния: %v", err)
+	}
+	if failed.mainChanged != 0 {
+		t.Fatal("при ошибке слияния MainChanged не зовётся")
+	}
+}

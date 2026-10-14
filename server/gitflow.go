@@ -11,6 +11,7 @@ import (
 	"ai/agents/architect"
 	"ai/application/gitflow"
 	"ai/chat"
+	"ai/domain"
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/logging"
@@ -21,11 +22,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-)
-
-const (
-	// epicBranchPrefix — префикс релизной ветки эпика (база = main).
-	epicBranchPrefix = gitflow.EpicBranchPrefix
 )
 
 // branchRegistry — адаптер gitflow.BranchRegistry поверх side-реестра
@@ -287,32 +283,37 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 
 	res, source, main, err := s.releaseEpic(r.Context(), project, epicID)
 	if err != nil {
-		var ae *apiError
-		if !errors.As(err, &ae) {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if ae.mce != nil {
+		var ce *git.MergeConflictError
+		if errors.As(err, &ce) {
 			// Конфликт на доске: эпик помечается списком файлов (бейдж в
 			// EpicModal, снимется успешным релизом/резолвом) — раньше признак
 			// ставили только авто-синхрон и резолв, и ручной «Залить в main»
 			// отдавал 409 с файлами, но доска оставалась пустой.
-			s.setEpicMergeConflict(r.Context(), project, epicID, ae.mce.Files)
+			s.setEpicMergeConflict(r.Context(), project, epicID, ce.Files)
 			s.srvEmitBoard(project, "gitflow: релиз эпика — конфликт")
 			if sess := s.session(project); sess != nil {
 				sess.append(chat.RoleStatus,
 					fmt.Sprintf("Эпик %s: релиз в main упёрся в конфликт в файлах [%s]. Доступен флоу rebase/резолв (ResolveGitConflicts).",
-						epicID, strings.Join(ae.mce.Files, ", ")),
+						epicID, strings.Join(ce.Files, ", ")),
 					"", "", nil)
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"status":  "conflicts",
-				"files":   ae.mce.Files,
-				"message": ae.mce.Error(),
+				"files":   ce.Files,
+				"message": ce.Error(),
 			})
 			return
 		}
-		writeErr(w, ae.code, ae.msg)
+		switch {
+		case errors.Is(err, gitflow.ErrProjectNotFound), errors.Is(err, gitflow.ErrEpicNotFound):
+			writeErr(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, gitflow.ErrBoardUnavailable):
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+		case errors.Is(err, gitflow.ErrMergeFailed):
+			writeErr(w, http.StatusBadGateway, err.Error())
+		default:
+			writeErr(w, http.StatusBadRequest, err.Error())
+		}
 		return
 	}
 
@@ -337,84 +338,9 @@ func (s *Server) handleReleaseEpic(w http.ResponseWriter, r *http.Request) {
 
 // releaseEpic вливает релизную ветку эпика в базовую (main) — общая механика
 // REST-эндпоинта «Залить в main» и моста-инструмента ассистента EpicRelease
-// (Ф-3). Ошибки возвращаются с HTTP-кодом (apiError), чтобы оба потребителя
-// отвечали одинаково; конфликт слияния дополнительно несёт *MergeConflictError
-// для ответа status=conflicts с файлами.
+// (Ф-3). Политика — в application/gitflow.Releaser; адаптер — mergeTaskHost.
 func (s *Server) releaseEpic(ctx context.Context, project, epicID string) (*git.MergeResult, string, string, error) {
-	inf, err := s.reg.Get(project)
-	if err != nil {
-		return nil, "", "", &apiError{code: http.StatusNotFound, msg: "проект не найден"}
-	}
-	if inf.Kind != workspace.KindGit {
-		return nil, "", "", &apiError{
-			code: http.StatusBadRequest,
-			msg:  fmt.Sprintf("«Залить в main» доступно только git-проектам (kind=%s)", inf.Kind),
-		}
-	}
-	main := strings.TrimSpace(inf.GitBase)
-	if main == "" {
-		return nil, "", "", &apiError{code: http.StatusBadRequest, msg: "у проекта не задана базовая ветка (git_base)"}
-	}
-
-	repo, err := s.repoOf(ctx, project)
-	if err != nil {
-		return nil, "", "", &apiError{code: http.StatusBadRequest, msg: err.Error()}
-	}
-
-	store, err := s.boardStore(ctx, project)
-	if err != nil {
-		return nil, "", "", &apiError{code: http.StatusServiceUnavailable, msg: "доска недоступна: " + err.Error()}
-	}
-	defer store.Close()
-	epic, err := store.GetEpic(ctx, epicID)
-	if err != nil {
-		return nil, "", "", &apiError{code: http.StatusNotFound, msg: "эпик не найден"}
-	}
-	if epic.Status != board.StatusDone {
-		return nil, "", "", &apiError{
-			code: http.StatusBadRequest,
-			msg:  fmt.Sprintf("«Залить в main» доступен только эпику со статусом done (сейчас %s)", epic.Status),
-		}
-	}
-
-	epicRef, err := s.reg.EpicBranch(project, epicID)
-	if err != nil {
-		return nil, "", "", &apiError{
-			code: http.StatusBadRequest,
-			msg:  fmt.Sprintf("у эпика %s нет релизной ветки — «Залить в main» невозможно (создайте ветку эпика %s)", epicID, epicBranchPrefix+git.SanitizeBranchName(epicID)),
-		}
-	}
-
-	lock := s.mergeLock(project)
-	lock.Lock()
-	defer lock.Unlock()
-
-	res, err := repo.MergeFeature(ctx, main, epicRef.Branch, git.MergeFeatureOptions{
-		Message: fmt.Sprintf("эпик %s: релиз в main из %s", epicID, epicRef.Branch),
-		PushURL: remotePushURL(inf),
-	})
-	if err != nil {
-		var ce *git.MergeConflictError
-		if errors.As(err, &ce) {
-			return nil, "", "", &apiError{code: http.StatusConflict, msg: ce.Error(), mce: ce}
-		}
-		return nil, "", "", &apiError{code: http.StatusBadGateway, msg: err.Error()}
-	}
-	s.invalidateDiffs(project)
-	// main изменился: переиндексировать его по ref и подтянуть рабочую копию
-	// агентов. Иначе следующий эпик (и его анализ) видел бы в RAG и в файлах
-	// код до этого релиза — см. server/ragref.go.
-	//
-	// Только когда ветка действительно слита: при already=true main не менялся,
-	// и лишние git-вызовы/индексация ничего не дают (тест «уже слитая ветка не
-	// должна мутировать git»). Рабочая копия подтягивается и на старте сессии —
-	// см. syncAgentBranchAsync.
-	if res.AlreadyMerged {
-		s.refreshRagIndexBranch(project, main)
-	} else {
-		s.afterMainChanged(project, main)
-	}
-	return res, epicRef.Branch, main, nil
+	return gitflow.Releaser{Host: mergeTaskHost{s: s}}.ReleaseEpic(ctx, project, epicID)
 }
 
 // epicBranch возвращает имя релизной ветки эпика задачи из side-реестра
@@ -480,6 +406,35 @@ func (h mergeTaskHost) DropEpicWorktreeLocked(ctx context.Context, project, epic
 }
 
 func (h mergeTaskHost) InvalidateDiffs(project string) { h.s.invalidateDiffs(project) }
+
+// EpicStatus — статус эпика на доске (found=false — эпика нет, err!=nil —
+// доска недоступна).
+func (h mergeTaskHost) EpicStatus(ctx context.Context, project, epicID string) (domain.Status, bool, error) {
+	store, err := h.s.boardStore(ctx, project)
+	if err != nil {
+		return "", false, err
+	}
+	defer store.Close()
+	epic, err := store.GetEpic(ctx, epicID)
+	if err != nil {
+		if errors.Is(err, board.ErrNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return epic.Status, true, nil
+}
+
+// MainChanged — хук «main изменился»: при реальном слиянии переиндексировать
+// main и подтянуть рабочую копию агентов; при уже влитой ветке — только
+// проверка актуальности индекса main (см. server/ragref.go).
+func (h mergeTaskHost) MainChanged(project, main string, alreadyMerged bool) {
+	if alreadyMerged {
+		h.s.refreshRagIndexBranch(project, main)
+		return
+	}
+	h.s.afterMainChanged(project, main)
+}
 
 // mergeTaskBranch вливает ветку задачи в ветку её эпика (общая механика для
 // REST-эндпоинта и авто-хука done→merge). Политика — в
@@ -646,15 +601,3 @@ func (s *Server) deleteEpicBranches(project, epicID string, epicTasks []string) 
 		Changed:  func() { s.invalidateDiffs(project) },
 	}.RemoveEpicBranches(epicID, epicTasks)
 }
-
-// apiError — ошибка REST-хендлера с HTTP-кодом: единый носитель «каким кодом
-// ответить» для общих ядер REST и мостов-инструментов ассистента (Ф-3).
-// mce заполняется только при конфликте слияния — REST-потребитель отдаёт
-// тогда status=conflicts с перечнем файлов (вход инструмента резолва Ф-4).
-type apiError struct {
-	code int
-	msg  string
-	mce  *git.MergeConflictError
-}
-
-func (e *apiError) Error() string { return e.msg }

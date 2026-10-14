@@ -67,7 +67,9 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 задачи, снятие веток+MR при удалении эпика) вынесена в `application/gitflow`
 (порты `BranchRepo`/`BranchRegistry`); срез **F3h ✅** — политика вливания ветки
 задачи в релиз эпика (`TaskMerger.MergeTaskBranch`) вынесена в
-`application/gitflow` (порт `MergeTaskHost`).
+`application/gitflow` (порт `MergeTaskHost`); срез **F3i ✅** — политика релиза
+эпика в main (`Releaser.ReleaseEpic`) вынесена в `application/gitflow` (порт
+`ReleaseHost`, доменные sentinel-ошибки вместо `apiError`).
 Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -540,6 +542,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3f | Авто-синхрон релизной ветки эпика с main (`EpicMainSyncer`: быстрый путь MergeFeature / авто-резолв тривиальных конфликтов / LLM-резолв сложных) вынесен в `application/gitflow` (порт `EpicMainHost`) | ✅ |
 | F3g | Политика ветвления (`Brancher`: `EnsureBranch`/`CreateEpicBranch`/`CreateTaskBranch`/`AutoCreateEpicBranch`/`AutoCreateTaskBranch`/`RemoveEpicBranches`, `ErrEpicBranchMissing`/`ErrBranchCreate`) вынесена в `application/gitflow` (порты `BranchRepo`/`BranchRegistry`) | ✅ |
 | F3h | Политика вливания ветки задачи в релиз эпика (`TaskMerger.MergeTaskBranch`: проверка проекта/веток, снятие worktree эпика, `MergeFeature` под локом, инвалидация диффов) вынесена в `application/gitflow` (порт `MergeTaskHost`) | ✅ |
+| F3i | Политика релиза эпика в main (`Releaser.ReleaseEpic`: проверка git/базы/статуса done/ветки эпика, `MergeFeature` под локом, инвалидация диффов + хук «main изменился») вынесена в `application/gitflow` (порт `ReleaseHost`, доменные sentinel-ошибки вместо `apiError`); `apiError` удалён | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -636,7 +639,19 @@ worktree эпика (`DropEpicWorktreeLocked`), `MergeFeature` под пер-п�
 обёртку `s.mergeTaskBranch`; HTTP-хендлер/ассистент/finalizer (три потребителя)
 не менялись. Герметичные тесты `release_test.go` (успех с проверкой аргументов
 слияния, nil/без эпика, не-git/нет проекта/нет репозитория, нет веток,
-конфликт не инвалидирует диффы).
+конфликт не инвалидирует диффы). **F3i ✅** — политика релиза релизной ветки
+эпика в main (`Releaser.ReleaseEpic`) вынесена из `server/gitflow.go` в
+`application/gitflow/release.go`: проверка git-проекта/базы/статуса done/ветки
+эпика, `MergeFeature` под пер-проектным локом, инвалидация диффов и хук
+«main изменился» (`MainChanged`: при `already=true` — только проверка индекса,
+иначе переиндексация + подтягивание рабочей копии). Порт `ReleaseHost`. Вместо
+серверного `apiError` use-case возвращает доменные sentinel-ошибки
+(`ErrProjectNotFound`/`ErrNotGitProject`/`ErrNoBaseBranch`/`ErrEpicNotFound`/
+`ErrEpicNotDone`/`ErrRepoUnavailable`/`ErrBoardUnavailable`/`ErrMergeFailed`),
+которые хендлер маппит в коды (404/400/503/502/409); `apiError` удалён, у
+`mergeTaskHost` появились `EpicStatus`/`MainChanged`. Герметичные тесты
+`release_test.go` (успех, already-merged, все sentinel'ы состояния, конфликт vs
+`ErrMergeFailed`).
 
 ## Ключевые решения
 

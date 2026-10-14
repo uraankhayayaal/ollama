@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3h — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3i — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -207,6 +207,31 @@ gitflow.go` оставил адаптер `branchRegistry` поверх `*worksp
 чист. Документация: план (шапка + таблица F3h), `docs/00-overview/project-map.md`.
 Остаток Этапа 6 — F3+: `gitflow.go` (`releaseEpic`), `gitflow_resolve.go`,
 сессии/оркестрация, RAG-хуки. Коммита нет (спросить пользователя).
+
+Срез **F3i** — политика релиза релизной ветки эпика в main (`Releaser.ReleaseEpic`)
+вынесена из `server/gitflow.go` в `application/gitflow/release.go`: проверка
+git-проекта/базы/статуса `done`/ветки эпика, `MergeFeature` под пер-проектным
+локом, инвалидация диффов и хук «main изменился» (`MainChanged`: при
+`already=true` — только проверка индекса `main`, иначе `afterMainChanged`). Порт
+`ReleaseHost` (`Project`/`Repo`/`EpicStatus`(found,err)/`EpicBranch`/`Locked`/
+`InvalidateDiffs`/`MainChanged`). Вместо серверного `apiError` use-case
+возвращает доменные sentinel-ошибки (`ErrProjectNotFound`/`ErrNotGitProject`/
+`ErrNoBaseBranch`/`ErrEpicNotFound`/`ErrEpicNotDone`/`ErrRepoUnavailable`/
+`ErrBoardUnavailable`/`ErrMergeFailed`), которые `handleReleaseEpic` маппит в
+коды (404/400/503/502/409 conflict с `*git.MergeConflictError`). Тип `apiError`
+и серверная константа `epicBranchPrefix` удалены. `mergeTaskHost` (адаптер
+F3h) вырос до обоих портов — добавлены `EpicStatus` (открывает `boardStore`,
+`board.ErrNotFound` → found=false) и `MainChanged`. Обёртка
+`s.releaseEpic` — тонкая; три потребителя (`handleReleaseEpic`,
+`Session.EpicRelease`, resolve-флоу) не меняли вызовы. Тесты: новые герметичные
+`application/gitflow/release_test.go` (успех, `AlreadyMerged`, все sentinel'ы
+состояния, конфликт vs `ErrMergeFailed`); серверные
+`gitflow_test.go`/`actions_test.go` не менялись и зелёные (проверяют коды).
+Верификация: канонический набор зелёный (26 пакетов), `-race` по
+`application/gitflow` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3i), `docs/00-overview/project-map.md`. Остаток Этапа 6 — F3+:
+`gitflow_resolve.go`, сессии/оркестрация, RAG-хуки. Коммита нет (спросить
+пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
