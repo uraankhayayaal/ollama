@@ -118,6 +118,7 @@
 | `domain/services/` | Порты: `LLMClient`, `RAGClient`, `GitOperations`, `SandboxWorkspace`, `BoardStore`, инструменты |
 | `application/usecases/` | Use-cases: `RunTask`, `CompressHistory`, `BreakLoop`, `Escalate`, `RollbackTask`, `NewTokenEstimator`, `GuardTaskDone` |
 | `application/planner/` | Планировщик и оркестрация доски (бывший `agents/planner`) |
+| `application/gitflow/` | Use-case LLM-разрешения конфликтов слияния (`Resolver`, порты `Store`/`Developer`/`Acceptor`/`Markers`) |
 
 ### Сервер и веб — `server/`, `web/`
 
@@ -128,7 +129,7 @@
 | `session.go` | Оркестрация в Web UI, AskUser, фоновая индексация, снимки |
 | `actions.go` | Серверные мосты-инструменты (`KanbanStart`, `TaskMerge`, `EpicRelease`, `AskUser`, `IndexBackground`) |
 | `ask.go` | Структурированные вопросы пользователю |
-| `gitflow.go`, `gitflow_auto.go`, `gitflow_resolve.go`, `gitflow_ar.go` | Ветки, авто-merge, синхронизация main, LLM-резолв конфликтов |
+| `gitflow.go`, `gitflow_auto.go`, `gitflow_resolve.go`, `gitflow_ar.go` | Ветки, авто-merge, синхронизация main, HTTP-обвязка LLM-резолва (правило — в `application/gitflow`) |
 | `diff.go` | Ленивые диффы с кэшем |
 | `auth.go`, `ratelimit.go` | Логин, сессия, CSRF, rate-limit |
 | `applog.go`, `logbroker.go` | Логи приложения и процесса |

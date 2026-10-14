@@ -1,19 +1,18 @@
-// ЛЛМ-разрешение конфликтов слияния через LLM (Ф-9).
+// ЛЛМ-разрешение конфликтов слияния через LLM (Ф-9): HTTP-обвязка.
 //
-// Когда TrivialResolve оставляет сложные конфликты ( marqueurs <<<<<<..., =======, >>>>>>>
-// ), сервер вызывает LLM для автоматического разрешения. Используется контекст:
-// - описание эпика (Summary из Epic.Summary)
-// - описания задач в порядке очереди (SequenceOrder)
-// - содержимое конфликтующих файлов
-//
-// После LLM разрешения запускается верификация (acceptor): build, формат, анализ.
-// Только при вердикте approve конфликты снимаются с доски.
+// Само правило (цикл «промпт → агент-разработчик → приёмка → снятие конфликтов
+// с доски») вынесено в application/gitflow (Этап 6, «Интерфейсы и адаптеры»).
+// Здесь остаётся серверная обвязка: доска, LLM-провайдер, приёмка, git
+// (stage/commit/push) и REST-эндпоинты.
 
 package server
 
 import (
 	"ai/acceptor"
+	"ai/agents"
+	"ai/application/gitflow"
 	"ai/application/planner"
+	"ai/domain"
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/infrastructure/llm"
@@ -24,360 +23,35 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
 
-// resolveCtx — контекст одного цикла разрешения конфликтов через LLM.
-type resolveCtx struct {
-	epic    *board.Epic
-	tasks   []*board.Task
-	hard    []string // пути конфликтных файлов
-	workdir string   // директория с worktree (файлы для чтения/записи)
-	store   *board.Store
+// resolveDeveloper — адаптер gitflow.Developer: агент-специалист нужной роли
+// (planner.SpecialistForRole) и его прогон через LLM-провайдер сервера.
+type resolveDeveloper struct{ prov llm.LLMProvider }
+
+func (d resolveDeveloper) SpecialistForRole(project, role, prompt string) agents.Agent {
+	return planner.SpecialistForRole(project, role, prompt)
 }
 
-// resolveResult — результат разрешения конфликтов.
-type resolveResult struct {
-	cleared   bool   // конфликты сняты с доски?
-	verifyErr string // причина неудачи верификации (для лога)
+func (d resolveDeveloper) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
+	return d.prov.Generate(ctx, agent)
 }
 
-func newResolveCtx(epic *board.Epic, tasks []*board.Task, hard []string, workdir string, store *board.Store) *resolveCtx {
-	return &resolveCtx{epic: epic, tasks: tasks, hard: hard, workdir: workdir, store: store}
-}
+// resolveAcceptor — адаптер gitflow.Acceptor: фиксированная приёмка worktree
+// конфликта (сборка до 3 мин, формат и анализ, без ЛСП и установки
+// зависимостей — агент уже правит готовое дерево).
+type resolveAcceptor struct{}
 
-// ResolveWithLLM — авторезолвинг конфликтов через агента-разработчика.
-// Специализация выбирается по роли (backend/frontend/qa/devops), агент
-// работает в worktree конфликта с инструментами и автoфиксом. При ошибке
-// верификации ошибки возвращаются в промпт следующей попытки.
-const resolveMaxAttempts = 3
-
-func (r *resolveCtx) ResolveWithLLM(ctx context.Context, prov llm.LLMProvider, project, role string) (*resolveResult, error) {
-	if prov == nil || len(r.hard) == 0 {
-		return nil, nil
-	}
-
-	var lastResult *resolveResult
-	for attempt := 1; attempt <= resolveMaxAttempts; attempt++ {
-		prompt := r.buildDeveloperPrompt()
-		if attempt > 1 && lastResult != nil && lastResult.verifyErr != "" {
-			prompt += fmt.Sprintf("\n\n=== ПРЕДЫДУЩАЯ ПОПЫТКА НЕ УДАЛАСЬ ===\nОшибки верификации:\n%s\n\nИсправь код и убедись, что сборка и проверки проходят.\n", lastResult.verifyErr)
-		}
-
-		agent := planner.SpecialistForRole(project, role, prompt)
-		if sa, ok := agent.(interface{ SetOutputDir(string) }); ok {
-			sa.SetOutputDir(r.workdir)
-		}
-
-		resp, err := prov.Generate(ctx, agent)
-		if err != nil {
-			return nil, fmt.Errorf("developer resolve generate (attempt %d): %w", attempt, err)
-		}
-		if resp == nil {
-			return nil, fmt.Errorf("empty developer response (attempt %d)", attempt)
-		}
-
-		// Разработчик может писать файлы с префиксом "OUTPUTDIR/" —
-		// переносим их в корень worktree.
-		r.flattenOutputDir()
-
-		markers, _ := git.HasConflictMarkers(r.workdir, r.hard)
-		if len(markers) > 0 {
-			lastResult = &resolveResult{cleared: false, verifyErr: fmt.Sprintf("остались маркеры конфликта в: %s", strings.Join(markers, ", "))}
-			continue
-		}
-
-		if verErr := r.verify(); verErr != nil {
-			lastResult = &resolveResult{cleared: false, verifyErr: verErr.Error()}
-			continue
-		}
-
-		r.clearConflictField(r.hard)
-		return &resolveResult{cleared: true}, nil
-	}
-
-	return lastResult, nil
-}
-
-// flattenOutputDir переносит файлы из подкаталога OUTPUTDIR/ в корень worktree.
-// Разработчик иногда пишет пути с префиксом "OUTPUTDIR/" — это артефакт промпта.
-func (r *resolveCtx) flattenOutputDir() {
-	sub := filepath.Join(r.workdir, "OUTPUTDIR")
-	entries, err := os.ReadDir(sub)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		src := filepath.Join(sub, e.Name())
-		dst := filepath.Join(r.workdir, e.Name())
-		if _, err := os.Stat(dst); err == nil {
-			continue
-		}
-		if err := os.Rename(src, dst); err != nil {
-			logging.Warnf("gitflow: LLM resolve: flattenOutputDir: %s: %v", e.Name(), err)
-		}
-	}
-}
-
-// buildDeveloperPrompt формирует задание разработчику на резолвинг конфликтов:
-// контекст эпика, задачи в порядке очереди, список конфликтных файлов.
-func (r *resolveCtx) buildDeveloperPrompt() string {
-	var b strings.Builder
-
-	b.WriteString("Ты — разработчик, решающий конфликты слияния (merge conflict resolution) в git.\n")
-	b.WriteString("В текущей директории (OutputDir) есть файлы с маркерами конфликта:\n")
-	b.WriteString("<<<<<<< (наша ветка), ======= (разделитель), >>>>>>> (их ветка).\n")
-	b.WriteString("ВАЖНО: при записи файлов используй ОТНОСИТЕЛЬНЫЕ пути без префикса OUTPUTDIR/ (например: Makefile, scripts/e2e.sh).\n\n")
-
-	// --- Контекст эпика ---
-	b.WriteString("=== ЭПИК ===\n")
-	b.WriteString(fmt.Sprintf("ID: %s\n", r.epic.TaskID))
-	b.WriteString(fmt.Sprintf("Title: %s\n", r.epic.Title))
-	if r.epic.Description != "" {
-		b.WriteString("Description: " + r.epic.Description + "\n")
-	}
-	if r.epic.Summary != "" {
-		b.WriteString("Architecture summary: " + r.epic.Summary + "\n")
-	}
-	b.WriteString("\n")
-
-	// --- Задачи в порядке выполнения ---
-	if len(r.tasks) > 0 {
-		b.WriteString("=== ЗАДАЧИ ЭПИКА (порядок выполнения) ===\n")
-		sorted := make([]*board.Task, len(r.tasks))
-		copy(sorted, r.tasks)
-		sort.Slice(sorted, func(i, j int) bool {
-			return int(sorted[i].SequenceOrder) < int(sorted[j].SequenceOrder)
-		})
-		for _, t := range sorted {
-			b.WriteString(fmt.Sprintf("  %s | Seq: %d | %s", t.TaskID, t.SequenceOrder, t.Title))
-			if t.AssignedRole != "" {
-				b.WriteString(fmt.Sprintf(" | Role: %s", t.AssignedRole))
-			}
-			if t.Description != "" {
-				b.WriteString(fmt.Sprintf("\n    %s", t.Description))
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
-
-	// --- Конфликтные файлы ---
-	b.WriteString("=== КОНФЛИКТНЫЕ ФАЙЛЫ ===\n")
-	for _, f := range r.hard {
-		b.WriteString(fmt.Sprintf("  %s\n", f))
-	}
-	b.WriteString("\n")
-
-	// --- Инструкции ---
-	b.WriteString("=== ИНСТРУКЦИИ ===\n")
-	b.WriteString("1. Прочитай конфликтные файлы (ReadFiles) и найди маркеры <<<<<<<, =======, >>>>>>>.\n")
-	b.WriteString("2. Разреши ВСЕ конфликты, объединив изменения обеих веток так, чтобы требования задач и эпика были выполнены.\n")
-	b.WriteString("3. Не удаляй чужой код без необходимости — объединяй логику.\n")
-	b.WriteString("4. После правок прогони сборку и проверки (Run), доведи до зелёного состояния.\n")
-	b.WriteString("5. Не оставляй маркеры конфликта в файлах.\n")
-	b.WriteString("6. LOCK-ФАЙЛЫ (go.sum, composer.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, cargo.lock, gemfile.lock, poetry.lock, pipfile.lock, packages.lock.json, project.assets.json) НЕ резолвь вручную: сначала разреши конфликт в манифесте (go.mod, composer.json, package.json, Cargo.toml, Gemfile, Pipfile), затем пересобери зависимости (go mod tidy, composer install, npm install, yarn install, pnpm install, cargo generate-lock-file, bundle install, poetry lock) — lock-файл пересоздаётся автоматически.\n")
-
-	return b.String()
-}
-
-// collectFiles читает содержимое конфликтных файлов из worktree.
-func (r *resolveCtx) collectFiles() (map[string]string, error) {
-	out := make(map[string]string, len(r.hard))
-	for _, f := range r.hard {
-		full := filepath.Join(r.workdir, filepath.FromSlash(f))
-		data, err := os.ReadFile(full)
-		if err != nil {
-			continue // файл может быть удалён merge — пропускаем
-		}
-		out[f] = string(data)
-	}
-	return out, nil
-}
-
-// buildPrompt строит промпт для LLM: эпик + задачи + файлы.
-func (r *resolveCtx) buildPrompt(files map[string]string) string {
-	var b strings.Builder
-
-	b.WriteString("You are a git conflict resolution agent. Solve ALL conflict markers (" + "<<<<<<<<;" + " =======," + " >>>>>>>>\n in the ELL).\n\n")
-
-	// --- Epic context ---
-	b.WriteString("=== EPIC ===\n")
-	b.WriteString(fmt.Sprintf("ID: %s\n", r.epic.TaskID))
-	b.WriteString(fmt.Sprintf("Title: %s\n", r.epic.Title))
-	if r.epic.Description != "" {
-		b.WriteString("Description: " + r.epic.Description + "\n")
-	}
-	if r.epic.Summary != "" {
-		b.WriteString("Architecture summary: " + r.epic.Summary + "\n")
-	}
-	if r.epic.AssignedRole != "" {
-		b.WriteString("Role: " + r.epic.AssignedRole + "\n")
-	}
-	b.WriteString("\n")
-
-	// --- Tasks in sequence order ---
-	if len(r.tasks) > 0 {
-		b.WriteString("=== EPIC TASKS (execution order) ===\n")
-		sorted := make([]*board.Task, len(r.tasks))
-		copy(sorted, r.tasks)
-		sort.Slice(sorted, func(i, j int) bool {
-			return int(sorted[i].SequenceOrder) < int(sorted[j].SequenceOrder)
-		})
-		for _, t := range sorted {
-			b.WriteString(fmt.Sprintf("  ID: %s | Seq: %d | Title: %s", t.TaskID, t.SequenceOrder, t.Title))
-			if t.AssignedRole != "" {
-				b.WriteString(fmt.Sprintf(" | Role: %s", t.AssignedRole))
-			}
-			if t.Description != "" {
-				b.WriteString(fmt.Sprintf(" | Desc: %s", t.Description))
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
-
-	// --- Conflict files ---
-	b.WriteString("=== CONFLICTING FILES ===\n\n")
-	for _, f := range r.hard {
-		if content, ok := files[f]; ok {
-			// Ограничить длину, чтобы не переполнить контекст LLM.
-			if len(content) > 12288 {
-				content = content[:12288] + "\n... (truncated to fit context)\n"
-			}
-			b.WriteString(fmt.Sprintf("FILE: %s\n", f))
-			b.WriteString(content)
-			b.WriteString("\n---\n")
-		} else {
-			b.WriteString(fmt.Sprintf("FILE: %s\n[FILE DELETED BY MERGE — skip]\n---\n", f))
-		}
-	}
-
-	// --- Instructions ---
-	b.WriteString("=== INSTRUCTIONS ===\n")
-	b.WriteString("1. Read all epic and task descriptions CAREFULLY.\n")
-	b.WriteString("2. Resolve EVERY conflict marker in EVERY listed file.\n")
-	b.WriteString("3. Ensure ALL task requirements are fully satisfied in the resolved code.\n")
-	b.WriteString("4. Only modify files listed above; do NOT touch files without conflict markers.\n\n")
-
-	// --- Output format ---
-	b.WriteString("=== OUTPUT FORMAT ===\n")
-	b.WriteString("Return ONLY a pure JSON object mapping file paths to resolved contents.\n")
-	b.WriteString("No markdown, no backticks, no commentary.\n\n")
-	b.WriteString("Format:\n")
-	b.WriteString("{\"file_path\": \"<resolved_content>\"}...")
-
-	return b.String()
-}
-
-// writeResolved пишет содержимое из resolved map в файлы worktree.
-func (r *resolveCtx) writeResolved(resolved map[string]string) error {
-	for f, content := range resolved {
-		full := filepath.Join(r.workdir, filepath.FromSlash(f))
-		dir := filepath.Dir(full)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("mkdirall %s: %w", dir, err)
-		}
-		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
-			return fmt.Errorf("write %s: %w", f, err)
-		}
-	}
-	return nil
-}
-
-// verify запускает обязательную приёмку: build, формат, анализ.
-// Возвращает детализированную ошибку с полным выводом для LLM.
-func (r *resolveCtx) verify() error {
-	cfg := acceptor.Config{
+func (resolveAcceptor) Accept(dir string) *domain.Report {
+	return acceptor.Accept(dir, acceptor.Config{
 		BuildTimeout: 3 * time.Minute,
 		CheckFormat:  true,
 		CheckAnalyze: true,
 		CheckLSP:     false,
 		InstallDeps:  false,
-	}
-
-	rep := acceptor.Accept(r.workdir, cfg)
-	if rep.Verdict == acceptor.VerdictApprove {
-		return nil
-	}
-
-	var parts []string
-
-	// Собираем вывод ошибок по стадиям.
-	if rep.Build.Output != "" {
-		parts = append(parts, fmt.Sprintf("BUILD OUTPUT:\n%s", strings.TrimSpace(rep.Build.Output)))
-	}
-	if rep.Analyze != nil && rep.Analyze.Output != "" {
-		parts = append(parts, fmt.Sprintf("ANALYZE OUTPUT:\n%s", strings.TrimSpace(rep.Analyze.Output)))
-	}
-	if rep.Format != nil && rep.Format.Output != "" {
-		parts = append(parts, fmt.Sprintf("FORMAT OUTPUT:\n%s", strings.TrimSpace(rep.Format.Output)))
-	}
-
-	// Fallback на issues если вывод пуст.
-	if len(parts) == 0 {
-		for _, issue := range rep.Issues {
-			if issue.Severity == "error" {
-				parts = append(parts, issue.Text)
-			}
-		}
-	}
-
-	if len(parts) == 0 {
-		return fmt.Errorf("acceptor reject: %s", rep.Summary)
-	}
-
-	return fmt.Errorf("acceptor reject:\n%s", strings.Join(parts, "\n\n"))
-}
-
-// clearConflictField снимает конфликтные файлы с доски.
-func (r *resolveCtx) clearConflictField(resolved []string) {
-	resSet := make(map[string]bool, len(resolved))
-	for _, f := range resolved {
-		resSet[f] = true
-	}
-
-	// Epic-level
-	if len(r.epic.MergeConflictFiles) > 0 {
-		all := true
-		for _, f := range r.epic.MergeConflictFiles {
-			if !resSet[f] {
-				all = false
-				break
-			}
-		}
-		if all {
-			r.epic.MergeConflictFiles = nil
-			if r.store != nil {
-				_ = r.store.SaveEpic(context.Background(), r.epic)
-			}
-		}
-	}
-
-	// Task-level
-	for _, t := range r.tasks {
-		if len(t.MergeConflictFiles) == 0 {
-			continue
-		}
-		all := true
-		for _, f := range t.MergeConflictFiles {
-			if !resSet[f] {
-				all = false
-				break
-			}
-		}
-		if all {
-			t.MergeConflictFiles = nil
-			if r.store != nil {
-				_ = r.store.SaveTask(context.Background(), t)
-			}
-		}
-	}
+	})
 }
 
 // attemptLLMResolve — полный цикл авторезолвина конфликтов через разработчика.
@@ -401,15 +75,24 @@ func (s *Server) attemptLLMResolve(ctx context.Context, project string, epic *bo
 		return false
 	}
 
-	rCtx := newResolveCtx(epic, tasks, hard, workdir, store)
-
 	prov, err := s.provider()
 	if err != nil {
 		logging.For(project).Warnf("gitflow: LLM resolve: provider: %v", err)
 		return false
 	}
+	if prov == nil {
+		logging.For(project).Warnf("gitflow: LLM resolve: эпик %s — LLM недоступен", epic.TaskID)
+		return false
+	}
 
-	result, err := rCtx.ResolveWithLLM(ctx, prov, project, role)
+	resolver := gitflow.NewResolver(epic, tasks, hard, workdir, gitflow.Deps{
+		Store:     store,
+		Developer: resolveDeveloper{prov: prov},
+		Acceptor:  resolveAcceptor{},
+		Markers:   git.HasConflictMarkers,
+	})
+
+	result, err := resolver.ResolveWithLLM(ctx, project, role)
 	if err != nil {
 		logging.For(project).Warnf("gitflow: LLM resolve: %v", err)
 		return false
@@ -418,8 +101,8 @@ func (s *Server) attemptLLMResolve(ctx context.Context, project string, epic *bo
 		logging.For(project).Warnf("gitflow: LLM resolve: эпик %s — LLM недоступен", epic.TaskID)
 		return false
 	}
-	if !result.cleared {
-		reason := result.verifyErr
+	if !result.Cleared {
+		reason := result.VerifyErr
 		if reason == "" {
 			reason = "неизвестная причина"
 		}

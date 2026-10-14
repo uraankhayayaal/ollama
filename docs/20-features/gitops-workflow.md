@@ -93,12 +93,14 @@ Worktree}`.
 
 ### LLM-авторезолв
 
-`server/gitflow_ar.go`:
+Правило живёт в `application/gitflow/resolve.go` (Этап 6, «Интерфейсы и
+адаптеры»): `ResolveMaxAttempts = 3`, контекст `Resolver`, `ResolveWithLLM`,
+`verify` (приёмка), `clearConflictField` (снятие признака с доски). Порты
+`Store`/`Developer`/`Acceptor`/`Markers` реализует серверный адаптер.
 
-- `resolveMaxAttempts = 3` (`:55`), контекст с таймаутом `resolveCtx` (`:47`).
-- `ResolveWithLLM` (`:57`), проверка результата `verify` (`:295`).
-- `clearConflictField` (`:339`).
-- Хендлеры: `handleTaskLLMResolve` (`:541`), `handleEpicLLMResolve` (`:586`).
+`server/gitflow_ar.go` — HTTP-обвязка: сборка зависимостей (`resolveDeveloper`,
+`resolveAcceptor`), `attemptLLMResolve` (stage/commit/push), хендлеры
+`handleTaskLLMResolve`, `handleEpicLLMResolve`.
 
 ### Инструмент агента
 

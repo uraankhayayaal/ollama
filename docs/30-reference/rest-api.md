@@ -238,7 +238,7 @@ POST /api/projects/calc/chat
 Ответ содержит поле `merge_conflict_files`.
 
 `GET .../epics/{eid}/resolve` — статус LLM-авторезолва: до 3 попыток
-(`resolveMaxAttempts = 3`, `server/gitflow_ar.go:55`).
+(`ResolveMaxAttempts = 3`, `application/gitflow/resolve.go`).
 
 ## Диффы
 

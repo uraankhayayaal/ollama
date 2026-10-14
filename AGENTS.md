@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3a — `server` → `application/usecases`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3b — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -46,9 +46,32 @@ Warn}`. `server/gitflow_done_guard.go` стал адаптером (`doneGuardSo
 таблица артефактов); серверные интеграционные
 `server/gitflow_done_guard_test.go` не менялись и проходят через адаптер.
 Верификация: канонический набор зелёный, `-race` по новым тестам чист, `gofmt`
-по правкам чист. План обновлён (таблица срезов + шапка). Остаток Этапа 6 —
-F3+: остальные git-flow хуки, сессии/оркестрация, RAG-хуки. Коммита нет
-(спросить пользователя).
+по правкам чист. План обновлён (таблица срезов + шапка).
+
+Срез **F3b** — цикл LLM-разрешения конфликтов вынесен из `server/` в новый
+пакет **`application/gitflow`** (`resolve.go`): `Resolver`/`ResolveWithLLM`,
+`buildDeveloperPrompt`, `flattenOutputDir`, `verify` (детерминированная приёмка
+через порт), `clearConflictField`; порты
+`Store{SaveEpic;SaveTask}`, `Developer{SpecialistForRole;Generate}`,
+`Acceptor{Accept}`, `Markers func(dir,files)`. Заодно удалён мёртвый код
+прежнего JSON-пути `buildPrompt`/`collectFiles`/`writeResolved` (не вызывались
+ниоткуда). `server/gitflow_ar.go` стал HTTP-обвязкой: адаптеры
+`resolveDeveloper` (planner.SpecialistForRole + llm.LLMProvider) и
+`resolveAcceptor` (acceptor.Accept с фиксированным Config), `attemptLLMResolve`
+(store/provider + stage/commit/push) и хендлеры `handleTaskLLMResolve`/
+`handleEpicLLMResolve`/`tryTaskLLMResolve`. Тесты: герметичные
+`application/gitflow/resolve_test.go` (10 шт.: пустой список, очистка полей
+доски, повтор с ошибкой приёмки в промпте, остаточные маркеры → бюджет, провал
+приёмки, ошибки LLM/пустой ответ, перенос `OUTPUTDIR/`, порядок задач, частичное
+снятие конфликтов); старые тесты `server/gitflow_ar_e2e_test.go` не менялись.
+Верификация: канонический набор зелёный (26 пакетов), `-race` по
+`application/gitflow` чист, `gofmt` по правкам чист. Документация: план
+(шапка + таблица F3b), `docs/00-overview/project-map.md` (новая строка
+`application/gitflow/`), `docs/20-features/gitops-workflow.md`,
+`docs/30-reference/rest-api.md`, `docs/40-operations/troubleshooting.md`
+(ссылки на `resolveMaxAttempts`/`ResolveWithLLM` → `application/gitflow`).
+Остаток Этапа 6 — F3+: остальные git-flow хуки, сессии/оркестрация, RAG-хуки.
+Коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

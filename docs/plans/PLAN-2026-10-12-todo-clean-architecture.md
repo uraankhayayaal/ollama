@@ -53,7 +53,10 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 вынесена в новый пакет `domain/log` (stdlib-only), `server/loganalysis.go`
 оставляет только чтение файлов и сборку промпта; срез **F3a ✅** — гард
 «phantom done» (`GuardTaskDone`) вынесен в `application/usecases` с портом
-`DoneGuardSource`. Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
+`DoneGuardSource`; срез **F3b ✅** — цикл LLM-разрешения конфликтов
+(`ResolveWithLLM`) вынесен в новый пакет `application/gitflow` (порты
+`Store`/`Developer`/`Acceptor`/`Markers`), попутно удалён мёртвый код.
+Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
 ## Проблема
@@ -518,6 +521,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F1 | Ручной откат задачи и прогноз токенов вынесены из `server/` в `application/usecases` (`rollback.go`, `tokenestimate.go`); `server/taskrollback.go`/`tokenestimate.go` стали тонкими обёртками | ✅ |
 | F2 | Детерминированная обработка логов вынесена из `server/` в `domain/log` (разбор строк/уровней/стека, шаблонизация, `BuildLogDigest`, `MergeLogFindings`, фильтры, `TruncateLogText`); `server/loganalysis.go` читает файлы и собирает промпт | ✅ |
 | F3a | Гард «phantom done» (`board.Store.TaskDoneGuard`) вынесен из `server/` в `application/usecases` (порт `DoneGuardSource`); `server/gitflow_done_guard.go` — адаптер | ✅ |
+| F3b | Цикл LLM-разрешения конфликтов (`Resolver.ResolveWithLLM`, промпт, `verify`, `clearConflictField`) вынесен из `server/` в `application/gitflow` (порты `Store`/`Developer`/`Acceptor`/`Markers`); удалён мёртвый код (`buildPrompt`/`collectFiles`/`writeResolved`) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -542,7 +546,17 @@ unit-тестами `doneguard_test.go` (герметичная заглушка
 `git.Repo` + env-флаг `KANBAN_DONE_REQUIRES_COMMIT` и внедрение в
 `board.Store.TaskDoneGuard` (в `attachGitHooks`); серверные интеграционные
 тесты гарда (`server/gitflow_done_guard_test.go`) ходят через адаптер и
-проходят без правок.
+проходят без правок. **F3b ✅** — цикл LLM-разрешения конфликтов
+(`Resolver`/`ResolveWithLLM`, `buildDeveloperPrompt`, `verify`,
+`clearConflictField`, `flattenOutputDir`) и порты `Store`/`Developer`/
+`Acceptor`/`Markers` в `application/gitflow/resolve.go`; сразу удалён мёртвый
+код прежнего JSON-пути (`buildPrompt`/`collectFiles`/`writeResolved` — не
+вызывались ниоткуда). `server/gitflow_ar.go` стал HTTP-обвязкой: адаптеры
+`resolveDeveloper`/`resolveAcceptor`, `attemptLLMResolve` (store/provider +
+stage/commit/push) и хендлеры. Герметичные тесты `resolve_test.go` (успех,
+прогон по бюджету с ошибкой приёмки в промпте, остаточные маркеры, провал
+приёмки, ошибки LLM, перенос `OUTPUTDIR/`, порядок задач, частичное снятие
+конфликтов).
 
 ## Ключевые решения
 
