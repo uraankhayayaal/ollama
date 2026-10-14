@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3y — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3z — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -631,6 +631,25 @@ approve, отказ, отмена контекста → `Reset`, останов
 `application/board` чист, `gofmt` по правкам чист. Документация: план (шапка +
 таблица F3y + narrative), `docs/00-overview/project-map.md` (новая строка
 `application/board/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3y `991da8c`.
+
+Срез **F3z** — детерминированная сборка сводки доски для промпта чат-ассистента
+вынесена из `server/chatassist.go` (`chatPromptFor`) в
+**`application/chatassist`** (`boardprompt.go`): `BoardSummary(BoardView)`
+(исходная задача, эпики, задачи по статусам + список в работе, конфликты мёрджа,
+баги), `OrchestrationStatus(running, gating)` (затвор важнее запуска),
+`BoardRevisionLine(rev uint64)`, тип `BoardView`. `server/chatassist.go` оставил
+в `chatPromptFor` только чтение рантайма сессии (`running`/`gate.State()`/
+`boardRev`), вызов `boardView` и fallback «Kanban-доска недоступна» + дайджест
+логов; текст сводки делегируется `appchatassist`. Тесты: новые герметичные
+`application/chatassist/boardprompt_test.go` (статус/ревизия, пустая доска,
+полная сводка: эпики/задачи в работе/конфликты/баги); серверные
+`chatassist_test.go` (`TestChatAssistPromptHasBoardContext`/
+`TestChatAssistPromptShowsMergeConflict`) не менялись (текст воспроизведён
+дословно). Верификация: канонический набор зелёный (31 пакет), `-race` по
+`application/chatassist` чист, `gofmt` по правкам чист. Документация: план (шапка
++ таблица F3z + narrative), `docs/00-overview/project-map.md` (строка
+`application/chatassist/` расширена). Остаток Этапа 6 — F3+: `server`-хендлеры.
+Коммит F3z — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
