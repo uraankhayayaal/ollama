@@ -106,6 +106,26 @@ GITLAB_URL=...                  # адрес GitLab без завершающе�
 `resolveAcceptor`), `attemptLLMResolve` (stage/commit/push), хендлеры
 `handleTaskLLMResolve`, `handleEpicLLMResolve`.
 
+### Конфликтный резолв «main ↔ релизная ветка эпика»
+
+Правило Ф-4 живёт в `application/gitflow/conflict.go` (Этап 6, срез F3j):
+`ConflictResolver.StartRebase` (прогноз `merge-tree`; если чисто —
+`Status:"ok"` идите `POST .../release`; иначе постоянный worktree
+`.conflict-<проект>-<эпик>` + авто-резолв тривиальных блоков) и
+`FinishResolve` (повторный авто-резолв, обязательная приёмка, коммит резолва,
+финальный `MergeFeature` main ← релизной ветки + push под пер-проектным локом).
+Порты: `ConflictHost` (`Project`/`Repo`/`EpicStatus`/`EpicBranch`/
+`ResolveState`/`SetResolveState`/`ClearResolveState`/`Worktree`/`Locked`/
+`DropEpicWorktreeLocked`/`TrivialResolve`/`Markers`/`Accept`/
+`SetEpicMergeConflict`), `ConflictRepo`, `ConflictWorktree`; сентинелы
+`ErrResolveBusy`/`ErrNoResolve`/`ErrResolveStateSave` (остальное — из
+`release.go`).
+
+`server/gitflow_resolve.go` — HTTP-обвязка: адаптеры `conflictHost`/
+`serverConflictRepo`, хендлеры `handleEpicRebase`/`handleEpicResolve`
+(сериализуют `Status`-исход, `writeConflictErr` маппит sentinel'ы в коды) и
+`handleResolveStatus` (read-model процесса).
+
 ### Создание MR
 
 Правило «когда и как открывать MR» живёт в `application/gitflow/mr.go`

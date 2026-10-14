@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3i — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3j — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -230,8 +230,44 @@ F3h) вырос до обоих портов — добавлены `EpicStatus`
 Верификация: канонический набор зелёный (26 пакетов), `-race` по
 `application/gitflow` чист, `gofmt` по правкам чист. Документация: план (шапка +
 таблица F3i), `docs/00-overview/project-map.md`. Остаток Этапа 6 — F3+:
-`gitflow_resolve.go`, сессии/оркестрация, RAG-хуки. Коммита нет (спросить
-пользователя).
+`gitflow_resolve.go`, сессии/оркестрация, RAG-хуки. Коммит F3i `606becf`.
+
+Срез **F3j** — конфликтный резолв «main ↔ релизная ветка эпика»
+(`ConflictResolver.StartRebase`/`FinishResolve`) вынесен из
+`server/gitflow_resolve.go` в новый `application/gitflow/conflict.go`:
+прогноз конфликтов `merge-tree` (чисто → `Status:"ok"`, идите `POST .../release`),
+постоянный конфликтный worktree `.conflict-<проект>-<эпик>`, снятие worktree
+эпика (4.1 — архитектор держит релизную ветку checked-out), настоящий merge
+main → релизной ветки в worktree, авто-резолв тривиальных блоков
+(`TrivialResolve`) + stage, обязательная приёмка (`Accept`) и финальный
+`MergeFeature` main ← релизной ветки с push под пер-проектным локом. Порт
+`ConflictHost` (`Project`/`Repo`/`EpicStatus`/`EpicBranch`/`ResolveState`/
+`SetResolveState`/`ClearResolveState`/`Worktree`/`Locked`/
+`DropEpicWorktreeLocked`/`TrivialResolve`/`Markers`/`Accept`/
+`SetEpicMergeConflict`) + `ConflictRepo` (`MergeFeature`/`MergeBase`/`MergeTree`/
+`Root`/`AddWorktree`/`RemoveWorktree`) и `ConflictWorktree` (`MergeBranch`/
+`UnmergedFiles`/`Stage`/`Dirty`/`Commit`/`CommitAllowEmpty`); исходы несут
+строковый `Status` (rebase: `resolving`/`ok`/`busy`; resolve: `ok`/
+`still_conflicts`/`acceptance_failed`/`no_resolve`/`busy`/`conflicts`),
+сентинелы `ErrResolveBusy`/`ErrNoResolve`/`ErrResolveStateSave` (прочие ошибки —
+переиспользованы из F3i). `server/gitflow_resolve.go` оставил адаптер
+`conflictHost` (встраивает `mergeTaskHost`; `Repo`/`Worktree` — через
+`s.repoOf`/`git.RepoFromState`, `Accept` — `acceptor.Accept(dir, LoadConfig())`)
+и `serverConflictRepo` поверх `*git.Repo` (`Root()` — геттер над полем);
+хендлеры `handleEpicRebase`/`handleEpicResolve` сериализуют исходы и маппят
+коды, `writeConflictErr` — sentinel'ы (404/503/500/502/400); `handleResolveStatus`
+не менялся, `unionPaths` переехал в use-case. Побочные эффекты (session-сообщение,
+`clearEpicMergeConflict`/`setEpicMergedIntoMain`, `srvEmitBoard`) остались в
+хендлерах. Тесты: новые герметичные `application/gitflow/conflict_test.go`
+(16 шт.: rebase no-conflicts/repeat/busy/все sentinel'ы состояния/сбой прогноза/
+сбой записи состояния с cleanup; resolve ok dirty/clean, no_resolve/нет worktree/
+busy/still_conflicts/acceptance_failed/final conflict/merge fatal); серверные
+`gitflow_resolve_test.go` (742 строки, коды + JSON `status`) не менялись.
+Верификация: канонический набор зелёный (26 пакетов), `-race` по
+`application/gitflow` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3j), `docs/00-overview/project-map.md`. Остаток Этапа 6 — F3+:
+сессии/оркестрация, RAG-хуки. Коммиты F3g `fd6c49b`, F3h `f3ed4e6`, F3i
+`606becf` сделаны; F3j — коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

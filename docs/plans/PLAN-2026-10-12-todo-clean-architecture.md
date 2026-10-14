@@ -69,7 +69,12 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 задачи в релиз эпика (`TaskMerger.MergeTaskBranch`) вынесена в
 `application/gitflow` (порт `MergeTaskHost`); срез **F3i ✅** — политика релиза
 эпика в main (`Releaser.ReleaseEpic`) вынесена в `application/gitflow` (порт
-`ReleaseHost`, доменные sentinel-ошибки вместо `apiError`).
+`ReleaseHost`, доменные sentinel-ошибки вместо `apiError`); срез **F3j ✅** —
+конфликтный резолв «main ↔ релизная ветка эпика» (`ConflictResolver`
+`StartRebase`/`FinishResolve`, порты `ConflictHost`/`ConflictRepo`/
+`ConflictWorktree`) вынесен из `server/gitflow_resolve.go` в
+`application/gitflow` (сентинелы `ErrResolveBusy`/`ErrNoResolve`/
+`ErrResolveStateSave`).
 Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -543,6 +548,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3g | Политика ветвления (`Brancher`: `EnsureBranch`/`CreateEpicBranch`/`CreateTaskBranch`/`AutoCreateEpicBranch`/`AutoCreateTaskBranch`/`RemoveEpicBranches`, `ErrEpicBranchMissing`/`ErrBranchCreate`) вынесена в `application/gitflow` (порты `BranchRepo`/`BranchRegistry`) | ✅ |
 | F3h | Политика вливания ветки задачи в релиз эпика (`TaskMerger.MergeTaskBranch`: проверка проекта/веток, снятие worktree эпика, `MergeFeature` под локом, инвалидация диффов) вынесена в `application/gitflow` (порт `MergeTaskHost`) | ✅ |
 | F3i | Политика релиза эпика в main (`Releaser.ReleaseEpic`: проверка git/базы/статуса done/ветки эпика, `MergeFeature` под локом, инвалидация диффов + хук «main изменился») вынесена в `application/gitflow` (порт `ReleaseHost`, доменные sentinel-ошибки вместо `apiError`); `apiError` удалён | ✅ |
+| F3j | Конфликтный резолв «main ↔ релизная ветка эпика» (`ConflictResolver.StartRebase`/`FinishResolve`: прогноз merge-tree, постоянный конфликтный worktree, авто-резолв тривиальных блоков, обязательная приёмка, коммит резолва, финальный merge+push) вынесен из `server/gitflow_resolve.go` в `application/gitflow` (порты `ConflictHost`/`ConflictRepo`/`ConflictWorktree`); `conflictHost`/`serverConflictRepo` — серверные адаптеры | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -651,7 +657,25 @@ worktree эпика (`DropEpicWorktreeLocked`), `MergeFeature` под пер-п�
 которые хендлер маппит в коды (404/400/503/502/409); `apiError` удалён, у
 `mergeTaskHost` появились `EpicStatus`/`MainChanged`. Герметичные тесты
 `release_test.go` (успех, already-merged, все sentinel'ы состояния, конфликт vs
-`ErrMergeFailed`).
+`ErrMergeFailed`). **F3j ✅** — конфликтный резолв «main ↔ релизная ветка эпика»
+(`ConflictResolver.StartRebase`/`FinishResolve`) вынесен из
+`server/gitflow_resolve.go` в `application/gitflow/conflict.go`: прогноз
+конфликтов `merge-tree`, постоянный конфликтный worktree
+(`.conflict-<проект>-<эпик>`), авто-резолв тривиальных блоков
+(`TrivialResolve`/`Markers`), обязательная приёмка (`Accept`), коммит резолва
+(`Commit`/`CommitAllowEmpty`) и финальный `MergeFeature` + push под
+пер-проектным локом. Порт `ConflictHost` + `ConflictRepo`/`ConflictWorktree`;
+исходы несут строковый `Status` (`resolving`/`ok`/`busy` для rebase;
+`ok`/`still_conflicts`/`acceptance_failed`/`no_resolve`/`busy`/`conflicts` для
+resolve), сентинелы `ErrResolveBusy`/`ErrNoResolve`/`ErrResolveStateSave`.
+`server/gitflow_resolve.go` оставил адаптер `conflictHost` (через `mergeTaskHost`
++ `s.reg`/`s.repoOf`/`git.RepoFromState`/`acceptor.Accept`) и `serverConflictRepo`
+поверх `*git.Repo`, `writeConflictErr` маппит sentinel'ы в коды; `handleResolveStatus`
+и `unionPaths` (переехал) — как раньше. `mergeTaskHost` вырос до `ConflictHost`
+(встроен). Герметичные тесты `conflict_test.go` (16 шт.): no-conflicts/repeat/
+busy/все sentinel'ы состояния rebase, сбой прогноза и сбой записи состояния с
+cleanup; resolve ok (dirty/clean), no_resolve/нет worktree/busy/still_conflicts/
+acceptance_failed/final conflict/merge fatal.
 
 ## Ключевые решения
 

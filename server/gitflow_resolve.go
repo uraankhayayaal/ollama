@@ -6,23 +6,29 @@
 // «сложные» файлы модели через инструмент ResolveGitConflicts. POST .../resolve
 // доводит процесс до конца: обязательная приёмка (acceptor), коммит резолва,
 // финальный merge main ← релизной ветки и push на remote.
+//
+// Логика вынесена в application/gitflow (срез F3j); здесь — HTTP-обвязка и
+// адаптер conflictHost.
 package server
 
 import (
 	"ai/acceptor"
-	"ai/infrastructure/board"
+	"ai/application/gitflow"
 	"ai/chat"
+	"ai/domain"
 	"ai/infrastructure/git"
-	"ai/logging"
 	"ai/workspace"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 )
+
+// conflictResolver — use-case конфликтного резолва поверх адаптера.
+func (s *Server) conflictResolver() gitflow.ConflictResolver {
+	return gitflow.ConflictResolver{Host: conflictHost{mergeTaskHost: mergeTaskHost{s: s}}}
+}
 
 // handleEpicRebase — вход Ф-4: вливает main в релизную ветку эпика в
 // постоянном конфликтном worktree для авто/модельного резолва конфликтов.
@@ -42,187 +48,52 @@ func (s *Server) handleEpicRebase(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	epicID := r.PathValue("eid")
 
-	inf, err := s.reg.Get(project)
+	out, err := s.conflictResolver().StartRebase(r.Context(), project, epicID)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "проект не найден")
+		writeConflictErr(w, err)
 		return
 	}
-	if inf.Kind != workspace.KindGit {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("резолв конфликтов доступен только git-проектам (kind=%s)", inf.Kind))
-		return
-	}
-	main := strings.TrimSpace(inf.GitBase)
-	if main == "" {
-		writeErr(w, http.StatusBadRequest, "у проекта не задана базовая ветка (git_base)")
-		return
-	}
-
-	repo, err := s.repoOf(r.Context(), project)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	store, err := s.boardStore(r.Context(), project)
-	if err != nil {
-		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
-		return
-	}
-	defer store.Close()
-	epic, err := store.GetEpic(r.Context(), epicID)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "эпик не найден")
-		return
-	}
-	if epic.Status != board.StatusDone {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("резолв доступен только эпику со статусом done (сейчас %s)", epic.Status))
-		return
-	}
-	epicRef, err := s.reg.EpicBranch(project, epicID)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("сначала создайте ветку эпика %s: %v", epicID, err))
-		return
-	}
-
-	// Резолв процесса — идемпотентное продолжение работы над готовым состоянием.
-	if rs, rerr := s.reg.EpicResolve(project); rerr == nil {
-		if rs.EpicID != epicID {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"status":  "busy",
-				"epic_id": rs.EpicID,
-				"message": fmt.Sprintf("сначала завершите резолв конфликтов эпика %s (POST .../resolve)", rs.EpicID),
-			})
-			return
-		}
-		logging.For(project).Infof("gitflow: rebase %s повторный — продолжаем резолв (%d файлов)", epicID, len(rs.Files))
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":   "resolving",
-			"files":    rs.Files,
-			"branch":   rs.Branch,
-			"worktree": rs.Worktree,
+	switch out.Status {
+	case "busy":
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status":  "busy",
+			"epic_id": out.EpicID,
+			"message": fmt.Sprintf("сначала завершите резолв конфликтов эпика %s (POST .../resolve)", out.EpicID),
 		})
 		return
-	}
-
-	lock := s.mergeLock(project)
-	lock.Lock()
-	defer lock.Unlock()
-
-	// Прогноз конфликтов merge-tree БЕЗ изменения рабочей копии: если чисто —
-	// резолв не нужен (идите POST .../release). Стрим дополнительно убирает
-	// «уже влито» (MergedInto) — release реализует этот короткий путь сам.
-	base, err := repo.MergeBase(r.Context(), main, epicRef.Branch)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "merge-base: "+err.Error())
-		return
-	}
-	forecast, err := repo.MergeTree(r.Context(), base, main, epicRef.Branch)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "merge-tree: "+err.Error())
-		return
-	}
-	if len(forecast) == 0 {
-		logging.For(project).Infof("gitflow: rebase %s: конфликтов нет, идите POST /release", epicID)
+	case "ok":
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":  "ok",
-			"message": "конфликтов не найдено — используйте POST /api/projects/" + project + "/epics/" + epicID + "/release",
+			"message": out.Message,
 			"files":   []string{},
 		})
 		return
 	}
-
-	wtPath := filepath.Join(filepath.Dir(repo.Root),
-		".conflict-"+project+"-"+git.SanitizeBranchName(epicID))
-
-	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
-	// checked-out — конфликтный worktree не смог бы её получить.
-	s.dropEpicWorktreeLocked(r.Context(), project, epicID)
-
-	// Чистим остатки прерванного процесса (каталог существует, но реестр пуст).
-	if _, err := os.Stat(wtPath); err == nil {
-		logging.For(project).Warnf("gitflow: удаляю осиротевший конфликтный worktree %s", wtPath)
-		_ = repo.RemoveWorktree(r.Context(), wtPath)
-	}
-
-	wt, err := repo.AddWorktree(r.Context(), wtPath, epicRef.Branch)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "создание конфликтного worktree: "+err.Error())
+	// Идемпотентный повтор: состояние уже открытого процесса, без побочных
+	// эффектов в чате/доске.
+	if out.Repeat {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":   "resolving",
+			"files":    out.Files,
+			"branch":   out.Branch,
+			"worktree": out.Worktree,
+		})
 		return
-	}
-	cleanup := func() {
-		_ = repo.RemoveWorktree(r.Context(), wtPath)
-		_ = s.reg.ClearEpicResolve(project)
-	}
-
-	// Настоящий merge main → релизная ветка прямо в worktree. Ошибка НЕ фатальна:
-	// конфликты оставляют маркеры в файлах и stage-записи в индексе worktree —
-	// это и есть рабочая поверхность резолва. Других причин падения тут нет
-	// (worktree свежий).
-	_, _ = wt.MergeBranch(r.Context(), main,
-		fmt.Sprintf("эпик %s: влитие main в релизную ветку (резолв конфликтов)", epicID))
-
-	unmerged, err := wt.UnmergedFiles(r.Context())
-	if err != nil {
-		cleanup()
-		writeErr(w, http.StatusBadGateway, "git ls-files -u: "+err.Error())
-		return
-	}
-	resolved, hard, err := git.TrivialResolve(wtPath, unmerged)
-	if err != nil {
-		cleanup()
-		writeErr(w, http.StatusBadGateway, "авто-резолв тривиальных конфликтов: "+err.Error())
-		return
-	}
-	if err := wt.Stage(r.Context(), resolved); err != nil {
-		cleanup()
-		writeErr(w, http.StatusBadGateway, "git add резолвов: "+err.Error())
-		return
-	}
-
-	rs := &workspace.EpicResolve{
-		EpicID:    epicID,
-		Branch:    epicRef.Branch,
-		Worktree:  wtPath,
-		Files:     hard,
-		StartedAt: time.Now().UTC(),
-	}
-	if err := s.reg.SetEpicResolve(project, rs); err != nil {
-		cleanup()
-		writeErr(w, http.StatusInternalServerError, "запись процесса резолва: "+err.Error())
-		return
-	}
-
-	logging.For(project).Infof("gitflow: rebase %s: конфликты в %s, авто-резолв %d, на модель %d (%s)",
-		epicID, strings.Join(forecast, ", "), len(resolved), len(hard), wtPath)
-	// Конфликт main ↔ релизная ветка виден на доске: помечаем эпик списком
-	// конфликтующих файлов (снимется успешным resolve/релизом).
-	epic.MergeConflictFiles = forecast
-	if serr := store.SaveEpic(r.Context(), epic); serr != nil {
-		logging.For(project).Warnf("gitflow: rebase %s: запись конфликта на доске: %v", epicID, serr)
 	}
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
 			fmt.Sprintf("Эпик %s: конфликты main ↔ %s в файлах [%s]. Авто-резолвено %d, осталось у модели %d. Правьте файлы инструментом ResolveGitConflicts и завершите POST .../resolve.",
-				epicID, epicRef.Branch, strings.Join(forecast, ", "), len(resolved), len(hard)),
+				epicID, out.Branch, strings.Join(out.All, ", "), len(out.Resolved), len(out.Files)),
 			"", "", nil)
 	}
 	s.srvEmitBoard(project, "gitflow: rebase эпика, конфликты для резолва")
-	if hard == nil {
-		hard = []string{}
-	}
-	if resolved == nil {
-		resolved = []string{}
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "resolving",
-		"files":    hard,
-		"resolved": resolved,
-		"branch":   epicRef.Branch,
-		"worktree": wtPath,
-		"message":  "правьте сложные файлы инструментом ResolveGitConflicts и завершите POST /api/projects/" + project + "/epics/" + epicID + "/resolve",
+		"files":    out.Files,
+		"resolved": out.Resolved,
+		"branch":   out.Branch,
+		"worktree": out.Worktree,
+		"message":  out.Message,
 	})
 }
 
@@ -244,175 +115,86 @@ func (s *Server) handleEpicResolve(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	epicID := r.PathValue("eid")
 
-	inf, err := s.reg.Get(project)
+	out, err := s.conflictResolver().FinishResolve(r.Context(), project, epicID)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "проект не найден")
+		writeConflictErr(w, err)
 		return
 	}
-	if inf.Kind != workspace.KindGit {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("резолв доступен только git-проектам (kind=%s)", inf.Kind))
+	switch out.Status {
+	case "no_resolve":
+		msg := out.Message
+		if msg == "" {
+			msg = "активного процесса резолва нет — начните с POST .../epics/" + epicID + "/rebase"
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{"status": "no_resolve", "message": msg})
 		return
-	}
-	repo, err := s.repoOf(r.Context(), project)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	main := strings.TrimSpace(inf.GitBase)
-	if main == "" {
-		writeErr(w, http.StatusBadRequest, "у проекта не задана базовая ветка (git_base)")
-		return
-	}
-
-	rs, err := s.reg.EpicResolve(project)
-	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"status":  "no_resolve",
-			"message": "активного процесса резолва нет — начните с POST .../epics/" + epicID + "/rebase",
-		})
-		return
-	}
-	if rs.EpicID != epicID {
+	case "busy":
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status":  "busy",
-			"epic_id": rs.EpicID,
-			"message": fmt.Sprintf("в резолве другой эпик (%s)", rs.EpicID),
+			"epic_id": out.EpicID,
+			"message": fmt.Sprintf("в резолве другой эпик (%s)", out.EpicID),
 		})
 		return
-	}
-	if _, err := os.Stat(rs.Worktree); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"status":  "no_resolve",
-			"message": "конфликтный worktree " + rs.Worktree + " не существует — начните заново: POST .../rebase",
-		})
-		return
-	}
-
-	lock := s.mergeLock(project)
-	lock.Lock()
-	defer lock.Unlock()
-
-	wt := git.RepoFromState(s.gitExec, rs.Worktree, inf.GitRemote, rs.Branch, strings.TrimSpace(inf.GitBase))
-
-	// 1) Закрываем всё, что модель успела почистить/не трогала: повторный
-	// авто-резолв + stage всех разрешённых + проверка «остались маркеры».
-	resolved, _, err := git.TrivialResolve(rs.Worktree, rs.Files)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "авто-резолв: "+err.Error())
-		return
-	}
-	if err := wt.Stage(r.Context(), resolved); err != nil {
-		writeErr(w, http.StatusBadGateway, "git add резолвов: "+err.Error())
-		return
-	}
-	unmerged, err := wt.UnmergedFiles(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "git ls-files -u: "+err.Error())
-		return
-	}
-	markers, err := git.HasConflictMarkers(rs.Worktree, rs.Files)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "проверка маркеров: "+err.Error())
-		return
-	}
-	if remain := unionPaths(unmerged, markers); len(remain) > 0 {
-		logging.For(project).Infof("gitflow: resolve %s: ещё конфликты в %s — резолв не завершён",
-			epicID, strings.Join(remain, ", "))
+	case "still_conflicts":
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status":  "still_conflicts",
-			"files":   remain,
+			"files":   out.Files,
 			"message": "в файлах остались маркеры конфликта или незакрытые записи индекса — продолжите работу инструментом ResolveGitConflicts",
 		})
 		return
-	}
-
-	// 2) Обязательная приёмка собранного worktree (безопасность релиза).
-	cfgreport := acceptor.Accept(rs.Worktree, acceptor.LoadConfig())
-	if cfgreport.Verdict != acceptor.VerdictApprove {
-		logging.For(project).Warnf("gitflow: resolve %s: приёмка не прошла — %s", epicID, cfgreport.Summary)
+	case "acceptance_failed":
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status":  "acceptance_failed",
-			"verdict": cfgreport.Verdict,
-			"summary": cfgreport.Summary,
-			"issues":  cfgreport.Issues,
+			"verdict": out.Verdict,
+			"summary": out.Summary,
+			"issues":  out.Issues,
 			"message": "проект после резолва не проходит обязательную приёмку; правки сохранены в worktree",
 		})
 		return
-	}
-
-	// 3) Коммит резолва в worktree (завершает merge main → релизная ветка).
-	// Когда резолв возвращает дерево на HEAD-содержимое (например, модель
-	// выбрала нашу версию файла), рабочая копия чиста — но merge всё равно
-	// нужно завершить merge-коммитом. CommitAllowEmpty создаёт его и в этом
-	// случае, иначе релизная ветка не получит main предком и финальный
-	// MergeFeature снова натолкнётся на конфликт.
-	dirty, err := wt.Dirty(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "git status: "+err.Error())
+	case "conflicts":
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status":  "conflicts",
+			"files":   out.Files,
+			"message": out.Message,
+		})
 		return
 	}
-	msg := fmt.Sprintf("эпик %s: резолв конфликтов main ↔ %s", epicID, rs.Branch)
-	if dirty {
-		if err := wt.Commit(r.Context(), msg); err != nil {
-			writeErr(w, http.StatusBadGateway, "git commit резолва: "+err.Error())
-			return
-		}
-	} else if err := wt.CommitAllowEmpty(r.Context(), msg); err != nil {
-		writeErr(w, http.StatusBadGateway, "git commit --allow-empty резолва: "+err.Error())
-		return
-	}
-
-	// 4) Финальный merge main ← релизной ветки (после резолва merge-tree чист,
-	// main уже среди предков релизной ветки — merge-коммит без конфликтов).
-	res, err := repo.MergeFeature(r.Context(), main, rs.Branch, git.MergeFeatureOptions{
-		Message: fmt.Sprintf("эпик %s: релиз в main после резолва конфликтов", epicID),
-		PushURL: remotePushURL(inf),
-	})
-	if err != nil {
-		var ce *git.MergeConflictError
-		if errors.As(err, &ce) {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"status":  "conflicts",
-				"files":   ce.Files,
-				"message": "неожиданные конфликты при финальном merge: " + ce.Error(),
-			})
-			return
-		}
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-
-	// 5) Cleanup: снять worktree, закрыть процесс, уведомить.
-	if err := repo.RemoveWorktree(r.Context(), rs.Worktree); err != nil {
-		logging.For(project).Warnf("gitflow: снятие конфликтного worktree %s: %v", rs.Worktree, err)
-	}
-	if err := s.reg.ClearEpicResolve(project); err != nil {
-		logging.For(project).Warnf("gitflow: снятие процесса резолва %s: %v", epicID, err)
-	}
-
-	logging.For(project).Infof("gitflow: resolve %s: релиз в main выполнен (%s, already=%v)",
-		epicID, res.Message, res.AlreadyMerged)
-	// Резолв завершён — снимаем признак конфликта с эпика на доске (если был).
+	// ok: релиз выполнен.
 	s.clearEpicMergeConflict(r.Context(), project, epicID)
 	s.setEpicMergedIntoMain(r.Context(), project, epicID, true)
 	if sess := s.session(project); sess != nil {
 		sess.append(chat.RoleStatus,
 			fmt.Sprintf("Эпик %s: конфликты разрешены, релизная ветка %s влита в main и запушена. Приёмка: %s",
-				epicID, rs.Branch, cfgreport.Summary), "", "", nil)
+				epicID, out.Source, out.Summary), "", "", nil)
 	}
 	s.srvEmitBoard(project, "gitflow: резолв конфликтов, релиз в main")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
-		"branch":         main,
-		"source":         rs.Branch,
-		"message":        res.Message,
-		"already_merged": res.AlreadyMerged,
+		"branch":         out.Branch,
+		"source":         out.Source,
+		"message":        out.Message,
+		"already_merged": out.AlreadyMerged,
 		"acceptance": map[string]any{
-			"verdict": cfgreport.Verdict,
-			"summary": cfgreport.Summary,
+			"verdict": out.Verdict,
+			"summary": out.Summary,
 		},
 	})
+}
+
+// writeConflictErr маппит доменные ошибки резолва в HTTP-ответы.
+func writeConflictErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, gitflow.ErrProjectNotFound), errors.Is(err, gitflow.ErrEpicNotFound):
+		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, gitflow.ErrBoardUnavailable):
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, gitflow.ErrResolveStateSave):
+		writeErr(w, http.StatusInternalServerError, err.Error())
+	case errors.Is(err, gitflow.ErrMergeFailed):
+		writeErr(w, http.StatusBadGateway, err.Error())
+	default:
+		writeErr(w, http.StatusBadRequest, err.Error())
+	}
 }
 
 // handleResolveStatus — статус активного процесса резолва (GET): для UI и
@@ -436,16 +218,106 @@ func (s *Server) handleResolveStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// unionPaths склеивает пути без дубликатов (локальная копия: избегаем
-// циклического импорта tools).
-func unionPaths(a, b []string) []string {
-	seen := make(map[string]bool, len(a)+len(b))
-	var out []string
-	for _, p := range append(a, b...) {
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
+// conflictHost — адаптер gitflow.ConflictHost поверх Server (встраивает
+// mergeTaskHost для Project/EpicStatus/EpicBranch/Locked/DropEpicWorktreeLocked).
+type conflictHost struct {
+	mergeTaskHost
+}
+
+var _ gitflow.ConflictHost = conflictHost{}
+
+// Repo отдаёт git-репозиторий проекта как ConflictRepo.
+func (h conflictHost) Repo(ctx context.Context, project string) (gitflow.ConflictRepo, error) {
+	repo, err := h.s.repoOf(ctx, project)
+	if err != nil {
+		return nil, err
 	}
-	return out
+	return serverConflictRepo{repo: repo}, nil
+}
+
+// ResolveState читает активный процесс резолва из side-реестра.
+func (h conflictHost) ResolveState(project string) (*gitflow.ResolveState, bool) {
+	rs, err := h.s.reg.EpicResolve(project)
+	if err != nil || rs == nil {
+		return nil, false
+	}
+	return &gitflow.ResolveState{
+		EpicID:    rs.EpicID,
+		Branch:    rs.Branch,
+		Worktree:  rs.Worktree,
+		Files:     rs.Files,
+		StartedAt: rs.StartedAt,
+	}, true
+}
+
+// SetResolveState сохраняет активный процесс резолва.
+func (h conflictHost) SetResolveState(project string, st *gitflow.ResolveState) error {
+	return h.s.reg.SetEpicResolve(project, &workspace.EpicResolve{
+		EpicID:    st.EpicID,
+		Branch:    st.Branch,
+		Worktree:  st.Worktree,
+		Files:     st.Files,
+		StartedAt: st.StartedAt,
+	})
+}
+
+// ClearResolveState снимает процесс резолва.
+func (h conflictHost) ClearResolveState(project string) error {
+	return h.s.reg.ClearEpicResolve(project)
+}
+
+// Worktree открывает конфликтный worktree как git-рабочую копию.
+func (h conflictHost) Worktree(project, worktree, branch string) (gitflow.ConflictWorktree, error) {
+	inf, err := h.s.reg.Get(project)
+	if err != nil {
+		return nil, err
+	}
+	return git.RepoFromState(h.s.gitExec, worktree, inf.GitRemote, branch, strings.TrimSpace(inf.GitBase)), nil
+}
+
+// TrivialResolve — детерминированный авто-резолв тривиальных блоков.
+func (h conflictHost) TrivialResolve(dir string, files []string) (resolved, hard []string, err error) {
+	return git.TrivialResolve(dir, files)
+}
+
+// Markers — поиск остаточных маркеров конфликта.
+func (h conflictHost) Markers(dir string, files []string) ([]string, error) {
+	return git.HasConflictMarkers(dir, files)
+}
+
+// Accept — обязательная приёмка собранного worktree.
+func (h conflictHost) Accept(dir string) *domain.Report {
+	return acceptor.Accept(dir, acceptor.LoadConfig())
+}
+
+// SetEpicMergeConflict помечает эпик конфликтом на доске.
+func (h conflictHost) SetEpicMergeConflict(ctx context.Context, project, epicID string, files []string) {
+	h.s.setEpicMergeConflict(ctx, project, epicID, files)
+}
+
+// serverConflictRepo — адаптер gitflow.ConflictRepo поверх *git.Repo.
+type serverConflictRepo struct {
+	repo *git.Repo
+}
+
+func (r serverConflictRepo) MergeFeature(ctx context.Context, base, source string, opts git.MergeFeatureOptions) (*git.MergeResult, error) {
+	return r.repo.MergeFeature(ctx, base, source, opts)
+}
+
+func (r serverConflictRepo) MergeBase(ctx context.Context, a, b string) (string, error) {
+	return r.repo.MergeBase(ctx, a, b)
+}
+
+func (r serverConflictRepo) MergeTree(ctx context.Context, base, ours, theirs string) ([]string, error) {
+	return r.repo.MergeTree(ctx, base, ours, theirs)
+}
+
+func (r serverConflictRepo) Root() string { return r.repo.Root }
+
+func (r serverConflictRepo) AddWorktree(ctx context.Context, worktreePath, branch string) (gitflow.ConflictWorktree, error) {
+	return r.repo.AddWorktree(ctx, worktreePath, branch)
+}
+
+func (r serverConflictRepo) RemoveWorktree(ctx context.Context, worktreePath string) error {
+	return r.repo.RemoveWorktree(ctx, worktreePath)
 }
