@@ -300,8 +300,8 @@ single-flight по ветке, отчёты в чат), git-flow хуки
 пакетов), `-race` по `application/rag` чист, `gofmt` по правкам чист.
 Документация: план (шапка + таблица F3k + narrative),
 `docs/00-overview/project-map.md` (новая строка `application/rag/`). Остаток
-Этапа 6 — F3+: git-flow хуки, сессии/оркестрация, остальные RAG-хуки. Коммита
-F3k нет (спросить пользователя).
+Этапа 6 — F3+: git-flow хуки, сессии/оркестрация, остальные RAG-хуки. Коммит
+F3k `ceecbfd`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
