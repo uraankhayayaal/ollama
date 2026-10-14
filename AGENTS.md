@@ -442,7 +442,7 @@ merge-base), `gitProjectDiff` (кэш по `project|ref|base`, обход саб
 `domain/diff/`), `docs/20-features/{contextual-diff,gitops-workflow,web-ui,
 submodules-multirepo}.md` (ссылки на разбор → `domain/diff`). Остаток Этапа 6 —
 F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
-`chatassist`/`actions`/`server`. Коммита нет (спросить пользователя).
+`chatassist`/`actions`/`server`. Коммит F3q `9bb6b6a`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
