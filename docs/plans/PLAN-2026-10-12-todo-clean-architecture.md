@@ -22,9 +22,10 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 `PublicAPIAuditorAdapter`), подключение — `main.go`;
 `application/planner` в non-test коде больше не импортирует `tools`/`models`/
 `board`/`runner`/`agents/acceptor` (проверено `go list -f .Imports`). Этап 3
-закрыт по портам — см. «Остаток работ» в конце (осталась `runner`-«тонкость» и
-ссылки в документации; предсуществующие падения тестов `application/planner`
-разобраны, см. ниже).
+закрыт полностью: `runner` стал тонким адаптером (адаптеры портов вынесены в
+`runner/adapters/`), ссылки на `agents/planner` в живых документах обновлены,
+предсуществующие падения тестов `application/planner` разобраны — см. «Остаток
+работ» в конце.
 
 ## Проблема
 
@@ -177,12 +178,18 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
      `CommentTypeSystem/User/QA` (нужны use-case для авто-комментария);
      `domain.ModelTierLarge` уже существовал.
 2. `runner` становится тонким адаптером к `application` (как `server` к
-   `application`). ⏳ `runner.Generate` делегирует в `usecases.RunTask`;
-   `runner/compression.go` — адаптер сжатия; оставшиеся файлы (`autofix.go`,
-   `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`, `reindex.go`)
-   реализуют порты-функции (`AutoFixer`, `RuntimeLogger`, `InjectionApplier`,
-   `RoundStateReporter`, `WIPCommitter`, `Reindexer`) для инфраструктуры —
-   бизнес-логика вынесена, но пакет ещё не «тонкий» по объёму.
+   `application`). ✅ `runner.Generate` делегирует в `usecases.RunTask`;
+   `runner/compression.go` — адаптер сжатия. Адаптеры портов-функций
+   (`AutoFixer`, `RuntimeLogger`, `InjectionApplier`, `RoundStateReporter`,
+   `WIPCommitter`, `Reindexer`) вынесены из пакета в `runner/adapters/`
+   (`autofix.go`, `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`,
+   `reindex.go`): там же конфигурация из окружения и формат сообщений, а
+   политика цикла остаётся в `application/usecases`. В `runner` остались
+   только `Generate` (сборка портов), `compression.go`/`compress_delegate.go`
+   (сжатие), `debug.go` и `agent_runner.go` — пакет стал «тонким» по объёму
+   (~590 строк non-test против ~1260): агент-разработчик (`agents/developer`)
+   больше не зависит от `runner`, а берёт адаптеры напрямую из
+   `runner/adapters`.
 3. Перенести логику из `agents/planner/` (16+ файлов) в
    `application/` и `domain/`. ⏳ **ЧАСТИЧНО (порт-ориентированный перенос)**:
    - **Срез A ✅** — весь пакет перемещён `agents/planner` → `application/planner`
@@ -250,7 +257,7 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
      `SetPublicAPIAuditor`) и в `application/planner/testmain_test.go` (адаптеры
      выставляются один раз через `TestMain`).
 
-**Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask` ✅
+**Критерий:** `runner` делегирует в `application/usecases/RunTask` ✅
 (`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
 распределена по `application/` и `domain/` ✅ — `application/planner` создан,
 зависимости от конкретных агентов инвертированы через порты, чистые типы плана
@@ -410,9 +417,10 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
       Оставшиеся прямые импорты агентов (`agentfactory.go`/`architectfactory.go`)
       — легальная реализация портов `AgentFactory`, они переедут в
       инфраструктурный пакет в рамках Этапа 4/5.
-- **`runner` не «тонкий» по объёму.** Делегирование есть, но адаптеры портов
-  (`autofix.go`, `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`,
-  `reindex.go`) остаются в пакете.
+- **`runner` не «тонкий» по объёму — устранено ✅.** Делегирование было, но
+  адаптеры портов (`autofix.go`, `applog.go`, `injections.go`, `taskstate.go`,
+  `wipcommit.go`, `reindex.go`) лежали в пакете. Перенесены в
+  `runner/adapters/` (см. пункт 2 Этапа 3).
 - **Падения тестов `application/planner` (17 шт.) — разобраны ✅.** Тесты
   воспроизводились на коммите `cb8fae2` (до Этапа 3) и не были регрессией
   переноса. Корневая причина: коммит `792f367` (Этап 6) сменил фолбэк

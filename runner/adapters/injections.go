@@ -1,4 +1,9 @@
-package runner
+package adapters
+
+// Сборка аппликатора промпт-инъекций для агентского цикла (порт
+// usecases.InjectionApplier). Источники инъекций и контекст условий собираются
+// здесь; сами правила применения живут в application (usecases) и в пакете
+// injections.
 
 import (
 	"context"
@@ -11,6 +16,7 @@ import (
 	"ai/board"
 	"ai/domain"
 	"ai/injections"
+	"ai/logging"
 )
 
 // injectionSet — инъекции агентского цикла, собираемые из источников.
@@ -35,7 +41,7 @@ func (s injectionSet) collect() []board.Injection {
 	return injections.CollectInjections(nil, s.assistant, nil, taskInjs)
 }
 
-// injectionSet собирает источники инъекций для цикла: инъекции ассистента
+// newInjectionSet собирает источники инъекций для цикла: инъекции ассистента
 // (Assistant.Injections через GetInjections) + инъекции задачи/сессии из
 // контекста.
 func newInjectionSet(ctx context.Context, agent agents.Agent) injectionSet {
@@ -50,7 +56,7 @@ func newInjectionSet(ctx context.Context, agent agents.Agent) injectionSet {
 // реальными значениями прогона. Раньше здесь стояли только System/Messages/
 // Role, из-за чего условия вида `when: "project == \"mytrip\""` или
 // `has_files == "true"` никогда не срабатывали — переменные были пустыми.
-func injectionMergeContext(ctx context.Context, agent agents.Agent, provider ChatProvider) injections.MergeContext {
+func injectionMergeContext(ctx context.Context, agent agents.Agent, provider usecases.ChatProvider) injections.MergeContext {
 	scope := board.InjectionScopeFromContext(ctx)
 
 	mctx := injections.MergeContext{
@@ -73,7 +79,7 @@ func injectionMergeContext(ctx context.Context, agent agents.Agent, provider Cha
 		},
 	}
 	if mctx.Role == "" {
-		mctx.Role = agentRole(agent)
+		mctx.Role = AgentRole(agent)
 	}
 
 	// Список инструментов агента — для when-переменной tools.
@@ -98,10 +104,10 @@ func injectionMergeContext(ctx context.Context, agent agents.Agent, provider Cha
 	return mctx
 }
 
-// agentRole — роль агента для условий when: приоритет у интерфейса
+// AgentRole — роль агента для условий when: приоритет у интерфейса
 // GetInjectionRole, затем имя типа агента (Assistant → assistant,
 // Developer → developer).
-func agentRole(agent agents.Agent) string {
+func AgentRole(agent agents.Agent) string {
 	if agent == nil {
 		return ""
 	}
@@ -135,14 +141,14 @@ func currentUser() string {
 type modelNamer interface{ ModelName() string }
 type providerNamer interface{ ProviderName() string }
 
-func providerModelName(p ChatProvider) string {
+func providerModelName(p usecases.ChatProvider) string {
 	if n, ok := p.(modelNamer); ok {
 		return n.ModelName()
 	}
 	return ""
 }
 
-func providerName(p ChatProvider) string {
+func providerName(p usecases.ChatProvider) string {
 	if n, ok := p.(providerNamer); ok {
 		return n.ProviderName()
 	}
@@ -157,8 +163,8 @@ type injectionApplier struct {
 	ctx  injections.MergeContext
 }
 
-// newInjectionApplier собирает аппликатор инъекций для запуска агента.
-func newInjectionApplier(ctx context.Context, agent agents.Agent, provider ChatProvider) usecases.InjectionApplier {
+// NewInjectionApplier собирает аппликатор инъекций для запуска агента.
+func NewInjectionApplier(ctx context.Context, agent agents.Agent, provider usecases.ChatProvider) usecases.InjectionApplier {
 	return injectionApplier{
 		injs: newInjectionSet(ctx, agent),
 		ctx:  injectionMergeContext(ctx, agent, provider),
@@ -190,18 +196,18 @@ func (a injectionApplier) Apply(history []domain.Message, turn int) []domain.Mes
 	result, err := injections.ApplyInjections(baseSystem, baseMsgs, all, ctxFor)
 	if err != nil || result == nil {
 		if err != nil {
-			Debugf("RUNNER: инъекции не применены: %v", err)
+			logging.Debugf("RUNNER: инъекции не применены: %v", err)
 		}
 		return history
 	}
 	if applied := injections.DescribeApplied(result.Applied); applied != "" {
-		Debugf("RUNNER: раунд %d: применены инъекции: %s", turn+1, applied)
+		logging.Debugf("RUNNER: раунд %d: применены инъекции: %s", turn+1, applied)
 	}
 	if skipped := injections.DescribeSkipped(result.Skipped); skipped != "" {
-		Debugf("RUNNER: раунд %d: инъекции пропущены: %s", turn+1, skipped)
+		logging.Debugf("RUNNER: раунд %d: инъекции пропущены: %s", turn+1, skipped)
 	}
 	if result.ReplaceWarning != "" {
-		Debugf("RUNNER: раунд %d: %s", turn+1, result.ReplaceWarning)
+		logging.Debugf("RUNNER: раунд %d: %s", turn+1, result.ReplaceWarning)
 	}
 
 	out := make([]domain.Message, 0, len(result.Messages)+1)

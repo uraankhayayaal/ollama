@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"ai/application/usecases"
+	"ai/runner/adapters"
 	"ai/tools"
 )
 
@@ -25,8 +26,8 @@ func TestAgentStateFor(t *testing.T) {
 		{false, false, 0, "idle"},
 	}
 	for _, c := range cases {
-		if got := agentStateFor(c.ran, c.failed, c.touched); got != c.want {
-			t.Fatalf("agentStateFor(%v,%v,%d)=%q, ожидалось %q", c.ran, c.failed, c.touched, got, c.want)
+		if got := adapters.AgentStateFor(c.ran, c.failed, c.touched); got != c.want {
+			t.Fatalf("adapters.AgentStateFor(%v,%v,%d)=%q, ожидалось %q", c.ran, c.failed, c.touched, got, c.want)
 		}
 	}
 }
@@ -39,7 +40,7 @@ func TestRoundVerifyKeepsFailureAfterGreenCheck(t *testing.T) {
 		{Name: "Run", Verify: true, VerifyCmd: "golangci-lint run"},
 		{Name: "ReadFiles"},
 	}
-	ran, failed, cmd, sample := roundVerify(calls)
+	ran, failed, cmd, sample := adapters.RoundVerify(calls)
 	if !ran || !failed {
 		t.Fatalf("ran=%v failed=%v, ожидались оба true", ran, failed)
 	}
@@ -52,7 +53,7 @@ func TestRoundVerifyKeepsFailureAfterGreenCheck(t *testing.T) {
 }
 
 func TestRoundVerifyNoVerifyInRound(t *testing.T) {
-	ran, failed, cmd, sample := roundVerify([]usecases.LoopRoundCall{{Name: "ReadFiles"}, {Name: "WriteFiles"}})
+	ran, failed, cmd, sample := adapters.RoundVerify([]usecases.LoopRoundCall{{Name: "ReadFiles"}, {Name: "WriteFiles"}})
 	if ran || failed || cmd != "" || sample != "" {
 		t.Fatalf("раунд без проверок: ran=%v failed=%v cmd=%q sample=%q", ran, failed, cmd, sample)
 	}
@@ -60,15 +61,15 @@ func TestRoundVerifyNoVerifyInRound(t *testing.T) {
 
 func TestRoundStateErrorTextTruncates(t *testing.T) {
 	raw := strings.Repeat("ошибка ", 1000)
-	rs := RoundState{VerifyCommand: "go test ./...", VerifyOutput: raw}
-	out := RoundStateErrorText(rs)
-	if len(out) >= len(raw) || len(out) > 2*roundStateErrorMax {
+	rs := adapters.RoundState{VerifyCommand: "go test ./...", VerifyOutput: raw}
+	out := adapters.RoundStateErrorText(rs)
+	if len(out) >= len(raw) || len(out) > 2*adapters.RoundStateErrorMax {
 		t.Fatalf("вывод не усечён: %d символов из %d", len(out), len(raw))
 	}
 	if !strings.Contains(out, "go test ./...") {
 		t.Fatalf("в last_error нет команды проверки: %q", out[:60])
 	}
-	if RoundStateErrorText(RoundState{}) != "" {
+	if adapters.RoundStateErrorText(adapters.RoundState{}) != "" {
 		t.Fatal("без падения last_error должен быть пустым")
 	}
 }
@@ -78,7 +79,7 @@ func TestRoundStateErrorTextTruncates(t *testing.T) {
 type stateAgent struct {
 	fakeAgent
 	touched  [][]string
-	states   []RoundState
+	states   []adapters.RoundState
 	commitOK bool
 }
 
@@ -100,7 +101,7 @@ func (a *stateAgent) CommitRoundTouched([]string, int) (string, bool, error) {
 	return "sha" + string(rune('a'+len(a.states))), true, nil
 }
 
-func (a *stateAgent) ReportRoundState(rs RoundState) { a.states = append(a.states, rs) }
+func (a *stateAgent) ReportRoundState(rs adapters.RoundState) { a.states = append(a.states, rs) }
 
 func TestGenerateReportsRoundStateEachRound(t *testing.T) {
 	failRun := []byte(`{"status":"error","exit_error":"exit status 1","stderr":"FAIL pkg/auth\n--- FAIL: TestLogin"}`)

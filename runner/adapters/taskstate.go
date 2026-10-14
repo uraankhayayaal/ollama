@@ -1,13 +1,16 @@
-package runner
+package adapters
 
 // Ф-6 (этап 2): State Tracking — доска задачи знает, чем занят агент прямо
 // сейчас, и где последняя рабочая точка для ручного отката.
 //
-// Источник сигнала один на всё: пост-раундовый блок хуков в runner.go, где уже
-// известно и что агент менял (TakeTouched), и чем закончились проверки раунда
-// (usecases.LoopStateFromCall). Отдельный подписчик «события прогона → Redis» для этого
-// не нужен: git-история worktree задачи уже хранит и коммиты раундов, и
-// прохождение проверок (см. State ниже).
+// Источник сигнала один на всё: пост-раундовый блок хуков, где уже известно и
+// что агент менял (TakeTouched), и чем закончились проверки раунда
+// (usecases.LoopStateFromCall). Отдельный подписчик «события прогона → Redis»
+// для этого не нужен: git-история worktree задачи уже хранит и коммиты раундов,
+// и прохождение проверок (см. State ниже).
+//
+// Адаптер порта `RoundStateReporter`: сборка domain.RoundState из раунда
+// выполняется здесь, запись на доску — на стороне агента-репортёра.
 
 import (
 	"strings"
@@ -15,12 +18,13 @@ import (
 	"ai/application/usecases"
 	"ai/board"
 	"ai/domain"
+	"ai/logging"
 )
 
-// roundStateErrorMax — сколько символов вывода упавшей проверки писать в
+// RoundStateErrorMax — сколько символов вывода упавшей проверки писать в
 // last_error задачи. Хватает, чтобы понять, что сломалось, и не раздувает
 // запись доски (нормализованный вывод тестов бывает на десятки тысяч символов).
-const roundStateErrorMax = 600
+const RoundStateErrorMax = 600
 
 // RoundState — состояние задачи по итогам одного раунда агента. Тип принадлежит
 // домену (domain.RoundState), здесь — алиас.
@@ -29,7 +33,6 @@ type RoundState = domain.RoundState
 // RoundStateReporter — необязательный интерфейс агента для записи состояния
 // задачи на доску (Ф-6). Реализует агент-разработчик поверх board.Store.
 // Отсутствие интерфейса — не ошибка: доска просто не знает runtime-состояния.
-// RoundStateReporter — порт агента, пишущего состояние раунда (usecases).
 type RoundStateReporter = usecases.RoundStateReporter
 
 // RoundStateErrorText — короткое описание упавшей проверки для last_error
@@ -45,13 +48,13 @@ func RoundStateErrorText(rs RoundState) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return Truncate(strings.Join(parts, " — "), roundStateErrorMax)
+	return logging.Truncate(strings.Join(parts, " — "), RoundStateErrorMax)
 }
 
-// agentStateFor — agent_state по итогам раунда. Приоритет: упавшая проверка
+// AgentStateFor — agent_state по итогам раунда. Приоритет: упавшая проверка
 // (агент чинит ошибки) → прошедшая проверка (прогоняет тесты) → изменённые
 // файлы (пишет код) → ничего не делал.
-func agentStateFor(verifyRan, verifyFailed bool, touched int) string {
+func AgentStateFor(verifyRan, verifyFailed bool, touched int) string {
 	switch {
 	case verifyFailed:
 		return board.AgentStateFixingErrors
@@ -64,13 +67,13 @@ func agentStateFor(verifyRan, verifyFailed bool, touched int) string {
 	}
 }
 
-// roundVerify собирает по раунду итог проверок: была ли проверка, падала ли и
+// RoundVerify собирает по раунду итог проверок: была ли проверка, падала ли и
 // что она вывела.
 //
 // Признак «падала» — ЛЮБАЯ упавшая проверка раунда, даже если последняя
 // проверка зелёная: «зелёный линт» не отменяет красный тест, а last_good_sha
 // по такой конвенции не сдвинется на раунде, где что-то было сломано.
-func roundVerify(calls []usecases.LoopRoundCall) (ran, failed bool, cmd, sample string) {
+func RoundVerify(calls []usecases.LoopRoundCall) (ran, failed bool, cmd, sample string) {
 	for _, c := range calls {
 		if !c.Verify {
 			continue
@@ -88,13 +91,13 @@ func roundVerify(calls []usecases.LoopRoundCall) (ran, failed bool, cmd, sample 
 	return ran, failed, cmd, sample
 }
 
-// newRoundState собирает состояние раунда из вызовов инструментов и результата
+// NewRoundState собирает состояние раунда из вызовов инструментов и результата
 // промежуточного коммита (Ф-6, этап 2).
-func newRoundState(round int, calls []usecases.LoopRoundCall, touched []string, sha string, committed bool) RoundState {
-	ran, failed, cmd, sample := roundVerify(calls)
+func NewRoundState(round int, calls []usecases.LoopRoundCall, touched []string, sha string, committed bool) RoundState {
+	ran, failed, cmd, sample := RoundVerify(calls)
 	return RoundState{
 		Round:         round,
-		State:         agentStateFor(ran, failed, len(touched)),
+		State:         AgentStateFor(ran, failed, len(touched)),
 		VerifyRan:     ran,
 		VerifyFailed:  failed,
 		VerifyCommand: cmd,

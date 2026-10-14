@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"ai/board"
-	"ai/runner"
+	"ai/runner/adapters"
 	"ai/tools"
 
 	"github.com/alicebob/miniredis/v2"
@@ -47,7 +47,7 @@ func stateAgentFor(store *board.Store) *base {
 func TestReportRoundStateRecordsProgressAndError(t *testing.T) {
 	store := stateStore(t)
 	d := stateAgentFor(store)
-	d.ReportRoundState(runner.RoundState{
+	d.ReportRoundState(adapters.RoundState{
 		Round: 3, State: "fixing_errors", VerifyRan: true, VerifyFailed: true,
 		VerifyCommand: "go test ./...", VerifyOutput: "--- FAIL: TestLogin",
 		Touched: 2,
@@ -80,14 +80,14 @@ func TestReportRoundStateMovesCheckpoints(t *testing.T) {
 	d := stateAgentFor(store)
 
 	// Раунд с коммитом, но без проверки: last_good на месте.
-	d.ReportRoundState(runner.RoundState{Round: 1, State: "writing_code", CommitSHA: "aaa", Committed: true, Touched: 1})
+	d.ReportRoundState(adapters.RoundState{Round: 1, State: "writing_code", CommitSHA: "aaa", Committed: true, Touched: 1})
 	got, _ := store.GetTask(ctx, "T-1")
 	if got.Checkpoint == nil || got.Checkpoint.LastSHA != "aaa" || got.Checkpoint.LastGoodSHA != "" {
 		t.Fatalf("после коммита без проверки: %+v", got.Checkpoint)
 	}
 
 	// Раунд с коммитом и зелёной проверкой: last_good догоняет last.
-	d.ReportRoundState(runner.RoundState{
+	d.ReportRoundState(adapters.RoundState{
 		Round: 2, State: "running_tests", VerifyRan: true,
 		CommitSHA: "bbb", Committed: true, Touched: 1,
 	})
@@ -100,7 +100,7 @@ func TestReportRoundStateMovesCheckpoints(t *testing.T) {
 	}
 
 	// Раунд с упавшей проверкой: last_good остаётся на последнем зелёном.
-	d.ReportRoundState(runner.RoundState{
+	d.ReportRoundState(adapters.RoundState{
 		Round: 3, State: "fixing_errors", VerifyRan: true, VerifyFailed: true,
 		VerifyCommand: "go test ./...", CommitSHA: "ccc", Committed: true, Touched: 1,
 	})
@@ -120,7 +120,7 @@ func TestReportRoundStateMovesCheckpoints(t *testing.T) {
 // без id задачи запись не происходит, но и падения нет.
 func TestReportRoundStateSkipsWithoutStoreOrTaskID(t *testing.T) {
 	store := stateStore(t)
-	rs := runner.RoundState{Round: 1, State: "writing_code", CommitSHA: "aaa", Committed: true}
+	rs := adapters.RoundState{Round: 1, State: "writing_code", CommitSHA: "aaa", Committed: true}
 
 	noStore := &base{FileOps: &tools.FileOps{}}
 	noStore.SetTaskID("T-1")

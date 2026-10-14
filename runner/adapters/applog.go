@@ -1,4 +1,4 @@
-package runner
+package adapters
 
 // Ф-2: логи рантайма в цикл самокоррекции.
 //
@@ -19,6 +19,9 @@ package runner
 //     он НЕ расходуется заново, пока модель не починит приложение;
 //   - логи никогда не показываются как «ошибка» сами по себе: стектрейс в
 //     логе — это подсказка, а не вердикт.
+//
+// Адаптер порта `RuntimeLogger`: политика подмешивания (что и как) живёт в
+// application/usecases, здесь — только конфигурация из окружения.
 
 import (
 	"os"
@@ -28,50 +31,38 @@ import (
 	"ai/application/usecases"
 )
 
-const (
-	// appLogFeedOnEnv — включение подмешивания (APP_LOG_AUTO_FEED).
-	// 0/false/off/no — выключить.
-	appLogFeedOnEnv = "APP_LOG_AUTO_FEED"
-	// appLogMaxFeedRoundsEnv — лимит подмешиваний за один цикл.
-	appLogMaxFeedRoundsEnv = "APP_LOG_MAX_FEED_ROUNDS"
-	// defaultAppLogMaxFeedRounds — по умолчанию два: первый лог объясняет
-	// проблему, второй подтверждает, что правка не помогла. Дальше модель
-	// обычно начинает «качать» правки наугад, и жжение раундов вредит.
-	defaultAppLogMaxFeedRounds = 2
-)
-
-// RuntimeLogger — необязательный интерфейс агента: хвост логов рантайма,
-// накопленный инструментом ReadAppLogs. Реализуется *tools.FileOps (встроен в
-// агентов-разработчиков, QA и DevOps через внедрённый *tools.FileOps), поэтому
-// подключается сам собой — как AutoFixer.
 // RuntimeLogger — порт агента с хвостом логов рантайма (usecases.RuntimeLogger).
+// Реализуется *tools.FileOps (встроен в агентов-разработчиков, QA и DevOps),
+// поэтому подключается сам собой — как AutoFixer.
 type RuntimeLogger = usecases.RuntimeLogger
 
-// appLogFeedEnabled сообщает, включено ли подмешивание логов рантайма.
-func appLogFeedEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(appLogFeedOnEnv))) {
+const (
+	// AppLogFeedOnEnv — включение подмешивания (APP_LOG_AUTO_FEED).
+	// 0/false/off/no — выключить.
+	AppLogFeedOnEnv = "APP_LOG_AUTO_FEED"
+	// AppLogMaxFeedRoundsEnv — лимит подмешиваний за один цикл.
+	AppLogMaxFeedRoundsEnv = "APP_LOG_MAX_FEED_ROUNDS"
+	// DefaultAppLogMaxFeedRounds — по умолчанию два: первый лог объясняет
+	// проблему, второй подтверждает, что правка не помогла. Дальше модель
+	// обычно начинает «качать» правки наугад, и жжение раундов вредит.
+	DefaultAppLogMaxFeedRounds = 2
+)
+
+// AppLogFeedEnabled сообщает, включено ли подмешивание логов рантайма.
+func AppLogFeedEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(AppLogFeedOnEnv))) {
 	case "0", "false", "off", "no":
 		return false
 	}
 	return true
 }
 
-// appLogMaxFeedRounds — лимит подмешиваний логов за цикл.
-func appLogMaxFeedRounds() int {
-	if v := strings.TrimSpace(os.Getenv(appLogMaxFeedRoundsEnv)); v != "" {
+// AppLogMaxFeedRounds — лимит подмешиваний логов за цикл.
+func AppLogMaxFeedRounds() int {
+	if v := strings.TrimSpace(os.Getenv(AppLogMaxFeedRoundsEnv)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return defaultAppLogMaxFeedRounds
-}
-
-// appLogFeedMessage — алиас usecases.AppLogFeedMessage (политика в application).
-func appLogFeedMessage(source string, lines []string, used, max int) string {
-	return usecases.AppLogFeedMessage(source, lines, used, max)
-}
-
-// trimAppLogLines — алиас usecases.TrimAppLogLines (политика в application).
-func trimAppLogLines(lines []string) []string {
-	return usecases.TrimAppLogLines(lines)
+	return DefaultAppLogMaxFeedRounds
 }

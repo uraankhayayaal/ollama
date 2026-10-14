@@ -108,7 +108,7 @@ JSON-RPC 2.0 по stdio с заголовками `Content-Length`. Сервер
 
 ## Автопочинка
 
-`runner/autofix.go` — по `LSP_AUTO_FIX` (вкл) и `LSP_MAX_FIX_ROUNDS`
+`runner/adapters/autofix.go` — по `LSP_AUTO_FIX` (вкл) и `LSP_MAX_FIX_ROUNDS`
 (по умолчанию 3). Агент получает диагностики и правит код без участия
 модели-рефактора.
 

@@ -5,6 +5,7 @@ import (
 	"ai/application/usecases"
 	"ai/domain"
 	"ai/runevents"
+	"ai/runner/adapters"
 	"ai/tools"
 	"context"
 	"os"
@@ -223,9 +224,9 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 	return usecases.RunTask(ctx, usecases.RunPorts{
 		Provider:   provider,
 		Agent:      agent,
-		Role:       domain.AgentRole(agentRole(agent)),
+		Role:       domain.AgentRole(adapters.AgentRole(agent)),
 		Reporter:   reporter,
-		Injections: newInjectionApplier(ctx, agent, provider),
+		Injections: adapters.NewInjectionApplier(ctx, agent, provider),
 		Compressor: usecases.HistoryCompressorFunc(func(ctx context.Context, provider usecases.ChatProvider, messages []domain.Message, lastInputTokens int) ([]domain.Message, *usecases.CompressionReport) {
 			// Convert messages to runner.Message for compatibility
 			runnerMessages := make([]Message, len(messages))
@@ -259,13 +260,13 @@ func generate(ctx context.Context, provider ChatProvider, agent agents.Agent, re
 			ParallelMax:         parallelToolMax(),
 			IsParallelSafe:      tools.IsParallelSafe,
 			ParseArguments:      tools.ParseArguments,
-			AutoFixEnabled:      autoFixEnabled(),
-			AutoFixMaxRounds:    autoFixMaxRounds(),
-			ReindexEnabled:      reindexEnabled(),
-			WIPEnabled:          wipCommitEnabled(),
-			AppLogFeedEnabled:   appLogFeedEnabled(),
-			AppLogMaxFeedRounds: appLogMaxFeedRounds(),
-			BuildRoundState:     newRoundState,
+			AutoFixEnabled:      adapters.AutoFixEnabled(),
+			AutoFixMaxRounds:    adapters.AutoFixMaxRounds(),
+			ReindexEnabled:      adapters.ReindexEnabled(),
+			WIPEnabled:          adapters.WIPCommitEnabled(),
+			AppLogFeedEnabled:   adapters.AppLogFeedEnabled(),
+			AppLogMaxFeedRounds: adapters.AppLogMaxFeedRounds(),
+			BuildRoundState:     adapters.NewRoundState,
 		},
 	})
 }

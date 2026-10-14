@@ -231,7 +231,7 @@ Content-Type: application/json
 Инъекции собираются из источников и применяются в порядке
 `global → assistant → session → runtime`; внутри scope — по убыванию
 `priority`, при равенстве порядок объявления. Сборка — `injectionSet.collect`
-(`runner/injections.go`), применение — `injections.ApplyInjections`.
+(`runner/adapters/injections.go`), применение — `injections.ApplyInjections`.
 
 | Scope | Источник | К кому применяется |
 |---|---|---|

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ai/agents"
+	"ai/application/usecases"
 	"ai/tools"
 )
 
@@ -174,17 +175,17 @@ func TestAutoFixDeduplicatesRepeatedDiags(t *testing.T) {
 	}
 }
 
-// filterNewDiags возвращает только ещё не отправленные строки, сохраняя порядок.
+// usecases.FilterNewDiags возвращает только ещё не отправленные строки, сохраняя порядок.
 func TestFilterNewDiags(t *testing.T) {
 	sent := map[string]bool{"a": true, "b": true}
-	got := filterNewDiags([]string{"a", "c", "b", "d"}, sent)
+	got := usecases.FilterNewDiags([]string{"a", "c", "b", "d"}, sent)
 	if len(got) != 2 || got[0] != "c" || got[1] != "d" {
-		t.Fatalf("filterNewDiags = %#v", got)
+		t.Fatalf("usecases.FilterNewDiags = %#v", got)
 	}
-	if len(filterNewDiags(nil, sent)) != 0 {
+	if len(usecases.FilterNewDiags(nil, sent)) != 0 {
 		t.Fatal("nil-вход должен дать пусто")
 	}
-	if got := filterNewDiags([]string{"x"}, nil); len(got) != 1 || got[0] != "x" {
+	if got := usecases.FilterNewDiags([]string{"x"}, nil); len(got) != 1 || got[0] != "x" {
 		t.Fatalf("без sent всё считается новым: %#v", got)
 	}
 }

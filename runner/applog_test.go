@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"ai/application/usecases"
+	"ai/runner/adapters"
 	"ai/tools"
 )
 
@@ -32,7 +33,7 @@ func (f *fakeRuntimeAgent) TakeAppLogTail() (string, []string) {
 }
 
 func TestAppLogFeedMessageMentionsRuntimeAndNotError(t *testing.T) {
-	msg := appLogFeedMessage("local", []string{"panic: boom"}, 1, 2)
+	msg := usecases.AppLogFeedMessage("local", []string{"panic: boom"}, 1, 2)
 	// Подсказка не должна читаться как «твой код сломан» — иначе модель
 	// начнёт чинить то, что не сломано. И обязана содержать сами строки.
 	if !strings.Contains(msg, "panic: boom") {
@@ -55,47 +56,47 @@ func TestTrimAppLogLinesKeepsTailAndCapsChars(t *testing.T) {
 	for i := 0; i < usecases.AppLogFeedMaxLines+20; i++ {
 		many = append(many, "line")
 	}
-	got := trimAppLogLines(many)
+	got := usecases.TrimAppLogLines(many)
 	if len(got) != usecases.AppLogFeedMaxLines {
 		t.Fatalf("строк: %d, ждём %d", len(got), usecases.AppLogFeedMaxLines)
 	}
 	// Одна гигантская строка (трейс с locals) не должна утянуть за собой весь
 	// бюджет: остаётся только она.
 	huge := strings.Repeat("x", usecases.AppLogFeedMaxChars*2)
-	got = trimAppLogLines([]string{"short", huge})
+	got = usecases.TrimAppLogLines([]string{"short", huge})
 	if len(got) != 1 || got[0] != huge {
 		t.Fatalf("обрезка по символам не сработала: %d строк", len(got))
 	}
 }
 
 func TestAppLogFeedRespectsMaxRounds(t *testing.T) {
-	t.Setenv(appLogMaxFeedRoundsEnv, "1")
-	if n := appLogMaxFeedRounds(); n != 1 {
+	t.Setenv(adapters.AppLogMaxFeedRoundsEnv, "1")
+	if n := adapters.AppLogMaxFeedRounds(); n != 1 {
 		t.Fatalf("лимит: %d, ждём 1", n)
 	}
 	// Мусор в переменной — дефолт, а не «ноль подмешиваний».
-	t.Setenv(appLogMaxFeedRoundsEnv, "мусор")
-	if n := appLogMaxFeedRounds(); n != defaultAppLogMaxFeedRounds {
-		t.Fatalf("лимит для некорректного значения: %d, ждём дефолт %d", n, defaultAppLogMaxFeedRounds)
+	t.Setenv(adapters.AppLogMaxFeedRoundsEnv, "мусор")
+	if n := adapters.AppLogMaxFeedRounds(); n != adapters.DefaultAppLogMaxFeedRounds {
+		t.Fatalf("лимит для некорректного значения: %d, ждём дефолт %d", n, adapters.DefaultAppLogMaxFeedRounds)
 	}
-	t.Setenv(appLogMaxFeedRoundsEnv, "0")
-	if n := appLogMaxFeedRounds(); n != defaultAppLogMaxFeedRounds {
-		t.Fatalf("лимит для нуля: %d, ждём дефолт %d", n, defaultAppLogMaxFeedRounds)
+	t.Setenv(adapters.AppLogMaxFeedRoundsEnv, "0")
+	if n := adapters.AppLogMaxFeedRounds(); n != adapters.DefaultAppLogMaxFeedRounds {
+		t.Fatalf("лимит для нуля: %d, ждём дефолт %d", n, adapters.DefaultAppLogMaxFeedRounds)
 	}
 }
 
 func TestAppLogFeedToggle(t *testing.T) {
-	if !appLogFeedEnabled() {
+	if !adapters.AppLogFeedEnabled() {
 		t.Fatalf("по умолчанию подмешивание должно быть включено")
 	}
 	for _, off := range []string{"0", "false", "off", "NO"} {
-		t.Setenv(appLogFeedOnEnv, off)
-		if appLogFeedEnabled() {
+		t.Setenv(adapters.AppLogFeedOnEnv, off)
+		if adapters.AppLogFeedEnabled() {
 			t.Fatalf("%s должно выключать подмешивание", off)
 		}
 	}
-	t.Setenv(appLogFeedOnEnv, "  1 ")
-	if !appLogFeedEnabled() {
+	t.Setenv(adapters.AppLogFeedOnEnv, "  1 ")
+	if !adapters.AppLogFeedEnabled() {
 		t.Fatalf("явное включение должно работать")
 	}
 }
@@ -105,7 +106,7 @@ func TestAppLogFeedToggle(t *testing.T) {
 // внедрённый FileOps. Здесь проверяем сам интерфейс на фейке, чтобы падение
 // сигнатуры не дошло до рабочего кода.
 func TestRuntimeAgentSatisfiesInterface(t *testing.T) {
-	var rl RuntimeLogger = &fakeRuntimeAgent{source: "local", pending: []string{"a"}}
+	var rl adapters.RuntimeLogger = &fakeRuntimeAgent{source: "local", pending: []string{"a"}}
 	src, lines := rl.TakeAppLogTail()
 	if src != "local" || len(lines) != 1 {
 		t.Fatalf("интерфейс вернул %q %+v", src, lines)
@@ -120,8 +121,8 @@ func TestRuntimeAgentSatisfiesInterface(t *testing.T) {
 // подмешивает их СЛЕДУЮЩИМ раундом отдельным user-сообщением, которое модель
 // реально видит в своей истории.
 func TestAppLogFeedGoesToModelAsUserMessage(t *testing.T) {
-	t.Setenv(appLogFeedOnEnv, "1")
-	t.Setenv(appLogMaxFeedRoundsEnv, "2")
+	t.Setenv(adapters.AppLogFeedOnEnv, "1")
+	t.Setenv(adapters.AppLogMaxFeedRoundsEnv, "2")
 
 	agent := &fakeRuntimeAgent{pending: []string{"listen tcp :8080: bind: address already in use"}}
 	// Модель: раунд 1 — вызов инструмента, раунд 2 — финальный ответ.

@@ -1,4 +1,4 @@
-package runner
+package adapters
 
 // Ф-6: промежуточные коммиты задачи — единица ручного отката.
 //
@@ -14,10 +14,12 @@ package runner
 // подписчик «события → Redis» для State Tracking не нужен.
 //
 // Коммит делает агент, а не раннер: раннер не знает ни проект, ни ветку, и
-// не должен знать про git. Хук живёт в общей точке пост-раундовых обработчиков
-// (runner.go, блок TakeTouched) и получает список файлов из того же
-// ОДНОГО дрена очереди, что авто-лечение LSP и реиндексация RAG, — иначе
-// хуки конкурировали бы за очередь.
+// не должен знать про git. Хук получает список файлов из того же ОДНОГО дрена
+// очереди, что авто-лечение LSP и реиндексация RAG, — иначе хуки конкурировали
+// бы за очередь.
+//
+// Адаптер порта `WIPCommitter`: формат сообщения коммита и конфигурация из
+// окружения — здесь, фиксация средствами git — на стороне агента.
 
 import (
 	"os"
@@ -27,25 +29,27 @@ import (
 	"ai/application/usecases"
 )
 
-// wipCommitOnEnv — env-флаг промежуточных коммитов (KANBAN_WIP_COMMIT).
+// WIPCommitOnEnv — env-флаг промежуточных коммитов (KANBAN_WIP_COMMIT).
 // По умолчанию включён; выключается 0/false/off/no.
-const wipCommitOnEnv = "KANBAN_WIP_COMMIT"
+const WIPCommitOnEnv = "KANBAN_WIP_COMMIT"
 
-// wipCommitFilesMax — сколько путей перечислять в теле сообщения коммита.
+// WIPCommitFilesMax — сколько путей перечислять в теле сообщения коммита.
 // Список нужен человеку при разборе истории, а не модели, поэтому длинный
 // хвост усекается счётчиком остатка.
-const wipCommitFilesMax = 12
+const WIPCommitFilesMax = 12
+
+// wipCommitFilesMaxEnv — env-override лимита файлов в сообщении коммита.
+const wipCommitFilesMaxEnv = "KANBAN_WIP_COMMIT_FILES"
 
 // WIPCommitter — необязательный интерфейс агента для фиксации правок раунда
 // (Ф-6). Реализуется агентами-разработчиками поверх gitops.Repo рабочего
 // каталога. Отказываться от реализации можно молча: без неё промежуточные
 // коммиты просто не делаются, поведение прежнее.
-// WIPCommitter — порт агента для фиксации правок раунда (usecases.WIPCommitter).
 type WIPCommitter = usecases.WIPCommitter
 
-// wipCommitEnabled сообщает, включены ли промежуточные коммиты.
-func wipCommitEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(wipCommitOnEnv))) {
+// WIPCommitEnabled сообщает, включены ли промежуточные коммиты.
+func WIPCommitEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(WIPCommitOnEnv))) {
 	case "0", "false", "off", "no":
 		return false
 	}
@@ -59,11 +63,8 @@ func wipCommitFilesLimit() int {
 			return n
 		}
 	}
-	return wipCommitFilesMax
+	return WIPCommitFilesMax
 }
-
-// wipCommitFilesMaxEnv — env-override лимита файлов в сообщении коммита.
-const wipCommitFilesMaxEnv = "KANBAN_WIP_COMMIT_FILES"
 
 // WipRoundMessage собирает сообщение промежуточного коммита.
 //

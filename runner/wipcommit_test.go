@@ -7,19 +7,21 @@ package runner
 import (
 	"strings"
 	"testing"
+
+	"ai/runner/adapters"
 )
 
 func TestWipCommitEnabledDefaultOn(t *testing.T) {
-	t.Setenv(wipCommitOnEnv, "")
-	if !wipCommitEnabled() {
+	t.Setenv(adapters.WIPCommitOnEnv, "")
+	if !adapters.WIPCommitEnabled() {
 		t.Fatal("по умолчанию промежуточные коммиты должны быть включены")
 	}
 }
 
 func TestWipCommitEnabledExplicitOff(t *testing.T) {
 	for _, v := range []string{"0", "false", "off", "no", "FALSE", " Off "} {
-		t.Setenv(wipCommitOnEnv, v)
-		if wipCommitEnabled() {
+		t.Setenv(adapters.WIPCommitOnEnv, v)
+		if adapters.WIPCommitEnabled() {
 			t.Fatalf("KANBAN_WIP_COMMIT=%q должен выключать коммиты", v)
 		}
 	}
@@ -27,15 +29,15 @@ func TestWipCommitEnabledExplicitOff(t *testing.T) {
 
 func TestWipCommitEnabledExplicitOn(t *testing.T) {
 	for _, v := range []string{"1", "true", "on", "yes"} {
-		t.Setenv(wipCommitOnEnv, v)
-		if !wipCommitEnabled() {
+		t.Setenv(adapters.WIPCommitOnEnv, v)
+		if !adapters.WIPCommitEnabled() {
 			t.Fatalf("KANBAN_WIP_COMMIT=%q должен включать коммиты", v)
 		}
 	}
 }
 
 func TestWipRoundMessageMentionsRoundAndFiles(t *testing.T) {
-	msg := WipRoundMessage(3, []string{"server/a.go", "server/b.go"})
+	msg := adapters.WipRoundMessage(3, []string{"server/a.go", "server/b.go"})
 	if !strings.Contains(msg, "раунд 3") {
 		t.Fatalf("нет номера раунда: %q", msg)
 	}
@@ -50,22 +52,22 @@ func TestWipRoundMessageMentionsRoundAndFiles(t *testing.T) {
 }
 
 func TestWipRoundMessageTruncatesLongList(t *testing.T) {
-	files := make([]string, 0, wipCommitFilesMax+5)
-	for i := 0; i < wipCommitFilesMax+5; i++ {
+	files := make([]string, 0, adapters.WIPCommitFilesMax+5)
+	for i := 0; i < adapters.WIPCommitFilesMax+5; i++ {
 		files = append(files, "f"+strings.Repeat("x", 3)+string(rune('a'+i%26))+".go")
 	}
-	msg := WipRoundMessage(1, files)
+	msg := adapters.WipRoundMessage(1, files)
 	if !strings.Contains(msg, "ещё 5") {
 		t.Fatalf("нет счётчика остатка: %q", msg)
 	}
 	// Усечённый хвост не должен попасть в сообщение целиком.
-	if strings.Count(msg, ".go") > wipCommitFilesMax {
+	if strings.Count(msg, ".go") > adapters.WIPCommitFilesMax {
 		t.Fatalf("список не усечён: %q", msg)
 	}
 }
 
 func TestWipRoundMessageWithoutFiles(t *testing.T) {
-	msg := WipRoundMessage(7, nil)
+	msg := adapters.WipRoundMessage(7, nil)
 	if !strings.Contains(msg, "раунд 7") {
 		t.Fatalf("нет номера раунда: %q", msg)
 	}

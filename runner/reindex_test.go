@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"ai/rag"
+	"ai/runner/adapters"
 	"ai/tools"
 )
 
@@ -142,7 +143,7 @@ func TestReindexFiles(t *testing.T) {
 	// Версия индексации задаётся вызывающей стороной (ветка worktree агента +
 	// коммит) и прокидывается в каждое обращение к индексу (Р-7).
 	opts := rag.IndexOptions{Branch: "ai/task/T-01", CommitSHA: "abc123"}
-	n, err := ReindexFiles(context.Background(), cl, scopeOf, dir, "p", []string{"a.go", "b.txt", "gone.go"}, opts)
+	n, err := adapters.ReindexFiles(context.Background(), cl, scopeOf, dir, "p", []string{"a.go", "b.txt", "gone.go"}, opts)
 	if err != nil {
 		t.Fatalf("ReindexFiles: %v", err)
 	}
@@ -165,10 +166,10 @@ func TestReindexFiles(t *testing.T) {
 		}
 	}
 
-	if n, _ := ReindexFiles(context.Background(), nil, scopeOf, dir, "p", []string{"a.go"}, opts); n != 0 {
+	if n, _ := adapters.ReindexFiles(context.Background(), nil, scopeOf, dir, "p", []string{"a.go"}, opts); n != 0 {
 		t.Fatalf("nil-клиент должен давать 0, got %d", n)
 	}
-	if n, _ := ReindexFiles(context.Background(), cl, scopeOf, dir, "p", nil, opts); n != 0 {
+	if n, _ := adapters.ReindexFiles(context.Background(), cl, scopeOf, dir, "p", nil, opts); n != 0 {
 		t.Fatalf("пустой список должен давать 0, got %d", n)
 	}
 }
@@ -184,7 +185,7 @@ func TestReindexFilesStopsOnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl := &fakeReindexClient{failAt: 2}
-	n, err := ReindexFiles(context.Background(), cl, nil, dir, "p", []string{"a.go", "b.go"}, rag.IndexOptions{Branch: "main"})
+	n, err := adapters.ReindexFiles(context.Background(), cl, nil, dir, "p", []string{"a.go", "b.go"}, rag.IndexOptions{Branch: "main"})
 	if err == nil {
 		t.Fatalf("ожидали ошибку индексации, got nil (n=%d)", n)
 	}

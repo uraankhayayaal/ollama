@@ -13,7 +13,7 @@ import (
 	"ai/logging"
 	"ai/projects"
 	"ai/rag"
-	"ai/runner"
+	"ai/runner/adapters"
 	"ai/tools"
 	"context"
 	"fmt"
@@ -192,7 +192,7 @@ func (b *base) withLangDesc(desc string) *base {
 // память ВЕТКИ агента (branch/commit_sha определяются по рабочему каталогу
 // worktree через rag.DetectIndexOptions, см.
 // PLAN-2026-09-27-done-branch-aware-rag.md, Р-7): прежние версии чанков помечаются
-// устаревшими, удалённые файлы — тоже. Реализует runner.Reindexer; вызывается
+// устаревшими, удалённые файлы — тоже. Реализует adapters.Reindexer; вызывается
 // раннером в пост-раундовом хуке при RAG_AUTO_REINDEX=1. Без подключённого
 // RAG — тихий ноль (degrade), ошибки доступа к Qdrant возвращаются: раннер
 // логирует, генерация не падает.
@@ -207,12 +207,12 @@ func (d *base) ReindexTouched(touched []string) (int, error) {
 	if project == "" {
 		return 0, nil
 	}
-	return runner.ReindexFiles(context.Background(), d.RAG, rag.ScopeForPath, d.OutputDir, project, touched,
+	return adapters.ReindexFiles(context.Background(), d.RAG, rag.ScopeForPath, d.OutputDir, project, touched,
 		rag.DetectIndexOptions(d.OutputDir))
 }
 
 // CommitRoundTouched фиксирует правки раунда промежуточным коммитом (Ф-6,
-// реализует runner.WIPCommitter). Вызывается раннером в пост-раундовом хуке
+// реализует adapters.WIPCommitter). Вызывается раннером в пост-раундовом хуке
 // из единой очереди затронутых файлов.
 //
 // Гард области: коммит создаётся только в изолированной копии задачи
@@ -251,7 +251,7 @@ func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, er
 		d.wipSubsDone = true
 	}
 	repo.Submodules = d.wipSubs
-	sha, committed, err := repo.CommitIfDirty(context.Background(), runner.WipRoundMessage(round, touched))
+	sha, committed, err := repo.CommitIfDirty(context.Background(), adapters.WipRoundMessage(round, touched))
 	if err != nil {
 		return "", false, err
 	}
@@ -286,7 +286,7 @@ func (b *base) Label() string {
 func (d *base) SetTaskID(id string) { d.taskID = strings.TrimSpace(id) }
 
 // ReportRoundState записывает состояние раунда на доску задачи (Ф-6, этап 2,
-// реализует runner.RoundStateReporter). Раннер вызывает его раз за раунд в
+// реализует adapters.RoundStateReporter). Раннер вызывает его раз за раунд в
 // том же хуке, где делает промежуточный коммит.
 //
 // Что важно и почему:
@@ -300,13 +300,13 @@ func (d *base) SetTaskID(id string) { d.taskID = strings.TrimSpace(id) }
 //
 // Промахи записи не поднимаются: состояние — вспомогательная телеметрия, её
 // потеря не должна ронять генерацию.
-func (d *base) ReportRoundState(rs runner.RoundState) {
+func (d *base) ReportRoundState(rs adapters.RoundState) {
 	if d.Store == nil || d.taskID == "" {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	rs.Agent = d.label
-	errText := runner.RoundStateErrorText(rs)
+	errText := adapters.RoundStateErrorText(rs)
 	err := d.Store.PatchTask(context.Background(), d.taskID, func(t *board.Task) error {
 		t.AgentState = rs.State
 		t.ActiveAgent = d.label

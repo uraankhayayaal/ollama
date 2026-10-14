@@ -1,4 +1,4 @@
-package runner
+package adapters
 
 // Ф-2: авто-самоисправление в цикле Generate.
 //
@@ -11,6 +11,9 @@ package runner
 // Поведение управляется LSP_AUTO_FIX (по умолчанию включено; 0/false/off/no —
 // выключить). При отсутствии чекеров LspCheck деградирует в skipped, диагностик
 // нет — фича тихо неактивна.
+//
+// Адаптер порта `AutoFixer`: политика цикла (что и как подмешивать) живёт в
+// application/usecases, здесь — только конфигурация из окружения.
 
 import (
 	"os"
@@ -30,14 +33,9 @@ const (
 	defaultAutoFixMax   = 3
 )
 
-// AutoFixer — необязательный интерфейс агента для координации пост-раундовых
-// хуков (Ф-2 + Ф-5): единый сегмент очереди затронутых файлов + LSP-проверка.
-// Реализуется *tools.FileOps (встроен в агентов-разработчиков). TakeTouched
-// дренит очередь РОВНО ОДИН раз за раунд; полученный список раннер раздаёт
-// включённым хукам — авто-лечению (LspCheckFiles) и переиндексации RAG
-// (Reindexer) — чтобы хуки не конкурировали за одну очередь.
-// autoFixEnabled сообщает, включено ли авто-самоисправление (LSP_AUTO_FIX).
-func autoFixEnabled() bool {
+// AutoFixEnabled сообщает, включено ли авто-самоисправление (LSP_AUTO_FIX).
+// По умолчанию — да; выключается 0/false/off/no.
+func AutoFixEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(autoFixOnEnv))) {
 	case "0", "false", "off", "no":
 		return false
@@ -45,23 +43,13 @@ func autoFixEnabled() bool {
 	return true
 }
 
-// autoFixMaxRounds — лимит подряд итераций авто-лечения (LSP_MAX_FIX_ROUNDS),
+// AutoFixMaxRounds — лимит подряд итераций авто-лечения (LSP_MAX_FIX_ROUNDS),
 // по умолчанию defaultAutoFixMax. Некорректное/нулевое значение — дефолт.
-func autoFixMaxRounds() int {
+func AutoFixMaxRounds() int {
 	if v := strings.TrimSpace(os.Getenv(autoFixMaxRoundsEnv)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
 	return defaultAutoFixMax
-}
-
-// filterNewDiags — алиас usecases.FilterNewDiags (политика в application).
-func filterNewDiags(diags []string, sent map[string]bool) []string {
-	return usecases.FilterNewDiags(diags, sent)
-}
-
-// autoFixMessage — алиас usecases.AutoFixMessage (политика в application).
-func autoFixMessage(diags []string, iteration, max int) string {
-	return usecases.AutoFixMessage(diags, iteration, max)
 }
