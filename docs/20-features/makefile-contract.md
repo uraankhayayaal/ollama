@@ -67,7 +67,7 @@ Make-цели исполняются в каталоге Makefile, а не в к
 
 Если `make` недоступен на хосте, `makefileLocate` даёт фолбэк
 `make infra.<цель>` (`detect.go:192-198`), а команда исполняется через
-`sandbox/compose.yaml`.
+`infrastructure/sandbox/compose.yaml`.
 
 ## Договорённость с агентами
 

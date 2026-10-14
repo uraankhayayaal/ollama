@@ -7,7 +7,7 @@ package tools
 // Имя destructiveCommandReason сохранено — на него завязаны вызовы
 // (runCommandSandbox, sandboxSpecFor) и существующие тесты.
 
-import "ai/sandbox"
+import "ai/infrastructure/sandbox"
 
 // destructiveCommandReason возвращает причину запрета, если команда
 // разрушительна. Пустая строка — команда разрешена.

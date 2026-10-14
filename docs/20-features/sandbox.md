@@ -61,7 +61,7 @@ CODEGEN_DOCKER_CERT=
    прошлой сессии (`ai-sandbox-<проект>`) → сеть → образ → контейнер.
    Ошибка старта = **отказ запуска оркестрации**: `session` объявляет
    изоляцию, тихий переход на хост запрещён.
-2. Контейнер регистрируется в реестре (`sandbox/registry.go`); команды
+2. Контейнер регистрируется в реестре (`infrastructure/sandbox/registry.go`); команды
    `FileOps.Run` и приёмки находят его по имени проекта или пути каталога.
 3. По завершении (и по отмене стопом) контейнер снимается: stop → rm →
    удаление прокси (`defer` в горутине-раннера, п. 1.7).
@@ -82,7 +82,7 @@ git-операции, RAG-индексация, логи. См. ограниче
 и корень один их не покрыл бы. Для temp-проектов родитель — общий `temp/`:
 смешивания с чужими проектами нет, потому что матчинг внутри сессии идёт по
 реестру — каталог проекта или его dot-сосед с именем проекта
-(`sandbox/registry.go:coverLen`). Чужая команда в чужую сессию не попадает.
+(`infrastructure/sandbox/registry.go:coverLen`). Чужая команда в чужую сессию не попадает.
 
 Пути **не переписываются**: workdir команды = хостовому пути, поэтому скрипты,
 make-цели и агенты не замечают подмены.
@@ -119,13 +119,13 @@ Dev-образ нужен для монорепо и make-целей вида `m
 один раз (или средствами кода):
 
 ```bash
-SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f sandbox/compose.yaml build
+SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f infrastructure/sandbox/compose.yaml build
 ```
 
 Если образа нет в кэше демона, песочница собирает его **сама**: `ai-sandbox:latest`
 в реестре не существует, поэтому неявный pull при `docker run`/`create` дал бы
-«pull access denied» (даже если в логике Pull). Автосборка (`sandbox/ensureimage.go`)
-использует тот же `sandbox/Dockerfile` (запечён в бинарь через `go:embed`) и
+«pull access denied» (даже если в логике Pull). Автосборка (`infrastructure/sandbox/ensureimage.go`)
+использует тот же `infrastructure/sandbox/Dockerfile` (запечён в бинарь через `go:embed`) и
 тот же Engine API, что и compose: реестровые образы она не трогает — их docker
 тянет неявным pull. Сериализована мьютексом, чтобы параллельные команды/сессии
 не гоняли один и тот же `docker build`.
@@ -153,7 +153,7 @@ SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f sandbox/compose.yaml
 работа идёт в одном каталоге задачи, а родитель может оказаться чем угодно вплоть
 до домашнего каталога.
 
-Ручной запуск через `sandbox/compose.yaml` монтирует по-прежнему в
+Ручной запуск через `infrastructure/sandbox/compose.yaml` монтирует по-прежнему в
 `/workspace`: это отдельная точка входа для человека, а не путь агента.
 
 `CODEGEN_SANDBOX_ALLOW_WRITE=false` монтирует проект `:ro` — команда,
@@ -180,7 +180,7 @@ tmpfs, поэтому тулчейн продолжает работать. Ре
 
 `whitelist` устроен так: контейнер сидит во **внутренней** docker-сети без
 маршрута наружу (обход прокси сырым сокетом невозможен), единственный выход —
-прокси с белым списком (`sandbox/egress.go`): точное имя или `*.example.com`,
+прокси с белым списком (`infrastructure/sandbox/egress.go`): точное имя или `*.example.com`,
 всё прочее — 403 с записью в лог.
 
 Где живёт прокси — зависит от платформы:
@@ -190,7 +190,7 @@ tmpfs, поэтому тулчейн продолжает работать. Ре
   LAN до него не достучится.
 - **Docker Desktop (macOS/Windows)** — шлюз принадлежит гостевой VM, хост на
   нём слушать не может, а маршрута из внутренней сети до хоста не существует.
-  Поэтому прокси — **gateway-контейнер** (`sandbox/proxycontainer.go`):
+  Поэтому прокси — **gateway-контейнер** (`infrastructure/sandbox/proxycontainer.go`):
   одновременно подключён к внутренней сети сессий (session → прокси on-link,
   без default route) и к обычной `bridge` (выход в интернет через штатный NAT
   демона). Внутри контейнера исполняется наш статик-бинарь
@@ -220,7 +220,7 @@ CODEGEN_SANDBOX_ALLOW_DOMAINS=proxy.golang.org, registry.npmjs.org, *.github.com
 
 Песочница **не спасает** от `rm -rf` внутри рабочего каталога: каталог
 проекта смонтирован на файловую систему хоста. Поэтому есть предварительный
-фильтр: `sandbox/destructive.go` (общий для всех режимов, п. 1.4), обёртка
+фильтр: `infrastructure/sandbox/destructive.go` (общий для всех режимов, п. 1.4), обёртка
 `tools/destructive.go` сохранена для эфемерного пути.
 
 Песочница спасает от `rm -rf /` **внутри контейнера**. То есть опасность
@@ -289,7 +289,7 @@ CODEGEN_SANDBOX=session go run . serve
 busybox sh/timeout/wget, без пулла тулчейнов):
 
 ```bash
-SANDBOX_LIVE=1 go test ./sandbox/ -run TestLiveSession -v
+SANDBOX_LIVE=1 go test ./infrastructure/sandbox/ -run TestLiveSession -v
 ```
 
 Покрывает: замену сессии, пути/mount, отбраковку, сеть `none`, таймаут,

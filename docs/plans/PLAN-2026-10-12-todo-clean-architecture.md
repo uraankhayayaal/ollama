@@ -35,8 +35,12 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 `domain/services.RAGClient` (`infrastructure/rag/port.go`). Срез **E3 ✅** —
 `gitops` → `infrastructure/git` (пакет `gitops` → `git`), порт
 `domain/services.GitOperations` совпадает по подписям с методами `*git.Repo` и
-реализуется напрямую (assertion в `infrastructure/git/port.go`). Разбивка этапа
-на срезы E1–E6 — в разделе «Этап 4» ниже.
+реализуется напрямую (assertion в `infrastructure/git/port.go`). Срез **E4 ✅** —
+`sandbox` → `infrastructure/sandbox` (пакет `sandbox`), порт
+`domain/services.SandboxWorkspace`: `Result`/`Workspace` стали alias'ами
+канонических типов домена, поэтому `*LocalWorkspace`/`*DockerWorkspace`
+реализуют порт напрямую (assertion в `infrastructure/sandbox/port.go`).
+Разбивка этапа на срезы E1–E6 — в разделе «Этап 4» ниже.
 
 ## Проблема
 
@@ -303,7 +307,7 @@ infrastructure/   — реализации (llm, rag, git, sandbox, board)
 | **E1** | Каркас `infrastructure/`; `models` → `infrastructure/llm` (пакет `models` → `llm`), compile-assertions `services.LLMClient` (`ports.go`) | ✅ |
 | **E2** | `rag` → `infrastructure/rag` (пакет `rag`), адаптер `rag.ProjectAdapter` к порту `services.RAGClient` | ✅ |
 | **E3** | `gitops` → `infrastructure/git` (пакет `git`), порт `services.GitOperations` реализуется `*git.Repo` напрямую | ✅ |
-| **E4** | `sandbox` → `infrastructure/sandbox` + assertion `services.SandboxEngine` | ⏳ |
+| **E4** | `sandbox` → `infrastructure/sandbox` (пакет `sandbox`), порт `services.SandboxWorkspace` реализуется `*LocalWorkspace`/`*DockerWorkspace` напрямую через alias типов домена | ✅ |
 | **E5** | `board` → `infrastructure/board` (самый крупный: ~75 импортёров) | ⏳ |
 | **E6** | Разбить `tools/` по доменам (`tools/lsp`, fileops/git/rag/board-подпакеты) и перевести их на `domain/services` вместо прямых импортов `ai/board`/`ai/rag`/`ai/sandbox`/`ai/infrastructure/git` | ⏳ |
 
@@ -364,6 +368,29 @@ root/remote/branch/base, а создание копии требует `Executor
 `CurrentBranch`/`Dirty` работают). Верификация: канонический набор зелёный,
 `-race` по `infrastructure/git` чист, `gofmt` по своим файлам чист.
 
+**E4 ✅ (`sandbox` → `infrastructure/sandbox` + порт `services.SandboxWorkspace`).**
+`git mv sandbox infrastructure/sandbox`, имя пакета сохранено (`sandbox`); 6
+импортёров переведены на `ai/infrastructure/sandbox` (`acceptor/run.go`,
+`cmd/sandbox-proxy/main.go`, `server/sandbox.go`, `tools/{fileops,sandbox,destructive}.go`
++ тесты). Порт `services.SandboxEngine` (старая «эскизная» форма
+`Start`/`Stop`/`Exec`/`CopyIn`/`CopyOut` с `SandboxConfig`/`SandboxMount`/
+`SandboxInstance`) противоречил осознанному дизайну пакета: файловые операции
+остаются на хосте (bind-mount), CopyIn/CopyOut не нужны. Порт переписан в
+фактическую потребительскую абстракцию — `SandboxWorkspace{Run(ctx, workdir,
+command) (SandboxResult, error); Close(ctx) error}` с `SandboxResult{Stdout,
+Stderr, ExitCode, TimedOut, ExitErr}`. Чтобы обойтись без адаптера, `Result` и
+`Workspace` в пакете стали **alias'ами** канонических типов домена
+(`infrastructure/sandbox/workspace.go`), поэтому `*LocalWorkspace` и
+`*DockerWorkspace` удовлетворяют порту напрямую — compile-assertions в
+`infrastructure/sandbox/port.go`; все прежние обращения `sandbox.Result`/
+`sandbox.Workspace` продолжают работать. Жизненный цикл сессии
+(`SessionOptions`/`StopSession`) и клиент Docker Engine (`Engine`) в порт не
+вошли. Правка теста `tools/sandbox_test.go` (читает `../infrastructure/sandbox/
+{compose.yaml,Dockerfile}`) и комментариев-путей в `tools/sandbox.go`,
+`infrastructure/sandbox/{ensureimage,stack,workspace}.go`. Верификация:
+канонический набор (`./sandbox/` заменён на `./infrastructure/...`) зелёный,
+`-race` по `infrastructure/sandbox` чист, `gofmt` по своим файлам чист.
+
 ### Этап 5: Рефакторинг агентов
 
 **Цель:** Устранить дублирование между специализациями агентов.
@@ -410,9 +437,9 @@ root/remote/branch/base, а создание копии требует `Executor
 После каждого этапа:
 
 ```bash
-go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go build . ./agents/... ./application/... ./tools/ ./board/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/ ./board/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/ ./board/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
 ```
 
 Дополнительно:
@@ -421,7 +448,7 @@ go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... 
   проектных пакетов.
 - Новые unit-тесты для `domain/` (сущности, интерфейсы).
 - Новые unit-тесты для `application/usecases/` (оркестрация).
-- Live E2E: `SANDBOX_LIVE=1 go test ./sandbox/ -run TestLiveSession -v`.
+- Live E2E: `SANDBOX_LIVE=1 go test -run TestLiveSession -v`.
 
 ## Риски
 

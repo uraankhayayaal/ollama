@@ -19,7 +19,7 @@ import (
 )
 
 // DefaultImage — dev-образ песочницы по умолчанию. Собирается из
-// sandbox/Dockerfile (docker compose -f sandbox/compose.yaml build) и содержит
+// infrastructure/sandbox/Dockerfile (docker compose -f infrastructure/sandbox/compose.yaml build) и содержит
 // тулчейн для монорепо.
 const DefaultImage = "ai-sandbox:latest"
 

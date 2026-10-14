@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/sandbox"
+	"ai/infrastructure/sandbox"
 )
 
 // stubWS — поддельный сессионный Workspace.

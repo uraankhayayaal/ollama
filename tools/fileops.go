@@ -4,7 +4,7 @@ import (
 	"ai/domain"
 	"ai/forges"
 	"ai/logging"
-	"ai/sandbox"
+	"ai/infrastructure/sandbox"
 	"bytes"
 	"context"
 	"encoding/json"

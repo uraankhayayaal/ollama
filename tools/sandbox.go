@@ -44,11 +44,11 @@ import (
 	"strings"
 	"time"
 
-	"ai/sandbox"
+	"ai/infrastructure/sandbox"
 )
 
 // sandboxWorkspace — точка монтирования рабочего каталога в ручном
-// compose-контейнере (sandbox/compose.yaml, «тот же образ, что и у
+// compose-контейнере (infrastructure/sandbox/compose.yaml, «тот же образ, что и у
 // sandboxCommand»). Эфемерный режим сюда НЕ идёт: он монтирует каталог по его
 // хостовому пути — см. sandboxSpecFor (иначе cd <путь из result["workdir"] и
 // git-worktree внутри контейнера не работают).
@@ -62,7 +62,7 @@ const sandboxWorkspace = "/workspace"
 const sandboxTmp = sandbox.Tmp
 
 // defaultSandboxImage — dev-образ песочницы по умолчанию. Собирается из
-// sandbox/Dockerfile (docker compose -f sandbox/compose.yaml build) и содержит
+// infrastructure/sandbox/Dockerfile (docker compose -f infrastructure/sandbox/compose.yaml build) и содержит
 // тулчейн для монорепо. Для проекта одного известного стека дешевле стоковый
 // образ — его выбирает sandboxImageFor.
 const defaultSandboxImage = sandbox.DefaultImage
@@ -387,7 +387,7 @@ func sandboxGitMounts(dir string, readOnly bool) []string {
 }
 
 // sandboxEnv — окружение внутри контейнера. Обёртка над sandbox.BaseEnv:
-// оно совпадает с sandbox/Dockerfile и sandbox/compose.yaml (HOME и все кэши
+// оно совпадает с infrastructure/sandbox/Dockerfile и infrastructure/sandbox/compose.yaml (HOME и все кэши
 // в /tmp, чтобы рабочий каталог был единственным местом записи, а
 // read-only-режим работал на любом образе).
 func sandboxEnv() map[string]string { return sandbox.BaseEnv() }

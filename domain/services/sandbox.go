@@ -2,34 +2,35 @@ package services
 
 import "context"
 
-type SandboxEngine interface {
-	Start(ctx context.Context, config SandboxConfig) (*SandboxInstance, error)
-	Stop(ctx context.Context, id string) error
-	Exec(ctx context.Context, id string, cmd []string) (SandboxResult, error)
-	CopyIn(ctx context.Context, id string, src string, dst string) error
-	CopyOut(ctx context.Context, id string, src string, dst string) error
+// SandboxWorkspace — порт изолированного окружения выполнения команд агента.
+//
+// Одна сессия оркестрации получает одно окружение (Workspace): команды
+// выполняются в нём, а по завершении оно освобождается. Реализации живут в
+// инфраструктуре (`infrastructure/sandbox`: LocalWorkspace — хост,
+// DockerWorkspace — контейнер сессии); application/tools-слой зависит только
+// от этого интерфейса.
+//
+// Контракт Run: он не должен висеть дольше дедлайна ctx (по дедлайну команда
+// останавливается и результат помечается TimedOut). Ошибку Run возвращает
+// только за инфраструктурные сбои (нет демона, каталог вне монтирования);
+// ненулевой выход команды — это поле результата, а не ошибка.
+type SandboxWorkspace interface {
+	Run(ctx context.Context, workdir, command string) (SandboxResult, error)
+	Close(ctx context.Context) error
 }
 
-type SandboxConfig struct {
-	Image   string
-	Workdir string
-	Mounts  []SandboxMount
-	Env     map[string]string
-}
-
-type SandboxMount struct {
-	Source   string
-	Target   string
-	ReadOnly bool
-}
-
-type SandboxInstance struct {
-	ID      string
-	Workdir string
-}
-
+// SandboxResult — результат выполнения одной команды в песочнице.
 type SandboxResult struct {
-	Stdout   string
-	Stderr   string
+	Stdout string
+	Stderr string
+	// ExitCode — код выхода; -1, если неизвестен (не стартовал / убит по
+	// таймауту до получения кода).
 	ExitCode int
+	// TimedOut — команда остановлена по таймауту (не путать с ненулевым
+	// выходом: это разные состояния для модели).
+	TimedOut bool
+	// ExitErr — ошибка завершения (ненулевой выход). nil при успехе. Ошибки
+	// ЗАПУСКА (docker недоступен, каталог не найден) возвращаются отдельной
+	// ошибкой Run.
+	ExitErr error
 }

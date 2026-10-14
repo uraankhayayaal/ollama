@@ -27,11 +27,12 @@
 package sandbox
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"ai/domain/services"
 )
 
 // Mode — выбранный исполнитель команд.
@@ -175,33 +176,16 @@ func parseDomains(v string) []string {
 	return out
 }
 
-// Result — результат выполнения одной команды в Workspace.
-type Result struct {
-	Stdout string
-	Stderr string
-	// ExitCode — код выхода; -1, если неизвестен (не стартовал / убит по
-	// таймауту до получения кода).
-	ExitCode int
-	// TimedOut — команда остановлена по таймауту (не путать с ненулевым
-	// выходом: это разные состояния для модели).
-	TimedOut bool
-	// ExitErr — ошибка завершения (ненулевой выход). nil при успехе.
-	// Ошибки ЗАПУСКА (docker недоступен, каталог не найден) возвращаются
-	// отдельной ошибкой Run — вызывающий различает «упала команда» и
-	// «не удалось выполнить».
-	ExitErr error
-}
+// Result — результат выполнения одной команды в Workspace. Alias на
+// канонический тип домена: реализации Workspace возвращают его напрямую,
+// поэтому удовлетворяют порту services.SandboxWorkspace без адаптера.
+type Result = services.SandboxResult
 
-// Workspace — изолированное окружение выполнения команд.
-//
-// Контракт: Run не должен зависать дольше дедлайна ctx; по дедлайну команда
-// останавливается, а результат помечается TimedOut. Run возвращает ошибку
-// только за инфраструктурные сбои (нет демона, каталог вне монтирования);
-// ненулевой выход команды — это Result, а не ошибка.
-type Workspace interface {
-	Run(ctx context.Context, workdir, command string) (Result, error)
-	Close(ctx context.Context) error
-}
+// Workspace — изолированное окружение выполнения команд. Alias на порт
+// domain/services.SandboxWorkspace: пакет — инфраструктурная реализация
+// (LocalWorkspace/DockerWorkspace), а потребители (tools/fileops, acceptor,
+// server) зависят от интерфейса домена.
+type Workspace = services.SandboxWorkspace
 
 // FirstEnv — первый непустой env из списка имён.
 func FirstEnv(names ...string) string {
@@ -227,7 +211,7 @@ func firstEnvOr(def string, names ...string) string {
 const Tmp = "/tmp"
 
 // BaseEnv — окружение внутри контейнера песочницы. Совпадает с
-// sandbox/Dockerfile и sandbox/compose.yaml: HOME и все кэши в /tmp, чтобы
+// infrastructure/sandbox/Dockerfile и infrastructure/sandbox/compose.yaml: HOME и все кэши в /tmp, чтобы
 // рабочий каталог был единственным местом записи.
 func BaseEnv() map[string]string {
 	return map[string]string{

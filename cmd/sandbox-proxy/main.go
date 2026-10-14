@@ -17,7 +17,7 @@ import (
 	"os"
 	"strings"
 
-	"ai/sandbox"
+	"ai/infrastructure/sandbox"
 )
 
 func main() {

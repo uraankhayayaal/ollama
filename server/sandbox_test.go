@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai/sandbox"
+	"ai/infrastructure/sandbox"
 	"ai/workspace"
 )
 

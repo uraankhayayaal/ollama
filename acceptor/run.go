@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"ai/sandbox"
+	"ai/infrastructure/sandbox"
 )
 
 // runCommand запускает команду через sh -c в указанной директории и собирает

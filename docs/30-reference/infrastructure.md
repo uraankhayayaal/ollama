@@ -107,7 +107,7 @@ down -v`.
 Отдельный compose для dev-образа песочницы:
 
 ```bash
-SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f sandbox/compose.yaml build
+SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f infrastructure/sandbox/compose.yaml build
 ```
 
 Подробнее — [Песочница](../20-features/sandbox.md).

@@ -422,7 +422,7 @@ Rate-limit (константы в `server/server.go:116-118`, не настра�
 ### `Ошибка/Error 127` в приёмке
 
 В контейнере нет `make` или другого инструмента хоста. Добавьте его в
-`sandbox/Dockerfile` или используйте зеркальные `make infra.<цель>`.
+`infrastructure/sandbox/Dockerfile` или используйте зеркальные `make infra.<цель>`.
 
 ### Путь проекта содержит `:` или `,`
 
@@ -480,17 +480,17 @@ git ls-remote -q --end-of-options https://github.com/<org>/<repo> HEAD
 
 Так и задумано: ложное срабатывание хуже пропуска. Если команда
 действительно нужна, убедитесь, что в строке нет запрещённых фрагментов
-(`sandbox/destructive.go:36-83`).
+(`infrastructure/sandbox/destructive.go:36-83`).
 
 ### `pull access denied for ai-sandbox` — образ песочницы не собран
 
 `ai-sandbox:latest` — **локальный** dev-образ, в реестре его нет, поэтому
 pull всегда даёт `access denied` (проект-монорепо/без распознанного стека
 выбирает именно его). Обычно песочница собирает его сама при старте
-(`sandbox/ensureimage.go`); если этого не произошло — соберите вручную:
+(`infrastructure/sandbox/ensureimage.go`); если этого не произошло — соберите вручную:
 
 ```bash
-SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f sandbox/compose.yaml build
+SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f infrastructure/sandbox/compose.yaml build
 ```
 
 ## Сборка

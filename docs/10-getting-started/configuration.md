@@ -150,7 +150,7 @@ CODEGEN_SANDBOX_RO=1         # read-only корень контейнера
 |---|---|
 | `OLLAMA_HOST` | Адрес сервера; в этом коде не читается — клиент Ollama берёт его сам |
 | `OLLAMA_KV_CACHE_TYPE`, `OLLAMA_KEEP_ALIVE` | Параметры **сервера** `ollama serve`, не клиента |
-| `CODEGEN_SANDBOX_BIN`, `CODEGEN_SANDBOX_USER` | Только для `docker compose -f sandbox/compose.yaml build` |
+| `CODEGEN_SANDBOX_BIN`, `CODEGEN_SANDBOX_USER` | Только для `docker compose -f infrastructure/sandbox/compose.yaml build` |
 | `CODEGEN_DOCKER_TLS`, `CODEGEN_DOCKER_CERT` | Прокидываются в окружение демона при наличии хоста/сертификата |
 
 **Есть в коде, но не документировано нигде:** `PORT` — читается только

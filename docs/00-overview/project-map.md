@@ -147,7 +147,7 @@
 | `stackdetect/` | Определение стека по маркерам проекта |
 | `repositories/` | Клонированные репозитории |
 | `services/mrlistener/` | Слушатель новых MR (`listen`) |
-| `sandbox/` | `Dockerfile` и `compose.yaml` для образа песочницы |
+| `infrastructure/sandbox/` | `Dockerfile` и `compose.yaml` для образа песочницы |
 
 ## Связанное
 

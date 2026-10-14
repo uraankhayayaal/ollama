@@ -713,7 +713,7 @@ func TestSandboxRealContainerWorktree(t *testing.T) {
 }
 
 // Образ песочницы объявлен в трёх местах: дефолт в коде, hermetic-тест и
-// sandbox/compose.yaml. Расхождение означает «тесты зелёные, а песочница
+// infrastructure/sandbox/compose.yaml. Расхождение означает «тесты зелёные, а песочница
 // работает на другом образе» — самый неприятный вид расхождения, потому что
 // он невидим до первого реального запуска.
 func TestSandboxComposeMatchesCodeDefaults(t *testing.T) {
@@ -728,7 +728,7 @@ func TestSandboxComposeMatchesCodeDefaults(t *testing.T) {
 		t.Errorf("sandboxImageFor не должен угадывать образ для каталога без манифеста: %q", got)
 	}
 
-	composePath := filepath.Join("..", "sandbox", "compose.yaml")
+	composePath := filepath.Join("..", "infrastructure", "sandbox", "compose.yaml")
 	raw, err := os.ReadFile(composePath)
 	if err != nil {
 		t.Fatalf("нет compose песочницы (%s): %v", composePath, err)
@@ -736,7 +736,7 @@ func TestSandboxComposeMatchesCodeDefaults(t *testing.T) {
 	compose := string(raw)
 	for _, want := range []string{"image: " + defaultSandboxImage, "/workspace:rw", "cap_drop", "no-new-privileges"} {
 		if !strings.Contains(compose, want) {
-			t.Errorf("sandbox/compose.yaml не содержит %q", want)
+			t.Errorf("infrastructure/sandbox/compose.yaml не содержит %q", want)
 		}
 	}
 
@@ -753,12 +753,12 @@ func TestSandboxComposeMatchesCodeDefaults(t *testing.T) {
 	if strings.Contains(compose, "HOME: "+sandboxWorkspace) {
 		t.Error("HOME в /workspace означает, что ~/.gitconfig и ~/.npmrc осядут в проекте и попадут в ревьюимый diff")
 	}
-	if _, err := os.Stat(filepath.Join("..", "sandbox", "Dockerfile")); err != nil {
+	if _, err := os.Stat(filepath.Join("..", "infrastructure", "sandbox", "Dockerfile")); err != nil {
 		t.Errorf("нет Dockerfile песочницы: %v", err)
 	}
 
 	// Тот же env в Dockerfile — иначе образ и docker run ведут себя по-разному.
-	dockerfile, err := os.ReadFile(filepath.Join("..", "sandbox", "Dockerfile"))
+	dockerfile, err := os.ReadFile(filepath.Join("..", "infrastructure", "sandbox", "Dockerfile"))
 	if err != nil {
 		t.Fatalf("нет Dockerfile песочницы: %v", err)
 	}

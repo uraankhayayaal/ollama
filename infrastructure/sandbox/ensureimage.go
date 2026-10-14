@@ -3,13 +3,13 @@ package sandbox
 // ensureimage.go — автосборка локального dev-образа песочницы, если его нет
 // в кэше демона.
 //
-// ai-sandbox:latest собирается из sandbox/Dockerfile и в реестре НЕ суще-
+// ai-sandbox:latest собирается из infrastructure/sandbox/Dockerfile и в реестре НЕ суще-
 // ствует: штатный неявный pull при docker run/create даёт «pull access denied»,
 // и первая же команда агента в монорепо (или без распознанного стека) падала
 // без понятного диагноза (живой случай: mytrip на хосте без собранного образа —
 // агент гонял одну и ту же пробу несколько раундов, прежде чем оркестрация
 // остановилась по таймауту модели). Здесь образ собирается сам: тем же
-// Dockerfile, что и ручной `docker compose -f sandbox/compose.yaml build`,
+// Dockerfile, что и ручной `docker compose -f infrastructure/sandbox/compose.yaml build`,
 // и через тот же Engine API (без docker CLI). Реестровые образы (golang:*,
 // node:*, python:*, php:*) docker доставляет неявным pull — их не касаемся.
 
@@ -66,7 +66,7 @@ func buildDevImage(ctx context.Context, eng *Engine) error {
 	if err != nil {
 		return err
 	}
-	logging.For("").Infof("[sandbox] образа %s нет в кэше — автосборка из sandbox/Dockerfile", DefaultImage)
+	logging.For("").Infof("[sandbox] образа %s нет в кэше — автосборка из infrastructure/sandbox/Dockerfile", DefaultImage)
 	if err := eng.BuildImage(ctx, DefaultImage, tarData, devBuildArgs()); err != nil {
 		return fmt.Errorf("sandbox: автосборка %s: %w", DefaultImage, err)
 	}

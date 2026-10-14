@@ -133,10 +133,10 @@ go run . index <имя_проекта>   # индексация
 команды `Run` идут на хост.
 
 ```bash
-docker compose -f sandbox/compose.yaml build
+docker compose -f infrastructure/sandbox/compose.yaml build
 ```
 
-`sandbox/Dockerfile` — `FROM golang:1.24-bookworm`, `USER ${TARGET_UID}:${TARGET_GID}`,
+`infrastructure/sandbox/Dockerfile` — `FROM golang:1.24-bookworm`, `USER ${TARGET_UID}:${TARGET_GID}`,
 `WORKDIR /workspace`, `CMD ["sh"]`. Playwright добавляется отдельным слоем
 (`CODEGEN_SANDBOX_PLAYWRIGHT`).
 

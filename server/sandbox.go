@@ -24,7 +24,7 @@ import (
 
 	"ai/logging"
 	"ai/projects"
-	"ai/sandbox"
+	"ai/infrastructure/sandbox"
 )
 
 // sandboxStartTimeout — бюджет старта сессии: сюда входят pull образа и
