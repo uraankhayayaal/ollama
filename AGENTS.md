@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3c — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3d — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -89,6 +89,29 @@ Warn}`. `server/gitflow_done_guard.go` стал адаптером (`doneGuardSo
 `docs/20-features/gitops-workflow.md` (секция «Создание MR»). Остаток Этапа 6 —
 F3+: остальные git-flow хуки, сессии/оркестрация, RAG-хуки. Коммита нет
 (спросить пользователя).
+
+Срез **F3d** — раскладка worktree, артефактная политика `.gitignore` и
+презентация git-ошибки вынесены из `server/gitflow_auto.go` в новый
+`application/gitflow/worktree.go`: `TaskWorktreePath`/`EpicWorktreePath`/
+`ChildTaskKey`, `GitignoreHeader`/`GitignorePatterns`/`GitignoreFileName`/
+`TaskGitignore`/`EnsureTaskGitignore` (идемпотентное создание/дополнение
+`.gitignore` worktree: сохранение проектных строк, дописывание недостающих
+паттернов артефактов; `vendor/` намеренно не в списке) и `GitflowErrBoard`
+(workflow-scope → подсказка, иначе первая строка без секретов, усечение до 200
+рун). `server/gitflow_auto.go` оставил тонкие обёртки (`taskWorktreePath`/
+`epicWorktreePath` как методы, `childTaskKey`/`taskGitignore`/
+`ensureTaskGitignore`/`gitflowErrBoard`, константа-алиас `taskGitignoreHeader`),
+поэтому тесты `server/gitflow_done_guard_test.go`, `gitflow_hooks_test.go`,
+`gitflow_test.go` не менялись. Тесты: новые герметичные
+`application/gitflow/worktree_test.go` (пути, ключ задачи, содержимое
+`.gitignore`, создание/дополнение/идемпотентность/пустой корень, политика
+`GitflowErrBoard`). Обновлены комментарии-указатели в `application/usecases/
+doneguard.go` и `infrastructure/git/gitops.go`. Верификация: канонический набор
+зелёный (26 пакетов), `-race` по `application/gitflow` чист, `gofmt` по правкам
+чист. Документация: план (шапка + таблица F3d), `docs/00-overview/project-map.md`,
+`docs/40-operations/troubleshooting.md`. Остаток Этапа 6 — F3+: остальные
+git-flow хуки (авто-коммит/merge, sync main), сессии/оркестрация, RAG-хуки.
+Коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

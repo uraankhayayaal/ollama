@@ -52,7 +52,7 @@ type DoneGuardSource interface {
 }
 
 // orchestratorGitignore — служебный .gitignore, который кладёт сам
-// оркестратор при создании worktree задачи (см. server.ensureTaskGitignore).
+// оркестратор при создании worktree задачи (см. gitflow.EnsureTaskGitignore).
 const orchestratorGitignore = ".gitignore"
 
 // GuardTaskDone — проверка перед переводом задачи в done. enabled=false
@@ -75,7 +75,7 @@ func GuardTaskDone(ctx context.Context, src DoneGuardSource, enabled bool, proje
 
 	// Признак 1: в worktree есть незакоммиченные правки агента — работа велась,
 	// авто-коммит при done её зафиксирует. Служебные файлы оркестратора
-	// (.gitignore, который сам пишет ensureTaskGitignore) доказательством
+	// (.gitignore, который сам пишет EnsureTaskGitignore) доказательством
 	// работы не считаются, иначе гард был бы слепым.
 	if paths, err := src.DirtyPaths(ctx, project, t.TaskID); err == nil {
 		for _, p := range paths {

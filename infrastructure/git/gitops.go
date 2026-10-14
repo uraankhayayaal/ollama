@@ -592,7 +592,7 @@ func (r *Repo) Dirty(ctx context.Context) (bool, error) {
 // DirtyPaths возвращает незакоммиченные изменения по одному пути на строку
 // (git status --porcelain). Нужен гарду «phantom done» (Ф-6): отличить работу
 // агента от служебного мусора, который положил сам оркестратор (например
-// .gitignore, который ensureTaskGitignore пишет в worktree задачи).
+// .gitignore, который EnsureTaskGitignore пишет в worktree задачи).
 func (r *Repo) DirtyPaths(ctx context.Context) ([]string, error) {
 	if r == nil || r.Root == "" {
 		return nil, fmt.Errorf("gitops: пустой Repo")
