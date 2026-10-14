@@ -9,6 +9,7 @@ import (
 
 	"ai/agents/architect"
 	appask "ai/application/ask"
+	applogs "ai/application/logs"
 	"ai/application/planner"
 	apprag "ai/application/rag"
 	"ai/chat"
@@ -98,12 +99,10 @@ type Session struct {
 	// понять, что доска менялась. Потокобезопасен (atomic).
 	boardRev atomic.Uint64
 
-	// logLastKey / logLastAt — последний разбор логов по кнопке «Разобрать»:
-	// ключ (файл + размер + mtime + фильтры) и время. Нужен для cooldown: два
-	// клика подряд по одному и тому же логу не должны дважды звать модель и
-	// плодить в чате одинаковые ответы. Читается/пишется под mu.
-	logLastKey string
-	logLastAt  time.Time
+	// logCooldown — окно подавления повторного разбора того же лога (кнопка
+	// «Разобрать»): два клика подряд не должны дважды звать модель и плодить в
+	// чате одинаковые ответы. Состояние — в application/logs.Cooldown.
+	logCooldown *applogs.Cooldown
 
 	// rate — последняя реальная скорость генерации (вых. ток/с) из usage
 	// провайдера (Ollama eval_count/eval_duration). Не сбрасывается между
@@ -176,6 +175,8 @@ func (s *Server) newSession(project string) (*Session, error) {
 	// Ф-1 «спроси пользователя»: состояние активного структурированного
 	// вопроса; публикация/статус/лог идут через адаптер askAnnouncer.
 	sess.pending = appask.NewPending(askAnnouncer{sess: sess})
+	// Cooldown повторного разбора логов (кнопка «Разобрать»).
+	sess.logCooldown = applogs.NewCooldown(logAnalysisCooldown)
 	// Ф-5/Р-2: оркестратор фоновой индексации RAG (single-flight по ветке,
 	// отчёты в лог/чат). Прогоны строит сервер (см. ragindex.go/ragref.go).
 	sess.bgIndex = apprag.NewBackgroundIndexer(project, ragIndexSink{sess: sess}, sess.newProjectIndexer)

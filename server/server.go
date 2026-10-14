@@ -2,9 +2,9 @@ package server
 
 import (
 	"ai/agents/architect"
-	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/forges"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/infrastructure/llm"
 	"ai/logging"
@@ -955,7 +955,7 @@ func (s *Server) handleChatLogAnalysis(w http.ResponseWriter, sess *Session, req
 
 	sess.log.Infof("[чат] маршрут: разбор логов (%d строк, %d находок)",
 		a.Digest.Lines, len(a.Digest.Findings))
-	if sess.markAnalyzed(a.key()) {
+	if sess.markAnalyzed(a.Key()) {
 		// Тот же лог только что разобран: модель второй раз не зовём, ответ
 		// уже выше в чате.
 		sess.append(chat.RoleStatus,

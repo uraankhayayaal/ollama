@@ -89,7 +89,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 блокирующий цикл `AskUser`↔`AnswerAsk` в `Pending`) вынесен из `server/ask.go`
 в новый пакет `application/ask` (порт `Announcer`); срез **F3o ✅** — сборка и
 отбор лог-файлов проекта (`CollectProject`/`CollectFiles`/`ReadTail`) вынесены
-из `server/logs.go` в новый пакет `application/logs`.
+из `server/logs.go` в новый пакет `application/logs`; срез **F3p ✅** — разбор
+логов кнопкой «Разобрать» (`BuildAnalysis`/`PickFiles`/`DigestPrompt`/
+`Cooldown`) вынесен из `server/loganalysis.go` в `application/logs`.
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -569,6 +571,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3m | Оркестрация фоновой индексации RAG (`BackgroundIndexer`: single-flight по ветке/источнику, запуск в горутине, отчёты в лог и чат) вынесена из `server/ragindex.go` в `application/rag` (порты `IndexSink`/`IndexerFactory`, тип `IndexRun`); `server` строит конкретный прогон (каталог/ветка/дифф) | ✅ |
 | F3n | Структурированный вопрос ассистента (`AskUser`): разбор/валидация пачки вопросов (`ParseQuestions`), состояние одного активного вопроса (блокирующий цикл `AskUser`↔`AnswerAsk`, `Pending`), протокол ответов (`Summarize`) вынесены из `server/ask.go` в `application/ask` (порт `Announcer`); `Session` делегирует, адаптер `askAnnouncer` публикует карточку/статус/лог | ✅ |
 | F3o | Панель логов (Logboard): сбор `*.log`, отбор «своих» из общего каталога и дедупликация (`CollectProject`), чтение хвоста с `MaxBytes` (`ReadTail`), типы `Entry`/`Response` вынесены из `server/logs.go` в `application/logs`; в `server` остались HTTP-хендлеры, `logDirs`/`logsDir`, брокер и алиасы типов | ✅ |
+| F3p | Разбор логов кнопкой «Разобрать»: выборка файлов (`PickFiles`), фильтры поиска/уровня и дайджест (`BuildAnalysis`), контракт ответа (`DigestPrompt`), cooldown повторов (`Cooldown`) вынесены из `server/loganalysis.go` в `application/logs`; `server` оставил алиасы типов, обвязку проекта и адаптер cooldown | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -772,6 +775,26 @@ show`/`git diff`), `ParseLsTreeEntry`/`IndexablePath`/`IndexableContent`/
 `logs_test.go`/`actions_logs_test.go` не менялись. Тесты: новые герметичные
 `application/logs/logs_test.go` (отбор/дедупликация/приоритет общего каталога,
 только `*.log` и пропуск каталогов, обрезка хвоста и пустой файл).
+
+**F3p ✅** — разбор логов кнопкой «Разобрать» вынесен из `server/loganalysis.go`
+в `application/logs` (`analysis.go`): `Req`/`Analysis` (с `FilesLabel`/`Key`),
+`BuildAnalysis` (сбор логов проекта + фильтры поиска/уровня ДО группировки +
+дайджест), `PickFiles` (выборка по имени или свежайших, файл проекта первым),
+`FilesLabel`, `DigestPrompt` (контракт ответа модели), `Cooldown` (окно 90 с —
+двойной клик не зовёт модель дважды) и `Dirs` (каталоги логов проекта).
+`server/loganalysis.go` стал тонкой обвязкой: алиасы `logAnalysisReq`/
+`logAnalysis`, `buildLogAnalysis` (проект из реестра + имя своего лога +
+`applogs.BuildAnalysis`), `markAnalyzed` (делегирует `logCooldown.Mark`),
+константа `logAnalysisCooldown`, обёртка `LogDigestPrompt`. `Session` держит
+`logCooldown *applogs.Cooldown` вместо пары `logLastKey`/`logLastAt`;
+`server/actions_logs.go` — `pickLogFiles` как обёртка над `applogs.PickFiles`.
+У неэкспортируемого метода `key()` нет алиасной видимости, поэтому он стал
+экспортируемым `Analysis.Key()` (правка в `server/loganalysis_test.go`/
+`server/server.go`). Тесты: новые герметичные `application/logs/analysis_test.go`
+(фильтры+склейка находок, отсутствующий файл, `PickFiles`, `FilesLabel`,
+контракт `DigestPrompt`, окно `Cooldown`, `Dirs`); серверные
+`loganalysis_test.go`/`actions_logs_test.go` не менялись по существу. Дока
+`docs/20-features/chat-assistant.md` обновлена (разбор → `application/logs`).
 
 ## Ключевые решения
 

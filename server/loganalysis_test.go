@@ -421,16 +421,16 @@ func TestLogAnalysisKeyChangesWithLog(t *testing.T) {
 	writeLogFile(t, sess.srv.logsDir(), "an-key.log", analysisLogBody+
 		"2026-01-01 10:00:09.000 FATAL  сервер упал\n")
 	a2, _ := sess.buildLogAnalysis(logAnalysisReq{File: "an-key.log"})
-	if a1.key() == a2.key() {
-		t.Fatalf("ключ не изменился после правки лога: %q", a1.key())
+	if a1.Key() == a2.Key() {
+		t.Fatalf("ключ не изменился после правки лога: %q", a1.Key())
 	}
-	if sess.markAnalyzed(a1.key()) {
+	if sess.markAnalyzed(a1.Key()) {
 		t.Fatalf("первый разбор помечен как недавний")
 	}
-	if !sess.markAnalyzed(a1.key()) {
+	if !sess.markAnalyzed(a1.Key()) {
 		t.Errorf("повтор того же ключа не отсечён")
 	}
-	if sess.markAnalyzed(a2.key()) {
+	if sess.markAnalyzed(a2.Key()) {
 		t.Errorf("новый ключ отсечён как недавний")
 	}
 }

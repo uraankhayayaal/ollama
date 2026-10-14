@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
+	applogs "ai/application/logs"
 	logpkg "ai/domain/log"
 	"ai/logging"
 	"ai/tools"
@@ -152,33 +152,7 @@ func (sess *Session) readProjectLogs(a logToolArgs) (map[string]any, error) {
 // pickLogFiles выбирает файлы для чтения: по имени, либо (пусто/all) самые
 // свежие. Сначала — файл проекта: он почти всегда и есть нужный.
 func pickLogFiles(files []logFileEntry, want, own string) []logFileEntry {
-	if want != "" && want != "all" {
-		for _, f := range files {
-			if f.Name == want || filepath.Base(f.Name) == want {
-				return []logFileEntry{f}
-			}
-		}
-		return nil
-	}
-	sorted := append([]logFileEntry(nil), files...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Modified > sorted[j].Modified })
-	out := make([]logFileEntry, 0, logToolMaxFiles)
-	for _, f := range sorted {
-		if len(out) == logToolMaxFiles {
-			break
-		}
-		// Файл проекта при пустом запросе идёт первым и всегда: остальные
-		// логи в общем каталоге принадлежат чужим прогонам.
-		if f.Name == own {
-			out = append([]logFileEntry{f}, out...)
-			continue
-		}
-		out = append(out, f)
-	}
-	if len(out) > logToolMaxFiles {
-		out = out[:logToolMaxFiles]
-	}
-	return out
+	return applogs.PickFiles(files, want, own, logToolMaxFiles)
 }
 
 // readLogSlice читает хвост файла (последние limit строк), при grep — только

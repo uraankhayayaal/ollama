@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3o — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3p — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -398,6 +398,32 @@ accept/reject), удалены локальные `discardHalfClone`/`sameGitRem
 `application/logs`), `docs/20-features/chat-assistant.md`. Остаток Этапа 6 —
 F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
 `chatassist`/`actions`/`diff`/`server`. Коммит F3o `2b2934b`.
+
+Срез **F3p** — разбор логов кнопкой «Разобрать» вынесен из
+`server/loganalysis.go` в `application/logs/analysis.go`: `Req`/`Analysis`
+(с `FilesLabel`/`Key`), `BuildAnalysis` (сбор логов проекта + фильтры
+поиска/уровня ДО группировки + дайджест), `PickFiles` (по имени либо свежайшие,
+файл проекта первым), `FilesLabel`, `DigestPrompt` (контракт ответа модели),
+`Cooldown` (окно 90 с — двойной клик не зовёт модель дважды), `Dirs` (каталоги
+логов проекта). `server/loganalysis.go` стал тонкой обвязкой: алиасы
+`logAnalysisReq`/`logAnalysis`, `buildLogAnalysis` (проект из реестра + имя
+своего лога + `applogs.BuildAnalysis`), `markAnalyzed` (делегирует
+`logCooldown.Mark`), константа `logAnalysisCooldown`, обёртка `LogDigestPrompt`.
+`Session` держит `logCooldown *applogs.Cooldown` вместо пары `logLastKey`/
+`logLastAt`; `server/actions_logs.go` — `pickLogFiles` как обёртка над
+`applogs.PickFiles`. Неэкспортируемый метод `key()` стал `Analysis.Key()`
+(правка `server/loganalysis_test.go`/`server/server.go`). Тесты: новые
+герметичные `application/logs/analysis_test.go` (фильтры+склейка, отсутствующий
+файл, `PickFiles`, `FilesLabel`, контракт `DigestPrompt`, окно `Cooldown`,
+`Dirs`); серверные `loganalysis_test.go`/`actions_logs_test.go` не менялись по
+существу. Верификация: канонический набор зелёный (28 пакетов), `-race` по
+`application/logs` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3p + narrative), `docs/00-overview/project-map.md` (строка
+`application/logs/` расширена `BuildAnalysis`/`analysis.go`),
+`docs/20-features/chat-assistant.md` (разбор логов → `application/logs`).
+Остаток Этапа 6 — F3+: `server/session.go` (оркестрация/HITL/событийность),
+git-flow хуки, `chatassist`/`actions`/`diff`/`server`. Коммита нет (спросить
+пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
