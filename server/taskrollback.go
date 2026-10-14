@@ -6,20 +6,22 @@ package server
 // "<sha>"}. Откатывает worktree задачи (вместе с сабмодулями) и возвращает
 // задачу в очередь, чтобы агент продолжил с откатанного кода.
 //
-// Откат делает только человек и только по явному подтверждению в UI: он
-// необратим в рабочем дереве (коммиты остаются в reflog) и отбрасывает всё
-// незакоммиченное. Автоматических откатов в системе нет намеренно (Р-1):
-// заменой автооткату служит watchdog этапа 4 — смена модели и возобновление.
+// Бизнес-логика отката живёт в application/usecases (Этап 6); здесь —
+// HTTP-адаптер: разбор запроса, разрешение worktree, вызов use-case, маппинг
+// доменных ошибок в коды и публикация события.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"ai/infrastructure/board"
+	"ai/application/usecases"
 	"ai/chat"
+	"ai/domain"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 )
 
@@ -72,17 +74,12 @@ func (s *Server) handleRollbackTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "у задачи нет worktree: откатывать нечего")
 		return
 	}
-	target, err := rollbackTarget(task, req.To)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
 
-	res, err := git.RollbackWorktree(r.Context(), s.gitExec, ref.Worktree, target)
+	out, err := usecases.RollbackTask(r.Context(), board.NewDomainStore(store), task, ref.Worktree, req.To, gitRollbacker{ex: s.gitExec})
 	if err != nil {
 		// Несуществующий коммит — вина запроса (опечатка в SHA, «последняя
 		// рабочая версия» ещё не существует), а не сбой git: 400, а не 502.
-		if errors.Is(err, git.ErrNoSuchCommit) {
+		if errors.Is(err, usecases.ErrBadTarget) || errors.Is(err, usecases.ErrNoSuchCommit) {
 			writeErr(w, http.StatusBadRequest, "откат не выполнен: "+err.Error())
 			return
 		}
@@ -90,44 +87,15 @@ func (s *Server) handleRollbackTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Чекпойнт переезжает на откатанную точку: HEAD задачи теперь равен цели
-	// отката, а отменённые раунды больше не являются ни «последним», ни
-	// «последним рабочим». Ошибка проверки отменённого кода тоже снимается —
-	// иначе UI продолжал бы показывать падение уже несуществующей версии.
-	if err := store.PatchTask(r.Context(), taskID, func(t *board.Task) error {
-		if t.Checkpoint == nil {
-			t.Checkpoint = &board.TaskCheckpoint{}
-		}
-		t.Checkpoint.LastSHA = res.SHA
-		t.Checkpoint.LastGoodSHA = res.SHA
-		t.LastError = ""
-		t.AgentState = ""
-		return nil
-	}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "обновление чекпойнта: "+err.Error())
-		return
-	}
-	// Задача возвращается в очередь: агент следующего прогона продолжит с
-	// откатанного кода. Отмена/помощь человека/готово остаются без изменений
-	// (иначе откат тихо воскресил бы отменённую задачу).
-	status := task.Status
-	if status == board.StatusInProgress {
-		if err := store.SetTaskStatus(r.Context(), taskID, board.StatusReady); err != nil {
-			writeErr(w, http.StatusInternalServerError, "возврат в очередь: "+err.Error())
-			return
-		}
-		status = board.StatusReady
-	}
-
-	short := res.SHA
+	short := out.SHA
 	if len(short) > 7 {
 		short = short[:7]
 	}
 	msg := fmt.Sprintf("Задача %s откатана к %s", taskID, short)
-	if n := len(res.Submodules); n > 0 {
-		msg += fmt.Sprintf(" (сабмодули: %s)", strings.Join(res.Submodules, ", "))
+	if n := len(out.Submodules); n > 0 {
+		msg += fmt.Sprintf(" (сабмодули: %s)", strings.Join(out.Submodules, ", "))
 	}
-	if status == board.StatusReady {
+	if out.Status == domain.StatusReady {
 		msg += "; задача вернулась в очередь"
 	}
 	if sess := s.session(project); sess != nil {
@@ -139,36 +107,24 @@ func (s *Server) handleRollbackTask(w http.ResponseWriter, r *http.Request) {
 		OK:         true,
 		TaskID:     taskID,
 		Project:    project,
-		SHA:        res.SHA,
-		Submodules: res.Submodules,
-		Status:     string(status),
+		SHA:        out.SHA,
+		Submodules: out.Submodules,
+		Status:     string(out.Status),
 	})
 }
 
-// rollbackTarget переводит `to` из тела запроса в SHA. Именованные точки —
-// last_good (последний раунд, прошедший проверку) и base (состояние на
-// момент старта задачи); всё остальное считается SHA: произвольный откат к
-// нужному коммиту должен быть возможен без правок кода.
-func rollbackTarget(task *board.Task, to string) (string, error) {
-	to = strings.TrimSpace(to)
-	if to == "" {
-		return "", fmt.Errorf("не указана точка отката: %s или %s или SHA", "last_good", "base")
-	}
-	cp := task.Checkpoint
-	switch to {
-	case "last_good":
-		if cp == nil || strings.TrimSpace(cp.LastGoodSHA) == "" {
-			return "", fmt.Errorf("неизвестно последнее рабочее состояние: в задаче не было раунда, прошедшего проверку")
+// gitRollbacker — адаптер git-отката (infrastructure/git) к порту
+// usecases.WorktreeRollbacker: переводит «нет такого коммита» в доменную ошибку
+// usecases.ErrNoSuchCommit, остальные сбои git отдаёт как есть (502).
+type gitRollbacker struct{ ex git.Executor }
+
+func (g gitRollbacker) RollbackWorktree(ctx context.Context, worktree, target string) (string, []string, error) {
+	res, err := git.RollbackWorktree(ctx, g.ex, worktree, target)
+	if err != nil {
+		if errors.Is(err, git.ErrNoSuchCommit) {
+			return "", nil, usecases.ErrNoSuchCommit
 		}
-		return cp.LastGoodSHA, nil
-	case "base":
-		if cp == nil || strings.TrimSpace(cp.BaseSHA) == "" {
-			return "", fmt.Errorf("неизвестна база задачи: worktree не создавался в этой сессии")
-		}
-		return cp.BaseSHA, nil
+		return "", nil, err
 	}
-	if strings.ContainsAny(to, " \t") {
-		return "", fmt.Errorf("некорректная цель отката %q", to)
-	}
-	return to, nil
+	return res.SHA, res.Submodules, nil
 }
