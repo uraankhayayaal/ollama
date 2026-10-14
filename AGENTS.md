@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3v — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3w — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -560,6 +560,28 @@ truncate больших файлов, чистые файлы без марке�
 `application/gitflow/` расширена `conflictfiles.go`). Остаток Этапа 6 — F3+:
 HITL-гейт и read-model доски в `server/session.go`, `chatassist`/`actions`/
 `server`. Коммит F3v `00d29e1`.
+
+Срез **F3w** — детерминированная политика диалога чат-ассистента вынесена из
+`server/chatassist.go`/`server/actions.go` в новый пакет **`application/chatassist`**
+(`policy.go`): распознавание согласия (`ConfirmAffirmative`/`BareConfirm` +
+`ConfirmTokens`), вопроса (`AsksSomething`), смены темы (`PrevUserDiffers`),
+«отчёта о записи на доске» (`LooksLikeBoardWriteClaim` + узкий список фраз),
+сводка structured-вопроса (`AskSummary(*chat.Ask)`) и антизацикливающая подсказка
+`ActionAnchor(hist []chat.Message, question string)` (вся логика бывшего
+`chatActionAnchor`, кроме чтения истории). `server/chatassist.go` оставил
+`chatActionAnchor` (читает `chat.Store.History` и делегирует) и тонкие обёртки
+`looksLikeBoardWriteClaim`/`askSummary`; `server/actions.go` — обёртку
+`confirmAffirmative`, `ActionConfirmed` без изменений. Удалены переехавшие
+`asksSomething`/`prevUserDiffers`/`bareConfirm`/`boardWriteClaimPhrases`. Тесты:
+новые герметичные `application/chatassist/policy_test.go` (согласие/не-согласие,
+bare-согласие, отчёт о записи, вопрос, смена темы, `AskSummary`, якорь:
+подтверждение/lf/новая тема/два вопроса/пусто/role=ask); серверные
+`actions_test.go`/`chatassist_test.go` не менялись (идут через обёртки).
+Верификация: канонический набор зелёный (29 пакетов), `-race` по
+`application/chatassist` чист, `gofmt` по правкам чист. Документация: план
+(шапка + таблица F3w + narrative), `docs/00-overview/project-map.md` (новая
+строка `application/chatassist/`). Остаток Этапа 6 — F3+: HITL-гейт и read-model
+доски в `server/session.go`, `server`-хендлеры. Коммит F3w — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

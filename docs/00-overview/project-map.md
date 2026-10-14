@@ -123,6 +123,7 @@
 | `application/rag/` | RAG-хуки: чтение содержимого ветки из git (`LoadRefItems`/`LoadRefDiff`, `ref.go`), сбор файлов каталога и полная индексация (`CollectIndexItems`/`IndexProjectRAG`, `index.go`), проверка актуальности (`BranchIndexUpToDate`), оркестрация фоновых прогонов (`BackgroundIndexer`, порты `IndexSink`/`IndexerFactory`, `background.go`), синхронизация рабочей копии агентов с main (`WorkingCopySyncer`, порт `SyncSink`, `sync.go`), конкретные фоновые прогоны (`RefJob`/`RefDiffJob`/`DirJob`, порты `RefLoader`/`DiffLoader`, `jobs.go`), порт `Indexer` |
 | `application/ask/` | Структурированный вопрос ассистента (`AskUser`): разбор/валидация пачки вопросов (`ParseQuestions`), состояние одного активного вопроса (блокирующий цикл `AskUser`↔`AnswerAsk`, `Pending`), протокол ответов (`Summarize`); порт `Announcer` |
 | `application/logs/` | Панель логов (Logboard): сбор `*.log` файлов проекта (`CollectFiles`), отбор «своих» из общего каталога и дедупликация (`CollectProject`), чтение хвоста с ограничением `MaxBytes` (`ReadTail`), типы `Entry`/`Response`; разбор кнопкой «Разобрать» (`BuildAnalysis`/`PickFiles`/`DigestPrompt`, `Cooldown`, `analysis.go`) |
+| `application/chatassist/` | Политика диалога чат-ассистента: распознавание согласия (`ConfirmAffirmative`/`BareConfirm`), вопроса (`AsksSomething`), смены темы (`PrevUserDiffers`), «отчёта о записи на доске» (`LooksLikeBoardWriteClaim`), сводка structured-вопроса (`AskSummary`) и антизацикливающая подсказка `ActionAnchor` |
 
 ### Сервер и веб — `server/`, `web/`
 

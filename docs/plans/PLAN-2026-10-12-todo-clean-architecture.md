@@ -588,7 +588,8 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3s | Политика синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`: пропуск при грязном дереве/занятом checkout, откат конфликтного merge, признак сдвига HEAD) вынесена из `server/ragref.go` в `application/rag` (`WorkingCopySyncer`, порт `SyncSink`, `sync.go`); `server` оставил адаптер `syncSink` и тонкую обёртку | ✅ |
 | F3t | Конкретные фоновые прогоны индексации RAG (`RefJob` — содержимое ветки по ref, `RefDiffJob` — изменения ветки относительно базы, `DirJob` — каталог под его веткой; загрузка снапшота + пропуск актуального индекса + отчёт) вынесены из `server/ragref.go`/`server/ragindex.go` в `application/rag` (`jobs.go`); `server` оставил адаптеры загрузчиков/фабрики и тонкие обёртки `Index*Background` | ✅ |
 | F3u | Набор сессионных промпт-инъекций (`SessionInjections`/`Add`/`Upsert`/`Remove`: адресация по ID, честный признак удаления, потокобезопасная копия) вынесен из `server/session.go` в `domain` (`InjectionSet`, `injectionset.go`); `Session` делегирует и лениво создаёт набор (нулевая сессия работоспособна) | ✅ || F3u | Набор сессионных промпт-инъекций (`SessionInjections`/`Add`/`Upsert`/`Remove`: адресация по ID, честный признак удаления, потокобезопасная копия) вынесен из `server/session.go` в `domain` (`InjectionSet`, `injectionset.go`); `Session` делегирует и лениво создаёт набор (нулевая сессия работоспособна) | ✅ |
-| F3v | Правка и презентация конфликтных файлов модели (`NewConflictView` — отбор остаточных маркеров + фрагмент больших файлов, `ApplyConflictFiles` — запись files/edits с проверкой уникальности `old`, `ConflictSafeRel`/`WithinDir` — безопасность пути, `IsConflictMarkerLine`/`ConflictRegion`) вынесены из `server/actions_resolve.go` в `application/gitflow` (`conflictfiles.go`); `server` оставил алиасы `ConflictEdit`/`conflictView` и тонкие обёртки | ✅ |
+| F3v | Правка и презентация конфликтных файлов модели (`NewConflictView` — отбор остаточных маркеров + фрагмент больших файлов, `ApplyConflictFiles` — запись files/edits с проверкой уникальности `old`, `ConflictSafeRel`/`WithinDir` — безопасность пути, `IsConflictMarkerLine`/`ConflictRegion`) вынесены из `server/actions_resolve.go` в `application/gitflow` (`conflictfiles.go`); `server` оставил алиасы `ConflictEdit`/`conflictView` и тонкие обёртки | ✅ || F3v | Правка и презентация конфликтных файлов модели (`NewConflictView` — отбор остаточных маркеров + фрагмент больших файлов, `ApplyConflictFiles` — запись files/edits с проверкой уникальности `old`, `ConflictSafeRel`/`WithinDir` — безопасность пути, `IsConflictMarkerLine`/`ConflictRegion`) вынесены из `server/actions_resolve.go` в `application/gitflow` (`conflictfiles.go`); `server` оставил алиасы `ConflictEdit`/`conflictView` и тонкие обёртки | ✅ |
+| F3w | Детерминированная политика диалога чат-ассистента (`ConfirmAffirmative`/`BareConfirm`, `AsksSomething`, `PrevUserDiffers`, `LooksLikeBoardWriteClaim`, `AskSummary`, `ActionAnchor`) вынесена из `server/chatassist.go`/`server/actions.go` в новый пакет `application/chatassist` (`policy.go`); `server` оставил тонкие обёртки (`chatActionAnchor` читает историю и делегирует, `confirmAffirmative`/`looksLikeBoardWriteClaim`/`askSummary`) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -909,6 +910,25 @@ worktree add`, worktree эпика — существующий/создание
 выход за worktree, неуникальный/пустой `old`, маркеры/регион). Верификация:
 канонический набор зелёный (28 пакетов), `-race` по `application/gitflow` чист,
 `gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3w ✅** — детерминированная политика диалога чат-ассистента вынесена из
+`server/chatassist.go`/`server/actions.go` в новый пакет `application/chatassist`
+(`policy.go`): распознавание согласия (`ConfirmAffirmative`/`BareConfirm` +
+`ConfirmTokens`), вопроса (`AsksSomething`), смены темы (`PrevUserDiffers`),
+«отчёта о записи на доске» (`LooksLikeBoardWriteClaim` + узкий список фраз),
+сводка structured-вопроса (`AskSummary(*chat.Ask)`) и антизацикливающая подсказка
+`ActionAnchor(hist []chat.Message, question string)` (вся логика бывшего
+`chatActionAnchor`, кроме чтения истории). `server/chatassist.go` оставил
+`chatActionAnchor` (читает `chat.Store.History` и делегирует) и тонкие обёртки
+`looksLikeBoardWriteClaim`/`askSummary`; `server/actions.go` — обёртку
+`confirmAffirmative`; `ActionConfirmed` без изменений. Удалены переехавшие
+`asksSomething`/`prevUserDiffers`/`bareConfirm`/`boardWriteClaimPhrases`. Тесты:
+новые герметичные `application/chatassist/policy_test.go` (согласие/не-согласие,
+bare-согласие, отчёт о записи, вопрос, смена темы, `AskSummary`, якорь:
+подтверждение/lf/новая тема/два вопроса/пусто/role=ask); серверные
+`actions_test.go`/`chatassist_test.go` не менялись (идут через обёртки).
+Верификация: канонический набор зелёный (29 пакетов), `-race` по
+`application/chatassist` чист, `gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
 

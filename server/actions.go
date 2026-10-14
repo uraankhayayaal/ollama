@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 
+	appchatassist "ai/application/chatassist"
 	"ai/chat"
 	"ai/infrastructure/git"
 	"ai/tools"
@@ -388,39 +389,6 @@ func (sess *Session) ActionConfirmed(ctx context.Context) bool {
 	return false
 }
 
-// confirmTokens — слова-согласия, по которым деструктивное действие
-// ассистента считается подтверждённым пользователем в чате.
-var confirmTokens = map[string]bool{
-	"да": true, "подтверждаю": true, "подтверждаем": true,
-	"ок": true, "окей": true, "о'к": true,
-	"делай": true, "делаю": true, "делаем": true,
-	"согласен": true, "согласна": true, "разрешаю": true,
-	"давай": true, "конечно": true, "вали": true,
-	"yes": true, "yep": true,
-	// «lf» — русское «да», набранное при не переключённой раскладке
-	// (д→l, а→f). Без него подтверждение «да/нет» терялось и ассистент
-	// спрашивал по кругу.
-	"lf": true,
-}
-
-// confirmAffirmative сообщает, содержит ли строка явное согласие на действие.
-func confirmAffirmative(s string) bool {
-	for _, tok := range strings.Fields(strings.ToLower(s)) {
-		if confirmTokens[strings.Trim(tok, " \t,.;:!?—–«»\"'()")] {
-			return true
-		}
-	}
-	return false
-}
-
-// bareConfirm — согласие ЧИСТОЙ репликой («да», «давай», «lf»), а не словом
-// внутри длинной фразы. Нужен там, где фраза трактуется как ответ на
-// вопрос да/нет: «давай посмотрим, что там по безопасности» согласием на
-// удаление не является, хотя confirmAffirmative её поймает.
-func bareConfirm(s string) bool {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(s)))
-	if len(fields) == 0 || len(fields) > 3 {
-		return false
-	}
-	return confirmAffirmative(s)
-}
+// confirmAffirmative — тонкая обёртка над политикой диалога
+// (application/chatassist.ConfirmAffirmative).
+func confirmAffirmative(s string) bool { return appchatassist.ConfirmAffirmative(s) }
