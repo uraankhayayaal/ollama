@@ -48,7 +48,7 @@ type FrontendLead struct {
 }
 
 // Label возвращает человекочитаемое имя агента для чата.
-func (l *FrontendLead) Label() string { return "Frontend-лид" }
+func (l *FrontendLead) Label() string { return l.AgentLabel() }
 
 // NewFrontendLead создаёт Frontend Tech Lead в общей для всех агентов выходной
 // папке temp/<projectName> в корне модуля. projectName — имя проекта, задаётся

@@ -48,7 +48,7 @@ type BackendLead struct {
 }
 
 // Label возвращает человекочитаемое имя агента для чата.
-func (l *BackendLead) Label() string { return "Backend-лид" }
+func (l *BackendLead) Label() string { return l.AgentLabel() }
 
 // NewBackendLead создаёт Backend Tech Lead в общей для всех агентов выходной
 // папке temp/<projectName> в корне модуля. projectName — имя проекта, задаётся

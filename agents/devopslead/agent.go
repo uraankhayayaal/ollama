@@ -7,8 +7,6 @@ import (
 	"ai/tools"
 	"os"
 	"path/filepath"
-
-	"github.com/ollama/ollama/api"
 )
 
 // leadToolNames — инструменты DevOps Lead, выбираемые из общего реестра tools.
@@ -34,26 +32,15 @@ var leadToolNames = []string{
 // конфигов не пишет. Задачи создаёт инструментами Kanban-доски (Board*);
 // при отсутствии доски отвечает JSON-декомпозицией.
 type DevopsLead struct {
-	// *tools.FileOps — разделяемый контекст файловых инструментов
-	// (OutputDir, MaxFiles, NoOverwrite). Поля и методы FileOps промотируются:
-	// d.OutputDir, d.Write(..) и т.п. доступны напрямую.
-	*tools.FileOps
-	Prompt string
-	Config Config
-	// Tools — выбранные агентом инструменты из общего реестра
-	// (единый источник для GetTools/GetToolsForOllama и диспетчеризации вызовов).
-	Tools *tools.Set
-	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
-	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store services.BoardStore
-	// requireTaskPublishing — обязательна ли публикация задач на доске:
-	// лид не считается отработавшим, пока не создал/обновил задачи для
-	// подчинённых (false — для сценариев, не связанных с декомпозицией).
+	// *agents.Base — общая часть агента.
+	*agents.Base
+	Config                Config
+	Store                 services.BoardStore
 	requireTaskPublishing bool
 }
 
 // Label возвращает человекочитаемое имя агента для чата.
-func (d *DevopsLead) Label() string { return "DevOps-лид" }
+func (d *DevopsLead) Label() string { return d.AgentLabel() }
 
 // NewDevopsLead создаёт DevOps Lead в общей для всех агентов выходной папке
 // temp/<projectName> в корне модуля. projectName — имя проекта, задаётся
@@ -88,10 +75,8 @@ func newDevopsLead(dir, prompt string, cfg Config) *DevopsLead {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
 	ops.SetWriteAllowlist(agents.SkeletonWriteAllowlist)
 	return &DevopsLead{
-		FileOps:               ops,
-		Prompt:                prompt,
+		Base:                  agents.NewBase(prompt, ops, leadToolNames, tools.Deps{}),
 		Config:                cfg,
-		Tools:                 tools.Select(leadToolNames, tools.Deps{FileOps: ops}),
 		requireTaskPublishing: true,
 	}
 }
@@ -104,21 +89,9 @@ func (d *DevopsLead) SetBoardStore(s services.BoardStore) {
 		return
 	}
 	d.Store = s
-	d.Tools = tools.Select(leadToolNames, tools.Deps{FileOps: d.FileOps, Board: s})
+	d.SetTools(leadToolNames, tools.Deps{Board: s})
 }
 
-func (d *DevopsLead) GetUserMessages() []agents.Message {
-	return []agents.Message{
-		{
-			Type:    agents.MessageTypeHuman,
-			Message: d.Prompt,
-		},
-	}
-}
-
-// RequiredToolFirstRound — DevOps Lead не обязан обязательно вызывать
-// конкретный инструмент в первом раунде: обязательные действия задаются
-// обобщённо через RequiredToolGroups (изучить код + опубликовать задачи).
 func (d *DevopsLead) RequiredToolFirstRound() (string, bool) {
 	return "", false
 }
@@ -237,30 +210,13 @@ func (d *DevopsLead) GetSystemMessages(_ []agents.Message) []agents.Message {
 	}
 }
 
-// GetTools возвращает определения выбранных инструментов (единый JSON Schema
-// формат для OpenAI/Yandex). Источник схем — реестр tools.
-func (d *DevopsLead) GetTools() []tools.ToolDefinition {
-	return d.Tools.Definitions()
-}
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama.
-func (d *DevopsLead) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(d.GetTools())
-}
-
-func (d *DevopsLead) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
-	return d.Tools.Execute(functionName, functionArgs)
-}
-
-// Обёртки доступных инструментов. Наблюдаемые снаружи сигнатуры сохранены
-// и просто делегируют в реестр (единый источник вызовов).
-
-func (d *DevopsLead) ReadFiles(args map[string]any) ([]byte, error) {
-	return d.Tools.Execute("ReadFiles", args)
-}
-func (d *DevopsLead) List(args map[string]any) ([]byte, error) {
-	return d.Tools.Execute("List", args)
+func (d *DevopsLead) GetUserMessages() []agents.Message {
+	return []agents.Message{
+		{
+			Type:    agents.MessageTypeHuman,
+			Message: d.Prompt,
+		},
+	}
 }
 
 // NeedsHeavyModel — лид декомпозирует эпики на задачи с контрактами,

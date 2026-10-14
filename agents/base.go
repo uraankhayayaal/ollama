@@ -23,6 +23,11 @@ type Base struct {
 	// Tools — выбранные агентом инструменты из общего реестра (единый источник
 	// для GetTools/GetToolsForOllama и диспетчеризации вызовов).
 	Tools *tools.Set
+	// SystemPrompt — опциональный системный промпт по умолчанию. Специализация
+	// может переопределить GetSystemMessages.
+	SystemPrompt string
+	// Label — человекочитаемое имя агента для чата.
+	Label string
 }
 
 // NewBase собирает общую часть агента: FileOps с заданным контекстом и выборку
@@ -34,11 +39,29 @@ func NewBase(prompt string, ops *tools.FileOps, toolNames []string, deps tools.D
 	return &Base{FileOps: ops, Prompt: prompt, Tools: tools.Select(toolNames, deps)}
 }
 
+// WithLabel — опциональный сеттер-строитель (устаревший) сохранён через простую
+// установку поля: допускаем инициализацию с Label через присваивание;
 // SetTools пересобирает набор инструментов (например, при подключении доски:
 // добавляются Board*-инструменты). FileOps-контекст берётся из Base.
 func (b *Base) SetTools(toolNames []string, deps tools.Deps) {
 	deps.FileOps = b.FileOps
 	b.Tools = tools.Select(toolNames, deps)
+}
+
+// GetSystemMessages возвращает системный промпт по умолчанию (если задан).
+func (b *Base) GetSystemMessages(_ []Message) []Message {
+	if b.SystemPrompt == "" {
+		return nil
+	}
+	return []Message{{Type: MessageTypeSystem, Message: b.SystemPrompt}}
+}
+
+// AgentLabel возвращает человекочитаемое имя агента.
+func (b *Base) AgentLabel() string {
+	if b.Label != "" {
+		return b.Label
+	}
+	return "агент"
 }
 
 // GetUserMessages возвращает задание пользователя как одно human-сообщение.
