@@ -1,5 +1,39 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F2 — `server` → `application/usecases`/`domain/log`)
+
+Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
+адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
+`bc9a7a7`) — ручной откат задачи и прогноз токенов вынесены из HTTP-слоя:
+`application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask`,
+порт `WorktreeRollbacker`, доменные ошибки `ErrTaskNotFound`/`ErrNoWorktree`/
+`ErrBadTarget`/`ErrNoSuchCommit`) и `application/usecases/tokenestimate.go`
+(`NewTokenEstimator`, TTL-обучение предиктора), тесты
+`application/usecases/rollback_test.go`; `server/taskrollback.go` и
+`server/tokenestimate.go` стали тонкими обёртками.
+
+Срез **F2** — детерминированная обработка логов вынесена из `server/` в новый
+пакет **`domain/log`** (stdlib-only; `go list -deps ./domain/log` чист от
+проектных пакетов). Перенос: `domain/log/digest.go` владеет типами
+`LogLine`/`LogFinding`/`LogDigest` (+`Empty`/`Text`), константами
+`LogDigestWindow`/`LogDigestMax`/`LogDigestSample`, функциями
+`ParseLogLine`/`LogHeuristicLevel`/`IsLogStackFrame`/`LevelRank`/
+`TruncateLogText`/`BuildLogDigest`/`MergeLogFindings`(
++ `FilterLogLines`/`FilterLogByLevel` — из `server/loganalysis.go`). Тесты
+переехали `server/logdigest_test.go` → `domain/log/digest_test.go` (`git mv`,
+package `log`, имена экспортированы). `server/logdigest.go` (временный
+shim-алиас) удалён. `server/loganalysis.go` импортирует `logpkg "ai/domain/log"`,
+держит только серверную обвязку (чтение файлов, выборка, `LogDigestPrompt`,
+cooldown); `server/actions_logs.go` зовёт `logpkg.TruncateLogText`;
+`server/chatassist.go` — `LogDigestPrompt(a)`. Проверено: канонический набор
+(`go build`/`go vet`/`go test` по перечню ниже) зелёный, `-race` по
+`domain/log` чист, `gofmt -l` по правкам чист (предсуществующие отклонения
+`server/chatassist.go` не трогались). Документация: раздел «Этап 6» и шапка
+плана (`PLAN-2026-10-12`), `docs/20-features/chat-assistant.md` (путь
+`buildLogDigest` → `domain/log`), `docs/00-overview/project-map.md` (новая
+секция `domain/`/`application/`). Остаток Этапа 6 — F3+: git-flow хуки,
+сессии/оркестрация, RAG-хуки. Коммита нет (спросить пользователя).
+
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
 Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы

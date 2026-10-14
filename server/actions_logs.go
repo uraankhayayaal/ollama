@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	logpkg "ai/domain/log"
 	"ai/logging"
 	"ai/tools"
 )
@@ -23,8 +24,8 @@ import (
 // collectProjectLogs), и ничего больше.
 //
 // Инструмент не заменяет дайджест: дайджест отдаётся в промпте (см.
-// buildLogDigest), а инструмент нужен для докапывания — увидеть реальные
-// строки конкретной находки, её окружение и соседние записи.
+// domain/log.BuildLogDigest), а инструмент нужен для докапывания — увидеть
+// реальные строки конкретной находки, её окружение и соседние записи.
 
 // actionReadLogs — имя инструмента-моста.
 const actionReadLogs = "ReadProjectLogs"
@@ -244,7 +245,7 @@ func readLogSlice(path string, size int64, grep string, limit int) (logToolFile,
 		content = content[len(content)-logToolMaxBytes:]
 		res.Truncated = true
 	}
-	res.Content = truncateLogText(content, logToolMaxBytes)
+	res.Content = logpkg.TruncateLogText(content, logToolMaxBytes)
 	if len(res.Content) == 0 && grep != "" {
 		res.Note = strings.TrimSpace(res.Note + " подстрока не найдена")
 	}

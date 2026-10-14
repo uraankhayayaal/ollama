@@ -16,9 +16,9 @@
 //     иначе трейс на 40 строк превратится в 40 находок;
 //   - переменные части (пути, числа, UUID, кавычки) заменяются
 //     плейсхолдерами: получается шаблон, по которому строки группируются;
-//   - находки сортируются по тяжести и частоте и обрезаются до logDigestMax.
+//   - находки сортируются по тяжести и частоте и обрезаются до LogDigestMax.
 
-package server
+package log
 
 import (
 	"regexp"
@@ -31,25 +31,25 @@ import (
 // Границы дайджеста. Заданы сверху: дайджест — это вход в контекст модели,
 // то есть его размер должен быть предсказуемым и небольшим.
 const (
-	// logDigestWindow — сколько последних строк лога разбираем.
-	logDigestWindow = 5000
-	// logDigestMax — сколько находок уходит в ответ (остальные отбрасываются,
+	// LogDigestWindow — сколько последних строк лога разбираем.
+	LogDigestWindow = 5000
+	// LogDigestMax — сколько находок уходит в ответ (остальные отбрасываются,
 	// их число видно в поле Dropped).
-	logDigestMax = 12
-	// logDigestSample — предел длины строки-примера и строки стека.
-	logDigestSample = 300
+	LogDigestMax = 12
+	// LogDigestSample — предел длины строки-примера и строки стека.
+	LogDigestSample = 300
 )
 
-// logLine — разобранная строка лога.
-type logLine struct {
+// LogLine — разобранная строка лога.
+type LogLine struct {
 	Raw   string
 	TS    string // метка времени, если строка размечена
 	Level string // FATAL/ERROR/WARN/..., если строка размечена
 	Msg   string // текст без метки времени и тега уровня
 }
 
-// logFinding — группа повторяющихся проблем: шаблон + частота + границы времени.
-type logFinding struct {
+// LogFinding — группа повторяющихся проблем: шаблон + частота + границы времени.
+type LogFinding struct {
 	Level    string // худший уровень в группе
 	Template string // сообщение с абстрагированными переменными
 	Sample   string // реальная строка-пример
@@ -59,21 +59,21 @@ type logFinding struct {
 	Frame    string // первая строка стека, если была
 }
 
-// logDigest — сводка лога для ассистента.
-type logDigest struct {
+// LogDigest — сводка лога для ассистента.
+type LogDigest struct {
 	File         string       `json:"file"`
 	Lines        int          `json:"lines"`         // строк в окне разбора
 	ProblemLines int          `json:"problem_lines"` // из них помеченных проблемными
-	Findings     []logFinding `json:"findings"`
-	Dropped      int          `json:"dropped"` // находок сверх logDigestMax
+	Findings     []LogFinding `json:"findings"`
+	Dropped      int          `json:"dropped"` // находок сверх LogDigestMax
 }
 
 // empty — дайджест без находок: UI показывает «проблем не найдено».
-func (d logDigest) empty() bool { return len(d.Findings) == 0 }
+func (d LogDigest) Empty() bool { return len(d.Findings) == 0 }
 
 // Text — дайджест строкой для промпта ассистента.
-func (d logDigest) Text() string {
-	if d.empty() {
+func (d LogDigest) Text() string {
+	if d.Empty() {
 		return "Дайджест логов: проблемных строк не найдено."
 	}
 	var b strings.Builder
@@ -125,9 +125,9 @@ var logLevelTag = regexp.MustCompile(`^(FATAL|ERROR|WARN|INFO|DEBUG|TRACE|CRITIC
 // разбирается — такие строки проблемными не считаются.
 var logTimeMark = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) `)
 
-// parseLogLine разбирает строку на метку времени, тег уровня и текст.
-func parseLogLine(raw string) logLine {
-	l := logLine{Raw: raw}
+// ParseLogLine разбирает строку на метку времени, тег уровня и текст.
+func ParseLogLine(raw string) LogLine {
+	l := LogLine{Raw: raw}
 	rest := raw
 	if m := logTimeMark.FindStringSubmatch(rest); m != nil {
 		l.TS = m[1]
@@ -155,9 +155,9 @@ var logProblemLevels = map[string]bool{
 // JSON-аргумента DETAIL-строки стал бы ошибкой.
 var logLevelWord = regexp.MustCompile(`(?i)\b(FATAL|CRITICAL|ERROR|EXCEPTION|WARNING|WARN)\b`)
 
-// logHeuristicLevel — уровень нетегированной строки. Нужен для логов САМОГО
+// LogHeuristicLevel — уровень нетегированной строки. Нужен для логов САМОГО
 // приложения (пишутся его собственным логгером, наш тег туда не попадает).
-func logHeuristicLevel(msg string) string {
+func LogHeuristicLevel(msg string) string {
 	low := strings.ToLower(strings.TrimSpace(msg))
 	if low == "" {
 		return ""
@@ -190,8 +190,8 @@ var logStackFrame = regexp.MustCompile(
 		`^goroutine \d+ \[`, // Go: начало трейса
 )
 
-// isLogStackFrame — строка является кадром стека (продолжением находки).
-func isLogStackFrame(msg string) bool {
+// IsLogStackFrame — строка является кадром стека (продолжением находки).
+func IsLogStackFrame(msg string) bool {
 	return logStackFrame.MatchString(msg)
 }
 
@@ -236,25 +236,25 @@ func logTemplate(msg string) string {
 
 // --- сборка дайджеста ---
 
-// buildLogDigest разбирает содержимое лог-файла и собирает сводку проблем.
-// Берутся последние logDigestWindow строк: старые записи не участвуют в
+// BuildLogDigest разбирает содержимое лог-файла и собирает сводку проблем.
+// Берутся последние LogDigestWindow строк: старые записи не участвуют в
 // разборе, зато стоимость не растёт с размером файла.
-func buildLogDigest(file, content string) logDigest {
+func BuildLogDigest(file, content string) LogDigest {
 	// Хвостовой перевод строки дал бы в разбор пустой элемент, который
 	// засчитывался бы в Lines/ProblemLines.
 	content = strings.TrimRight(content, "\n")
-	d := logDigest{File: file, Findings: []logFinding{}}
+	d := LogDigest{File: file, Findings: []LogFinding{}}
 	if content == "" {
 		return d
 	}
 	lines := strings.Split(content, "\n")
-	if n := len(lines); n > logDigestWindow {
-		lines = lines[n-logDigestWindow:]
+	if n := len(lines); n > LogDigestWindow {
+		lines = lines[n-LogDigestWindow:]
 	}
 	d.Lines = len(lines)
 
 	type group struct {
-		f      logFinding
+		f      LogFinding
 		lastTS string
 	}
 	groups := map[string]*group{}
@@ -263,22 +263,22 @@ func buildLogDigest(file, content string) logDigest {
 	var order []string
 
 	for _, raw := range lines {
-		l := parseLogLine(raw)
+		l := ParseLogLine(raw)
 		// Кадр стека приклеиваем к последней находке: иначе трейс на 40
 		// строк станет сорока находками, и ни одна не будет читаемой.
 		// Проверяем ДО TrimSpace: кадр опознаётся по ведущему отступу.
-		if isLogStackFrame(l.Msg) {
+		if IsLogStackFrame(l.Msg) {
 			if len(order) > 0 {
 				g := groups[order[len(order)-1]]
 				if g != nil && g.f.Frame == "" {
-					g.f.Frame = truncateLogText(strings.TrimSpace(l.Msg), logDigestSample)
+					g.f.Frame = TruncateLogText(strings.TrimSpace(l.Msg), LogDigestSample)
 				}
 			}
 			continue
 		}
 		level := l.Level
 		if level == "" {
-			level = logHeuristicLevel(l.Msg)
+			level = LogHeuristicLevel(l.Msg)
 		}
 		msg := strings.TrimSpace(l.Msg)
 		if msg == "" {
@@ -291,10 +291,10 @@ func buildLogDigest(file, content string) logDigest {
 		tpl := logTemplate(msg)
 		g := groups[tpl]
 		if g == nil {
-			g = &group{f: logFinding{
+			g = &group{f: LogFinding{
 				Level:    level,
 				Template: tpl,
-				Sample:   truncateLogText(l.Raw, logDigestSample),
+				Sample:   TruncateLogText(l.Raw, LogDigestSample),
 				Count:    0,
 				FirstTS:  l.TS,
 			}}
@@ -302,7 +302,7 @@ func buildLogDigest(file, content string) logDigest {
 			order = append(order, tpl)
 		}
 		g.f.Count++
-		if levelRank(level) > levelRank(g.f.Level) {
+		if LevelRank(level) > LevelRank(g.f.Level) {
 			g.f.Level = level
 		}
 		if l.TS != "" {
@@ -317,20 +317,20 @@ func buildLogDigest(file, content string) logDigest {
 		d.Findings = append(d.Findings, groups[tpl].f)
 	}
 	sort.SliceStable(d.Findings, func(i, j int) bool {
-		if ri, rj := levelRank(d.Findings[i].Level), levelRank(d.Findings[j].Level); ri != rj {
+		if ri, rj := LevelRank(d.Findings[i].Level), LevelRank(d.Findings[j].Level); ri != rj {
 			return ri > rj
 		}
 		return d.Findings[i].Count > d.Findings[j].Count
 	})
-	if len(d.Findings) > logDigestMax {
-		d.Dropped = len(d.Findings) - logDigestMax
-		d.Findings = d.Findings[:logDigestMax]
+	if len(d.Findings) > LogDigestMax {
+		d.Dropped = len(d.Findings) - LogDigestMax
+		d.Findings = d.Findings[:LogDigestMax]
 	}
 	return d
 }
 
-// levelRank — тяжесть уровня для сортировки (больше — хуже).
-func levelRank(level string) int {
+// LevelRank — тяжесть уровня для сортировки (больше — хуже).
+func LevelRank(level string) int {
 	switch level {
 	case "FATAL", "PANIC":
 		return 4
@@ -344,8 +344,8 @@ func levelRank(level string) int {
 	return 0
 }
 
-// truncateLogText обрезает строку по границе символа и помечает многоточием.
-func truncateLogText(s string, limit int) string {
+// TruncateLogText обрезает строку по границе символа и помечает многоточием.
+func TruncateLogText(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
@@ -354,4 +354,84 @@ func truncateLogText(s string, limit int) string {
 		cut = cut[:len(cut)-1]
 	}
 	return strings.TrimSpace(cut) + " …"
+}
+
+// --- фильтры выборки ---
+
+// FilterLogLines оставляет строки, содержащие подстроку (регистронезависимо).
+func FilterLogLines(content, needleLower string) string {
+	var b strings.Builder
+	for _, l := range strings.Split(content, "\n") {
+		if strings.Contains(strings.ToLower(l), needleLower) {
+			b.WriteString(l)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// FilterLogByLevel оставляет строки не легче уровня min. Разбор строки идёт
+// тем же ParseLogLine/LogHeuristicLevel, что и при построении дайджеста, иначе
+// фильтр и разбор смотрели бы на строку по-разному.
+func FilterLogByLevel(content, min string) string {
+	want := LevelRank(min)
+	var b strings.Builder
+	for _, raw := range strings.Split(content, "\n") {
+		l := ParseLogLine(raw)
+		if IsLogStackFrame(l.Msg) {
+			// Кадры стека не имеют уровня, но нужны для чтения ошибки:
+			// оставляем их, иначе вырезается контекст находки.
+			b.WriteString(raw)
+			b.WriteString("\n")
+			continue
+		}
+		level := l.Level
+		if level == "" {
+			level = LogHeuristicLevel(l.Msg)
+		}
+		if LevelRank(level) >= want {
+			b.WriteString(raw)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// MergeLogFindings склеивает находки с одинаковым шаблоном (сумма частот,
+// худший уровень, самое раннее/позднее время), сортирует и обрезает до limit.
+func MergeLogFindings(in []LogFinding, limit int) []LogFinding {
+	idx := map[string]int{}
+	out := []LogFinding{}
+	for _, f := range in {
+		key := f.Level + "|" + f.Template
+		if i, ok := idx[key]; ok {
+			cur := &out[i]
+			cur.Count += f.Count
+			if LevelRank(f.Level) > LevelRank(cur.Level) {
+				cur.Level = f.Level
+			}
+			if f.FirstTS != "" && (cur.FirstTS == "" || f.FirstTS < cur.FirstTS) {
+				cur.FirstTS = f.FirstTS
+			}
+			if f.LastTS != "" && f.LastTS > cur.LastTS {
+				cur.LastTS = f.LastTS
+			}
+			if cur.Frame == "" {
+				cur.Frame = f.Frame
+			}
+			continue
+		}
+		idx[key] = len(out)
+		out = append(out, f)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if ri, rj := LevelRank(out[i].Level), LevelRank(out[j].Level); ri != rj {
+			return ri > rj
+		}
+		return out[i].Count > out[j].Count
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }

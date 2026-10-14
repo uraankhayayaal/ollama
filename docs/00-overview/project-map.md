@@ -109,6 +109,16 @@
 | `embed.go` | Эмбеддинги через Ollama |
 | `episodes.go` | Эпизоды вытеснения (Ф-7) |
 
+### Домен и use-cases — `domain/`, `application/`
+
+| Файл/папка | Назначение |
+|---|---|
+| `domain/` | Сущности и политики без зависимостей от проектных пакетов: `status.go` (FSM доски), `order.go`/`unmarshal.go` (порядок эпиков, разбор задач), `acceptance.go` (отчёт приёмки), `comment.go`/`injection.go`, `board_types.go`/`epic.go`/`task.go`, `agent.go`/`plan.go` |
+| `domain/log/` | Детерминированная обработка логов: разбор строк/уровней/стека, шаблонизация, `BuildLogDigest`, `MergeLogFindings`, `FilterLogLines`/`FilterLogByLevel`, `TruncateLogText` |
+| `domain/services/` | Порты: `LLMClient`, `RAGClient`, `GitOperations`, `SandboxWorkspace`, `BoardStore`, инструменты |
+| `application/usecases/` | Use-cases: `RunTask`, `CompressHistory`, `BreakLoop`, `Escalate`, `RollbackTask`, `NewTokenEstimator` |
+| `application/planner/` | Планировщик и оркестрация доски (бывший `agents/planner`) |
+
 ### Сервер и веб — `server/`, `web/`
 
 | Файл/папка | Назначение |

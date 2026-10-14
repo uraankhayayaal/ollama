@@ -49,7 +49,7 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 // писал, он нажал кнопку. Выдумывать от его имени текст в истории нельзя.
 func (sess *Session) runChatLogAnalysis(ctx context.Context, a logAnalysis, provider llm.LLMProvider) {
 	question := fmt.Sprintf("Разбери лог %s и объясни, что в нём сломалось.", a.FilesLabel())
-	sess.runChatAsk(ctx, chatAsk{question: question, logDigestPrompt: logDigestPrompt(a)}, provider)
+	sess.runChatAsk(ctx, chatAsk{question: question, logDigestPrompt: LogDigestPrompt(a)}, provider)
 }
 
 // runChatAsk — общий запуск ассистента чата.

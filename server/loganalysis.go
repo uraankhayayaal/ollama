@@ -3,19 +3,23 @@ package server
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
+	logpkg "ai/domain/log"
 	"ai/logging"
 )
 
 // Разбор логов по запросу панели логов (кнопка «Разобрать»).
 //
-// Поток целиком: панель отдаёт файл/поиск/уровень → сервер строит ДЕТЕРМИНИРОВАННЫЙ
-// дайджест (buildLogDigest) → дайджест уходит в промпт ассистента → модель
-// отвечает в чате и при необходимости докапывает находку инструментом
+// Поток целиком: панель отдаёт файл/поиск/уровень → детерминированный
+// дайджест (domain/log.BuildLogDigest) → дайджест уходит в промпт ассистента →
+// модель отвечает в чате и при необходимости докапывает находку инструментом
 // ReadProjectLogs. Сырой лог целиком в промпт не идёт никогда.
+//
+// Здесь остаётся только серверная обвязка: чтение файлов проекта, сборка
+// промпта и cooldown. Разбор строк, фильтры, склейка находок и сам дайджест —
+// в domain/log.
 
 // logAnalysisReq — запрос разбора из POST /api/projects/{id}/chat.
 // Все поля опциональны: пустой запрос разбирает самые свежие логи проекта.
@@ -31,7 +35,7 @@ type logAnalysisReq struct {
 // logAnalysis — подготовленный разбор для промпта.
 type logAnalysis struct {
 	Files  []string // какие файлы разобраны (для заголовка)
-	Digest logDigest
+	Digest logpkg.LogDigest
 	// Note — человекочитаемые условия выборки (поиск/уровень) для заголовка в
 	// промпте. Модель должна знать, что она видит подмножество, а не весь лог.
 	Note string
@@ -73,7 +77,7 @@ func (sess *Session) buildLogAnalysis(req logAnalysisReq) (logAnalysis, error) {
 	}
 	query := strings.ToLower(strings.TrimSpace(req.Query))
 
-	merged := logDigest{Findings: []logFinding{}}
+	merged := logpkg.LogDigest{Findings: []logpkg.LogFinding{}}
 	for _, f := range sel {
 		body, err := os.ReadFile(f.Path)
 		if err != nil {
@@ -81,12 +85,12 @@ func (sess *Session) buildLogAnalysis(req logAnalysisReq) (logAnalysis, error) {
 		}
 		content := string(body)
 		if query != "" {
-			content = filterLogLines(content, query)
+			content = logpkg.FilterLogLines(content, query)
 		}
 		if minLevel != "" {
-			content = filterLogByLevel(content, minLevel)
+			content = logpkg.FilterLogByLevel(content, minLevel)
 		}
-		d := buildLogDigest(f.Name, content)
+		d := logpkg.BuildLogDigest(f.Name, content)
 		merged.Lines += d.Lines
 		merged.ProblemLines += d.ProblemLines
 		merged.Dropped += d.Dropped
@@ -94,7 +98,7 @@ func (sess *Session) buildLogAnalysis(req logAnalysisReq) (logAnalysis, error) {
 		// находка с суммой частот, а не две.
 		merged.Findings = append(merged.Findings, d.Findings...)
 	}
-	merged.Findings = mergeLogFindings(merged.Findings, logDigestMax)
+	merged.Findings = logpkg.MergeLogFindings(merged.Findings, logpkg.LogDigestMax)
 
 	names := make([]string, 0, len(sel))
 	for _, f := range sel {
@@ -156,90 +160,12 @@ func filesLabel(files []string) string {
 	}
 }
 
-// filterLogLines оставляет строки, содержащие подстроку (регистронезависимо).
-func filterLogLines(content, needleLower string) string {
-	var b strings.Builder
-	for _, l := range strings.Split(content, "\n") {
-		if strings.Contains(strings.ToLower(l), needleLower) {
-			b.WriteString(l)
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
-}
-
-// filterLogByLevel оставляет строки не легче уровня min. Разбор строки идёт
-// тем же parseLogLine/logHeuristicLevel, что и при построении дайджеста, иначе
-// фильтр и разбор смотрели бы на строку по-разному.
-func filterLogByLevel(content, min string) string {
-	want := levelRank(min)
-	var b strings.Builder
-	for _, raw := range strings.Split(content, "\n") {
-		l := parseLogLine(raw)
-		if isLogStackFrame(l.Msg) {
-			// Кадры стека не имеют уровня, но нужны для чтения ошибки:
-			// оставляем их, иначе вырезается контекст находки.
-			b.WriteString(raw)
-			b.WriteString("\n")
-			continue
-		}
-		level := l.Level
-		if level == "" {
-			level = logHeuristicLevel(l.Msg)
-		}
-		if levelRank(level) >= want {
-			b.WriteString(raw)
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
-}
-
-// mergeLogFindings склеивает находки с одинаковым шаблоном (сумма частот,
-// худший уровень, самое раннее/позднее время), сортирует и обрезает до limit.
-func mergeLogFindings(in []logFinding, limit int) []logFinding {
-	idx := map[string]int{}
-	out := []logFinding{}
-	for _, f := range in {
-		key := f.Level + "|" + f.Template
-		if i, ok := idx[key]; ok {
-			cur := &out[i]
-			cur.Count += f.Count
-			if levelRank(f.Level) > levelRank(cur.Level) {
-				cur.Level = f.Level
-			}
-			if f.FirstTS != "" && (cur.FirstTS == "" || f.FirstTS < cur.FirstTS) {
-				cur.FirstTS = f.FirstTS
-			}
-			if f.LastTS != "" && f.LastTS > cur.LastTS {
-				cur.LastTS = f.LastTS
-			}
-			if cur.Frame == "" {
-				cur.Frame = f.Frame
-			}
-			continue
-		}
-		idx[key] = len(out)
-		out = append(out, f)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if ri, rj := levelRank(out[i].Level), levelRank(out[j].Level); ri != rj {
-			return ri > rj
-		}
-		return out[i].Count > out[j].Count
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
-}
-
-// logDigestPrompt — блок промпта с дайджестом и контрактом ответа.
+// LogDigestPrompt — блок промпта с дайджестом и контрактом ответа.
 //
 // Контракт задан явно, потому что без него модель по сводке находок пишет
 // пересказ лога вместо разбора: без «цитаты-доказательства» и «гипотезы
 // причины» она ограничивается «в логах есть ошибки».
-func logDigestPrompt(a logAnalysis) string {
+func LogDigestPrompt(a logAnalysis) string {
 	var b strings.Builder
 	b.WriteString("\n\n=== РАЗБОР ЛОГА ПРОЕКТА ===\n")
 	fmt.Fprintf(&b, "Пользователь нажал «Разобрать» в панели логов. Файл(ы): %s.\n", a.FilesLabel())

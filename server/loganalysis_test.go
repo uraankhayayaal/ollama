@@ -11,6 +11,7 @@ import (
 
 	"ai/agents"
 	"ai/chat"
+	logpkg "ai/domain/log"
 	"ai/infrastructure/llm"
 	"ai/runner"
 )
@@ -46,7 +47,7 @@ func TestLogAnalysisDigestGoesToPrompt(t *testing.T) {
 		t.Errorf("первой находкой должен быть ERROR, got %q", a.Digest.Findings[0].Level)
 	}
 
-	p := sess.chatPromptFor(chatAsk{question: "разбери лог", logDigestPrompt: logDigestPrompt(a)})
+	p := sess.chatPromptFor(chatAsk{question: "разбери лог", logDigestPrompt: LogDigestPrompt(a)})
 	for _, want := range []string{
 		"РАЗБОР ЛОГА ПРОЕКТА", "an-prompt.log", "не удалось подключиться",
 		"таймаут", "ReadProjectLogs", "первопричина",
@@ -68,7 +69,7 @@ func TestLogAnalysisPromptStatesResponseContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block := logDigestPrompt(a)
+	block := LogDigestPrompt(a)
 	for _, want := range []string{"ЦИТАТА", "гипотез", "шумом", "следующие шаги", "критичного нет"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("в контракте ответа нет %q:\n%s", want, block)
@@ -85,7 +86,7 @@ func TestLogAnalysisLevelFilterKeepsOnlyWorse(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range a.Digest.Findings {
-		if levelRank(f.Level) < levelRank("ERROR") {
+		if logpkg.LevelRank(f.Level) < logpkg.LevelRank("ERROR") {
 			t.Errorf("в разбор попал %q при level=ERROR", f.Level)
 		}
 	}
@@ -121,7 +122,7 @@ func TestLogAnalysisQueryFilter(t *testing.T) {
 		t.Errorf("подстрока поиска не отражена в условиях выборки: %q", a.Note)
 	}
 	// Модель должна понимать, что видит подмножество.
-	if !strings.Contains(logDigestPrompt(a), "Условия выборки") {
+	if !strings.Contains(LogDigestPrompt(a), "Условия выборки") {
 		t.Errorf("условия выборки не попали в промпт")
 	}
 }

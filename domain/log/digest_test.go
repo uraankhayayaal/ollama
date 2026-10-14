@@ -1,4 +1,4 @@
-package server
+package log
 
 import (
 	"strings"
@@ -63,7 +63,7 @@ func TestParseLogLineUsesOwnTagNotSubstring(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := parseLogLine(c.raw)
+			got := ParseLogLine(c.raw)
 			if got.TS != c.ts || got.Level != c.level || got.Msg != c.msg {
 				t.Fatalf("разбор = %+v\nwant ts=%q level=%q msg=%q", got, c.ts, c.level, c.msg)
 			}
@@ -90,8 +90,8 @@ func TestLogHeuristicLevelForUntaggedLines(t *testing.T) {
 		`[инструмент] модель вызывает X: {"level":"ERROR", "msg":"boom"}`: "ERROR",
 	}
 	for msg, want := range cases {
-		if got := logHeuristicLevel(msg); got != want {
-			t.Errorf("logHeuristicLevel(%q) = %q, want %q", msg, got, want)
+		if got := LogHeuristicLevel(msg); got != want {
+			t.Errorf("LogHeuristicLevel(%q) = %q, want %q", msg, got, want)
 		}
 	}
 }
@@ -104,8 +104,8 @@ func TestBuildLogDigestIgnoresLevelWordInsideTaggedPayload(t *testing.T) {
 		`2026-01-01 10:00:00.000 DETAIL [инструмент] модель вызывает X: {"level":"ERROR","msg":"boom"}`,
 		`2026-01-01 10:00:00.001 DETAIL [инструмент] результат X: {"stderr":"ERROR: cannot connect"}`,
 	}, "\n")
-	d := buildLogDigest("x.log", content)
-	if !d.empty() || d.ProblemLines != 0 {
+	d := BuildLogDigest("x.log", content)
+	if !d.Empty() || d.ProblemLines != 0 {
 		t.Fatalf("DETAIL-строки разобраны как ошибки: %+v", d)
 	}
 }
@@ -119,7 +119,7 @@ func TestBuildLogDigestGroupsRepeats(t *testing.T) {
 		ts := "2026-09-23 00:17:1" + string(rune('0'+i)) + ".000"
 		b.WriteString(tsLine(ts, "WARN", "патч файла "+f+": файл не найден в снимке: "+f) + "\n")
 	}
-	d := buildLogDigest("calc.log", b.String())
+	d := BuildLogDigest("calc.log", b.String())
 
 	if d.ProblemLines != 5 || d.Lines != 5 {
 		t.Fatalf("проблемных=%d строк=%d, want 5/5", d.ProblemLines, d.Lines)
@@ -163,7 +163,7 @@ func TestBuildLogDigestAttachesStackFramesToFinding(t *testing.T) {
 		"  at com.foo.Baz(Baz.java:7)",
 		"2026-01-01 10:00:01.000 INFO всё прошло",
 	}, "\n")
-	d := buildLogDigest("app.log", content)
+	d := BuildLogDigest("app.log", content)
 
 	if len(d.Findings) != 1 {
 		t.Fatalf("находок=%d, want 1: %+v", len(d.Findings), d.Findings)
@@ -179,7 +179,7 @@ func TestBuildLogDigestAttachesStackFramesToFinding(t *testing.T) {
 
 func TestBuildLogDigestGroupsPanicTraceback(t *testing.T) {
 	content := "panic: index out of range [3]\n\ngoroutine 1 [running]:\nmain.serve(0x1)\n\t/tmp/x.go:12\n"
-	d := buildLogDigest("app.log", content)
+	d := BuildLogDigest("app.log", content)
 	if len(d.Findings) != 1 || d.Findings[0].Level != "FATAL" {
 		t.Fatalf("ожидалась одна находка FATAL: %+v", d.Findings)
 	}
@@ -201,7 +201,7 @@ func TestBuildLogDigestSortsBySeverityThenCount(t *testing.T) {
 	b.WriteString("2026-01-01 10:00:00.000 WARN   редкий вывод\n")
 	b.WriteString("2026-01-01 10:00:00.000 ERROR разовое падение\n")
 	b.WriteString("2026-01-01 10:00:00.000 FATAL  сервер упал\n")
-	d := buildLogDigest("x.log", b.String())
+	d := BuildLogDigest("x.log", b.String())
 
 	want := []struct {
 		level string
@@ -224,13 +224,13 @@ func TestBuildLogDigestSortsBySeverityThenCount(t *testing.T) {
 // предсказуемым: лишние находки отбрасываются, но их количество видно.
 func TestBuildLogDigestCapsFindingsAndCountsDropped(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < logDigestMax+8; i++ {
+	for i := 0; i < LogDigestMax+8; i++ {
 		b.WriteString("2026-01-01 10:00:00.000 WARN   уникальная проблема " + string(rune('A'+i)) + "\n")
 	}
-	d := buildLogDigest("x.log", b.String())
+	d := BuildLogDigest("x.log", b.String())
 
-	if len(d.Findings) != logDigestMax {
-		t.Fatalf("находок=%d, want %d", len(d.Findings), logDigestMax)
+	if len(d.Findings) != LogDigestMax {
+		t.Fatalf("находок=%d, want %d", len(d.Findings), LogDigestMax)
 	}
 	if d.Dropped != 8 {
 		t.Fatalf("dropped = %d, want 8", d.Dropped)
@@ -240,21 +240,21 @@ func TestBuildLogDigestCapsFindingsAndCountsDropped(t *testing.T) {
 	}
 }
 
-// Разбор ограничен последними logDigestWindow строками: старые записи в
+// Разбор ограничен последними LogDigestWindow строками: старые записи в
 // разбор не идут, зато стоимость не растёт с размером файла.
 func TestBuildLogDigestLooksAtLastWindowOnly(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < logDigestWindow+100; i++ {
+	for i := 0; i < LogDigestWindow+100; i++ {
 		b.WriteString("2026-01-01 10:00:00.000 WARN   повтор\n")
 	}
 	b.WriteString("2026-01-01 10:00:00.000 ERROR   уникальное падение\n")
-	d := buildLogDigest("x.log", b.String())
+	d := BuildLogDigest("x.log", b.String())
 
-	if d.Lines != logDigestWindow {
-		t.Fatalf("Lines = %d, want %d", d.Lines, logDigestWindow)
+	if d.Lines != LogDigestWindow {
+		t.Fatalf("Lines = %d, want %d", d.Lines, LogDigestWindow)
 	}
-	if d.ProblemLines != logDigestWindow {
-		t.Fatalf("ProblemLines = %d, want %d", d.ProblemLines, logDigestWindow)
+	if d.ProblemLines != LogDigestWindow {
+		t.Fatalf("ProblemLines = %d, want %d", d.ProblemLines, LogDigestWindow)
 	}
 	// Ровно одна строка «повтор» осталась за окном разбора.
 	if len(d.Findings) != 2 {
@@ -263,8 +263,8 @@ func TestBuildLogDigestLooksAtLastWindowOnly(t *testing.T) {
 	if d.Findings[0].Level != "ERROR" || d.Findings[0].Count != 1 {
 		t.Fatalf("первой должна быть уникальная ошибка: %+v", d.Findings[0])
 	}
-	if d.Findings[1].Level != "WARN" || d.Findings[1].Count != logDigestWindow-1 {
-		t.Fatalf("повторов в окне = %d, want %d", d.Findings[1].Count, logDigestWindow-1)
+	if d.Findings[1].Level != "WARN" || d.Findings[1].Count != LogDigestWindow-1 {
+		t.Fatalf("повторов в окне = %d, want %d", d.Findings[1].Count, LogDigestWindow-1)
 	}
 }
 
@@ -277,8 +277,8 @@ func TestBuildLogDigestIgnoresVerboseLevels(t *testing.T) {
 		"2026-01-01 10:00:00.002 DEBUG  внутренний кеш",
 		"2026-01-01 10:00:00.003 TRACE  трейс вызова",
 	}, "\n")
-	d := buildLogDigest("x.log", content)
-	if !d.empty() || d.ProblemLines != 0 {
+	d := BuildLogDigest("x.log", content)
+	if !d.Empty() || d.ProblemLines != 0 {
 		t.Fatalf("пустой лог без проблем разобран как проблемный: %+v", d)
 	}
 	if !strings.Contains(d.Text(), "не найдено") {
@@ -294,7 +294,7 @@ func TestBuildLogDigestKeepsWorstLevelInGroup(t *testing.T) {
 		"2026-01-01 10:00:01.000 ERROR диск переполнен на узле 2",
 		"2026-01-01 10:00:02.000 WARN   диск переполнен на узле 3",
 	}, "\n")
-	d := buildLogDigest("x.log", content)
+	d := BuildLogDigest("x.log", content)
 
 	if len(d.Findings) != 1 {
 		t.Fatalf("находок=%d, want 1: %+v", len(d.Findings), d.Findings)
@@ -311,7 +311,7 @@ func TestBuildLogDigestKeepsWorstLevelInGroup(t *testing.T) {
 // Обрезка не должна порвать многобайтовый символ: текст уходит в промпт.
 func TestTruncateLogTextKeepsValidUTF8(t *testing.T) {
 	long := strings.Repeat("я", 500)
-	got := truncateLogText(long, 100)
+	got := TruncateLogText(long, 100)
 	if !utf8.ValidString(got) {
 		t.Fatalf("невалидный UTF-8: %q", got[:20])
 	}
@@ -319,7 +319,7 @@ func TestTruncateLogTextKeepsValidUTF8(t *testing.T) {
 		t.Errorf("обрезка не помечена: %q", got[len(got)-10:])
 	}
 	// Обрезка ровно по границе не должна ничего портить.
-	if got := truncateLogText("коротко", 100); got != "коротко" {
+	if got := TruncateLogText("коротко", 100); got != "коротко" {
 		t.Errorf("короткая строка изменена: %q", got)
 	}
 }
@@ -327,12 +327,12 @@ func TestTruncateLogTextKeepsValidUTF8(t *testing.T) {
 // Находка не должна раздувать промпт: пример и кадр стека ограничены.
 func TestBuildLogDigestBoundsSampleLength(t *testing.T) {
 	long := strings.Repeat("A", 5000)
-	d := buildLogDigest("x.log", "2026-01-01 10:00:00.000 ERROR "+long+"\n  at foo"+long)
+	d := BuildLogDigest("x.log", "2026-01-01 10:00:00.000 ERROR "+long+"\n  at foo"+long)
 	f := d.Findings[0]
-	if len(f.Sample) > logDigestSample+4 {
-		t.Errorf("образец длиной %d байт, предел %d", len(f.Sample), logDigestSample)
+	if len(f.Sample) > LogDigestSample+4 {
+		t.Errorf("образец длиной %d байт, предел %d", len(f.Sample), LogDigestSample)
 	}
-	if len(f.Frame) > logDigestSample+4 {
-		t.Errorf("кадр длиной %d байт, предел %d", len(f.Frame), logDigestSample)
+	if len(f.Frame) > LogDigestSample+4 {
+		t.Errorf("кадр длиной %d байт, предел %d", len(f.Frame), LogDigestSample)
 	}
 }

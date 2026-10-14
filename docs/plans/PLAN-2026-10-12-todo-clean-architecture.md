@@ -47,6 +47,13 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 `ai/tools/rag`.
 Разбивка этапа на срезы E1–E6 — в разделе «Этап 4» ниже.
 
+**Этап 6 (в работе):** срез **F1 ✅** — ручной откат задачи (`RollbackTask`) и
+прогноз токенов (`NewTokenEstimator`) вынесены из `server/` в
+`application/usecases`; срез **F2 ✅** — детерминированная обработка логов
+вынесена в новый пакет `domain/log` (stdlib-only), `server/loganalysis.go`
+оставляет только чтение файлов и сборку промпта. Остальное (git-flow хуки,
+сессии/оркестрация, RAG-хуки) — в плане; разбивка в разделе «Этап 6» ниже.
+
 ## Проблема
 
 Текущая архитектура проекта — слоистая, но не соответствует принципам
@@ -501,6 +508,29 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 
 **Критерий:** `server/` не содержит бизнес-логики; только маршрутизация,
 сериализация, авторизация.
+
+**Срезы (статус):**
+
+| Срез | Что | Статус |
+|---|---|---|
+| F1 | Ручной откат задачи и прогноз токенов вынесены из `server/` в `application/usecases` (`rollback.go`, `tokenestimate.go`); `server/taskrollback.go`/`tokenestimate.go` стали тонкими обёртками | ✅ |
+| F2 | Детерминированная обработка логов вынесена из `server/` в `domain/log` (разбор строк/уровней/стека, шаблонизация, `BuildLogDigest`, `MergeLogFindings`, фильтры, `TruncateLogText`); `server/loganalysis.go` читает файлы и собирает промпт | ✅ |
+| F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
+
+**F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
+`WorktreeRollbacker`-порт, доменные ошибки `ErrTaskNotFound`/`ErrNoWorktree`/
+`ErrBadTarget`/`ErrNoSuchCommit`) и `application/usecases/tokenestimate.go`
+(`NewTokenEstimator`, TTL-обучение) покрыты unit-тестами (`rollback_test.go`);
+`server/taskrollback.go`/`server/tokenestimate.go` только подключают
+зависимости. **F2 ✅** — новый пакет `domain/log` (stdlib-only,
+`go list -deps` чист): типы `LogLine`/`LogFinding`/`LogDigest` (+`Empty`/`Text`),
+`ParseLogLine`/`LogHeuristicLevel`/`IsLogStackFrame`/`LevelRank`/
+`TruncateLogText`, `BuildLogDigest`, `MergeLogFindings`,
+`FilterLogLines`/`FilterLogByLevel`; тесты переехали из
+`server/logdigest_test.go` в `domain/log/digest_test.go`. `server/loganalysis.go`
+импортирует `logpkg "ai/domain/log"` и держит только чтение файлов, выборку,
+промпт (`LogDigestPrompt`) и cooldown; временный shim `server/logdigest.go`
+удалён. Канонический набор зелёный, `-race` по `domain/log` чист.
 
 ## Ключевые решения
 

@@ -945,7 +945,7 @@ func (s *Server) handleChatLogAnalysis(w http.ResponseWriter, sess *Session, req
 	// Пустой разбор: критичных проблем нет. Отвечаем детерминированно, без
 	// вызова модели — тратить токены на «всё хорошо» незачем, а модель на
 	// пустом дайджесте склонна выдумать проблему.
-	if a.Digest.empty() {
+	if a.Digest.Empty() {
 		msg := fmt.Sprintf("В логе %s критичных проблем не найдено: ни одной записи уровня WARN/ERROR/FATAL%s.",
 			a.FilesLabel(), logAnalysisWhere(a.Note))
 		sess.append(chat.RoleAssistant, msg, "assistant", "", nil)
