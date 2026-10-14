@@ -332,7 +332,7 @@ accept/reject), удалены локальные `discardHalfClone`/`sameGitRem
 чист. Документация: план (шапка + таблица F3l + narrative),
 `docs/00-overview/project-map.md` (строка `application/gitflow/` расширена
 `ProjectOpener`/`open.go`). Остаток Этапа 6 — F3+: сессии/оркестрация,
-остальные git-flow/RAG-хуки и прочие хендлеры `server/`. Коммит F3l — ниже.
+остальные git-flow/RAG-хуки и прочие хендлеры `server/`. Коммит F3l `6a49fb5`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
