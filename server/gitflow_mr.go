@@ -19,35 +19,18 @@ import (
 	"strings"
 	"time"
 
-	"ai/infrastructure/board"
+	"ai/application/gitflow"
 	"ai/chat"
 	"ai/forges"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"
 )
 
-// errMREmptyBranch — в ветке нет коммитов относительно базы MR: ветка либо
-// создана без правок, либо уже влита в базу. Фордж отклоняет такой MR
-// (GitHub/GitLab — 422 «No commits between …»), поэтому пуш и запрос к API
-// бессмысленны. Это состояние, а не сбой сервера: ручной путь отвечает 400
-// с понятным текстом, авто-шаг тихо пропускает.
-var errMREmptyBranch = errors.New("в ветке нет коммитов относительно базы MR — создавать MR нечего")
-
-// branchHasCommits — есть ли в ветке свои коммиты (repo.CountCommits > 0).
-// Ошибка git (неизвестный реф, сломанный клон) возвращается отдельно:
-// тогда проверка считается непройденной и MR создаётся как раньше —
-// дефекты git не должны блокировать создание MR.
-func branchHasCommits(ctx context.Context, repo *git.Repo, base, branch string) (bool, error) {
-	if repo == nil {
-		return false, errors.New("gitflow: репозиторий не инициализирован")
-	}
-	n, err := repo.CountCommits(ctx, base, branch)
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
+// errMREmptyBranch — алиас доменной ошибки gitflow.ErrEmptyBranch (Этап 6):
+// ручной путь отвечает 400 с понятным текстом, авто-шаг тихо пропускает.
+var errMREmptyBranch = gitflow.ErrEmptyBranch
 
 // gitLinkView — состояние «ветка + MR» одного эпика/задачи в снимке доски.
 type gitLinkView struct {
@@ -127,32 +110,21 @@ func (s *Server) handleCreateEpicMR(w http.ResponseWriter, r *http.Request) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	repo := s.repoForBranch(inf, epicRef.Branch, epicRef.Base)
-	// Релизная ветка эпика без своих коммитов — фордж ответит 422
-	// «No commits between …» (та же защита, что у задачи).
-	if ok, cerr := branchHasCommits(r.Context(), repo, epicRef.Base, epicRef.Branch); cerr == nil && !ok {
-		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("%v (%s → %s)", errMREmptyBranch, epicRef.Branch, epicRef.Base))
-		return
+	creator := gitflow.MRCreator{
+		Gateway:  serverMRGateway{s: s, inf: inf, source: epicRef.Branch, target: epicRef.Base},
+		Forge:    serverMRForge{s: s, project: project, inf: inf},
+		Registry: serverMRRegistry{s: s, project: project},
 	}
-	if err := s.pushRepo(r.Context(), repo, inf.GitRemote); err != nil {
-		writeErr(w, http.StatusBadGateway, "push ветки "+epicRef.Branch+": "+err.Error())
-		return
-	}
-	mrURL, err := s.createMR(r.Context(), project, inf, forges.MergeRequestOptions{
-		SourceBranch: epicRef.Branch,
-		TargetBranch: epicRef.Base,
-		Title:        fmt.Sprintf("Эпик %s: %s (релиз в %s)", epicID, epic.Title, epicRef.Base),
-		Description:  epic.Description,
-	})
+	mrURL, err := creator.CreateEpicMR(r.Context(), epicID,
+		fmt.Sprintf("Эпик %s: %s (релиз в %s)", epicID, epic.Title, epicRef.Base),
+		epic.Description, epicRef.Branch, epicRef.Base)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "создание MR эпика: "+err.Error())
-		return
-	}
-	if err := s.reg.SetEpicMR(project, epicID, workspace.MRRef{
-		URL: mrURL, Source: epicRef.Branch, Target: epicRef.Base, State: "open",
-	}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "ошибка записи MR в реестр: "+err.Error())
+		if errors.Is(err, errMREmptyBranch) {
+			writeErr(w, http.StatusBadRequest,
+				fmt.Sprintf("%v (%s → %s)", errMREmptyBranch, epicRef.Branch, epicRef.Base))
+			return
+		}
+		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -233,41 +205,77 @@ func (s *Server) handleCreateTaskMR(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// createTaskMRLocked открывает MR задачи → ветку эпика. Выполняется под
-// mergeLock проекта (вызывающий удерживает его): база MR должна существовать в
-// remote, ветка задачи пушится, MR создаётся и пишется в side-реестр.
-func (s *Server) createTaskMRLocked(ctx context.Context, project string, inf workspace.Info, taskID string, task *board.Task, taskRef workspace.BranchRef) (string, error) {
-	repo := s.repoForBranch(inf, taskRef.Branch, taskRef.Base)
-	// Ветка без своих коммитов (специалист не правил, либо всё уже в базе):
-	// 422 «No commits between …» от форджа — гарантированно. Пропускаем ДО
-	// push, чтобы не толкать ветку впустую и не путать WARN в логе.
-	if ok, cerr := branchHasCommits(ctx, repo, taskRef.Base, taskRef.Branch); cerr == nil && !ok {
-		return "", fmt.Errorf("%w: %s → %s", errMREmptyBranch, taskRef.Branch, taskRef.Base)
+// serverMRGateway — адаптер gitflow.MRGateway поверх git.Repo клона и
+// серверных push/ensure-remote.
+type serverMRGateway struct {
+	s      *Server
+	inf    workspace.Info
+	source string
+	target string
+}
+
+func (g serverMRGateway) CountCommits(ctx context.Context, base, branch string) (int, error) {
+	repo := g.s.repoForBranch(g.inf, branch, base)
+	if repo == nil {
+		return 0, errors.New("gitflow: репозиторий не инициализирован")
 	}
-	// База MR (ветка эпика) должна существовать в remote: GitHub/GitLab
-	// отклоняют MR с неизвестной base (422 "base invalid"), а ветка эпика
-	// до первого MR задачи живёт только в локальном клоне.
-	if err := s.ensureRemoteBase(ctx, inf, taskRef.Base); err != nil {
-		return "", fmt.Errorf("подготовка базы MR: %w", err)
-	}
-	if err := s.pushRepo(ctx, repo, inf.GitRemote); err != nil {
-		return "", fmt.Errorf("push ветки %s: %w", taskRef.Branch, err)
-	}
-	mrURL, err := s.createMR(ctx, project, inf, forges.MergeRequestOptions{
-		SourceBranch: taskRef.Branch,
-		TargetBranch: taskRef.Base,
-		Title:        fmt.Sprintf("Задача %s: %s", taskID, task.Title),
-		Description:  task.Description,
+	return repo.CountCommits(ctx, base, branch)
+}
+
+func (g serverMRGateway) EnsureRemoteBranch(ctx context.Context, base string) error {
+	return g.s.ensureRemoteBase(ctx, g.inf, base)
+}
+
+func (g serverMRGateway) PushBranch(ctx context.Context, branch, base string) error {
+	return g.s.pushRepo(ctx, g.s.repoForBranch(g.inf, branch, base), g.inf.GitRemote)
+}
+
+// serverMRForge — адаптер gitflow.Forge поверх форджа проекта.
+type serverMRForge struct {
+	s       *Server
+	project string
+	inf     workspace.Info
+}
+
+func (f serverMRForge) CreateMergeRequest(ctx context.Context, opts gitflow.MROptions) (string, error) {
+	return f.s.createMR(ctx, f.project, f.inf, forges.MergeRequestOptions{
+		SourceBranch: opts.SourceBranch,
+		TargetBranch: opts.TargetBranch,
+		Title:        opts.Title,
+		Description:  opts.Description,
 	})
-	if err != nil {
-		return "", fmt.Errorf("создание MR задачи: %w", err)
+}
+
+// serverMRRegistry — адаптер gitflow.MRRegistry поверх side-реестра workspace.
+type serverMRRegistry struct {
+	s       *Server
+	project string
+}
+
+func (r serverMRRegistry) SetTaskMR(taskID string, mr gitflow.MR) error {
+	return r.s.reg.SetTaskMR(r.project, taskID, workspace.MRRef{
+		URL: mr.URL, Source: mr.Source, Target: mr.Target, State: mr.State,
+	})
+}
+
+func (r serverMRRegistry) SetEpicMR(epicID string, mr gitflow.MR) error {
+	return r.s.reg.SetEpicMR(r.project, epicID, workspace.MRRef{
+		URL: mr.URL, Source: mr.Source, Target: mr.Target, State: mr.State,
+	})
+}
+
+// createTaskMRLocked открывает MR задачи → ветку эпика. Выполняется под
+// mergeLock проекта (вызывающий удерживает его). Политика — в
+// application/gitflow (Этап 6); здесь только сборка адаптеров.
+func (s *Server) createTaskMRLocked(ctx context.Context, project string, inf workspace.Info, taskID string, task *board.Task, taskRef workspace.BranchRef) (string, error) {
+	creator := gitflow.MRCreator{
+		Gateway:  serverMRGateway{s: s, inf: inf, source: taskRef.Branch, target: taskRef.Base},
+		Forge:    serverMRForge{s: s, project: project, inf: inf},
+		Registry: serverMRRegistry{s: s, project: project},
 	}
-	if err := s.reg.SetTaskMR(project, taskID, workspace.MRRef{
-		URL: mrURL, Source: taskRef.Branch, Target: taskRef.Base, State: "open",
-	}); err != nil {
-		return "", fmt.Errorf("ошибка записи MR в реестр: %w", err)
-	}
-	return mrURL, nil
+	return creator.CreateTaskMR(ctx, taskID,
+		fmt.Sprintf("Задача %s: %s", taskID, task.Title),
+		task.Description, taskRef.Branch, taskRef.Base)
 }
 
 // createTaskMROnce создаёт MR задачи вне mergeLock — авто-шаг done (Ф-3).

@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3b — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3c — `server` → `application/usecases`/`application/gitflow`/`domain/log`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -70,8 +70,25 @@ Warn}`. `server/gitflow_done_guard.go` стал адаптером (`doneGuardSo
 `application/gitflow/`), `docs/20-features/gitops-workflow.md`,
 `docs/30-reference/rest-api.md`, `docs/40-operations/troubleshooting.md`
 (ссылки на `resolveMaxAttempts`/`ResolveWithLLM` → `application/gitflow`).
-Остаток Этапа 6 — F3+: остальные git-flow хуки, сессии/оркестрация, RAG-хуки.
-Коммита нет (спросить пользователя).
+
+Срез **F3c** — политика открытия MR вынесена из `server/gitflow_mr.go` в
+`application/gitflow/mr.go`: `MRCreator`/`CreateTaskMR`/`CreateEpicMR` +
+`ErrEmptyBranch`; порты `MRGateway{CountCommits;EnsureRemoteBranch;PushBranch}`,
+`Forge{CreateMergeRequest}`, `MRRegistry{SetTaskMR;SetEpicMR}`. Правило: пустая
+ветка (нет коммитов относительно базы) → `ErrEmptyBranch` до push (серверный
+`errMREmptyBranch` стал алиасом доменной ошибки, `errors.Is` в хендлерах и
+авто-шаге работает как раньше); ошибка самого git при подсчёте НЕ блокирует MR.
+`server/gitflow_mr.go` оставил адаптеры `serverMRGateway`/`serverMRForge`/
+`serverMRRegistry`, `createTaskMRLocked`/`createTaskMROnce`, `ensureRemoteBase`,
+хендлеры `handleCreateEpicMR`/`handleCreateTaskMR` и read-model `gitStatus`.
+Удалён `branchHasCommits` (переехал в use-case). Тесты: новые герметичные
+`application/gitflow/mr_test.go` (8 шт.); серверные `gitflow_mr_test.go`/
+`gitflow_submodule_test.go` не менялись. Верификация: канонический набор зелёный
+(26 пакетов), `-race` по `application/gitflow` чист, `gofmt` по правкам чист.
+Документация: план (шапка + таблица F3c), `docs/00-overview/project-map.md`,
+`docs/20-features/gitops-workflow.md` (секция «Создание MR»). Остаток Этапа 6 —
+F3+: остальные git-flow хуки, сессии/оркестрация, RAG-хуки. Коммита нет
+(спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

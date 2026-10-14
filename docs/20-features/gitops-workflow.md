@@ -102,6 +102,20 @@ Worktree}`.
 `resolveAcceptor`), `attemptLLMResolve` (stage/commit/push), хендлеры
 `handleTaskLLMResolve`, `handleEpicLLMResolve`.
 
+### Создание MR
+
+Правило «когда и как открывать MR» живёт в `application/gitflow/mr.go`
+(Этап 6): `MRCreator`/`CreateTaskMR`/`CreateEpicMR`, порты `MRGateway`
+(`CountCommits`/`EnsureRemoteBranch`/`PushBranch`), `Forge`
+(`CreateMergeRequest`) и `MRRegistry` (`SetTaskMR`/`SetEpicMR`). Пустая ветка
+(нет коммитов относительно базы) → `ErrEmptyBranch` (серверный алиас
+`errMREmptyBranch`): ручной путь отвечает `400`, авто-шаг тихо пропускает.
+
+`server/gitflow_mr.go` — HTTP-обвязка: адаптеры `serverMRGateway`/
+`serverMRForge`/`serverMRRegistry`, `createTaskMRLocked`/`createTaskMROnce`
+(под `mergeLock`), `ensureRemoteBase`, хендлеры `handleCreateEpicMR`/
+`handleCreateTaskMR`, read-model `gitStatus` и сверка MR с форджем.
+
 ### Инструмент агента
 
 `ResolveGitConflicts` (`tools/gitresolve.go`) — три шага: `status` →

@@ -55,7 +55,9 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 «phantom done» (`GuardTaskDone`) вынесен в `application/usecases` с портом
 `DoneGuardSource`; срез **F3b ✅** — цикл LLM-разрешения конфликтов
 (`ResolveWithLLM`) вынесен в новый пакет `application/gitflow` (порты
-`Store`/`Developer`/`Acceptor`/`Markers`), попутно удалён мёртвый код.
+`Store`/`Developer`/`Acceptor`/`Markers`), попутно удалён мёртвый код; срез
+**F3c ✅** — политика создания MR (`MRCreator`) вынесена в `application/gitflow`
+(порты `MRGateway`/`Forge`/`MRRegistry`).
 Остальное (git-flow хуки, сессии/оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -522,6 +524,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F2 | Детерминированная обработка логов вынесена из `server/` в `domain/log` (разбор строк/уровней/стека, шаблонизация, `BuildLogDigest`, `MergeLogFindings`, фильтры, `TruncateLogText`); `server/loganalysis.go` читает файлы и собирает промпт | ✅ |
 | F3a | Гард «phantom done» (`board.Store.TaskDoneGuard`) вынесен из `server/` в `application/usecases` (порт `DoneGuardSource`); `server/gitflow_done_guard.go` — адаптер | ✅ |
 | F3b | Цикл LLM-разрешения конфликтов (`Resolver.ResolveWithLLM`, промпт, `verify`, `clearConflictField`) вынесен из `server/` в `application/gitflow` (порты `Store`/`Developer`/`Acceptor`/`Markers`); удалён мёртвый код (`buildPrompt`/`collectFiles`/`writeResolved`) | ✅ |
+| F3c | Политика создания MR (`MRCreator.CreateTaskMR`/`CreateEpicMR`, `ErrEmptyBranch`) вынесена из `server/` в `application/gitflow` (порты `MRGateway`/`Forge`/`MRRegistry`) | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -556,7 +559,13 @@ unit-тестами `doneguard_test.go` (герметичная заглушка
 stage/commit/push) и хендлеры. Герметичные тесты `resolve_test.go` (успех,
 прогон по бюджету с ошибкой приёмки в промпте, остаточные маркеры, провал
 приёмки, ошибки LLM, перенос `OUTPUTDIR/`, порядок задач, частичное снятие
-конфликтов).
+конфликтов). **F3c ✅** — политика открытия MR
+(`MRCreator`/`CreateTaskMR`/`CreateEpicMR`, `ErrEmptyBranch`) вынесена в
+`application/gitflow/mr.go` за портами `MRGateway`/`Forge`/`MRRegistry`;
+`server/gitflow_mr.go` оставил адаптеры, разбор HTTP-ошибок и read-model
+`gitStatus`, серверный `errMREmptyBranch` — алиас доменной ошибки. Герметичные
+тесты `mr_test.go` (порядок вызовов, пустая ветка → `ErrEmptyBranch`, ошибка
+подсчёта коммитов пропускает, сбои базы/форджа/реестра, MR эпика).
 
 ## Ключевые решения
 
