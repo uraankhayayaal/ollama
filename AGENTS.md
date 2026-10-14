@@ -377,7 +377,7 @@ accept/reject), удалены локальные `discardHalfClone`/`sameGitRem
 `docs/00-overview/project-map.md` (новая строка `application/ask/`),
 `docs/20-features/chat-assistant.md` (ссылки на `application/ask`). Остаток
 Этапа 6 — F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow
-хуки, `chatassist`/`actions`/`logs`/`diff`/`server`. Коммит F3n — ниже.
+хуки, `chatassist`/`actions`/`logs`/`diff`/`server`. Коммит F3n `fcdc298`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
