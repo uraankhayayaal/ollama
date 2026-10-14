@@ -1,4 +1,4 @@
-package models
+package llm
 
 // ModelSettings — ключевые настройки модели провайдера, ограничивающие
 // потребление токенов. Значения задаются в providers.json в секции settings

@@ -65,7 +65,7 @@ gofmt -w <файл>
 | `agents/` | Реализации агентов: архитектор, лиды, специалисты, ревьюер, ассистент, приёмка, планировщик |
 | `tools/` | Function-calling инструменты, файловые операции, LSP-обвязка, песочница |
 | `runner/` | Агентский цикл: генерация, раунды, хуки, сжатие, автопочинка, переиндексация |
-| `models/` | LLM-провайдеры: Ollama, YandexGPT, Trim, layered, `ModelLimits` |
+| `infrastructure/llm/` | LLM-провайдеры: Ollama, YandexGPT, Trim, layered, `ModelLimits` |
 | `rag/` | RAG: чанки, индекс, поиск, ветки, Qdrant-клиент |
 | `board/` | Эпики, задачи, багрепорты, статусы, токены |
 | `server/` | Web UI: REST, WebSocket, git-flow, чат, логи, метрики |
@@ -94,7 +94,7 @@ agents/  runner/            ← оркестрация
       ↓
 tools/   rag/   board/      ← инструменты и хранилища
       ↓
-models/ gitops/ forges/    ← внешний мир
+infrastructure/llm/  gitops/  forges/    ← внешний мир
 ```
 
 Правило: **`tools` не знает про `server`**. Серверные мосты добавляются

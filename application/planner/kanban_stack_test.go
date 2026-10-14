@@ -37,7 +37,7 @@ func (p *stackProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 	case strings.HasPrefix(umsg, "Ты — специалист"):
 		// Разработчик сдаёт в testing, тестировщик — в done; делегируем
 		// kanbanProvider, чтобы поведение совпадало с боевым циклом
-		// (models.OllamaProvider исполняет tool-call'ы модели).
+		// (llm.OllamaProvider исполняет tool-call'ы модели).
 		return (&kanbanProvider{}).Generate(ctx, agent)
 	case strings.HasPrefix(umsg, "Проведи триаж"):
 		return &runner.AgentResponse{Content: ""}, nil

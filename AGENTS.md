@@ -1,5 +1,28 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Clean Architecture Этап 4, срез E1 — каркас `infrastructure/`)
+
+Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы
+E1–E6 (таблица в разделе «Этап 4» плана). Срез **E1** закрыт: создан каталог
+`infrastructure/`, пакет `models` переехал в `infrastructure/llm`
+(`git mv models infrastructure/llm`) и переименован `models` → `llm`; импортёры
+(`main.go`, `repositories/Repository.go`, `server/{resolve,server,session,chatassist,gitflow_ar}.go`
++ тесты) переведены на `ai/infrastructure/llm` и квалификатор `llm.`. Новый
+`infrastructure/llm/ports.go` фиксирует реализацию порта
+`domain/services.LLMClient` для `*OllamaProvider`/`*LayeredProvider`
+(`*OpenAIProvider` пока без `ChatStream` — покроется при переводе OpenAI-пути
+на порт). Правка чисто механическая (перенос+переименование), поведение не
+менялось. Остальные срезы Этапа 4 (E2 `rag` → `infrastructure/rag`, E3 `gitops`
+→ `infrastructure/git`, E4 `sandbox` → `infrastructure/sandbox`, E5 `board` →
+`infrastructure/board`, E6 разбиение `tools/` и перевод на `domain/services`)
+не начаты. Верификация: канонический набор (в него добавлен `./infrastructure/...`)
+зелёный, `-race` по `infrastructure/llm` чист, `gofmt -l` по своим файлам чист.
+Документация: раздел «Этап 4» + шапка плана, пути `models/` →
+`infrastructure/llm/` в живых доках (`architecture.md`, `project-map.md`,
+`providers.md`, `context-compression.md`, `agents-and-roles.md`,
+`troubleshooting.md`, `adding-a-feature.md`, `development.md`), канонический
+набор и примечание в этом файле. Коммит не делался (спросить пользователя).
+
 ## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
 
 Срез C6 завершён: модели доски сведены с доменом (`domain.TaskSpec`/`Task`/`Epic`
@@ -49,13 +72,14 @@ Acceptor-порт вынесен из `acceptor`: отчёт приёмки — 
 Рабочая сборка (обходит известный блокер в `temp/`):
 
 ```
-go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
-go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
-go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
 ```
 
 Примечание: `./application/planner` — бывший `agents/planner` (перенос по
-PLAN-2026-10-12, этап 3); в нём 17 предсуществующих падений тестов (не регресс).
+PLAN-2026-10-12, этап 3); предсуществовавшие падения его тестов разобраны —
+набор зелёный. `./infrastructure/llm` — бывший `models/` (Этап 4, срез E1).
 
 Живая проверка сессионной песочницы (нужен Docker; вне рабочего набора,
 по образцу `E2E_LIVE`):

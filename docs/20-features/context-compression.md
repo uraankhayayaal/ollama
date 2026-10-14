@@ -54,9 +54,9 @@ CODEGEN_READ_MAX_TOTAL=800000  # лимит символов за вызов Rea
 идёт только по явным настройкам.
 
 Интерфейс `ModelLimitsProvider` — опциональное расширение `ChatProvider`.
-Реализуют: Ollama (`models/OllamaModel.go:57-63`), YandexGPT
-(`models/AlisaDefinition.go:62`), Trim (`models/TrimProvider.go:106`),
-Layered — проксирует к нижнему (`models/layered.go:114-123`).
+Реализуют: Ollama (`infrastructure/llm/OllamaModel.go:76-82`), OpenAI
+(`infrastructure/llm/OpenAIProvider.go:81-87`), Layered — проксирует к
+нижнему (`infrastructure/llm/layered.go:156`).
 
 Цикл:
 

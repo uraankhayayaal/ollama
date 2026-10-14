@@ -7,7 +7,7 @@
 ### `unknown provider`
 
 **Причина:** не задан `LLM_PROVIDER`, либо значение не распознано
-(`models/resolve.go:71`).
+(`infrastructure/llm/resolve.go:144`).
 
 **Решение:**
 

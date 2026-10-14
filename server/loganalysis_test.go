@@ -11,7 +11,7 @@ import (
 
 	"ai/agents"
 	"ai/chat"
-	"ai/models"
+	"ai/infrastructure/llm"
 	"ai/runner"
 )
 
@@ -178,10 +178,10 @@ func (p *countingProvider) Generate(context.Context, agents.Agent) (*runner.Agen
 	return &runner.AgentResponse{Content: "разбор: главное — ошибка подключения к БД"}, nil
 }
 
-func setProviderForTest(srv *Server, p models.LLMProvider) {
+func setProviderForTest(srv *Server, p llm.LLMProvider) {
 	srv.prov.mu.Lock()
 	defer srv.prov.mu.Unlock()
-	srv.prov.cached = &models.Resolved{Provider: p, Name: "test"}
+	srv.prov.cached = &llm.Resolved{Provider: p, Name: "test"}
 	srv.prov.done = true
 	srv.prov.err = nil
 }

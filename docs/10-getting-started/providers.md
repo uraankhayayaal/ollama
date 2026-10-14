@@ -104,7 +104,7 @@ REST-контракт — [rest-api.md](../30-reference/rest-api.md#модель
 ## Двухуровневая маршрутизация (Ollama)
 
 Если задана крупная модель (`MODEL_LARGE` или `large_model`), включается
-`LayeredProvider` (`models/layered.go`):
+`LayeredProvider` (`infrastructure/llm/layered.go`):
 
 - **основная модель** — рядовые шаги: разработчики, приёмка, инфраструктура.
 - **крупная модель** — лиды, архитектор, ревьюер, эксперт по багам.
@@ -137,7 +137,7 @@ REST-контракт — [rest-api.md](../30-reference/rest-api.md#модель
 
 `settings.think_tokens` — числовой бюджет, который переводится в уровень:
 ≤2k → `low`, ≤8k → `medium`, ≤12k → `high`, больше → `max`
-(`models/ModelSettings.go`, `thinkLevelFromTokens`). У Ollama уровень задаётся
+(`infrastructure/llm/ModelSettings.go`, `thinkLevelFromTokens`). У Ollama уровень задаётся
 ключом `think`, у OpenAI-совместимых — `reasoning_effort`.
 
 Дополнительно у Ollama есть флаг `OLLAMA_THINK` (0/1) — принудительное
@@ -169,7 +169,7 @@ LLM_PROVIDER / MODEL / MODEL_LARGE        выбор из Web UI (server/resolve
       │                                              │
       └──────────────────┬───────────────────────────┘
                          ▼
-              models.ResolveSelection
+              llm.ResolveSelection
                          │
         ┌────────────────┴─────────────────┐
         ▼                                  ▼

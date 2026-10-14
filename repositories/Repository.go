@@ -1,7 +1,7 @@
 package repositories
 
 import (
-	"ai/models"
+	"ai/infrastructure/llm"
 	"context"
 )
 
@@ -20,7 +20,7 @@ type SearchFilter struct {
 
 // VectorRepository задает контракт для работы с векторным хранилищем
 type VectorRepository interface {
-	NewCollection(ctx context.Context, provider models.LLMProvider) error
+	NewCollection(ctx context.Context, provider llm.LLMProvider) error
 
 	Insert(ctx context.Context, item *VectorItem) error
 

@@ -27,6 +27,12 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 предсуществующие падения тестов `application/planner` разобраны — см. «Остаток
 работ» в конце.
 
+**Этап 4 (в работе):** срез **E1 ✅** — создан каркас `infrastructure/`,
+пакет `models` переехал в `infrastructure/llm` (пакет `models` → `llm`) и
+привязан к порту `domain/services.LLMClient` compile-assertions
+(`infrastructure/llm/ports.go`). Разбивка этапа на срезы E1–E6 — в разделе
+«Этап 4» ниже.
+
 ## Проблема
 
 Текущая архитектура проекта — слоистая, но не соответствует принципам
@@ -282,6 +288,33 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 **Критерий:** `tools/` разбит на подпакеты; каждый подпакет зависит от
 `domain/`, а не от других инфраструктурных пакетов.
 
+#### Срезы Этапа 4
+
+Этап разбит на срезы (по образцу Этапа 3): сначала под `infrastructure/`
+переезжают уже существующие инфраструктурные пакеты, затем режется `tools/`.
+
+| Срез | Что | Статус |
+|---|---|---|
+| **E1** | Каркас `infrastructure/`; `models` → `infrastructure/llm` (пакет `models` → `llm`), compile-assertions `services.LLMClient` (`ports.go`) | ✅ |
+| **E2** | `rag` → `infrastructure/rag` + assertion `services.RAGClient` | ⏳ |
+| **E3** | `gitops` → `infrastructure/git` + assertion `services.GitOperations` | ⏳ |
+| **E4** | `sandbox` → `infrastructure/sandbox` + assertion `services.SandboxEngine` | ⏳ |
+| **E5** | `board` → `infrastructure/board` (самый крупный: ~75 импортёров) | ⏳ |
+| **E6** | Разбить `tools/` по доменам (`tools/lsp`, fileops/git/rag/board-подпакеты) и перевести их на `domain/services` вместо прямых импортов `ai/board`/`ai/rag`/`ai/sandbox`/`ai/gitops` | ⏳ |
+
+**E1 ✅ (каркас `infrastructure/`, `models` → `infrastructure/llm`).**
+`git mv models infrastructure/llm`, пакет переименован `models` → `llm`;
+импортёры (`main.go`, `repositories/Repository.go`, `server/resolve.go`,
+`server/server.go`, `server/session.go`, `server/chatassist.go`,
+`server/gitflow_ar.go` + тесты) переведены на `ai/infrastructure/llm` /
+квалификатор `llm.`. Новый `infrastructure/llm/ports.go` фиксирует
+соответствие порту `domain/services.LLMClient`: `*OllamaProvider` и
+`*LayeredProvider` (у `OpenAIProvider` пока нет `ChatStream` — покроется при
+переводе OpenAI-пути на порт). Поведение не менялось: чистое перемещение +
+переименование. Верификация: канонический набор (добавлен
+`./infrastructure/...`) зелёный, `-race` по `infrastructure/llm` чист,
+`gofmt -l` по своим файлам чист.
+
 ### Этап 5: Рефакторинг агентов
 
 **Цель:** Устранить дублирование между специализациями агентов.
@@ -328,9 +361,9 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
 После каждого этапа:
 
 ```bash
-go build . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
-go vet . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
-go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/
+go build . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner/ ./gitops/ ./infrastructure/...
 ```
 
 Дополнительно:

@@ -39,7 +39,7 @@ func (p *kanbanProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 		// Разработчик всегда ставит задачу в testing (Этап 6); тестировщик —
 		// в done (Этап 7). Без фактического вызова BoardSetTaskStatus задача
 		// зависла бы в testing/in_progress и recoverStuckTasks вернул бы её в
-		// ready — цикл. Боевой провайдер (models.OllamaProvider) исполняет
+		// ready — цикл. Боевой провайдер (llm.OllamaProvider) исполняет
 		// tool-call'ы модели внутри своего цикла; тестовый — делает это здесь.
 		var resp *runner.AgentResponse
 		if _, ok := agent.(*qaengineer.QAEngineer); ok {
@@ -346,7 +346,7 @@ func taskIDFromPrompt(umsg string) string {
 
 // executeBoardToolCalls исполняет инструменты доски (Board*), возвращённые
 // фейковым провайдером, — так же, как это делает боевой агентский цикл
-// (models.OllamaProvider.Generate → usecases.RunAgent → runner.Generate).
+// (llm.OllamaProvider.Generate → usecases.RunAgent → runner.Generate).
 // Ошибки перехода (например, отказ гарда «phantom done») намеренно
 // игнорируются: оркестратор сам разбирает итоговый статус задачи.
 func executeBoardToolCalls(agent agents.Agent, resp *runner.AgentResponse) {

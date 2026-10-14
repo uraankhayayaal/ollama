@@ -1,7 +1,7 @@
 package server
 
 import (
-	"ai/models"
+	"ai/infrastructure/llm"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,9 +15,9 @@ import (
 // providers.json: тесты не должны зависеть от конфигурации окружения.
 // nil — «провайдер настроен, но не создан» (используется в тестах
 // недоступного LLM).
-func stubProviderResolve(prov models.LLMProvider) providerResolve {
+func stubProviderResolve(prov llm.LLMProvider) providerResolve {
 	return providerResolve{
-		cached: &models.Resolved{Provider: prov, Name: "stub", Model: "stub-model"},
+		cached: &llm.Resolved{Provider: prov, Name: "stub", Model: "stub-model"},
 		done:   true,
 	}
 }
@@ -70,8 +70,8 @@ func TestSelectProviderAppliesAfterFirstResolve(t *testing.T) {
 	}
 
 	// Пользователь выбирает другую модель в UI.
-	if _, err := srv.prov.setOverride(models.Selection{
-		Provider: models.ProviderOllama,
+	if _, err := srv.prov.setOverride(llm.Selection{
+		Provider: llm.ProviderOllama,
 		Model:    "qwen2.5-coder:7b",
 	}); err != nil {
 		t.Fatalf("setOverride: %v", err)
@@ -109,7 +109,7 @@ func TestSelectProviderKeepsEnvModelAsDefault(t *testing.T) {
 		t.Fatal("до выбора из UI override должен быть false")
 	}
 
-	if _, err := srv.prov.setOverride(models.Selection{Provider: "ollama", Model: "qwen3-coder:30b"}); err != nil {
+	if _, err := srv.prov.setOverride(llm.Selection{Provider: "ollama", Model: "qwen3-coder:30b"}); err != nil {
 		t.Fatalf("setOverride: %v", err)
 	}
 	if sel := srv.prov.selection(); sel.Model != "qwen3-coder:30b" {
@@ -347,7 +347,7 @@ func TestSelectProviderLargeModelFallsBackToConfig(t *testing.T) {
     }`)
 	srv, _, _ := newTestServer(t)
 
-	if _, err := srv.prov.setOverride(models.Selection{Provider: "ollama", Model: "qwen2.5-coder:7b"}); err != nil {
+	if _, err := srv.prov.setOverride(llm.Selection{Provider: "ollama", Model: "qwen2.5-coder:7b"}); err != nil {
 		t.Fatalf("setOverride: %v", err)
 	}
 	res, err := srv.prov.resolved()
@@ -364,7 +364,7 @@ func TestSelectProviderLargeModelFallsBackToConfig(t *testing.T) {
 // перезапуска процесса (иначе добавленную модель нельзя было бы выбрать).
 func TestProvidersConfigReloadsOnChange(t *testing.T) {
 	testProvidersConfig(t, twoModelsConfig)
-	if cfg, err := models.LoadProvidersConfig(); err != nil || len(cfg.Providers["ollama"].Models) != 2 {
+	if cfg, err := llm.LoadProvidersConfig(); err != nil || len(cfg.Providers["ollama"].Models) != 2 {
 		t.Fatalf("первая загрузка: %v, %+v", err, cfg)
 	}
 
@@ -374,7 +374,7 @@ func TestProvidersConfigReloadsOnChange(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := models.LoadProvidersConfig()
+	cfg, err := llm.LoadProvidersConfig()
 	if err != nil {
 		t.Fatal(err)
 	}

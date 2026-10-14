@@ -1,8 +1,8 @@
 package server
 
 import (
+	"ai/infrastructure/llm"
 	"ai/logging"
-	"ai/models"
 	"fmt"
 	"sync"
 )
@@ -20,10 +20,10 @@ import (
 // без эффекта после первого же запроса к модели.
 type providerResolve struct {
 	mu   sync.Mutex
-	sel  models.Selection
+	sel  llm.Selection
 	over bool // true — выбор сделан пользователем (UI), false — из окружения
 
-	cached *models.Resolved
+	cached *llm.Resolved
 	err    error
 	done   bool
 }
@@ -31,13 +31,13 @@ type providerResolve struct {
 // selection возвращает действующий выбор: override из UI, если он задан,
 // иначе выбор из окружения. Блокировка не нужна для чтения неизменяемого
 // override, но берём mu ради единообразия и возможной смены реализации.
-func (p *providerResolve) selection() models.Selection {
+func (p *providerResolve) selection() llm.Selection {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.over {
 		return p.sel
 	}
-	return models.EnvSelection()
+	return llm.EnvSelection()
 }
 
 // isOverride сообщает, что выбор сделан пользователем в UI (а не взят из
@@ -52,7 +52,7 @@ func (p *providerResolve) isOverride() bool {
 // провайдера: ошибка конфигурации (неизвестный base_url, пустая модель)
 // возвращается в REST, а не всплывает позже на первом же запросе к модели.
 // Фактическую модель пишет resolveLocked — единственное место логирования.
-func (p *providerResolve) setOverride(sel models.Selection) (*models.Resolved, error) {
+func (p *providerResolve) setOverride(sel llm.Selection) (*llm.Resolved, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sel, p.over, p.done = sel, true, false
@@ -61,7 +61,7 @@ func (p *providerResolve) setOverride(sel models.Selection) (*models.Resolved, e
 }
 
 // clearOverride возвращает выбор из окружения (кнопка «сбросить» в UI).
-func (p *providerResolve) clearOverride() (*models.Resolved, error) {
+func (p *providerResolve) clearOverride() (*llm.Resolved, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.over, p.done = false, false
@@ -72,7 +72,7 @@ func (p *providerResolve) clearOverride() (*models.Resolved, error) {
 // get возвращает провайдера, инициируя ResolveSelection при первом вызове.
 // Фактически выбранные модели логируются: без этого в логах не видно, на
 // какой модели реально идёт работа.
-func (p *providerResolve) get() (models.LLMProvider, models.ProviderName, error) {
+func (p *providerResolve) get() (llm.LLMProvider, llm.ProviderName, error) {
 	res, err := p.resolved()
 	if err != nil {
 		name := p.selection().Provider
@@ -86,24 +86,24 @@ func (p *providerResolve) get() (models.LLMProvider, models.ProviderName, error)
 
 // resolved возвращает кэшированный (или только что созданный) провайдера
 // вместе с фактическими моделями — для логов и ответов REST.
-func (p *providerResolve) resolved() (*models.Resolved, error) {
+func (p *providerResolve) resolved() (*llm.Resolved, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.resolveLocked()
 }
 
 // resolveLocked создаёт провайдера, если кэш пуст. Вызывается под mu.
-func (p *providerResolve) resolveLocked() (*models.Resolved, error) {
+func (p *providerResolve) resolveLocked() (*llm.Resolved, error) {
 	if p.done {
 		return p.cached, p.err
 	}
 	p.done = true
 
-	sel := models.EnvSelection()
+	sel := llm.EnvSelection()
 	if p.over {
 		sel = p.sel
 	}
-	res, err := models.ResolveSelection(sel)
+	res, err := llm.ResolveSelection(sel)
 	if err != nil {
 		err = fmt.Errorf("инициализация провайдера LLM: %w", err)
 		logging.Warnf("server: LLM: %v", err)
@@ -128,14 +128,14 @@ func (p *providerResolve) describe() string {
 
 // describeSelection описывает выбор без создания клиента (ошибки провайдера
 // не показываем — они всплывут при реальном резолве).
-func describeSelection(sel models.Selection) string {
+func describeSelection(sel llm.Selection) string {
 	name := string(sel.Provider)
 	if name == "" {
 		name = "не задан"
 	}
 	out := name + "/" + sel.Model
 	if sel.Model == "" {
-		if cfg, err := models.LoadProvidersConfig(); err == nil {
+		if cfg, err := llm.LoadProvidersConfig(); err == nil {
 			if pc, err := cfg.GetProviderConfig(sel.Provider); err == nil {
 				out = name + "/" + pc.ResolveModel("")
 			}

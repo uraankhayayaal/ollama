@@ -141,7 +141,7 @@
 | `workspace/` | Реестр проектов (`registry.go`), карта веток (`branches.go`) |
 | `projects/` | `ProjectDir` (`temp/<имя>`), `config.go` (CODEGEN_*) |
 | `tokens/` | `scoped.go`, `pricing.go`, `predict.go`, `history.go`, `store.go` |
-| `models/` | `resolve.go` (выбор провайдера), `OllamaModel.go`, `AlisaDefinition.go`, `TrimProvider.go`, `layered.go`, `ModelSettings.go` |
+| `infrastructure/llm/` | LLM-провайдеры: `resolve.go` (выбор провайдера), `OllamaModel.go`, `OpenAIProvider.go`, `layered.go`, `ModelSettings.go`, `ports.go` (реализация `domain/services.LLMClient`). Бывший `models/` |
 | `logging/` | Файлы логов, `LOG_DIR` |
 | `langdetect/` | Определение языка по диффу (21 язык) |
 | `stackdetect/` | Определение стека по маркерам проекта |

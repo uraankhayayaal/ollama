@@ -52,7 +52,7 @@ func (p *askFirstProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
 		// Разработчик сдаёт в testing, тестировщик — в done; исполняем
-		// tool-call'ы, как боевой цикл (models.OllamaProvider).
+		// tool-call'ы, как боевой цикл (llm.OllamaProvider).
 		return (&kanbanProvider{}).Generate(ctx, agent)
 	default:
 		a, ok := agent.(*architect.Architect)
@@ -134,7 +134,7 @@ func (p *autonomyProvider) Generate(ctx context.Context, agent agents.Agent) (*r
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
 		// Разработчик сдаёт в testing, тестировщик — в done; исполняем
-		// tool-call'ы, как боевой цикл (models.OllamaProvider).
+		// tool-call'ы, как боевой цикл (llm.OllamaProvider).
 		return (&kanbanProvider{}).Generate(ctx, agent)
 	default:
 		a, ok := agent.(*architect.Architect)

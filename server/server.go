@@ -6,8 +6,8 @@ import (
 	"ai/chat"
 	"ai/forges"
 	"ai/gitops"
+	"ai/infrastructure/llm"
 	"ai/logging"
-	"ai/models"
 	"ai/runmetrics"
 	"ai/tools"
 	"ai/workspace"
@@ -319,7 +319,7 @@ func (s *Server) session(project string) *Session {
 // Список провайдеров отсортирован: обход map в Go неупорядочен, и без сортировки
 // UI прыгал бы между провайдерами при каждом обновлении страницы.
 func (s *Server) handleGetProviders(w http.ResponseWriter, r *http.Request) {
-	cfg, err := models.LoadProvidersConfig()
+	cfg, err := llm.LoadProvidersConfig()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "providers.json недоступен: "+err.Error())
 		return
@@ -375,7 +375,7 @@ func (s *Server) handleGetProviders(w http.ResponseWriter, r *http.Request) {
 // default_model и large_model. Последние два могут отсутствовать в models
 // (особенно large_model), и без объединения действующую модель нельзя было бы
 // выбрать в UI.
-func selectableModels(cfg models.ProviderConfig) []string {
+func selectableModels(cfg llm.ProviderConfig) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(cfg.Models)+2)
 	for _, m := range append(append([]string{}, cfg.Models...), cfg.DefaultModel, cfg.LargeModel) {
@@ -414,7 +414,7 @@ func (s *Server) handleSelectProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := models.LoadProvidersConfig()
+	cfg, err := llm.LoadProvidersConfig()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "providers.json недоступен: "+err.Error())
 		return
@@ -443,8 +443,8 @@ func (s *Server) handleSelectProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.prov.setOverride(models.Selection{
-		Provider:   models.ProviderName(strings.TrimSpace(body.Provider)),
+	res, err := s.prov.setOverride(llm.Selection{
+		Provider:   llm.ProviderName(strings.TrimSpace(body.Provider)),
 		Model:      model,
 		LargeModel: large,
 	})
@@ -454,7 +454,7 @@ func (s *Server) handleSelectProvider(w http.ResponseWriter, r *http.Request) {
 // writeSelectionResult отвечает на смену выбора: 200 с фактическими моделями
 // либо 502 с причиной (провайдер не собрался — выбор уже применён, но не
 // работает; UI покажет текст ошибки из лога/ответа).
-func (s *Server) writeSelectionResult(w http.ResponseWriter, res *models.Resolved, err error) {
+func (s *Server) writeSelectionResult(w http.ResponseWriter, res *llm.Resolved, err error) {
 	if err != nil {
 		msg := err.Error()
 		// Ошибка конфигурации (providers.json, base_url, модель) — это ответ
@@ -575,7 +575,7 @@ func projectMeta(inf workspace.Info, meta *board.Meta, running, gating, standby 
 
 // provider возвращает LLM-провайдер (ленивая инициализация). Возвращает
 // ошибку, если провайдер не настроен (LLM_PROVIDER).
-func (s *Server) provider() (models.LLMProvider, error) {
+func (s *Server) provider() (llm.LLMProvider, error) {
 	p, _, err := s.prov.get()
 	if err != nil {
 		return nil, err

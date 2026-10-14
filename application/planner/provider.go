@@ -8,7 +8,7 @@ import (
 
 // LLMProvider — порт полного агентского цикла для оркестратора плана.
 // Реализуются инфраструктурные провайдеры (Ollama/OpenAI/Layered); planner
-// зависит только от этого интерфейса, а не от пакета models.
+// зависит только от этого интерфейса, а не от пакета llm.
 type LLMProvider interface {
 	Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error)
 }

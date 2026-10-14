@@ -16,8 +16,8 @@ import (
 	"ai/application/planner"
 	"ai/board"
 	"ai/gitops"
+	"ai/infrastructure/llm"
 	"ai/logging"
-	"ai/models"
 	"ai/workspace"
 	"context"
 	"fmt"
@@ -54,7 +54,7 @@ func newResolveCtx(epic *board.Epic, tasks []*board.Task, hard []string, workdir
 // верификации ошибки возвращаются в промпт следующей попытки.
 const resolveMaxAttempts = 3
 
-func (r *resolveCtx) ResolveWithLLM(ctx context.Context, prov models.LLMProvider, project, role string) (*resolveResult, error) {
+func (r *resolveCtx) ResolveWithLLM(ctx context.Context, prov llm.LLMProvider, project, role string) (*resolveResult, error) {
 	if prov == nil || len(r.hard) == 0 {
 		return nil, nil
 	}

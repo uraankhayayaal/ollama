@@ -19,8 +19,8 @@ import (
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	_ "ai/forges/all"
+	"ai/infrastructure/llm"
 	"ai/logging"
-	"ai/models"
 	"ai/projects"
 	"ai/rag"
 	"ai/runctx"
@@ -123,8 +123,8 @@ func main() {
 	defer cancel()
 
 	// Провайдер LLM создаётся общей функцией (CLI и Web UI используют одну
-	// логику выбора модели по окружению; подробности в models.ResolveProvider).
-	provider, providerType, err := models.ResolveProvider()
+	// логику выбора модели по окружению; подробности в llm.ResolveProvider).
+	provider, providerType, err := llm.ResolveProvider()
 	if err != nil {
 		logging.Fatalf("Failed to init provider: %v", err)
 	}
@@ -597,7 +597,7 @@ func installStatusWord(res *acceptor.InstallResult) string {
 // планировщика. Иначе планировщик строит план (с повторной попыткой при
 // некорректном JSON), и каждый шаг выполняется отдельным агентом с чистым
 // контекстом (экономия токенов).
-func runPlanMode(ctx context.Context, provider models.LLMProvider, projectName, originalPrompt string) {
+func runPlanMode(ctx context.Context, provider llm.LLMProvider, projectName, originalPrompt string) {
 	store, resume := plannerStore(ctx, projectName)
 	if store != nil {
 		defer store.Close()
