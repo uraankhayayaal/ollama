@@ -280,12 +280,14 @@ func (p *tokenEchoProvider) Generate(ctx context.Context, agent agents.Agent) (*
 	// в done (Этап 7). Без явного вызова BoardSetTaskStatus задача зависла бы
 	// в testing/in_progress и recoverStuckTasks вернул бы её в ready — цикл.
 	if _, ok := agent.(*qaengineer.QAEngineer); ok {
-		return &runner.AgentResponse{
+		resp := &runner.AgentResponse{
 			Content: "Тестирование пройдено.",
 			ToolCalls: []tools.ToolCall{
 				{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`},
 			},
-		}, nil
+		}
+		executeBoardToolCalls(agent, resp)
+		return resp, nil
 	}
 	return (&kanbanProvider{}).Generate(ctx, agent)
 }

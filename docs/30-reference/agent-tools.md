@@ -136,7 +136,7 @@
 | QA-инженер | То же + `ReadAppLogs` обязательно; запись ограничена тестами (`WriteTestsOnly`) + файлом-отчётом |
 | Лиды | Только чтение + `LspDefinition` / `LspReferences` / `LspHover` (без `LspCheck`) |
 | Архитектор | Чтение, `CodeSearch`, `RagIndexStatus`, `DetectStack`, `BoardCreateEpic` / `Update` / `Delete` / `SetStatus`, `BoardReviewBug` |
-| Планировщик | Навигация без `LspCheck` (`agents/planner/planner.go:14`) |
+| Планировщик | Навигация без `LspCheck` (`application/planner/planner.go:14`) |
 | Ревьюер | `ReviewMr`, `NextChunk`, `ApproveMr` |
 | Чат-ассистент | Чтение, `CodeSearch`, `WebSearch`, 15 инструментов доски, мосты |
 | Архитектор (CLI) | Только RAG — `AskUser`/`IndexBackground` в консоли недоступны |

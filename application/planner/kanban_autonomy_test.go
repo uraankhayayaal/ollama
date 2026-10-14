@@ -6,6 +6,7 @@ package planner
 import (
 	"ai/agents"
 	"ai/agents/architect"
+	"ai/agents/qaengineer"
 	"ai/board"
 	"ai/domain"
 	"ai/projects"
@@ -227,11 +228,18 @@ func (p *heavyProbeProvider) Generate(ctx context.Context, agent agents.Agent) (
 	case strings.HasPrefix(umsg, "Ты — специалист"):
 		if domain.HeavyModelFor(ctx) {
 			p.note("large")
-			// Сильная модель доводит задачу до конца.
-			return &runner.AgentResponse{
+			// Сильная модель доводит задачу до конца: разработчик сдаёт в
+			// testing, тестировщик — в done.
+			status := "testing"
+			if _, ok := agent.(*qaengineer.QAEngineer); ok {
+				status = "done"
+			}
+			resp := &runner.AgentResponse{
 				Content:   "готово",
-				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`}},
-			}, nil
+				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"` + status + `"}`}},
+			}
+			executeBoardToolCalls(agent, resp)
+			return resp, nil
 		}
 		p.note("small")
 		return &runner.AgentResponse{

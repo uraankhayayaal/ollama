@@ -53,11 +53,32 @@ func (p *bugFlowProvider) Generate(ctx context.Context, agent agents.Agent) (*ru
 				return nil, err
 			}
 		}
-		return &runner.AgentResponse{
-			Content:   "Задача выполнена.",
-			ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`}},
-		}, nil
+		// Разработчик сдаёт в testing, тестировщик — в done; tool-call'ы
+		// исполняются, как в боевом цикле.
+		var resp *runner.AgentResponse
+		if _, ok := agent.(*qaengineer.QAEngineer); ok {
+			resp = &runner.AgentResponse{
+				Content:   "Тестирование пройдено.",
+				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`}},
+			}
+		} else {
+			resp = &runner.AgentResponse{
+				Content:   "Задача выполнена.",
+				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`}},
+			}
+		}
+		executeBoardToolCalls(agent, resp)
+		return resp, nil
 	case strings.HasPrefix(umsg, "Проведи триаж"):
+		// QA Lead: триаж new -> confirmed инструментом BoardSetBugStatus.
+		if a, ok := agent.(*qaengineer.QAEngineer); ok {
+			_, err := a.CallFunction(tools.BoardSetBugStatus, map[string]any{
+				"bug_id": "BUG-01", "status": "confirmed",
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 		return &runner.AgentResponse{Content: "Триаж выполнен."}, nil
 	default:
 		if a, ok := agent.(*architect.Architect); ok {

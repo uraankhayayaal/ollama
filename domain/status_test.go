@@ -12,6 +12,7 @@ func TestValidateTransitionFSM(t *testing.T) {
 		{StatusInProgress, StatusTesting},
 		{StatusTesting, StatusInProgress},
 		{StatusTesting, StatusDone},
+		{StatusTesting, StatusReady},
 		{StatusDone, StatusDone},
 		{StatusNew, StatusHumanHelp},
 		{StatusTesting, StatusHumanHelp},

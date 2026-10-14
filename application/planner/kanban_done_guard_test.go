@@ -8,8 +8,10 @@ package planner
 
 import (
 	"ai/agents"
+	"ai/agents/qaengineer"
 	"ai/board"
 	"ai/runner"
+	"ai/tools"
 	"context"
 	"fmt"
 	"strings"
@@ -34,6 +36,17 @@ func (p *idleProvider) Generate(ctx context.Context, agent agents.Agent) (*runne
 		umsg = us[0].Message
 	}
 	if strings.HasPrefix(umsg, "Ты — специалист") {
+		// Разработчик ничего не делает (сценарий FEL-04). Тестировщик сдаёт
+		// работу в done — без этого чистый idle-прогон не завершился бы, а
+		// именно проверки ради и нужен idle-разработчик.
+		if _, ok := agent.(*qaengineer.QAEngineer); ok {
+			resp := &runner.AgentResponse{
+				Content:   "Тестирование пройдено.",
+				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`}},
+			}
+			executeBoardToolCalls(agent, resp)
+			return resp, nil
+		}
 		return &runner.AgentResponse{Content: "посмотрел задачу, делать нечего"}, nil
 	}
 	return p.loopedProvider.Generate(ctx, agent)

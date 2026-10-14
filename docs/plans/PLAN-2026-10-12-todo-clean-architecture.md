@@ -15,7 +15,16 @@ C4 (контекст-плумбинг), C5 (порт `services.BoardStore`), C6 
 `models` (порт `planner.LLMProvider`, `domain.WithHeavyModel`/
 `domain.HeavyModelFor`, `models/force.go` удалён); Acceptor-порт вынесен из
 `acceptor` (`domain.Report`, `planner.Acceptor`, `acceptor.PlannerAdapter`);
-остался Tools-порт — см. «Остаток работ» в конце.
+Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
+`ToolSetBuilder`/`LSPDiagnoser`/`Snapshot`/`SnapshotFactory`/
+`PublicAPIAuditor`), адаптеры — `tools/plannerports.go`
+(`PlannerToolSet`/`LSPDiagnoserAdapter`/`SnapshotAdapterFactory`/
+`PublicAPIAuditorAdapter`), подключение — `main.go`;
+`application/planner` в non-test коде больше не импортирует `tools`/`models`/
+`board`/`runner`/`agents/acceptor` (проверено `go list -f .Imports`). Этап 3
+закрыт по портам — см. «Остаток работ» в конце (осталась `runner`-«тонкость» и
+ссылки в документации; предсуществующие падения тестов `application/planner`
+разобраны, см. ниже).
 
 ## Проблема
 
@@ -208,7 +217,7 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
        (`toDomainTaskSpecs`). Сериализация не изменилась (FlexInt -> int).
      - Срез разделён на два коммита: `AgentType`/`Role` (алиасы) и `Plan`/`Step`/
        `ComputeWaves`. Обновлены `plan_doc.go` и `plan_doc_test.go`.
-   - **Осталось (срез C) ❌**:
+   - **Срез C (порт `BoardStore`/модели) ✅**:
      - **C1 ✅** — `domain.Status` — авторитетный FSM доски
        (`ValidateTransition`/`StatusError`/`Terminal`/`Valid`/`Label`),
        `board.Status`/`StatusError`/`Meta`/`StatusCounts` — алиасы.
@@ -231,6 +240,15 @@ infrastructure/   — реализации (models, rag, gitops, sandbox, board)
       - `executor.go` больше не импортирует `agents/acceptor`: приёмка идёт
         через порт `planner.Acceptor` и отчёт `domain.Report` (адаптер
         `acceptor.PlannerAdapter` подключается в `main.go` и в тестах).
+   - **Порт `Tools` ✅ (коммит `c589be4`)** — planner в non-test коде больше не
+     импортирует `tools`. Интерфейсы объявлены в `domain/services/tools.go`
+     (`Tool`/`ToolSet`/`ToolSetBuilder`, `LSPDiagnoser`, `Snapshot`/
+     `SnapshotFactory`, `PublicAPIAuditor`); адаптеры к `tools` —
+     `tools/plannerports.go` (`PlannerToolSet`, `LSPDiagnoserAdapter`,
+     `SnapshotAdapterFactory`, `PublicAPIAuditorAdapter`); подключаются в
+     `main.go` (`SetPlannerToolBuilder`/`SetLSPDiagnoser`/`SetSnapshotFactory`/
+     `SetPublicAPIAuditor`) и в `application/planner/testmain_test.go` (адаптеры
+     выставляются один раз через `TestMain`).
 
 **Критерий:** `runner.Runner` делегирует в `application/usecases/RunTask` ✅
 (`runner.Generate` → `usecases.RunTask`); логика из `agents/planner/`
@@ -382,24 +400,59 @@ go test . ./agents/... ./tools/ ./board/ ./sandbox/ ./cmd/... ./server/ ./runner
      объявлен как `planner.LLMProvider` (только `Generate`), «тяжёлая модель»
      через контекст — `domain.WithHeavyModel`/`domain.HeavyModelFor`
      (`models/force.go` удалён, `models.LLMProvider` структурно совместим).
-    - **Порт `Tools`**: planner по-прежнему зависит от `tools` напрямую
-      (снимки/откаты, Public API, LSP, project-map/RAG). `runner` в non-test
-      коде planner отсутствует; в тестах используются алиасы
-      `runner.AgentResponse`/`runner.ModelReply` и helpers.
+    - **Порт `Tools` ✅**: planner в non-test коде больше не импортирует `tools`
+      (проверено `go list -f '{{join .Imports "\n"}}'` — `ai/tools`/`ai/models`/
+      `ai/board`/`ai/runner`/`ai/agents/acceptor` в прямых импортах
+      `application/planner` отсутствуют). Интерфейсы —
+      `domain/services/tools.go`; адаптеры — `tools/plannerports.go`; точками
+      внедрения служат `SetPlannerToolBuilder`/`SetLSPDiagnoser`/
+      `SetSnapshotFactory`/`SetPublicAPIAuditor` (`main.go`, тестовый `TestMain`).
+      Оставшиеся прямые импорты агентов (`agentfactory.go`/`architectfactory.go`)
+      — легальная реализация портов `AgentFactory`, они переедут в
+      инфраструктурный пакет в рамках Этапа 4/5.
 - **`runner` не «тонкий» по объёму.** Делегирование есть, но адаптеры портов
   (`autofix.go`, `applog.go`, `injections.go`, `taskstate.go`, `wipcommit.go`,
   `reindex.go`) остаются в пакете.
-- **Предсуществующие падения тестов `application/planner`** (17 шт., включая
-  `TestGuardRejectionEscalatesWithinBudget`, `TestPhantomDoneNotClosedByFallback`,
-  `TestTokenAccountingEndToEnd`): воспроизводятся на коммите `cb8fae2` до
-  Этапа 3 и не изменились после срезов A/B/B2/D/C1 (проверено по счётчику и
-  составу) — это не регрессия переноса. Разобрать отдельно; эскалация и `RunTask`
-  покрыты unit-тестами в `application/usecases` (`escalate_test.go`,
-  `run_test.go`), выбор агента — `application/planner/agentfactory_test.go`,
-  все зелёные.
-- **Обновить ссылки на путь** `agents/planner/...` в живых документах
-  (`docs/20-features/*`, `docs/00-overview/*`) — они указывают на
+- **Падения тестов `application/planner` (17 шт.) — разобраны ✅.** Тесты
+  воспроизводились на коммите `cb8fae2` (до Этапа 3) и не были регрессией
+  переноса. Корневая причина: коммит `792f367` (Этап 6) сменил фолбэк
+  специалиста `done` → `testing` и добавил `phaseTesting`, но тестовые
+  провайдеры эмулируют боевой цикл неявно — они возвращали `tool-call`
+  (`BoardSetTaskStatus`), а фейковый провайдер не исполняет вызовы (в бою это
+  делает `models.OllamaProvider.Generate` → `usecases.RunAgent` →
+  `runner.Generate`). Задача зависала в `testing`, и петля крутилась до 100
+  раундов. Что сделано:
+  - тестовый хелпер `executeBoardToolCalls` (`application/planner/kanban_test.go`)
+    исполняет `Board*`-вызовы фейкового провайдера, подставляя `task_id` из
+    промпта задачи, — как боевой цикл; фейковые провайдеры (`kanbanProvider`,
+    `queueProvider`, `bugFlowProvider`, `stackProvider`, `askFirstProvider`,
+    `autonomyProvider`, `heavyProbeProvider`, `idleProvider`, `tokenEchoProvider`)
+    приведены к единой семантике «разработчик → testing, тестировщик → done»;
+  - восстановлен пропавший при удалении `agents/qalead` (`6968e2a`) вызов
+    `BoardSetBugStatus` в тестовом провайдере триажа и добавлены инструменты
+    `BoardSetBugStatus`/`BoardGetBug` в `qaBoardToolNames`
+    (`agents/qaengineer/agent.go`) — иначе QA-лид физически не мог подтвердить
+    багрепорт (боевой дефект: `bugTriagePrompt` требует `BoardSetBugStatus`, а у
+    объединённого QA-агента его не было);
+  - закрыт боевой дефект «задача осталась в `testing` после прогона QA»:
+    `phaseTesting` больше не считает это «прогрессом» (была бесконечная петля
+    QA↔testing до 100 раундов, инцидент FEL-04), а эскалирует
+    (`kanban_testing.go` → `escalate` «работа не сделана»); FSM доски расширен
+    переходом `testing → ready` (`domain/status.go`) — эскалация возвращает
+    задачу в очередь.
+  Верификация: весь канонический набор зелёный (в т.ч. `application/planner`),
+  `-race` по `application/planner` чист.
+- **Ссылки на путь `agents/planner/...` в живых документах — обновлены ✅**
+  (`docs/20-features/planner.md`, `kanban-board.md`, `agents-and-roles.md`,
+  `architect.md`, `lsp.md`, `docs/00-overview/architecture.md`,
+  `how-it-works.md`, `glossary.md`, `docs/30-reference/agent-tools.md`,
+  `docs/40-operations/testing.md`, `troubleshooting.md`) — теперь
   `application/planner/...`; исторические `PLAN-*-done-*.md` не переписываются.
+  Обнаружена смежная (вне рамок этого плана) устаревшая ссылка:
+  `acceptor` переехал из `agents/acceptor/` в корневой `acceptor/`, но живые
+  документы (`docs/20-features/acceptor.md`, `makefile-contract.md`,
+  `lsp.md`, `docs/40-operations/testing.md`) и `agents-and-roles.md` всё ещё
+  указывают `agents/acceptor/...` — обновить отдельной правкой.
 
 ## Что осталось пользователю
 

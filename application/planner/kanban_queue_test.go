@@ -111,22 +111,27 @@ func (p *queueProvider) Generate(ctx context.Context, agent agents.Agent) (*runn
 		return &runner.AgentResponse{Content: backendQueueDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
 		// Разработчик всегда ставит задачу в testing (Этап 6); тестировщик —
-		// в done (Этап 7). Без явного вызова BoardSetTaskStatus задача зависла бы
-		// в testing/in_progress и recoverStuckTasks вернул бы её в ready — цикл.
+		// в done (Этап 7). Без фактического вызова BoardSetTaskStatus задача
+		// зависла бы в testing/in_progress и recoverStuckTasks вернул бы её в
+		// ready — цикл.
+		var resp *runner.AgentResponse
 		if _, ok := agent.(*qaengineer.QAEngineer); ok {
-			return &runner.AgentResponse{
+			resp = &runner.AgentResponse{
 				Content: "Тестирование пройдено.",
 				ToolCalls: []tools.ToolCall{
 					{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`},
 				},
-			}, nil
+			}
+		} else {
+			resp = &runner.AgentResponse{
+				Content: "Задача выполнена.",
+				ToolCalls: []tools.ToolCall{
+					{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+				},
+			}
 		}
-		return &runner.AgentResponse{
-			Content: "Задача выполнена.",
-			ToolCalls: []tools.ToolCall{
-				{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
-			},
-		}, nil
+		executeBoardToolCalls(agent, resp)
+		return resp, nil
 	default:
 		if a, ok := agent.(*architect.Architect); ok {
 			_, err := a.CallFunction(architect.SubmitBacklogToolName, queueArchitectBacklogArgs)

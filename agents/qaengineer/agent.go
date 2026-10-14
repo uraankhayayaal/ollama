@@ -24,9 +24,14 @@ var qaToolNames = []string{
 
 // qaBoardToolNames — инструменты общей Kanban-доски, добавляемые
 // QA-инженеру, когда оркестратор Kanban подключает доску (SetBoardStore):
-// чтение своей задачи, смена её статуса и публикация багрепортов.
+// чтение своей задачи, смена её статуса, публикация багрепортов, а также
+// инструменты QA-лида (тот же агент в роли лида направления): чтение
+// багрепортов и их триаж new → confirmed/slop (BoardSetBugStatus).
+// BoardSetBugStatus раньше жил в отдельном пакете agents/qalead; после
+// объединения лида в qaengineer (commit 6968e2a) триаж остался без инструмента.
 var qaBoardToolNames = []string{
-	tools.BoardGetTask, tools.BoardSetTaskStatus, tools.BoardCreateBug, tools.BoardListBugs, tools.BoardAddComment,
+	tools.BoardGetTask, tools.BoardSetTaskStatus, tools.BoardCreateBug,
+	tools.BoardListBugs, tools.BoardGetBug, tools.BoardSetBugStatus, tools.BoardAddComment,
 }
 
 // QAEngineer — агент QA Engineer и приёмки (объединение QA и acceptor).

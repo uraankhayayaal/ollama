@@ -66,7 +66,7 @@ RAG_ARCHITECT_CONTEXT=1    # RAG-контекст архитектора (вкл
 
 ## Ревизия черновиков
 
-Фаза `phaseArchitectReview` (`agents/planner/kanban.go:693-741`):
+Фаза `phaseArchitectReview` (`application/planner/kanban.go:693-741`):
 
 1. Собираются эпики с `requires_review = true`.
 2. Исключаются терминальные и **в `human_help`** — «помощь человека»

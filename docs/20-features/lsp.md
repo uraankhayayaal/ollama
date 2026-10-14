@@ -74,7 +74,7 @@ JSON-RPC 2.0 по stdio с заголовками `Content-Length`. Сервер
 | `LspReferences` | `file`, `line`, `col`, `include_declaration` | То же | Почти все агенты |
 | `LspHover` | `file`, `line`, `col` | `{contents}`; при отсутствии символа — пояснение | Почти все агенты |
 
-Планировщик получает только навигацию, без `LspCheck` (`agents/planner/planner.go:14`).
+Планировщик получает только навигацию, без `LspCheck` (`application/planner/planner.go:14`).
 
 Коды ответа: `error` (нет `OutputDir`, сбой запроса), `skipped` (сервер
 недоступен, с подсказкой использовать `ReadMap`/`ReadFiles`), `success`.
@@ -88,7 +88,7 @@ JSON-RPC 2.0 по stdio с заголовками `Content-Length`. Сервер
 
 ## Step Gate
 
-`agents/planner/lspgate.go:120-165` — проверка строго по файлам, изменённым
+`application/planner/lspgate.go:120-165` — проверка строго по файлам, изменённым
 шагом:
 
 1. Флаг `LSP_STEP_GATE` (вкл по умолчанию).

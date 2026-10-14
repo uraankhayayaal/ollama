@@ -125,12 +125,12 @@ cancelled ◄─────┴────────────── из �
 - Переход в тот же статус — идемпотентный «переход», не ошибка.
 - Неизвестный статус → `StatusError`.
 - `human_help` **замораживает** ревизию: `phaseArchitectReview` пропускает
-  эпики в «помощи человека» (`agents/planner/kanban.go:817`).
+  эпики в «помощи человека» (`application/planner/kanban.go:817`).
 - Специалист сам переводит свою задачу в `human_help` инструментом
   `BoardSetTaskStatus` с обязательным `reason` (задача невыполнима: кода или
   зависимостей нет, блокер) — причина оседает в `pause_reason` и видна в
   карточке; оркестратор уважает `human_help`/`cancelled` от агента и не
-  затирает их fallback'ом в `done` (`agents/planner/kanban.go`, ветка после
+  затирает их fallback'ом в `done` (`application/planner/kanban.go`, ветка после
   «агент подтвердил сам»). Исчерпание бюджета автономии
   (`KANBAN_MAX_ESCALATIONS`) тоже ведёт в `human_help` — с последней причиной
   в `pause_reason`.

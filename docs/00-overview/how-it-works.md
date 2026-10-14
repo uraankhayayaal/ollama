@@ -61,7 +61,7 @@ CLI и Web UI, дальше сходятся.
 
 ## Фазы Kanban-раннера
 
-`agents/planner/kanban.go` — цикл до полного решения задачи:
+`application/planner/kanban.go` — цикл до полного решения задачи:
 
 | Фаза | Функция | Что делает |
 |---|---|---|
@@ -115,7 +115,7 @@ QA Lead: триаж → confirmed | slop
 | Ситуация | Поведение |
 |---|---|
 | Сборка упала в приёмке | `reject` → багрепорт → эпик на исправление |
-| LSP-ошибка в scope шага | Шаг падает, scope откатывается, план останавливается (`agents/planner/lspgate.go:153-164`) |
+| LSP-ошибка в scope шага | Шаг падает, scope откатывается, план останавливается (`application/planner/lspgate.go:153-164`) |
 | Модель вернула пустой ответ с `finish_reason=length` | Шаг `failed`, план падает — а не «успешно без кода» |
 | Конфликт merge в задаче | `merge_conflict_files` + откат в `in_progress` |
 | Конфликт merge в эпике | `merge_conflict_files` на эпике, автосинхронизация main в фоне |

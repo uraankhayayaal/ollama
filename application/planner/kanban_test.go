@@ -10,6 +10,7 @@ import (
 	"ai/runner"
 	"ai/tools"
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -36,22 +37,28 @@ func (p *kanbanProvider) Generate(ctx context.Context, agent agents.Agent) (*run
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
 		// Разработчик всегда ставит задачу в testing (Этап 6); тестировщик —
-		// в done (Этап 7). Без явного вызова BoardSetTaskStatus задача зависла бы
-		// в testing/in_progress и recoverStuckTasks вернул бы её в ready — цикл.
+		// в done (Этап 7). Без фактического вызова BoardSetTaskStatus задача
+		// зависла бы в testing/in_progress и recoverStuckTasks вернул бы её в
+		// ready — цикл. Боевой провайдер (models.OllamaProvider) исполняет
+		// tool-call'ы модели внутри своего цикла; тестовый — делает это здесь.
+		var resp *runner.AgentResponse
 		if _, ok := agent.(*qaengineer.QAEngineer); ok {
-			return &runner.AgentResponse{
+			resp = &runner.AgentResponse{
 				Content: "Тестирование пройдено.",
 				ToolCalls: []tools.ToolCall{
 					{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`},
 				},
-			}, nil
+			}
+		} else {
+			resp = &runner.AgentResponse{
+				Content: "Задача выполнена.",
+				ToolCalls: []tools.ToolCall{
+					{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+				},
+			}
 		}
-		return &runner.AgentResponse{
-			Content: "Задача выполнена.",
-			ToolCalls: []tools.ToolCall{
-				{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
-			},
-		}, nil
+		executeBoardToolCalls(agent, resp)
+		return resp, nil
 	default:
 		// Системный архитектор: реально публикуем бэклог вызовом инструмента.
 		if a, ok := agent.(*architect.Architect); ok {
@@ -316,5 +323,53 @@ func TestKanbanNoProgressOnCancelled(t *testing.T) {
 	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
 	if err := kr.Run(ctx, "kanban-test", "x"); err == nil {
 		t.Fatal("ожидалась ошибка «нет прогресса» при отменённом эпике")
+	}
+}
+
+// taskIDFromPrompt достаёт идентификатор задачи из промпта специалиста
+// (planner.taskPrompt: «Задача на доске: <ID> — <title>»). Тестовые провайдеры
+// подставляют его в BoardSetTaskStatus — боевая модель берёт ID оттуда же.
+func taskIDFromPrompt(umsg string) string {
+	const marker = "Задача на доске: "
+	i := strings.Index(umsg, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := umsg[i+len(marker):]
+	if j := strings.Index(rest, " — "); j >= 0 {
+		rest = rest[:j]
+	} else if j := strings.IndexAny(rest, " \n\t"); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
+}
+
+// executeBoardToolCalls исполняет инструменты доски (Board*), возвращённые
+// фейковым провайдером, — так же, как это делает боевой агентский цикл
+// (models.OllamaProvider.Generate → usecases.RunAgent → runner.Generate).
+// Ошибки перехода (например, отказ гарда «phantom done») намеренно
+// игнорируются: оркестратор сам разбирает итоговый статус задачи.
+func executeBoardToolCalls(agent agents.Agent, resp *runner.AgentResponse) {
+	if resp == nil || agent == nil {
+		return
+	}
+	for _, tc := range resp.ToolCalls {
+		if !strings.HasPrefix(tc.Name, "Board") {
+			continue
+		}
+		args := map[string]any{}
+		if strings.TrimSpace(tc.Arguments) != "" {
+			if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+				continue
+			}
+		}
+		if _, ok := args["task_id"]; !ok {
+			if us := agent.GetUserMessages(); len(us) > 0 {
+				if id := taskIDFromPrompt(us[0].Message); id != "" {
+					args["task_id"] = id
+				}
+			}
+		}
+		_, _ = agent.CallFunction(tc.Name, args)
 	}
 }
