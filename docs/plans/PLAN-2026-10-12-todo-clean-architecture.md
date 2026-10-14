@@ -117,7 +117,10 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 срез **F3aa ✅** — кольцевой буфер логов рантайма вынесен из `server/applog.go` в
 `application/logs`; срез **F3ab ✅** — инкрементальный хвост лог-файлов
 (позиция/remainder/отпечаток, ротация, рескан) вынесен из `server/logbroker.go` в
-новый пакет `application/logtail` (порт `Publish func(project, line)`). Остальное (git-flow хуки, остальная оркестрация, RAG-хуки)
+ новый пакет `application/logtail` (порт `Publish func(project, line)`); срез
+**F3ac ✅** — чтение хвоста лог-файла с grep/limit/truncation (`ReadLogSlice`)
+вынесено из `server/actions_logs.go` в `application/logs` (`readslice.go`).
+Остальное (git-flow хуки, остальная оркестрация, RAG-хуки)
 — в плане; разбивка в разделе «Этап 6» ниже.
 
 ## Проблема
@@ -609,6 +612,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3z | Детерминированная сборка сводки доски для промпта чат-ассистента (`BoardSummary` — исходная задача/эпики/задачи по статусам + в работе/конфликты мёрджа/баги, `OrchestrationStatus`, `BoardRevisionLine`, тип `BoardView`) вынесена из `server/chatassist.go` (`chatPromptFor`) в `application/chatassist` (`boardprompt.go`); `server` оставил чтение рантайма сессии, вызов `boardView`, fallback «Kanban-доска недоступна» и дайджест логов | ✅ |
 | F3aa | Кольцевой буфер логов рантайма (`appLogBuffer`/`appLogLine`/`appLogBufferLines`/`appLogDefaultTail`/`appLogMaxTail`) вынесен из `server/applog.go` в `application/logs` (`RingBuffer`/`Line`/`BufferLines`/`DefaultTail`/`MaxTail`); `server` оставил адаптер `appLogBuffer` с методами `push`/`tail`/`takeDirty` | ✅ |
 | F3ab | Инкрементальный хвост лог-файлов проектов (`Broker`: позиция/remainder/отпечаток начала, детекция ротации — усечение/copytruncate или подмена содержимого, идемпотентная подписка, рескан новых файлов, `Run`/`Subscribe`/`Broadcast`/`Rescan`, `ListLogFiles`, `SubFile.OpenAtEnd`/`OpenFromStart`/`Rotated`/`ReadNew`/`Close`, `Line`) вынесен из `server/logbroker.go` в новый пакет `application/logtail` (порт `Publish func(project, line Line)`); `server/logbroker.go` оставил адаптер, публикующий строки в хаб | ✅ |
+| F3ac | Чтение хвоста лог-файла с grep/limit/truncation (`ReadLogSlice` — хвост файла, фильтр grep, лимит строк, обрезка по байтам, тип `Slice`) вынесено из `server/actions_logs.go` в `application/logs` (`readslice.go`); `server/actions_logs.go` оставил тонкую обёртку `readLogSlice` | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -1018,6 +1022,17 @@ approve, отказ, отмена контекста → `Reset`, останов
 `TestBrokerRunPublishesAndStops`); серверный `TestLogBrokerBroadcastPublishesNewLines`
 ( WS-хаб) не менялся. Верификация: канонический набор зелёный, `-race` по
 `application/logtail` чист, `gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3ac ✅** — чтение хвоста лог-файла с grep/limit/truncation вынесено из
+`server/actions_logs.go` в `application/logs/readslice.go`: `ReadLogSlice`
+(хвост файла с `readMaxBytes`, фильтр grep, лимит строк, обрезка содержимого
+по `contentMaxBytes`, тип `Slice`). Серверный `readLogSlice` стал тонкой
+обёрткой, маппингом `Slice` → `logToolFile`. Тесты: новые
+`application/logs/readslice_test.go` (базовое чтение, grep, лимит,
+отсутствующий файл, обрезка по байтам); серверные `actions_logs_test.go` не
+менялись. Верификация: канонический набор зелёный (предсуществующий флак
+`TestChatAssistant*` на живом прогоне — в изоляции зелёный), `-race` по
+`application/logs` чист, `gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
 

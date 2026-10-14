@@ -3,12 +3,9 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	applogs "ai/application/logs"
-	logpkg "ai/domain/log"
 	"ai/logging"
 	"ai/tools"
 )
@@ -156,72 +153,21 @@ func pickLogFiles(files []logFileEntry, want, own string) []logFileEntry {
 }
 
 // readLogSlice читает хвост файла (последние limit строк), при grep — только
-// совпавшие строки. Читает с конца файла целиком: логи проекта уже
-// ограничены панелью, а полный файл может быть больше — тогда берём хвост
-// размера logMaxBytes, как это делает Logboard.
+// совпавшие строки. Логика — в application/logs.ReadLogSlice.
 func readLogSlice(path string, size int64, grep string, limit int) (logToolFile, error) {
-	f, err := os.Open(path)
+	s, err := applogs.ReadLogSlice(path, grep, limit, logMaxBytes, logToolMaxBytes)
 	if err != nil {
 		return logToolFile{}, err
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return logToolFile{}, err
-	}
-	res := logToolFile{
-		Name:     filepath.Base(path),
-		Size:     info.Size(),
-		Modified: info.ModTime().Format("2006-01-02 15:04:05"),
-	}
-	start := int64(0)
-	if logMaxBytes > 0 && info.Size() > logMaxBytes {
-		start = info.Size() - logMaxBytes
-		res.Truncated = true
-		res.Note = "файл больше 1 МБ, прочитан хвост"
-	}
-	if _, err := f.Seek(start, 0); err != nil {
-		return res, err
-	}
-	buf := make([]byte, info.Size()-start)
-	if _, err := f.Read(buf); err != nil && len(buf) > 0 {
-		return res, err
-	}
-
-	all := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
-	if all == nil {
-		all = nil
-	}
-	if len(all) == 1 && all[0] == "" {
-		all = nil
-	}
-	res.Total = len(all)
-	picked := all
-	if grep != "" {
-		picked = nil
-		for _, l := range all {
-			if strings.Contains(strings.ToLower(l), strings.ToLower(grep)) {
-				picked = append(picked, l)
-			}
-		}
-		res.Matched = len(picked)
-	}
-	if len(picked) > limit {
-		picked = picked[len(picked)-limit:]
-		res.Truncated = true
-		if res.Note == "" {
-			res.Note = fmt.Sprintf("показаны последние %d из %d строк", limit, res.Total)
-		}
-	}
-	res.Lines = len(picked)
-	content := strings.Join(picked, "\n")
-	if len(content) > logToolMaxBytes {
-		content = content[len(content)-logToolMaxBytes:]
-		res.Truncated = true
-	}
-	res.Content = logpkg.TruncateLogText(content, logToolMaxBytes)
-	if len(res.Content) == 0 && grep != "" {
-		res.Note = strings.TrimSpace(res.Note + " подстрока не найдена")
-	}
-	return res, nil
+	return logToolFile{
+		Name:      s.Name,
+		Size:      s.Size,
+		Modified:  s.Modified,
+		Lines:     s.Lines,
+		Matched:   s.Matched,
+		Total:     s.Total,
+		Truncated: s.Truncated,
+		Content:   s.Content,
+		Note:      s.Note,
+	}, nil
 }

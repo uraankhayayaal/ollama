@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3ab — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3ac — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -679,6 +679,20 @@ approve, отказ, отмена контекста → `Reset`, останов
 `application/logtail` чист, `gofmt` по правкам чист. Документация: план (шапка +
 таблица F3ab + narrative), `docs/00-overview/project-map.md` (новая строка
 `application/logtail/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3ab `1cff506`.
+
+Срез **F3ac** — чтение хвоста лог-файла с grep/limit/truncation вынесено из
+`server/actions_logs.go` в `application/logs/readslice.go`: `ReadLogSlice`
+(хвост файла с `readMaxBytes`, фильтр grep, лимит строк, обрезка содержимого
+по `contentMaxBytes`, тип `Slice`). Серверный `readLogSlice` стал тонкой
+обёрткой, маппингом `Slice` → `logToolFile`. Тесты: новые
+`application/logs/readslice_test.go` (базовое чтение, grep, лимит,
+отсутствующий файл, обрезка по байтам); серверные `actions_logs_test.go` не
+менялись. Верификация: канонический набор зелёный (предсуществующий флак
+`TestChatAssistant*` на живом прогоне — в изоляции зелёный), `-race` по
+`application/logs` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3ac + narrative), `docs/00-overview/project-map.md` (строка
+`application/logs/` расширена `readslice.go`). Остаток Этапа 6 — F3+:
+`server`-хендлеры. Коммит F3ac — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
