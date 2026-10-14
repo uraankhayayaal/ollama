@@ -356,7 +356,7 @@ accept/reject), удалены локальные `discardHalfClone`/`sameGitRem
 `gofmt` по правкам чист. Документация: план (шапка + таблица F3m + narrative),
 `docs/00-overview/project-map.md` (строка `application/rag/`). Остаток Этапа 6
 — F3+: `server/session.go` (оркестрация/HITL/событийность), git-flow хуки,
-`chatassist`/`ask`/`actions`/`logs`/`diff`/`server`. Коммит F3m — ниже.
+`chatassist`/`ask`/`actions`/`logs`/`diff`/`server`. Коммит F3m `492f3df`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
