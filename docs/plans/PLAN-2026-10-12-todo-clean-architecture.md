@@ -587,7 +587,8 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3r | Жизненный цикл worktree задачи/эпика (`TaskWorktree` — создание worktree задачи + rebase на эпик + сабмодули, `EpicWorktree` — ленивый worktree релизной ветки эпика, `DropEpicWorktreeLocked` — снятие worktree эпика) вынесен из `server/gitflow_auto.go` в `application/gitflow` (`WorktreeManager`, порт `WorktreeHost`); `server` оставил адаптер `worktreeHost` и тонкие обёртки | ✅ |
 | F3s | Политика синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`: пропуск при грязном дереве/занятом checkout, откат конфликтного merge, признак сдвига HEAD) вынесена из `server/ragref.go` в `application/rag` (`WorkingCopySyncer`, порт `SyncSink`, `sync.go`); `server` оставил адаптер `syncSink` и тонкую обёртку | ✅ |
 | F3t | Конкретные фоновые прогоны индексации RAG (`RefJob` — содержимое ветки по ref, `RefDiffJob` — изменения ветки относительно базы, `DirJob` — каталог под его веткой; загрузка снапшота + пропуск актуального индекса + отчёт) вынесены из `server/ragref.go`/`server/ragindex.go` в `application/rag` (`jobs.go`); `server` оставил адаптеры загрузчиков/фабрики и тонкие обёртки `Index*Background` | ✅ |
-| F3u | Набор сессионных промпт-инъекций (`SessionInjections`/`Add`/`Upsert`/`Remove`: адресация по ID, честный признак удаления, потокобезопасная копия) вынесен из `server/session.go` в `domain` (`InjectionSet`, `injectionset.go`); `Session` делегирует и лениво создаёт набор (нулевая сессия работоспособна) | ✅ |
+| F3u | Набор сессионных промпт-инъекций (`SessionInjections`/`Add`/`Upsert`/`Remove`: адресация по ID, честный признак удаления, потокобезопасная копия) вынесен из `server/session.go` в `domain` (`InjectionSet`, `injectionset.go`); `Session` делегирует и лениво создаёт набор (нулевая сессия работоспособна) | ✅ || F3u | Набор сессионных промпт-инъекций (`SessionInjections`/`Add`/`Upsert`/`Remove`: адресация по ID, честный признак удаления, потокобезопасная копия) вынесен из `server/session.go` в `domain` (`InjectionSet`, `injectionset.go`); `Session` делегирует и лениво создаёт набор (нулевая сессия работоспособна) | ✅ |
+| F3v | Правка и презентация конфликтных файлов модели (`NewConflictView` — отбор остаточных маркеров + фрагмент больших файлов, `ApplyConflictFiles` — запись files/edits с проверкой уникальности `old`, `ConflictSafeRel`/`WithinDir` — безопасность пути, `IsConflictMarkerLine`/`ConflictRegion`) вынесены из `server/actions_resolve.go` в `application/gitflow` (`conflictfiles.go`); `server` оставил алиасы `ConflictEdit`/`conflictView` и тонкие обёртки | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -890,6 +891,24 @@ worktree add`, worktree эпика — существующий/создание
 канонический набор зелёный (28 пакетов; один прогон упал на пред-существующем
 флаке `TestChatAssistantRejectBranchAfterConfirm` — в изоляции зелёный), `-race`
 по `domain` чист, `gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3v ✅** — правка и презентация конфликтных файлов вынесены из
+`server/actions_resolve.go` в `application/gitflow` (`conflictfiles.go`):
+`NewConflictView` (отбор файлов с остаточными маркерами + фрагмент для больших
+файлов), `ConflictRegion`/`IsConflictMarkerLine`, `ApplyConflictFiles` (запись
+`files` — полное содержимое, затем `edits` — точечные замены с проверкой
+уникальности `old`), `ConflictSafeRel`/`WithinDir` (безопасность пути), типы
+`ConflictEdit`/`ConflictView`, константы `MaxConflictFileBytes`/`MaxConflictFiles`.
+`server/actions_resolve.go` оставил алиасы (`type ConflictEdit = gitflow.ConflictEdit`,
+`type conflictView = gitflow.ConflictView`) и тонкие обёртки
+`newConflictView`/`conflictSafeRel`/`withinDir`, поэтому серверные
+`actions_resolve_test.go` не менялись; `conflictApply` зовёт
+`gitflow.ApplyConflictFiles`. Тесты: новые герметичные
+`application/gitflow/conflictfiles_test.go` (safe-rel/within-dir, truncate
+больших файлов, чистые файлы, apply files+edits, отказы: не конфликтный файл,
+выход за worktree, неуникальный/пустой `old`, маркеры/регион). Верификация:
+канонический набор зелёный (28 пакетов), `-race` по `application/gitflow` чист,
+`gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
 

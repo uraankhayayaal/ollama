@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3u — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3v — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -536,6 +536,30 @@ mutex) с `List` (копия наружу), `Add`, `Upsert` (перезапис�
 `docs/00-overview/project-map.md` (строка `domain/` расширена `injectionset.go`).
 Остаток Этапа 6 — F3+: HITL-гейт и read-model доски в `server/session.go`,
 `chatassist`/`actions`/`server`. Коммит F3u `ddae990`.
+
+Срез **F3v** — правка и презентация конфликтных файлов модели вынесены из
+`server/actions_resolve.go` в `application/gitflow` (`conflictfiles.go`):
+`NewConflictView` (отбор файлов с остаточными маркерами + фрагмент вокруг
+маркеров для больших файлов), `ConflictRegion`/`IsConflictMarkerLine`,
+`ApplyConflictFiles` (запись `files` — полное содержимое, затем `edits` —
+точечные замены с проверкой уникальности `old`), `ConflictSafeRel`/`WithinDir`
+(безопасность пути), типы `ConflictEdit`/`ConflictView`, константы
+`MaxConflictFileBytes`/`MaxConflictFiles`. `server/actions_resolve.go` оставил
+алиасы (`type ConflictEdit = gitflow.ConflictEdit`,
+`type conflictView = gitflow.ConflictView`) и тонкие обёртки
+`newConflictView`/`conflictSafeRel`/`withinDir` (вызовы ассистента и тестов не
+менялись), а `conflictApply` зовёт `gitflow.ApplyConflictFiles`. Удалены
+переехавшие локальные функции/константы и импорт `path/filepath`. Тесты: новые
+герметичные `application/gitflow/conflictfiles_test.go` (safe-rel/within-dir,
+truncate больших файлов, чистые файлы без маркеров, apply files+edits, отказы:
+не конфликтный файл, выход за worktree, неуникальный/пустой `old`, маркеры/
+регион); серверный `actions_resolve_test.go` не менялся (идёт через обёртки).
+Верификация: канонический набор зелёный (28 пакетов), `-race` по
+`application/gitflow` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3v + narrative), `docs/00-overview/project-map.md` (строка
+`application/gitflow/` расширена `conflictfiles.go`). Остаток Этапа 6 — F3+:
+HITL-гейт и read-model доски в `server/session.go`, `chatassist`/`actions`/
+`server`. Коммит F3v — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
