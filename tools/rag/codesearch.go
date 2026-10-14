@@ -1,4 +1,4 @@
-package tools
+package rag
 
 // Инструмент CodeSearch — семантический поиск по кодовой базе проекта
 // (RAG поверх Qdrant, см. PLAN-2026-09-19-done-qdrant.md, Ф-3; поиск с учётом
@@ -28,39 +28,33 @@ package tools
 // ReadMap/ReadFiles; шаг не падает (по образцу ЛСП-инструментов).
 
 import (
-	"ai/infrastructure/rag"
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
+
+	"ai/domain"
+	infrarag "ai/infrastructure/rag"
 )
 
-// CodeSearch — имя инструмента в реестре (см. registry.go newTool).
-const CodeSearch = "CodeSearch"
-
-type RAGSearcher = rag.Searcher
-
-// codeSearchTool — обёртка инструмента CodeSearch в реестре.
-type codeSearchTool struct {
-	// searcher — клиент RAG (нил — инструмент деградирует в skipped).
-	searcher RAGSearcher
-	// ops — файловый контекст: имя проекта (FileOps.Project с фолбэком на
-	// basename OutputDir) и ветка из положения OutputDir (temp/<имя> или
-	// worktree задачи), чтобы поиск шёл по коду только своего проекта и
-	// только своей ветки.
-	ops *FileOps
+// SearchTool — обёртка инструмента CodeSearch в реестре.
+type SearchTool struct {
+	// Searcher — клиент RAG (нил — инструмент деградирует в skipped).
+	Searcher Searcher
+	// Ctx — файловый контекст: имя проекта (FileOps.Project с фолбэком на
+	// basename OutputDir) и ветка из положения рабочего каталога (temp/<имя>
+	// или worktree задачи), чтобы поиск шёл по коду только своего проекта и
+	// только своей ветки. Читается лениво (SetProjectName/SetOutputDir).
+	Ctx Context
 
 	branchOnce sync.Once
 	branch     string // кэш определения ветки (детерминирован в рамках жизни инструмента)
 }
 
-func (t *codeSearchTool) Name() string { return CodeSearch }
-func (t *codeSearchTool) Definition() ToolDefinition {
-	return ToolDefinition{
+func (t *SearchTool) Name() string { return CodeSearch }
+func (t *SearchTool) Definition() domain.ToolDefinition {
+	return domain.ToolDefinition{
 		Name: CodeSearch,
 		Description: "Используй этот инструмент, когда ищешь, ГДЕ в проекте реализована определённая функциональность " +
 			"(например, «где валидируется токен сессии»), по смыслу, а не по именам файлов. Передай описание одной строкой в query " +
@@ -91,7 +85,7 @@ func (t *codeSearchTool) Definition() ToolDefinition {
 		},
 	}
 }
-func (t *codeSearchTool) Execute(args map[string]any) ([]byte, error) { return t.exec(args) }
+func (t *SearchTool) Execute(args map[string]any) ([]byte, error) { return t.exec(args) }
 
 // CodeSearchParams — JSON-параметры инструмента CodeSearch.
 type CodeSearchParams struct {
@@ -106,7 +100,7 @@ type CodeSearchParams struct {
 // {"status":"success","branch":"…","results":[{file,start_line,end_line,score,snippet,branch,commit_sha,chunk_id}]}.
 // Все ветки возвращают JSON, ошибка Go используется только для внутренних
 // сбоев сериализации (единый стиль файловых инструментов).
-func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
+func (t *SearchTool) exec(args map[string]any) ([]byte, error) {
 	var p CodeSearchParams
 	if raw, err := json.Marshal(args); err == nil {
 		_ = json.Unmarshal(raw, &p)
@@ -120,20 +114,20 @@ func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
 		return out, nil
 	}
 
-	if t.searcher == nil {
+	if t.Searcher == nil {
 		return codeSearchJSON(map[string]any{
 			"status":  "skipped",
 			"message": "векторная память RAG не подключена (нет клиента Qdrant) — используй ReadMap/ReadFiles, либо настрой QDRANT_ADDR и построй индекс командой 'go run . index <имя_проекта>'",
 		}), nil
 	}
 
-	// Имя проекта — базовое имя OutputDir (temp/<имя>): поиск ограничен кодом
-	// этого проекта (фильтр payload project_name).
-	project := projectNameOf(t.ops)
+	// Имя проекта — явно заданное или basename рабочего каталога: поиск
+	// ограничен кодом этого проекта (фильтр payload project_name).
+	project := projectNameOf(t.Ctx)
 	if project == "" {
 		return codeSearchJSON(map[string]any{
 			"status":  "skipped",
-			"message": "не определён проект (OutputDir не задан) — используй ReadMap/ReadFiles",
+			"message": "не определён проект (рабочий каталог не задан) — используй ReadMap/ReadFiles",
 		}), nil
 	}
 
@@ -149,8 +143,8 @@ func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
 
 	// Лёгкий контроль доступности Qdrant перед поиском: недоступность даёт
 	// различимую ошибку-подсказку (Ping не трогает эмбеддер).
-	if err := t.searcher.Ping(ctx); err != nil {
-		if rag.IsUnavailable(err) {
+	if err := t.Searcher.Ping(ctx); err != nil {
+		if infrarag.IsUnavailable(err) {
 			return codeSearchJSON(map[string]any{
 				"status":  "skipped",
 				"message": err.Error() + " — используй ReadMap/ReadFiles",
@@ -160,7 +154,7 @@ func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
 	}
 
 	limit, maxTotal := ragLimits()
-	results, err := t.searcher.Search(ctx, rag.SearchParams{
+	results, err := t.Searcher.Search(ctx, infrarag.SearchParams{
 		Project:  project,
 		Query:    query,
 		Scope:    strings.TrimSpace(p.Scope),
@@ -169,7 +163,7 @@ func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
 		MaxTotal: maxTotal,
 	})
 	if err != nil {
-		var unavail *rag.UnavailableError
+		var unavail *infrarag.UnavailableError
 		if errors.As(err, &unavail) {
 			return codeSearchJSON(map[string]any{
 				"status":  "skipped",
@@ -182,7 +176,7 @@ func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
 		return codeSearchJSON(map[string]any{
 			"status":  "success",
 			"branch":  branch,
-			"results": []rag.SearchResult{},
+			"results": []infrarag.SearchResult{},
 			"message": "по запросу ничего не найдено — сформулируй query иначе или расширь scope",
 		}), nil
 	}
@@ -202,7 +196,7 @@ func (t *codeSearchTool) exec(args map[string]any) ([]byte, error) {
 
 // codeSnippetHeader — маркер происхождения чанка над его кодом:
 // [Файл: src/auth.go | Ветка: ai/epic/ARCH-01 | Коммит: a1b2c3d].
-func codeSnippetHeader(r rag.SearchResult) string {
+func codeSnippetHeader(r infrarag.SearchResult) string {
 	commit := strings.TrimSpace(r.CommitSHA)
 	if len(commit) > 8 {
 		commit = commit[:8]
@@ -219,61 +213,22 @@ func codeSearchJSON(v map[string]any) []byte {
 	return b
 }
 
-// projectNameOf — имя проекта для фильтра RAG: явно заданное FileOps.Project,
-// иначе basename OutputDir. У специалиста задачи OutputDir — worktree
-// (temp/.wt-task-<проект>-<id>), поэтому явное имя обязательно: иначе поиск
-// шёл бы по несуществующему «проекту» и всегда возвращал пустую выдачу.
-func projectNameOf(ops *FileOps) string {
-	if ops == nil {
-		return ""
-	}
-	return ops.ProjectName()
-}
-
 // detectBranch определяет ветку рабочего каталога агента для поиска по RAG
 // (Р-6): вне git (или git недоступен) — main, поэтому поведение консольных
 // проектов без gitflow не меняется. Результат кэшируется: ветка в рамках
 // работы агента не меняется, а git-вызов на каждый CodeSearch не нужен.
-func (t *codeSearchTool) detectBranch() string {
+func (t *SearchTool) detectBranch() string {
 	t.branchOnce.Do(func() {
 		dir := ""
-		if t.ops != nil {
-			dir = t.ops.OutputDir
+		if t.Ctx != nil {
+			dir = t.Ctx.WorkingDir()
 		}
-		branch, err := rag.DetectBranch(dir)
+		branch, err := infrarag.DetectBranch(dir)
 		if err != nil || branch == "" {
-			t.branch = rag.MainBranch
+			t.branch = infrarag.MainBranch
 			return
 		}
 		t.branch = branch
 	})
 	return t.branch
-}
-
-// ragLimits читает лимиты выдачи CodeSearch из окружения: RAG_MAX_RESULTS
-// (по умолчанию rag.DefaultMaxResults) и RAG_READ_MAX_TOTAL (по умолчанию
-// rag.DefaultSearchMaxTotal). 0 — значения по умолчанию берёт сам rag.Search.
-func ragLimits() (maxResults, maxTotal int) {
-	if v := strings.TrimSpace(os.Getenv("RAG_MAX_RESULTS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			maxResults = n
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("RAG_READ_MAX_TOTAL")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			maxTotal = n
-		}
-	}
-	return maxResults, maxTotal
-}
-
-// ragSearchTimeout — лимит на весь цикл поиска (Ping + эмбеддинг + Query),
-// чтобы код с недоступным/зависшим Qdrant не вешал шаг агента.
-func ragSearchTimeout() time.Duration {
-	if v := strings.TrimSpace(os.Getenv("RAG_SEARCH_TIMEOUT")); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	return 30 * time.Second
 }

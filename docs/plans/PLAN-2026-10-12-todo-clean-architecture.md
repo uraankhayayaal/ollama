@@ -43,7 +43,8 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 **E5 ✅** — `board` → `infrastructure/board` (пакет `board`), 75 импортёров на
 `ai/infrastructure/board`. Срез **E6** разбит на под-срезы (E6a…E6e, таблица
 ниже); **E6a ✅** — `tools/` больше не импортирует `ai/infrastructure/board`
-(переведён на `domain`).
+(переведён на `domain`); **E6b ✅** — RAG-инструменты вынесены в подпакет
+`ai/tools/rag`.
 Разбивка этапа на срезы E1–E6 — в разделе «Этап 4» ниже.
 
 ## Проблема
@@ -321,7 +322,7 @@ infrastructure/   — реализации (llm, rag, git, sandbox, board)
 | Под-срез | Что | Статус |
 |---|---|---|
 | **E6a** | `tools/` → `domain` вместо `ai/infrastructure/board`: `ErrExists`/`DecodeInjections`/`ValidateInjections` — из `domain` (уже были алиасами), `DecodeComments` перенесён в `domain` (`domain/comment.go`), `board.DecodeComments` делегирует. `tools` (non-test) больше не импортирует `infrastructure/board` | ✅ |
-| **E6b** | `tools/` (codesearch/ragstatus) → `domain/services` вместо `ai/infrastructure/rag`. Требует вынести рабочий RAG-контракт (`Searcher`, `SearchParams`, `SearchResult`, `Search`, `IsUnavailable`, `UnavailableError`, `DetectBranch`/`MainBranch`, лимиты) в `domain/services` — иначе под-пакет `tools/rag` продолжит зависеть от инфраструктуры | ⏳ |
+| **E6b** | `tools/rag` — CodeSearch/RagIndexStatus вынесены в подпакет `ai/tools/rag` (package `rag`), инфра-RAG импортируется как `infrarag`; зависимость от `FileOps` инвертирована интерфейсом `rag.Context{ProjectName; WorkingDir}` (лениво — `SetProjectName`/`SetOutputDir` зовутся уже после сборки набора) | ✅ |
 | **E6c** | `tools/` (sandbox/destructive/fileops) → `services.SandboxWorkspace`/`SandboxResult` (alias'ы E4) там, где возможно; пакетные функции (`Config`/`LoadConfig`/`EnsureImage`/`DetectStack`/`BaseEnv`…) остаются у `infrastructure/sandbox` → под-пакет `tools/sandbox` | ⏳ |
 | **E6d** | `tools/gitresolve`/`tool.go` → `services.GitOperations`; `git.Executor`/`CLIExecutor`/`RepoFromState`/`TrivialResolve`/`HasConflictMarkers` в порт не входят → под-пакет `tools/git` | ⏳ |
 | **E6e** | Собственно разбиение `tools/` на под-пакеты (`tools/lsp`, `tools/rag`, `tools/sandbox`, `tools/git`, …) с инверсией зависимости от `FileOps` (интерфейс `Runner`/`Project`/`Ops` в под-пакете, методы/поля `FileOps` делегируют). Под-пакеты реализуют `services.Tool` напрямую (`Definition() domain.ToolDefinition`) и вправе импортировать `infrastructure/*`. Выполняется по одному под-пакету (E6e1…); **E6e1 ✅** — `tools/git` | 🔄 (E6e1 ✅) |
@@ -450,6 +451,26 @@ E6 читается как **разбиение `tools/` на под-пакет�
 `tools/gitresolve_test.go` переехал в `tools/git` (`package git`, `fakeGitExec`
 без изменений). Верификация: `./tools/...` (в т.ч. новый `ai/tools/git`),
 `./server`, канонический набор — зелёные, `gofmt` чист.
+
+**E6b ✅ (`tools/rag` — CodeSearch/RagIndexStatus).** `tools/codesearch.go` и
+`tools/ragstatus.go` вынесены в `ai/tools/rag` (`package rag`); инфра-RAG
+импортируется как `infrarag "ai/infrastructure/rag"` (RAG-контракт богаче порта
+`services.RAGClient` — `Searcher`/`ProjectInfo`/`UnavailableError`/`DetectBranch`,
+переносить его в `domain` нельзя: `DetectBranch` ходит в git). Обратная
+зависимость от `FileOps` инвертирована интерфейсом `rag.Context{ProjectName()
+string; WorkingDir() string}`: обе величины читаются ЛЕНИВО (оркестрация зовёт
+`SetProjectName`/`SetOutputDir` уже после сборки набора инструментов —
+`kanban_execute.go`), поэтому не запоминаются при `Select`. В `tools/fileops.go`
+добавлен nil-безопасный аксессор `WorkingDir()` (и поправлен порядок nil-проверки
+в `ProjectName`). Экспортированы `rag.SearchTool`/`rag.StatusTool`/
+`rag.CodeSearch`/`rag.IndexStatus`; в `tools` остались алиасы `RAGSearcher =
+rag.Searcher` (`tool.go`), `CodeSearch`/`RagIndexStatus` (`registry.go`), а
+`registry.go` собирает `&rag.SearchTool{Ctx, Searcher}`/`&rag.StatusTool{…}` через
+nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test.go` переехал в
+`tools/rag` (фейковый `fakeCtx` повторяет фолбэк имени проекта; сам фолбэк теперь
+покрыт `tools/fileops_projectname_test.go` вместе с `WorkingDir`). Верификация:
+`./tools/...` (в т.ч. новый `ai/tools/rag`), канонический набор — зелёные,
+`gofmt` по своим файлам чист.
 
 ### Этап 5: Рефакторинг агентов
 

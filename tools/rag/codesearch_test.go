@@ -1,31 +1,33 @@
 // Hermetic-тесты CodeSearch: формат ответа, лимиты RAG_MAX_RESULTS/
 // RAG_READ_MAX_TOTAL и degrade (skipped) при отсутствии/недоступности RAG.
-// Сеть не используется: поиск заменён fake-реализацией RAGSearcher.
+// Сеть не используется: поиск заменён fake-реализацией Searcher.
 
-package tools
+package rag
 
 import (
-	"ai/infrastructure/rag"
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	infrarag "ai/infrastructure/rag"
 )
 
-// fakeSearcher — управляемая реализация RAGSearcher для тестов.
+// fakeSearcher — управляемая реализация Searcher для тестов.
 type fakeSearcher struct {
 	pingErr     error
-	results     []rag.SearchResult
+	results     []infrarag.SearchResult
 	searchErr   error
-	projectInfo rag.ProjectInfo
+	projectInfo infrarag.ProjectInfo
 	infoErr     error
-	last        rag.SearchParams
+	last        infrarag.SearchParams
 }
 
 func (f *fakeSearcher) Ping(context.Context) error { return f.pingErr }
 
-func (f *fakeSearcher) Search(_ context.Context, p rag.SearchParams) ([]rag.SearchResult, error) {
+func (f *fakeSearcher) Search(_ context.Context, p infrarag.SearchParams) ([]infrarag.SearchResult, error) {
 	f.last = p
 	if f.searchErr != nil {
 		return nil, f.searchErr
@@ -33,18 +35,37 @@ func (f *fakeSearcher) Search(_ context.Context, p rag.SearchParams) ([]rag.Sear
 	return f.results, nil
 }
 
-func (f *fakeSearcher) ProjectInfo(_ context.Context, _ string) (rag.ProjectInfo, error) {
+func (f *fakeSearcher) ProjectInfo(_ context.Context, _ string) (infrarag.ProjectInfo, error) {
 	return f.projectInfo, f.infoErr
 }
 
-func newCodeSearchTool(searcher RAGSearcher) *codeSearchTool {
-	return &codeSearchTool{ops: &FileOps{OutputDir: "/tmp/temp/demo"}, searcher: searcher}
+// fakeCtx — файловый контекст для тестов: повторяет фолбэк FileOps.ProjectName
+// (явное имя, иначе basename рабочего каталога). Сам фолбэк покрыт тестом
+// FileOps в пакете tools (fileops_projectname_test.go).
+type fakeCtx struct {
+	dir     string
+	project string
+}
+
+func (c fakeCtx) WorkingDir() string { return c.dir }
+func (c fakeCtx) ProjectName() string {
+	if p := strings.TrimSpace(c.project); p != "" {
+		return p
+	}
+	if c.dir == "" {
+		return ""
+	}
+	return filepath.Base(filepath.Clean(c.dir))
+}
+
+func newCodeSearchTool(searcher Searcher) *SearchTool {
+	return &SearchTool{Ctx: fakeCtx{dir: "/tmp/temp/demo"}, Searcher: searcher}
 }
 
 // Успешный поиск: формат {"status":"success","results":[...]} с полями
 // file/start_line/end_line/score/snippet.
 func TestCodeSearchSuccessFormat(t *testing.T) {
-	fake := &fakeSearcher{results: []rag.SearchResult{
+	fake := &fakeSearcher{results: []infrarag.SearchResult{
 		{File: "server/auth/token.go", StartLine: 12, EndLine: 26, Score: 0.86, Snippet: "func ValidateToken(...) {...}"},
 		{File: "server/auth/session.go", StartLine: 4, EndLine: 9, Score: 0.72, Snippet: "func NewSession(...) {...}"},
 	}}
@@ -72,7 +93,7 @@ func TestCodeSearchSuccessFormat(t *testing.T) {
 		t.Fatalf("первый результат: %#v", r)
 	}
 
-	// Параметры поиска: проект из OutputDir, query и scope проброшены.
+	// Параметры поиска: проект из рабочего каталога, query и scope проброшены.
 	if fake.last.Project != "demo" {
 		t.Fatalf("проект: got %q, want demo", fake.last.Project)
 	}
@@ -111,7 +132,7 @@ func TestCodeSearchEmptyQuery(t *testing.T) {
 	if json.Unmarshal(out, &m) != nil || m["status"] != "error" {
 		t.Fatalf("должен быть error, got %s", out)
 	}
-	if fake := tool.searcher.(*fakeSearcher); fake.last.Query != "" {
+	if fake := tool.Searcher.(*fakeSearcher); fake.last.Query != "" {
 		t.Fatal("поиск не должен вызываться при пустом query")
 	}
 }
@@ -134,7 +155,7 @@ func TestCodeSearchSkippedWhenRAGNil(t *testing.T) {
 
 // Недоступный Qdrant (Ping → UnavailableError) — skipped, не падает.
 func TestCodeSearchSkippedWhenQdrantDown(t *testing.T) {
-	tool := newCodeSearchTool(&fakeSearcher{pingErr: &rag.UnavailableError{Err: errors.New("connection refused")}})
+	tool := newCodeSearchTool(&fakeSearcher{pingErr: &infrarag.UnavailableError{Err: errors.New("connection refused")}})
 	out, err := tool.Execute(map[string]any{"query": "тест"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -147,7 +168,7 @@ func TestCodeSearchSkippedWhenQdrantDown(t *testing.T) {
 
 // Qdrant выпал уже на этапе поиска (Search → UnavailableError) — тоже skipped.
 func TestCodeSearchSkippedWhenSearchUnavailable(t *testing.T) {
-	tool := newCodeSearchTool(&fakeSearcher{searchErr: &rag.UnavailableError{Err: errors.New("connection refused")}})
+	tool := newCodeSearchTool(&fakeSearcher{searchErr: &infrarag.UnavailableError{Err: errors.New("connection refused")}})
 	out, err := tool.Execute(map[string]any{"query": "тест"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -171,32 +192,32 @@ func TestCodeSearchInternalError(t *testing.T) {
 	}
 }
 
-// Имя проекта: явное FileOps.Project приоритетно (worktree задачи), иначе
-// basename OutputDir: temp/<имя> → <имя>; пусто — skipped.
+// Имя проекта: явное имя приоритетно (worktree задачи), иначе basename
+// рабочего каталога: temp/<имя> → <имя>; пусто — skipped.
 func TestCodeSearchProjectName(t *testing.T) {
-	if got := projectNameOf(&FileOps{OutputDir: "/tmp/temp/billingService"}); got != "billingService" {
+	if got := projectNameOf(fakeCtx{dir: "/tmp/temp/billingService"}); got != "billingService" {
 		t.Fatalf("проект: got %q, want billingService", got)
 	}
 	// Регресс: worktree специалиста называется .wt-task-<проект>-<id>; без
 	// явного имени поиск шёл бы по несуществующему «проекту» (пустая выдача).
-	if got := projectNameOf(&FileOps{OutputDir: "/tmp/temp/.wt-task-billingService-T-01", Project: "billingService"}); got != "billingService" {
+	if got := projectNameOf(fakeCtx{dir: "/tmp/temp/.wt-task-billingService-T-01", project: "billingService"}); got != "billingService" {
 		t.Fatalf("явное имя проекта: got %q, want billingService", got)
 	}
-	if got := projectNameOf(&FileOps{OutputDir: "/tmp/temp/.wt-task-billingService-T-01"}); got != ".wt-task-billingService-T-01" {
+	if got := projectNameOf(fakeCtx{dir: "/tmp/temp/.wt-task-billingService-T-01"}); got != ".wt-task-billingService-T-01" {
 		t.Fatalf("worktree без явного имени: got %q, want .wt-task-billingService-T-01", got)
 	}
 	if got := projectNameOf(nil); got != "" {
-		t.Fatalf("нет Ops: got %q, want ''", got)
+		t.Fatalf("нет Ctx: got %q, want ''", got)
 	}
-	if got := projectNameOf(&FileOps{OutputDir: ""}); got != "" {
-		t.Fatalf("пустой OutputDir: got %q, want ''", got)
+	if got := projectNameOf(fakeCtx{dir: ""}); got != "" {
+		t.Fatalf("пустой рабочий каталог: got %q, want ''", got)
 	}
 
-	tool := &codeSearchTool{ops: &FileOps{OutputDir: ""}, searcher: &fakeSearcher{}}
+	tool := &SearchTool{Ctx: fakeCtx{dir: ""}, Searcher: &fakeSearcher{}}
 	out, _ := tool.Execute(map[string]any{"query": "тест"})
 	var m map[string]any
 	if json.Unmarshal(out, &m) != nil || m["status"] != "skipped" {
-		t.Fatalf("без OutputDir должен быть skipped, got %s", out)
+		t.Fatalf("без рабочего каталога должен быть skipped, got %s", out)
 	}
 }
 
@@ -204,9 +225,9 @@ func TestCodeSearchProjectName(t *testing.T) {
 // имени каталога worktree.
 func TestCodeSearchUsesExplicitProjectName(t *testing.T) {
 	fake := &fakeSearcher{}
-	tool := &codeSearchTool{
-		ops:      &FileOps{OutputDir: "/tmp/temp/.wt-task-billingService-T-01", Project: "billingService"},
-		searcher: fake,
+	tool := &SearchTool{
+		Ctx:      fakeCtx{dir: "/tmp/temp/.wt-task-billingService-T-01", project: "billingService"},
+		Searcher: fake,
 	}
 	if _, err := tool.Execute(map[string]any{"query": "тест"}); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -223,7 +244,7 @@ func TestCodeSearchLimitsFromEnv(t *testing.T) {
 	defer t.Setenv("RAG_MAX_RESULTS", "")
 	defer t.Setenv("RAG_READ_MAX_TOTAL", "")
 
-	fake := &fakeSearcher{results: []rag.SearchResult{{File: "a.go", Snippet: "x"}}}
+	fake := &fakeSearcher{results: []infrarag.SearchResult{{File: "a.go", Snippet: "x"}}}
 	tool := newCodeSearchTool(fake)
 	if _, err := tool.Execute(map[string]any{"query": "тест"}); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -235,7 +256,7 @@ func TestCodeSearchLimitsFromEnv(t *testing.T) {
 
 // Ветка поиска: явный параметр агента пробрасывается в RAG-поиск (Р-5/Р-6).
 func TestCodeSearchExplicitBranch(t *testing.T) {
-	fake := &fakeSearcher{results: []rag.SearchResult{
+	fake := &fakeSearcher{results: []infrarag.SearchResult{
 		{File: "server/api.go", StartLine: 3, EndLine: 9, Score: 0.9, Snippet: "func Handler()",
 			Branch: "ai/epic/ARCH-01", CommitSHA: "abcdef1234567890", ChunkID: "cid-1"},
 	}}
@@ -277,37 +298,37 @@ func TestCodeSearchExplicitBranch(t *testing.T) {
 // Без параметра branch ветка берётся из рабочего каталога агента (в тесте —
 // вне git → main), а результат кэшируется (git не дёргается на каждый вызов).
 func TestCodeSearchBranchAutoDetected(t *testing.T) {
-	fake := &fakeSearcher{results: []rag.SearchResult{{File: "a.go", Snippet: "x", Branch: "main"}}}
-	tool := newCodeSearchTool(fake) // OutputDir /tmp/temp/demo — вне git
+	fake := &fakeSearcher{results: []infrarag.SearchResult{{File: "a.go", Snippet: "x", Branch: "main"}}}
+	tool := newCodeSearchTool(fake) // рабочий каталог /tmp/temp/demo — вне git
 	if _, err := tool.Execute(map[string]any{"query": "тест"}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if fake.last.Branch != rag.MainBranch {
-		t.Fatalf("ветка вне git: got %q, want %s", fake.last.Branch, rag.MainBranch)
+	if fake.last.Branch != infrarag.MainBranch {
+		t.Fatalf("ветка вне git: got %q, want %s", fake.last.Branch, infrarag.MainBranch)
 	}
-	if tool.branch != rag.MainBranch {
+	if tool.branch != infrarag.MainBranch {
 		t.Fatalf("ветка не закэширована: %q", tool.branch)
 	}
 	if _, err := tool.Execute(map[string]any{"query": "ещё"}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if fake.last.Branch != rag.MainBranch {
+	if fake.last.Branch != infrarag.MainBranch {
 		t.Fatalf("повторный вызов: ветка %q", fake.last.Branch)
 	}
 }
 
 // Определение ветки инструмента — hermetic-тест через настоящий git-каталог не
-// требуется: достаточно проверить, что инструмент не падает без OutputDir.
+// требуется: достаточно проверить, что инструмент не падает без рабочего каталога.
 func TestCodeSearchBranchWithoutOutputDir(t *testing.T) {
-	tool := &codeSearchTool{searcher: &fakeSearcher{}}
-	if got := tool.detectBranch(); got != rag.MainBranch {
-		t.Fatalf("без OutputDir ожидалась main, got %q", got)
+	tool := &SearchTool{Searcher: &fakeSearcher{}}
+	if got := tool.detectBranch(); got != infrarag.MainBranch {
+		t.Fatalf("без рабочего каталога ожидалась main, got %q", got)
 	}
 }
 
 // Результат без коммита (проект вне git) печатает прочерк, а не пустую строку.
 func TestCodeSnippetHeaderNoCommit(t *testing.T) {
-	h := codeSnippetHeader(rag.SearchResult{File: "a.go", Branch: "main"})
+	h := codeSnippetHeader(infrarag.SearchResult{File: "a.go", Branch: "main"})
 	if h != "[Файл: a.go | Ветка: main | Коммит: -]" {
 		t.Fatalf("шапка без коммита: %q", h)
 	}

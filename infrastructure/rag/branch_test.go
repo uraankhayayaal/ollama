@@ -10,7 +10,7 @@ import (
 // withGit подменяет git-вызовы на детерминированный fake: отвечает по
 // подстроке аргументов команды. Возвращает счётчик вызовов для проверки, что
 // определение версии кэшируется вызывающей стороной и не дёргает git на каждый
-// поиск (в tools ветка кэшируется в codeSearchTool).
+// поиск (в tools ветка кэшируется в rag.SearchTool).
 func withGit(t *testing.T, branch, commit string, brErr, cmErr error) *int {
 	t.Helper()
 	calls := 0

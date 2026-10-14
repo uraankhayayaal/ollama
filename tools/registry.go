@@ -4,11 +4,28 @@ import (
 	"fmt"
 
 	"ai/tools/git"
+	"ai/tools/rag"
 )
 
 // ResolveGitConflicts — имя инструмента в реестре; каноническое значение
 // и реализация вынесены в подпакет ai/tools/git (E6e1).
 const ResolveGitConflicts = git.ResolveToolName
+
+// CodeSearch и RagIndexStatus — имена RAG-инструментов; канонические значения и
+// реализация вынесены в подпакет ai/tools/rag (E6b).
+const (
+	CodeSearch     = rag.CodeSearch
+	RagIndexStatus = rag.IndexStatus
+)
+
+// ragCtx приводит файловый контекст к rag.Context (nil-безопасно: nil FileOps →
+// nil интерфейс, а не «typed nil», чтобы инструменты корректно деградировали).
+func ragCtx(ops *FileOps) rag.Context {
+	if ops == nil {
+		return nil
+	}
+	return ops
+}
 
 // Set — набор инструментов, выбранных агентом из общего реестра.
 // Агент держит его в себе и использует для трёх вещей:
@@ -150,9 +167,9 @@ func newTool(name string, deps Deps) Tool {
 	case LspHover:
 		return &lspHoverTool{ops: deps.FileOps}
 	case CodeSearch:
-		return &codeSearchTool{ops: deps.FileOps, searcher: deps.RAG}
+		return &rag.SearchTool{Ctx: ragCtx(deps.FileOps), Searcher: deps.RAG}
 	case RagIndexStatus:
-		return &ragIndexStatusTool{ops: deps.FileOps, searcher: deps.RAG}
+		return &rag.StatusTool{Ctx: ragCtx(deps.FileOps), Searcher: deps.RAG}
 	case DetectStack:
 		return &stackTool{ops: deps.FileOps}
 	case WebSearch:

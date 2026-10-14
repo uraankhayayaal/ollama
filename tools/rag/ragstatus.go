@@ -1,4 +1,4 @@
-package tools
+package rag
 
 // Инструмент RagIndexStatus — статус RAG-индекса проекта (см.
 // PLAN-2026-09-24-done-architect-intelligence.md, Ф-1/Р-2).
@@ -13,27 +13,26 @@ package tools
 // CodeSearch); шаг не падает.
 
 import (
-	"ai/infrastructure/rag"
 	"context"
 	"encoding/json"
+
+	"ai/domain"
+	infrarag "ai/infrastructure/rag"
 )
 
-// RagIndexStatus — имя инструмента в реестре (см. registry.go newTool).
-const RagIndexStatus = "RagIndexStatus"
-
-// ragIndexStatusTool — обёртка инструмента RagIndexStatus в реестре.
-type ragIndexStatusTool struct {
-	// searcher — клиент RAG (нил — инструмент деградирует в skipped).
-	searcher RAGSearcher
-	// ops — файловый контекст: имя проекта берётся из положения OutputDir
-	// (temp/<имя>), чтобы считать чанки только своего проекта.
-	ops *FileOps
+// StatusTool — обёртка инструмента RagIndexStatus в реестре.
+type StatusTool struct {
+	// Searcher — клиент RAG (нил — инструмент деградирует в skipped).
+	Searcher Searcher
+	// Ctx — файловый контекст: имя проекта (явное или basename рабочего
+	// каталога), чтобы считать чанки только своего проекта. Читается лениво.
+	Ctx Context
 }
 
-func (t *ragIndexStatusTool) Name() string { return RagIndexStatus }
-func (t *ragIndexStatusTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name:        RagIndexStatus,
+func (t *StatusTool) Name() string { return IndexStatus }
+func (t *StatusTool) Definition() domain.ToolDefinition {
+	return domain.ToolDefinition{
+		Name:        IndexStatus,
 		Description: "Узнать статус векторной памяти (RAG) проекта: построен ли индекс и сколько чанков в нём. Полезно перед CodeSearch: если индекс не построен (indexed=false / status=skipped) — CodeSearch не найдёт ничего, читай файлы ReadMap/ReadFiles/LSP и предложи построить индекс.",
 		Parameters: map[string]any{
 			"type":                 "object",
@@ -43,32 +42,32 @@ func (t *ragIndexStatusTool) Definition() ToolDefinition {
 		},
 	}
 }
-func (t *ragIndexStatusTool) Execute(args map[string]any) ([]byte, error) { return t.exec(args) }
+func (t *StatusTool) Execute(args map[string]any) ([]byte, error) { return t.exec(args) }
 
 // exec возвращает JSON вида {"status":"ok","indexed":bool,"chunks":int}.
 // Все ветки возвращают JSON, ошибка Go используется только для внутренних
 // сбоев сериализации (единый стиль файловых инструментов).
-func (t *ragIndexStatusTool) exec(args map[string]any) ([]byte, error) {
-	if t.searcher == nil {
+func (t *StatusTool) exec(args map[string]any) ([]byte, error) {
+	if t.Searcher == nil {
 		return ragIndexStatusJSON(map[string]any{
 			"status":  "skipped",
 			"message": "векторная память RAG не подключена (нет клиента Qdrant) — используй ReadMap/ReadFiles, либо настрой QDRANT_ADDR и построй индекс командой 'go run . index <имя_проекта>'",
 		}), nil
 	}
 
-	project := projectNameOf(t.ops)
+	project := projectNameOf(t.Ctx)
 	if project == "" {
 		return ragIndexStatusJSON(map[string]any{
 			"status":  "skipped",
-			"message": "не определён проект (OutputDir не задан) — используй ReadMap/ReadFiles",
+			"message": "не определён проект (рабочий каталог не задан) — используй ReadMap/ReadFiles",
 		}), nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), ragSearchTimeout())
 	defer cancel()
 
-	if err := t.searcher.Ping(ctx); err != nil {
-		if rag.IsUnavailable(err) {
+	if err := t.Searcher.Ping(ctx); err != nil {
+		if infrarag.IsUnavailable(err) {
 			return ragIndexStatusJSON(map[string]any{
 				"status":  "skipped",
 				"message": err.Error() + " — используй ReadMap/ReadFiles",
@@ -77,9 +76,9 @@ func (t *ragIndexStatusTool) exec(args map[string]any) ([]byte, error) {
 		return ragIndexStatusJSON(map[string]any{"status": "error", "message": err.Error()}), nil
 	}
 
-	info, err := t.searcher.ProjectInfo(ctx, project)
+	info, err := t.Searcher.ProjectInfo(ctx, project)
 	if err != nil {
-		if rag.IsUnavailable(err) {
+		if infrarag.IsUnavailable(err) {
 			return ragIndexStatusJSON(map[string]any{
 				"status":  "skipped",
 				"message": err.Error() + " — используй ReadMap/ReadFiles",

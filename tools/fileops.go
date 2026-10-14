@@ -130,13 +130,28 @@ func (ops *FileOps) SetProjectName(name string) {
 // ProjectName — имя проекта для RAG: явное Project, иначе basename OutputDir
 // (temp/<имя> → "<имя>"; пустой OutputDir — "").
 func (ops *FileOps) ProjectName() string {
+	if ops == nil {
+		return ""
+	}
 	if name := strings.TrimSpace(ops.Project); name != "" {
 		return name
 	}
-	if ops == nil || ops.OutputDir == "" {
+	if ops.OutputDir == "" {
 		return ""
 	}
 	return filepath.Base(filepath.Clean(ops.OutputDir))
+}
+
+// WorkingDir — текущая рабочая директория файловых операций (OutputDir).
+// Ленивый nil-безопасный аксессор для инструментов, вынесенных в подпакеты
+// (tools/rag): OutputDir может меняться на лету (SetOutputDir при переходе
+// специалиста в worktree), поэтому подпакеты читают его через интерфейс, а не
+// запоминают значение при сборке набора инструментов.
+func (ops *FileOps) WorkingDir() string {
+	if ops == nil {
+		return ""
+	}
+	return ops.OutputDir
 }
 
 // allowed проверяет, разрешён ли файл (относительный slash-путь) областью

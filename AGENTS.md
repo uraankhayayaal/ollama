@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6e1 — каркас `infrastructure/`)
+## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
 Начат Этап 4 (`PLAN-2026-10-12-todo-clean-architecture.md`), разбит на срезы
 E1–E6 (таблица в разделе «Этап 4» плана). Срез **E1** закрыт: создан каталог
@@ -72,7 +72,16 @@ DecodeComments}`. **E6e1** закрыт (пользователь выбрал �
 `const ResolveGitConflicts = git.ResolveToolName`, `registry.go` собирает
 `&git.ResolveTool{…}`. Ключ к отсутствию цикла: `Tool`/`ToolDefinition` уже в
 `domain`/`domain/services`, под-пакет реализует `services.Tool` напрямую.
-Осталось: E6b (`tools/rag`), E6c (`tools/sandbox`), E6d (git-часть вне
+**E6b** закрыт: RAG-инструменты (`CodeSearch`/`RagIndexStatus`) вынесены в
+`ai/tools/rag` (package `rag`), инфра-RAG импортируется как `infrarag`; обратная
+зависимость от `FileOps` инвертирована интерфейсом
+`rag.Context{ProjectName; WorkingDir}` — обе величины читаются ЛЕНИВО
+(`SetProjectName`/`SetOutputDir` зовутся после сборки набора); в `tools` —
+алиасы `RAGSearcher`/`CodeSearch`/`RagIndexStatus`, `registry.go` собирает
+`&rag.SearchTool`/`&rag.StatusTool`; в `FileOps` добавлен `WorkingDir()`,
+nil-проверка `ProjectName` поправлена; тесты переехали в `tools/rag`, фолбэк
+имени проекта покрыт `tools/fileops_projectname_test.go`.
+Осталось: E6c (`tools/sandbox`), E6d (git-часть вне
 ResolveGitConflicts), E6e-остаток (`tools/lsp` и др.). Верификация: канонический
 набор (в него добавлены `./tools/...`, `./infrastructure/...`; убраны `./sandbox/`
 и `./board/`) зелёный, `-race` по `infrastructure/{llm,rag,git,sandbox}` чист,
@@ -88,7 +97,8 @@ ResolveGitConflicts), E6e-остаток (`tools/lsp` и др.). Верифик�
 `makefile-contract.md`, `troubleshooting.md`, `adding-a-feature.md`,
 `development.md`, `testing.md`), канонический набор и примечание в этом файле.
 Коммиты E1 (`4279c9f`), E2 (`2e71139`), E3 (`3e01f8f`), E4 (`ab39ad6`),
-E5 (`91ca525`), E6a (`1f87352`) сделаны; E6e1 — коммитится следом.
+E5 (`91ca525`), E6a (`1f87352`), E6e1 (`c78f039`) сделаны; E6b — коммитится
+следом.
 
 ## Состояние последней сессии (Clean Architecture Этап 3, срез C6 — полная миграция planner)
 
