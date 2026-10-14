@@ -124,6 +124,7 @@
 | `application/ask/` | Структурированный вопрос ассистента (`AskUser`): разбор/валидация пачки вопросов (`ParseQuestions`), состояние одного активного вопроса (блокирующий цикл `AskUser`↔`AnswerAsk`, `Pending`), протокол ответов (`Summarize`); порт `Announcer` |
 | `application/logs/` | Панель логов (Logboard): сбор `*.log` файлов проекта (`CollectFiles`), отбор «своих» из общего каталога и дедупликация (`CollectProject`), чтение хвоста с ограничением `MaxBytes` (`ReadTail`), типы `Entry`/`Response`; разбор кнопкой «Разобрать» (`BuildAnalysis`/`PickFiles`/`DigestPrompt`, `Cooldown`, `analysis.go`) |
 | `application/chatassist/` | Политика диалога чат-ассистента: распознавание согласия (`ConfirmAffirmative`/`BareConfirm`), вопроса (`AsksSomething`), смены темы (`PrevUserDiffers`), «отчёта о записи на доске» (`LooksLikeBoardWriteClaim`), сводка structured-вопроса (`AskSummary`) и антизацикливающая подсказка `ActionAnchor` |
+| `application/board/` | Read-model доски: сборка упорядоченного снимка (`View` — эпики в эффективном порядке очереди через `infrastructure/board.SortEpics`, задачи, баги, meta), пагинация со счётчиками (`ViewPage`/`SlicePage`), `TruncateText`, типы `Snapshot`/`Total`, порт `Store` |
 | `application/hitl/` | HITL-затвор (подтверждение эпиков/задач человеком): `Gate.Wait` (событие затвора + статус `waiting`, блокировка до решения/отмены), `Gate.Approve`, `Gate.State`, `Gate.Reset`, тип `GateEvent`; порт `GateHost` (`Stopped`/`Running`/`BroadcastStatus`/`PublishGate`) |
 
 ### Сервер и веб — `server/`, `web/`

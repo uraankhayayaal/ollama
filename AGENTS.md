@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3x — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3y — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -609,6 +609,29 @@ approve, отказ, отмена контекста → `Reset`, останов
 `docs/00-overview/project-map.md` (новая строка `application/hitl/`). Остаток
 Этапа 6 — F3+: read-model доски в `server/session.go`, `server`-хендлеры.
 Коммит F3x `a0c9eb3`.
+
+Срез **F3y** — read-model доски вынесен из `server/session.go` в новый пакет
+**`application/board`** (`view.go`): `View` (сборка снимка — эпики в эффективном
+порядке очереди через `infrastructure/board.SortEpics`, задачи, баги, meta),
+`ViewPage` (пагинация + полные `Total`-счётчики), `SlicePage[T]`,
+`TruncateText`, типы `Snapshot`/`Total`, порт `Store`
+(`ListEpics`/`ListTasks`/`ListBugReports`/`GetMeta`). Git-статус проекта в снимок
+НЕ входит (презентация git-flow завязана на реестр — остаётся на сервере).
+`server/session.go`: `boardSnapshot` теперь встраивает `appboard.Snapshot` и
+добавляет поле `Git *gitView`; `boardView`/`boardViewPage` — тонкие обёртки,
+`truncateText` делегирует `appboard.TruncateText`; серверные типы
+`boardTotal`/`slicePage` удалены (переехали). Тесты: новые герметичные
+`application/board/view_test.go` (`fakeStore`: порядок эпиков по приоритету,
+проброс ошибки, полный снимок + пагинация/offset/beyond, `SlicePage`,
+`TruncateText`); серверные `boardpage_test.go` (зовёт
+`boardView`/`boardViewPage`) / `chatassist_test.go` / `gitflow_mr_test.go` /
+`injections_api_test.go` / `server_test.go` (тип `boardSnapshot`) не менялись.
+Верификация: канонический набор зелёный (31 пакет; один прогон `./server/`
+упал на пред-существующем флаке — на повторе зелёный), `-race` по
+`application/board` чист, `gofmt` по правкам чист. Документация: план (шапка +
+таблица F3y + narrative), `docs/00-overview/project-map.md` (новая строка
+`application/board/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3y —
+ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

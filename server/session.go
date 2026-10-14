@@ -9,6 +9,7 @@ import (
 
 	"ai/agents/architect"
 	appask "ai/application/ask"
+	appboard "ai/application/board"
 	"ai/application/hitl"
 	applogs "ai/application/logs"
 	"ai/application/planner"
@@ -819,89 +820,37 @@ type statusEvent struct {
 	Gate   string `json:"gate,omitempty"`
 }
 
-// boardView собирает снимок доски (доска проекта или ErrNotFound-доска пуста).
-func boardView(ctx context.Context, store *board.Store) (boardSnapshot, error) {
-	epics, err := store.ListEpics(ctx)
-	if err != nil {
-		return boardSnapshot{}, err
-	}
-	// Порядок по умолчанию — ListEpics (по ID); приводим к эффективному порядку
-	// очереди лидов (фаза → приоритет → sequence_order → task_id). Так строки
-	// доски идут ровно в том порядке, в каком эпики берёт оркестратор, и
-	// перетаскивание строк меняет реальную очередь.
-	board.SortEpics(epics)
-	tasks, err := store.ListTasks(ctx)
-	if err != nil {
-		return boardSnapshot{}, err
-	}
-	bugs, err := store.ListBugReports(ctx)
-	if err != nil {
-		return boardSnapshot{}, err
-	}
-	meta, _ := store.GetMeta(ctx)
-	return boardSnapshot{Meta: meta, Epics: epics, Tasks: tasks, Bugs: bugs}, nil
-}
-
-// boardSnapshot — полный снимок доски для REST/SSE.
+// boardSnapshot — полный снимок доски для REST/SSE: read-model из
+// application/board плюс git-статус проекта (презентация git-flow, завязанная
+// на реестр проектов, поэтому остаётся на сервере).
 type boardSnapshot struct {
-	Meta  *board.Meta        `json:"meta,omitempty"`
-	Epics []*board.Epic      `json:"epics"`
-	Tasks []*board.Task      `json:"tasks"`
-	Bugs  []*board.BugReport `json:"bugs"`
-	Total *boardTotal        `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
+	appboard.Snapshot
 	// Git — git-статус проекта (ветки/MR эпиков и задач, Ф-5). Только для
 	// git-проектов с созданными ветками; иначе nil.
 	Git *gitView `json:"git,omitempty"`
 }
 
-// boardTotal — полные счётчики доски (когда снимок ограничен limit/offset).
-type boardTotal struct {
-	Epics int `json:"epics"`
-	Tasks int `json:"tasks"`
-	Bugs  int `json:"bugs"`
-}
-
-// boardViewPage ограничивает снимок доски страницей (limit/limit+offset=0 —
-// полный снимок) и дополняет его полными счётчиками.
-func boardViewPage(ctx context.Context, store *board.Store, limit, offset int) (boardSnapshot, error) {
-	v, err := boardView(ctx, store)
+// boardView собирает снимок доски (read-model — application/board).
+func boardView(ctx context.Context, store *board.Store) (boardSnapshot, error) {
+	snap, err := appboard.View(ctx, store)
 	if err != nil {
 		return boardSnapshot{}, err
 	}
-	total := &boardTotal{Epics: len(v.Epics), Tasks: len(v.Tasks), Bugs: len(v.Bugs)}
-	if limit <= 0 {
-		v.Total = total
-		return v, nil
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	v.Epics = slicePage(v.Epics, offset, limit)
-	v.Tasks = slicePage(v.Tasks, offset, limit)
-	v.Bugs = slicePage(v.Bugs, offset, limit)
-	v.Total = total
-	return v, nil
+	return boardSnapshot{Snapshot: snap}, nil
 }
 
-// slicePage возвращает подмножество [offset, offset+limit) из слайса любого типа.
-func slicePage[T any](in []T, offset, limit int) []T {
-	if offset >= len(in) {
-		return []T{}
+// boardViewPage ограничивает снимок доски страницей (read-model — application/board).
+func boardViewPage(ctx context.Context, store *board.Store, limit, offset int) (boardSnapshot, error) {
+	snap, err := appboard.ViewPage(ctx, store, limit, offset)
+	if err != nil {
+		return boardSnapshot{}, err
 	}
-	end := offset + limit
-	if end > len(in) {
-		end = len(in)
-	}
-	return in[offset:end]
+	return boardSnapshot{Snapshot: snap}, nil
 }
 
-// truncateText обрезает длинный текст для статусных сообщений.
-func truncateText(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
+// truncateText обрезает длинный текст для статусных сообщений (обёртка над
+// application/board.TruncateText).
+func truncateText(s string, n int) string { return appboard.TruncateText(s, n) }
 
 // injections лениво создаёт набор сессионных инъекций (нулевая сессия тоже
 // работоспособна: тесты и ранние стадии конструируют Session без newSession).

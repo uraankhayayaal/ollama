@@ -109,7 +109,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 (`ConfirmAffirmative`/`AskSummary`/`ActionAnchor`) вынесена в новый пакет
 `application/chatassist`; срез **F3x ✅** — HITL-затвор
 (`Epics`/`Tasks`/`Wait`/`Approve`/`Reset`) вынесен из `server/session.go` в новый
-пакет `application/hitl` (порт `GateHost`).
+пакет `application/hitl` (порт `GateHost`); срез **F3y ✅** — read-model доски
+(сборка упорядоченного снимка + пагинация) вынесен из `server/session.go` в новый
+пакет `application/board` (порт `Store`).
 Остальное (git-flow хуки, остальная оркестрация, RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -598,6 +600,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3v | Правка и презентация конфликтных файлов модели (`NewConflictView` — отбор остаточных маркеров + фрагмент больших файлов, `ApplyConflictFiles` — запись files/edits с проверкой уникальности `old`, `ConflictSafeRel`/`WithinDir` — безопасность пути, `IsConflictMarkerLine`/`ConflictRegion`) вынесены из `server/actions_resolve.go` в `application/gitflow` (`conflictfiles.go`); `server` оставил алиасы `ConflictEdit`/`conflictView` и тонкие обёртки | ✅ |
 | F3w | Детерминированная политика диалога чат-ассистента (`ConfirmAffirmative`/`BareConfirm`, `AsksSomething`, `PrevUserDiffers`, `LooksLikeBoardWriteClaim`, `AskSummary`, `ActionAnchor`) вынесена из `server/chatassist.go`/`server/actions.go` в новый пакет `application/chatassist` (`policy.go`); `server` оставил тонкие обёртки (`chatActionAnchor` читает историю и делегирует, `confirmAffirmative`/`looksLikeBoardWriteClaim`/`askSummary`) | ✅ |
 | F3x | HITL-затвор (`Epics`/`Tasks` — `Wait` c публикацией события/статуса и блокировкой до решения, `Approve` — разрешение/отказ, `Reset`, состояние `State`) вынесен из `server/session.go` в новый пакет `application/hitl` (`gate.go`, порт `GateHost`: `Stopped`/`Running`/`BroadcastStatus`/`PublishGate`); `Session` оставил адаптер эффектов и тонкие обёртки, `gateEvent` — алиас `hitl.GateEvent` | ✅ |
+| F3y | Read-model доски: сборка упорядоченного снимка (`View` — эпики в эффективном порядке очереди через `infrastructure/board.SortEpics`, задачи, баги, meta), пагинация со счётчиками (`ViewPage`/`SlicePage`), `TruncateText`, типы `Snapshot`/`Total` вынесены из `server/session.go` в новый пакет `application/board` (`view.go`, порт `Store`); `server` оставил `boardSnapshot` (встраивает `appboard.Snapshot` + `Git *gitView`) и тонкие обёртки | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -958,6 +961,19 @@ approve, отказ, отмена контекста → `Reset`, останов
 снятие «залежавшегося» решения, `Reset`); серверный
 `TestSessionSnapshotReplaysActiveGate` поправлен на `gateOf().State()`.
 Верификация: канонический набор зелёный (30 пакетов), `-race` по `application/hitl`
+чист, `gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3y ✅** — read-model доски вынесен из `server/session.go` в новый пакет
+`application/board` (`view.go`): `View` (эпики в эффективном порядке очереди
+через `infrastructure/board.SortEpics`, задачи, баги, meta), `ViewPage`
+(пагинация + полные `Total`-счётчики), `SlicePage[T]`, `TruncateText`, типы
+`Snapshot`/`Total`, порт `Store`. Git-статус проекта в снимок НЕ входит
+(презентация git-flow завязана на реестр — остаётся на сервере): `boardSnapshot`
+сервера встраивает `appboard.Snapshot` и добавляет `Git *gitView`. Тесты: новые
+герметичные `application/board/view_test.go` (`fakeStore`); серверные
+`boardpage_test.go`/`chatassist_test.go`/`gitflow_mr_test.go` не менялись.
+Верификация: канонический набор зелёный (31 пакет; один прогон `./server/` упал
+на пред-существующем флаке — на повторе зелёный), `-race` по `application/board`
 чист, `gofmt` по правкам чист. Доки: `project-map.md`.
 
 ## Ключевые решения
