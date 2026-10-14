@@ -9,7 +9,7 @@
 | Новый инструмент модели | `tools/` | `tools/registry.go:105` + реализация |
 | Новое поведение агента | `agents/<роль>/` | промпт + `tools.Select` |
 | Новый REST-эндпоинт | `server/` | `mux.HandleFunc` + хендлер |
-| Новый источник данных | `runner/`, `board/`, `infrastructure/rag/` | интерфейс + реализация |
+| Новый источник данных | `runner/`, `infrastructure/board/`, `infrastructure/rag/` | интерфейс + реализация |
 | Новый провайдер | `infrastructure/llm/` | интерфейс + `ResolveProvider` |
 | Новый фордж | `forges/` | реализация + саморегистрация в `init` |
 | Новый стек | `stackdetect/`, `tools/stacktool.go` | детектор + роли |
@@ -38,9 +38,9 @@ go test ./<пакет>/ -run TestNewFeature
 ### 4. Проверить
 
 ```bash
-go build . ./agents/... ./tools/ ./board/
-go vet   . ./agents/... ./tools/ ./board/
-go test  . ./agents/... ./tools/ ./board/
+go build . ./agents/... ./tools/ ./infrastructure/board/
+go vet   . ./agents/... ./tools/ ./infrastructure/board/
+go test  . ./agents/... ./tools/ ./infrastructure/board/
 gofmt -l <файлы-которые-вы-трогали>   # не `gofmt -l .`: см. ниже
 ```
 

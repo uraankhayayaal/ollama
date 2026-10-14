@@ -24,7 +24,7 @@ LLM_CURRENCY=у.е.     # подпись валюты (по умолчанию �
 
 ## Учёт по доске
 
-`board/tokens.go`:
+`infrastructure/board/tokens.go`:
 
 | Функция | Что делает |
 |---|---|

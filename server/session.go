@@ -9,7 +9,7 @@ import (
 
 	"ai/agents/architect"
 	"ai/application/planner"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/infrastructure/llm"
 	"ai/infrastructure/rag"

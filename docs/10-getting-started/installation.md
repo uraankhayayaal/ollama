@@ -6,7 +6,7 @@
 
 ```bash
 go version
-go build . ./agents/... ./tools/ ./board/
+go build . ./agents/... ./tools/ ./infrastructure/board/
 ```
 
 ## Docker
@@ -187,7 +187,7 @@ npm --prefix web install
 ## Проверка установки
 
 ```bash
-go build . ./agents/... ./tools/ ./board/ && echo BUILD_OK
+go build . ./agents/... ./tools/ ./infrastructure/board/ && echo BUILD_OK
 docker compose ps
 redis-cli -p 56379 ping
 curl -s -X POST http://localhost:11434/api/tags | head -c 200

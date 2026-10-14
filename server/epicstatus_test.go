@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // TestSetEpicStatusHumanHelpResumeCancel — REST-кнопки «Помощь человека»/

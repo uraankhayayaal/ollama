@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"

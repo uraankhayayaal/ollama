@@ -5,7 +5,7 @@
 package server
 
 import (
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/infrastructure/git"
 	"ai/logging"

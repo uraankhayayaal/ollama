@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/workspace"
 )

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"ai/agents/architect"
-	"ai/board"
+	"ai/infrastructure/board"
 
 	"github.com/alicebob/miniredis/v2"
 )

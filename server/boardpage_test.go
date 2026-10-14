@@ -10,7 +10,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // seedBoardPage заполняет доску miniredis'а эпиками/задачами/багами.

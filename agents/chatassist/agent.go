@@ -10,7 +10,7 @@ package chatassist
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"

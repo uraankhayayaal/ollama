@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // Простой E2E тест для проверки реализации плана

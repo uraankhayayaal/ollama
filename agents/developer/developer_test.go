@@ -2,7 +2,7 @@ package developer
 
 import (
 	"ai/agents/promptcheck"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/tools"
 	"os"

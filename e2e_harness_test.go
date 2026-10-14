@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/server"
 	"ai/tools"
 )

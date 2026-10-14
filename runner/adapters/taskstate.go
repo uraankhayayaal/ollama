@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"ai/application/usecases"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain"
 	"ai/logging"
 )

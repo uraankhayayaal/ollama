@@ -6,7 +6,7 @@ package tools
 // Единый источник определений — реестр (registry.go) и этот файл.
 
 import (
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/logging"

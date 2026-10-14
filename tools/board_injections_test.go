@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // Инъекции задачи задаются инструментом доски: это путь «пользователь в чате

@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/forges"
 	"ai/infrastructure/git"

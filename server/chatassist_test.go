@@ -3,7 +3,7 @@ package server
 import (
 	"ai/agents"
 	"ai/agents/chatassist"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/domain"
 	"ai/injections"

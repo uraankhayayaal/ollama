@@ -3,7 +3,7 @@
 ## Запуск
 
 ```bash
-go test . ./agents/... ./tools/ ./board/          # рабочий набор
+go test . ./agents/... ./tools/ ./infrastructure/board/          # рабочий набор
 go test ./infrastructure/rag/ ./runner/ ./server/ ./workspace/   # расширенный
 go test -race ./agents/... ./tools/               # с гонками
 go test -run TestName ./tools/                    # один тест
@@ -76,7 +76,7 @@ tool-calls — на них проверяется, что чат пошёл им
 | `application/planner/` | 17 | Волны, откат, контракт, step-gate, сжатие |
 | `infrastructure/rag/` | 10 | Версионирование по веткам, изоляция веток, идемпотентность индексации, перекрытие версий в выдаче |
 | `runner/` | 10 | Сжатие истории, адаптивный бюджет диагностик, автопочинка, переиндексация |
-| `board/` | 3 | Модель сущностей, переходы, токены, JSON-поля |
+| `infrastructure/board/` | 3 | Модель сущностей, переходы, токены, JSON-поля |
 | `workspace/` | 3 | Разрешение путей, project-конфигурация |
 | `acceptor/` | 3 | Стадии приёмки, make-приоритет, деградации |
 | `agents/architect/` | 1 | Парсинг бэклога, opportunities, round-trip в Summary |
@@ -135,9 +135,9 @@ directory`. В контейнере приёмки зеркало `make infra.<�
 ## Проверить перед коммитом
 
 ```bash
-go build . ./agents/... ./tools/ ./board/
-go vet   . ./agents/... ./tools/ ./board/
-go test  . ./agents/... ./tools/ ./board/
+go build . ./agents/... ./tools/ ./infrastructure/board/
+go vet   . ./agents/... ./tools/ ./infrastructure/board/
+go test  . ./agents/... ./tools/ ./infrastructure/board/
 npm --prefix web run build
 ```
 

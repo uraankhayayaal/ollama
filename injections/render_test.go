@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // Раньше подстановка {{env.*}} отдавала ЛЮБУЮ переменную окружения: проверено

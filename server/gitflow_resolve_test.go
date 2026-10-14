@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/projects"
 	"ai/workspace"

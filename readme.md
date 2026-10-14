@@ -55,9 +55,9 @@ go run . serve                             # Web UI на :8090
 ## Разработка
 
 ```bash
-go build . ./agents/... ./tools/ ./board/
-go vet   . ./agents/... ./tools/ ./board/
-go test  . ./agents/... ./tools/ ./board/
+go build . ./agents/... ./tools/ ./infrastructure/board/
+go vet   . ./agents/... ./tools/ ./infrastructure/board/
+go test  . ./agents/... ./tools/ ./infrastructure/board/
 npm --prefix web run build
 ```
 

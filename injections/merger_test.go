@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 func testRenderFn(content string, _ MergeContext) string { return content }

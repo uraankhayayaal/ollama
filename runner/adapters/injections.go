@@ -13,7 +13,7 @@ import (
 
 	"ai/agents"
 	"ai/application/usecases"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain"
 	"ai/injections"
 	"ai/logging"

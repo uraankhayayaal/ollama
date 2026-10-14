@@ -10,7 +10,7 @@ package server
 
 import (
 	"ai/acceptor"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/infrastructure/git"
 	"ai/logging"

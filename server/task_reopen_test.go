@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"ai/agents/architect"
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // driveTaskDone доводит задачу до done через свежее хранилище (без хуков

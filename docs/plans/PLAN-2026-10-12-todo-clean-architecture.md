@@ -39,7 +39,9 @@ Tools-порт вынесен в `domain/services/tools.go` (`Tool`/`ToolSet`/
 `sandbox` → `infrastructure/sandbox` (пакет `sandbox`), порт
 `domain/services.SandboxWorkspace`: `Result`/`Workspace` стали alias'ами
 канонических типов домена, поэтому `*LocalWorkspace`/`*DockerWorkspace`
-реализуют порт напрямую (assertion в `infrastructure/sandbox/port.go`).
+реализуют порт напрямую (assertion в `infrastructure/sandbox/port.go`). Срез
+**E5 ✅** — `board` → `infrastructure/board` (пакет `board`), 75 импортёров на
+`ai/infrastructure/board`.
 Разбивка этапа на срезы E1–E6 — в разделе «Этап 4» ниже.
 
 ## Проблема
@@ -308,7 +310,7 @@ infrastructure/   — реализации (llm, rag, git, sandbox, board)
 | **E2** | `rag` → `infrastructure/rag` (пакет `rag`), адаптер `rag.ProjectAdapter` к порту `services.RAGClient` | ✅ |
 | **E3** | `gitops` → `infrastructure/git` (пакет `git`), порт `services.GitOperations` реализуется `*git.Repo` напрямую | ✅ |
 | **E4** | `sandbox` → `infrastructure/sandbox` (пакет `sandbox`), порт `services.SandboxWorkspace` реализуется `*LocalWorkspace`/`*DockerWorkspace` напрямую через alias типов домена | ✅ |
-| **E5** | `board` → `infrastructure/board` (самый крупный: ~75 импортёров) | ⏳ |
+| **E5** | `board` → `infrastructure/board` (самый крупный: ~75 импортёров) | ✅ |
 | **E6** | Разбить `tools/` по доменам (`tools/lsp`, fileops/git/rag/board-подпакеты) и перевести их на `domain/services` вместо прямых импортов `ai/board`/`ai/rag`/`ai/sandbox`/`ai/infrastructure/git` | ⏳ |
 
 **E1 ✅ (каркас `infrastructure/`, `models` → `infrastructure/llm`).**
@@ -391,6 +393,18 @@ Stderr, ExitCode, TimedOut, ExitErr}`. Чтобы обойтись без ада
 канонический набор (`./sandbox/` заменён на `./infrastructure/...`) зелёный,
 `-race` по `infrastructure/sandbox` чист, `gofmt` по своим файлам чист.
 
+**E5 ✅ (`board` → `infrastructure/board`).** `git mv board infrastructure/board`,
+имя пакета сохранено (`board`); все 75 импортёров переведены на
+`ai/infrastructure/board` (`agents/{developer,chatassist,architect}`,
+`application/planner`, `injections`, `runner/adapters`, `server/*`, `tokens`,
+`tools/*`, `main.go`, `e2e_harness*`). Правка чисто механическая — меняется
+только путь импорта; `board.*`-квалификатор и поведение не тронуты (внутри
+пакета — прежние импорты `ai/domain`/`ai/domain/services`). Из канонического
+набора убран `./board/` (каталог входит в `./infrastructure/...`); в живых доках
+`board/` → `infrastructure/board/`. Верификация: канонический набор зелёный
+(`./application/planner` и `./infrastructure/board` — ok), `gofmt` по своим
+файлам чист.
+
 ### Этап 5: Рефакторинг агентов
 
 **Цель:** Устранить дублирование между специализациями агентов.
@@ -437,9 +451,9 @@ Stderr, ExitCode, TimedOut, ExitErr}`. Чтобы обойтись без ада
 После каждого этапа:
 
 ```bash
-go build . ./agents/... ./application/... ./tools/ ./board/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go vet . ./agents/... ./application/... ./tools/ ./board/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
-go test . ./agents/... ./application/... ./tools/ ./board/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go build . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go vet . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
+go test . ./agents/... ./application/... ./tools/ ./cmd/... ./server/ ./runner/ ./infrastructure/...
 ```
 
 Дополнительно:

@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/tokens"
 )
 

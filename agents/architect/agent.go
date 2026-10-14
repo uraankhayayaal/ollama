@@ -14,7 +14,7 @@ package architect
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain/services"
 	"ai/infrastructure/rag"
 	"ai/projects"

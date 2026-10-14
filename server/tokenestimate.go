@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/tokens"
 )
 

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 
 	"ai/agents/chatassist"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/infrastructure/llm"
 	"ai/infrastructure/rag"

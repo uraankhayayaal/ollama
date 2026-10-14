@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"ai/agents"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/runner"
 	"ai/tools"

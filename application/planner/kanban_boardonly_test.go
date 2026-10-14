@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"context"
 	"errors"

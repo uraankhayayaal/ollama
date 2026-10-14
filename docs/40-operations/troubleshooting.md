@@ -501,7 +501,7 @@ SANDBOX_UID=$(id -u) SANDBOX_GID=$(id -g) docker compose -f infrastructure/sandb
 исходным кодом. Используйте перечень без `./...`:
 
 ```bash
-go build . ./agents/... ./tools/ ./board/
+go build . ./agents/... ./tools/ ./infrastructure/board/
 ```
 
 ### `gofmt -l` показывает чужие файлы

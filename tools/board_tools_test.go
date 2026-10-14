@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"ai/board"
+	"ai/infrastructure/board"
 	"context"
 	"encoding/json"
 	"strings"

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/runner/adapters"
 	"ai/tools"
 

@@ -13,7 +13,7 @@ import (
 	"ai/agents/qaengineer"
 	"ai/application/planner"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/checkpoint"
 
 	// Blank-import регистрирует все встроенные провайдеры систем ревью

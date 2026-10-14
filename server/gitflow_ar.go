@@ -14,7 +14,7 @@ package server
 import (
 	"ai/acceptor"
 	"ai/application/planner"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/infrastructure/llm"
 	"ai/logging"

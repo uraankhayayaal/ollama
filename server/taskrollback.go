@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"strings"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/infrastructure/git"
 )

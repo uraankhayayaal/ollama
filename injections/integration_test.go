@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // TestApplyInjections_Integration проверяет полный пайплайн:

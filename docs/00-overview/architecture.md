@@ -85,7 +85,7 @@
 
 | Что | Где | Пакет | Зачем |
 |---|---|---|---|
-| Kanban-доска | Redis, `BOARD_REDIS_ADDR` | `board/` | Эпики, задачи, багрепорты |
+| Kanban-доска | Redis, `BOARD_REDIS_ADDR` | `infrastructure/board/` | Эпики, задачи, багрепорты |
 | Чекпоинты плана | Redis, `REDIS_ADDR` | `checkpoint/` | Статусы шагов для `--resume` |
 | История и события чата | Redis Streams | `chat/` | Живой чат в Web UI |
 | RAG-индекс | Qdrant, `QDRANT_ADDR` (gRPC) | `infrastructure/rag/` | Семантический поиск по коду |

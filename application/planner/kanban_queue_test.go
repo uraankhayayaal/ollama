@@ -4,7 +4,7 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/qaengineer"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain"
 	"ai/projects"
 	"ai/runner"

@@ -15,7 +15,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/workspace"
 	"github.com/alicebob/miniredis/v2"

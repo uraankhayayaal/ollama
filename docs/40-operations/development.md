@@ -15,17 +15,17 @@
 Рабочая тройка (обходит известный блокер в `temp/`):
 
 ```bash
-go build . ./agents/... ./tools/ ./board/
-go vet   . ./agents/... ./tools/ ./board/
-go test  . ./agents/... ./tools/ ./board/
+go build . ./agents/... ./tools/ ./infrastructure/board/
+go vet   . ./agents/... ./tools/ ./infrastructure/board/
+go test  . ./agents/... ./tools/ ./infrastructure/board/
 ```
 
 Расширенный набор (когда нужно проверить всё):
 
 ```bash
-go build ./agents/... ./tools/ ./board/ ./infrastructure/rag/ ./server/ ./workspace/
-go vet   ./agents/... ./tools/ ./board/ ./infrastructure/rag/ ./server/ ./workspace/
-go test  ./agents/... ./tools/ ./board/ ./infrastructure/rag/ ./server/ ./workspace/
+go build ./agents/... ./tools/ ./infrastructure/board/ ./infrastructure/rag/ ./server/ ./workspace/
+go vet   ./agents/... ./tools/ ./infrastructure/board/ ./infrastructure/rag/ ./server/ ./workspace/
+go test  ./agents/... ./tools/ ./infrastructure/board/ ./infrastructure/rag/ ./server/ ./workspace/
 ```
 
 > `go build ./...` падает на `temp/moon-distance/internal/middleware/cors.go`
@@ -67,7 +67,7 @@ gofmt -w <файл>
 | `runner/` | Агентский цикл: генерация, раунды, хуки, сжатие, автопочинка, переиндексация |
 | `infrastructure/llm/` | LLM-провайдеры: Ollama, YandexGPT, Trim, layered, `ModelLimits` |
 | `infrastructure/rag/` | RAG: чанки, индекс, поиск, ветки, Qdrant-клиент |
-| `board/` | Эпики, задачи, багрепорты, статусы, токены |
+| `infrastructure/board/` | Эпики, задачи, багрепорты, статусы, токены |
 | `server/` | Web UI: REST, WebSocket, git-flow, чат, логи, метрики |
 | `workspace/` | Реестр проектов, ветки, worktree |
 | `infrastructure/git/` | Обёртки над git: клон, ветки, worktree, diff, сабмодули |
@@ -76,7 +76,7 @@ gofmt -w <файл>
 | `stackdetect/` | Определение стека проекта |
 | `checkpoint/` | Чекпоинты плана в Redis |
 | `chat/` | История чата в Redis |
-| `board/`, `runmetrics/`, `tokens/` | Токены, метрики, цены |
+| `infrastructure/board/`, `runmetrics/`, `tokens/` | Токены, метрики, цены |
 | `projects/` | Конфиг проекта, `ProjectDir` |
 | `runctx/`, `runevents/` | Контекст цикла и события |
 | `web/` | Фронтенд React + TypeScript |
@@ -92,7 +92,7 @@ main.go / server/
       ↓
 agents/  runner/            ← оркестрация
       ↓
-tools/   infrastructure/rag/   board/      ← инструменты и хранилища
+tools/   infrastructure/rag/   infrastructure/board/      ← инструменты и хранилища
       ↓
 infrastructure/llm/  infrastructure/git/  forges/    ← внешний мир
 ```

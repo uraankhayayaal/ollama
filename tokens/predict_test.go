@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // fakeHistory — подставная доска для HistoryFromBoard.

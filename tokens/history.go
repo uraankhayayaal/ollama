@@ -10,7 +10,7 @@ package tokens
 import (
 	"context"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // HistoryStore — минимальный доступ к доске для сборки выборки (реализуется

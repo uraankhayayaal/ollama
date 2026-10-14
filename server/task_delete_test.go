@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // TestHandleDeleteTaskRest — Ф-3/Ф-4: удаление задачи с доски по REST

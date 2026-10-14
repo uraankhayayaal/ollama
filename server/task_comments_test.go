@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // Регрессия: PUT /tasks/{tid} с полем comments раньше молча терял комментарий —

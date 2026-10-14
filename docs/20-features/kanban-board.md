@@ -4,7 +4,7 @@
 разлагают их в задачи, специалисты выполняют и закрывают. Приёмка и QA
 регистрируют багрепорты.
 
-Пакет `board/`, модель данных — `board/entity.go`, хранилище — `board/store.go`.
+Пакет `infrastructure/board/`, модель данных — `infrastructure/board/entity.go`, хранилище — `infrastructure/board/store.go`.
 
 ## Настройка
 
@@ -53,11 +53,11 @@ BOARD_TTL=0            # 0 = без истечения; например 24h
 | `priority` | int | **Приоритет** (пересортировка строк доски): чем больше — тем раньше в очереди лидов; действует внутри фазы |
 | `TokenUsage` | struct | Учёт токенов |
 
-`FlexInt`/`FlexBool` (`board/entity.go:439-476`) принимают JSON-строку вместо
+`FlexInt`/`FlexBool` (`infrastructure/board/entity.go:439-476`) принимают JSON-строку вместо
 числа/булева — модели часто присылают `"1"`/`"true"`.
 
 > **Важно про `requires_review`:** при разборе JSON **отсутствующее поле
-> трактуется как `true`** (`board/entity.go:290-306`). Это защитный дефолт:
+> трактуется как `true`** (`infrastructure/board/entity.go:290-306`). Это защитный дефолт:
 > старые записи и эпики из чата требуют ревизии архитектора. Явно снимается
 > либо `submit_architecture_backlog`, либо `BoardUpdateEpic`.
 
@@ -88,11 +88,11 @@ BOARD_TTL=0            # 0 = без истечения; например 24h
 
 `architecture_summary` + `tasks[]` + `opportunities[]`.
 `Opportunity{target_role, suggestion}` — кросс-функциональная рекомендация
-(«эта задача создаёт работу для смежной роли»), `board/entity.go:149-162`.
+(«эта задача создаёт работу для смежной роли»), `infrastructure/board/entity.go:149-162`.
 
 ## Статусы и переходы
 
-### Задачи и эпики (`board/entity.go:32-150`)
+### Задачи и эпики (`infrastructure/board/entity.go:32-150`)
 
 Основная цепочка (Р-6) плюс боковая ветка «помощь человека»:
 
@@ -135,7 +135,7 @@ cancelled ◄─────┴────────────── из �
   (`KANBAN_MAX_ESCALATIONS`) тоже ведёт в `human_help` — с последней причиной
   в `pause_reason`.
 
-### Багрепорты (`board/entity.go:313-394`)
+### Багрепорты (`infrastructure/board/entity.go:313-394`)
 
 ```
 new ──► confirmed ──► fix ──► fixed
@@ -148,7 +148,7 @@ new ──► confirmed ──► fix ──► fixed
 
 ## Хуки
 
-`board/store.go:53-83` — колбэки, вызываемые **после** сохранения, вне
+`infrastructure/board/store.go:53-83` — колбэки, вызываемые **после** сохранения, вне
 блокировок. Ошибка git-шага не ломает переход статуса.
 
 | Хук | Что делает сервер |
@@ -184,7 +184,7 @@ new ──► confirmed ──► fix ──► fixed
 
 ## Токены
 
-`TokenUsage` встроен в Epic и Task (`board/entity.go:173-201`), дублирует
+`TokenUsage` встроен в Epic и Task (`infrastructure/board/entity.go:173-201`), дублирует
 данные из `tokens/scoped.go`:
 
 ```json
@@ -197,7 +197,7 @@ new ──► confirmed ──► fix ──► fixed
 ## Пересортировка эпиков (приоритет)
 
 Порядок строк доски = приоритет эпиков в очереди лидов. Единый компаратор
-`board.EpicLess` (`board/order.go`) использует и снимок доски (`boardView`
+`board.EpicLess` (`infrastructure/board/order.go`) использует и снимок доски (`boardView`
 сортирует строки), и оркестратор (`nextLeadEpic`, `phaseArchitect`,
 `blockingDependencyEpic`), поэтому «что видно» = «что берут в работу»:
 
@@ -211,7 +211,7 @@ new ──► confirmed ──► fix ──► fixed
 Ручная пересортировка — `POST /api/projects/<id>/epics/reorder`
 (`handleReorderEpics`, `server/server.go`), тело `{"order": ["EPIC-1", …]}`,
 первый ID получает наибольший приоритет (`Store.ReorderEpics`,
-`board/store.go:311`). Нюансы:
+`infrastructure/board/store.go:311`). Нюансы:
 
 - ревизию эпика **не** увеличивает (приоритет — не содержание, повторная
   декомпозиция лидом не нужна);

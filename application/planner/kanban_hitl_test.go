@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // recordingGate — HITL-затвор с задаваемыми решениями и журналом вызовов.

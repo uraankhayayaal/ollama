@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // TestReorderEpicsEndpoint — REST-пересортировка эпиков (Web UI: перетаскивание

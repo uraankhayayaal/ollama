@@ -8,7 +8,7 @@ import (
 
 	"ai/agents"
 	"ai/agents/architect"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"

@@ -7,7 +7,7 @@ package developer
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain/services"
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"

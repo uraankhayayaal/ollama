@@ -124,9 +124,9 @@ npm --prefix web run dev       # vite на :5173, проксирует /api на
 ## Проверить, что всё работает
 
 ```bash
-go build . ./agents/... ./tools/ ./board/   # сборка
-go vet . ./agents/... ./tools/ ./board/     # статический анализ
-go test . ./agents/... ./tools/ ./board/    # тесты
+go build . ./agents/... ./tools/ ./infrastructure/board/   # сборка
+go vet . ./agents/... ./tools/ ./infrastructure/board/     # статический анализ
+go test . ./agents/... ./tools/ ./infrastructure/board/    # тесты
 ```
 
 > `go build ./...` падает на артефактах в `temp/` (сгенерированные проекты) —

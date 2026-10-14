@@ -2,7 +2,7 @@ package runner
 
 import (
 	"ai/agents"
-	"ai/board"
+	"ai/infrastructure/board"
 	"ai/domain"
 	"ai/tools"
 	"context"

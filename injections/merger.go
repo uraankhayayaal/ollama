@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"ai/board"
+	"ai/infrastructure/board"
 )
 
 // MergeContext — контекст для применения инъекций: что сейчас в промпте и
