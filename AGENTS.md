@@ -630,8 +630,7 @@ approve, отказ, отмена контекста → `Reset`, останов
 упал на пред-существующем флаке — на повторе зелёный), `-race` по
 `application/board` чист, `gofmt` по правкам чист. Документация: план (шапка +
 таблица F3y + narrative), `docs/00-overview/project-map.md` (новая строка
-`application/board/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3y —
-ниже.
+`application/board/`). Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3y `991da8c`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
