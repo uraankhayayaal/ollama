@@ -98,7 +98,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 `DropEpicWorktreeLocked`) вынесен из `server/gitflow_auto.go` в
 `application/gitflow` (порт `WorktreeHost`); срез **F3s ✅** — политика
 синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`) вынесена
-из `server/ragref.go` в `application/rag` (порт `SyncSink`).
+из `server/ragref.go` в `application/rag` (порт `SyncSink`); срез **F3t ✅** —
+конкретные фоновые прогоны индексации (`RefJob`/`RefDiffJob`/`DirJob`) вынесены
+из `server/ragref.go`/`server/ragindex.go` в `application/rag` (`jobs.go`).
 Остальное (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) — в
 плане; разбивка в разделе «Этап 6» ниже.
 
@@ -582,6 +584,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3q | Разбор unified-диффа git (`Parse`/`Split`/`ParseBlock`/`PathOf`/`PrefixPath`, статусы `Added`/`Modified`/`Removed`/`Renamed`/`Submodule`, типы `FileEntry`/`Diff`) вынесен из `server/diff.go` в новый stdlib-only пакет `domain/diff`; `server` оставил git-вызовы (`branchDiff`/`gitProjectDiff`), кэш `cachedDiff` и алиасы | ✅ |
 | F3r | Жизненный цикл worktree задачи/эпика (`TaskWorktree` — создание worktree задачи + rebase на эпик + сабмодули, `EpicWorktree` — ленивый worktree релизной ветки эпика, `DropEpicWorktreeLocked` — снятие worktree эпика) вынесен из `server/gitflow_auto.go` в `application/gitflow` (`WorktreeManager`, порт `WorktreeHost`); `server` оставил адаптер `worktreeHost` и тонкие обёртки | ✅ |
 | F3s | Политика синхронизации рабочей копии агентов с main (`syncAgentBranchWithMain`: пропуск при грязном дереве/занятом checkout, откат конфликтного merge, признак сдвига HEAD) вынесена из `server/ragref.go` в `application/rag` (`WorkingCopySyncer`, порт `SyncSink`, `sync.go`); `server` оставил адаптер `syncSink` и тонкую обёртку | ✅ |
+| F3t | Конкретные фоновые прогоны индексации RAG (`RefJob` — содержимое ветки по ref, `RefDiffJob` — изменения ветки относительно базы, `DirJob` — каталог под его веткой; загрузка снапшота + пропуск актуального индекса + отчёт) вынесены из `server/ragref.go`/`server/ragindex.go` в `application/rag` (`jobs.go`); `server` оставил адаптеры загрузчиков/фабрики и тонкие обёртки `Index*Background` | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -855,6 +858,20 @@ worktree add`, worktree эпика — существующий/создание
 `server`. Тесты: новые герметичные `application/rag/sync_test.go` (пропуски
 пустой базы/ветки/nil repo, занятый checkout, грязное дерево, откат конфликта,
 сдвиг HEAD → true, без сдвига → false, сообщение merge). Верификация:
+канонический набор зелёный (28 пакетов), `-race` по `application/rag` чист,
+`gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3t ✅** — конкретные фоновые прогоны индексации RAG вынесены из
+`server/ragref.go`/`server/ragindex.go` в `application/rag/jobs.go`: `RefJob`
+(содержимое ветки по ref: загрузка снапшота, пропуск актуального индекса,
+`EnsureCollection` + `IndexProject`), `RefDiffJob` (изменения ветки относительно
+базы) и `DirJob` (каталог под заранее определённой веткой/коммитом). Порты —
+`RefLoader`/`DiffLoader` (`func`-типы) и `IndexSink` для отчётов. `server` оставил
+адаптеры (`loadRefItems`/`loadRefDiff` стали значениями `apprag.RefLoader`/
+`apprag.DiffLoader`, `ragIndexSink`) и тонкие обёртки `IndexRefBackground`/
+`IndexRefDiffBackground`/`IndexDirBackground`; `orEmpty` удалён (переехал как
+`orDash`). Тесты: новые герметичные `application/rag/jobs_test.go` (`RefJob` —
+полный прогон/пропуск/ошибка загрузчика, `RefDiffJob`, `DirJob`). Верификация:
 канонический набор зелёный (28 пакетов), `-race` по `application/rag` чист,
 `gofmt` по правкам чист. Доки: `project-map.md`.
 

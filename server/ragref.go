@@ -33,12 +33,9 @@ import (
 	"time"
 )
 
-// refItemsLoader — снапшот ветки по ref. Аргументы: git-исполнитель сервера,
-// каталог репозитория и имя ветки. Заменяется в hermetic-тестах.
-type refItemsLoader func(ctx context.Context, ex git.Executor, dir, ref string) (apprag.RefSnapshot, error)
-
-// loadRefItems — текущий загрузчик снапшота (пакетная переменная для тестов).
-var loadRefItems refItemsLoader = apprag.LoadRefItems
+// loadRefItems — текущий загрузчик снапшота ветки (пакетная переменная для
+// hermetic-тестов; порт apprag.RefLoader).
+var loadRefItems apprag.RefLoader = apprag.LoadRefItems
 
 // IndexRefBackground индексирует содержимое ветки проекта из git (по ref), а не
 // рабочую копию. Основной сценарий — главная ветка после merge эпика: без
@@ -55,26 +52,10 @@ func (sess *Session) IndexRefBackground(ctx context.Context, ref string) error {
 	}
 	dir := sess.projectDir()
 	ex := sess.srv.gitExec
+	job := apprag.RefJob{Project: sess.project, Dir: dir, Exec: ex, Loader: loadRefItems, Sink: ragIndexSink{sess: sess}}
 	return sess.startIndexBackground("ветка "+ref, ref,
 		func(bgctx context.Context, indexer apprag.Indexer) (*rag.IndexResult, string, bool, error) {
-			snap, err := loadRefItems(bgctx, ex, dir, ref)
-			if err != nil {
-				return nil, ref, false, err
-			}
-			skip, err := apprag.BranchIndexUpToDate(bgctx, indexer, sess.project, snap.Branch, snap.CommitSHA)
-			if err != nil || skip {
-				return &rag.IndexResult{}, snap.Branch, skip, err
-			}
-			sess.log.Infof("rag: фоновая индексация %s: ветка %s из git (%s), файлов %d, коммит %s",
-				sess.project, ref, dir, len(snap.Items), orEmpty(snap.CommitSHA))
-			if _, err := indexer.EnsureCollection(bgctx); err != nil {
-				return nil, ref, false, fmt.Errorf("подготовка коллекции: %w", err)
-			}
-			res, err := indexer.IndexProject(bgctx, sess.project, snap.Items, rag.IndexOptions{
-				Branch:    snap.Branch,
-				CommitSHA: snap.CommitSHA,
-			})
-			return res, snap.Branch, false, err
+			return job.Run(bgctx, indexer, ref)
 		})
 }
 
@@ -92,34 +73,16 @@ func (sess *Session) IndexRefDiffBackground(ctx context.Context, ref, base strin
 	}
 	dir := sess.projectDir()
 	ex := sess.srv.gitExec
+	job := apprag.RefDiffJob{Project: sess.project, Dir: dir, Base: base, Exec: ex, Loader: loadRefDiff, Sink: ragIndexSink{sess: sess}}
 	return sess.startIndexBackground("изменения ветки "+ref, ref,
 		func(bgctx context.Context, indexer apprag.Indexer) (*rag.IndexResult, string, bool, error) {
-			snap, err := loadRefDiff(bgctx, ex, dir, ref, base)
-			if err != nil {
-				return nil, ref, false, err
-			}
-			skip, err := apprag.BranchIndexUpToDate(bgctx, indexer, sess.project, snap.Branch, snap.CommitSHA)
-			if err != nil || skip {
-				return &rag.IndexResult{}, snap.Branch, skip, err
-			}
-			sess.log.Infof("rag: фоновая индексация %s: изменения ветки %s относительно %s (%s), файлов %d, коммит %s",
-				sess.project, ref, base, dir, len(snap.Items), orEmpty(snap.CommitSHA))
-			if _, err := indexer.EnsureCollection(bgctx); err != nil {
-				return nil, ref, false, fmt.Errorf("подготовка коллекции: %w", err)
-			}
-			res, err := indexer.IndexProject(bgctx, sess.project, snap.Items, rag.IndexOptions{
-				Branch:    snap.Branch,
-				CommitSHA: snap.CommitSHA,
-			})
-			return res, snap.Branch, false, err
+			return job.Run(bgctx, indexer, ref)
 		})
 }
 
-// loadRefDiff — загрузчик изменений ветки (инъекция для hermetic-тестов).
-var loadRefDiff refDiffLoader = apprag.LoadRefDiff
-
-// refDiffLoader — файлы, отличающиеся ref от base.
-type refDiffLoader func(ctx context.Context, ex git.Executor, dir, ref, base string) (apprag.RefSnapshot, error)
+// loadRefDiff — загрузчик изменений ветки относительно базы (инъекция для
+// hermetic-тестов; порт apprag.DiffLoader).
+var loadRefDiff apprag.DiffLoader = apprag.LoadRefDiff
 
 // --- Хуки поддержания индекса и рабочей копии в актуальном состоянии ---
 

@@ -126,19 +126,9 @@ func (sess *Session) IndexDirBackground(ctx context.Context, dir, what string) e
 	// Ветка/коммит определяются до запуска: они попадают в сообщение о старте,
 	// а каталог мог исчезнуть уже после (типовая гонка с очисткой temp/).
 	opts := rag.DetectIndexOptions(dir)
+	job := apprag.DirJob{Project: sess.project, Dir: dir, What: what, Opts: opts, Sink: ragIndexSink{sess: sess}}
 	return sess.startIndexBackground(what, opts.Branch,
 		func(bgctx context.Context, indexer apprag.Indexer) (*rag.IndexResult, string, bool, error) {
-			sess.log.Infof("rag: фоновая индексация %s (%s): обход %s (ветка %s, коммит %s)",
-				sess.project, what, dir, opts.Branch, orEmpty(opts.CommitSHA))
-			res, err := apprag.IndexProjectRAG(bgctx, indexer, sess.project, dir, opts)
-			return res, opts.Branch, false, err
+			return job.Run(bgctx, indexer)
 		})
-}
-
-// orEmpty — замена пустого значения (для логов).
-func orEmpty(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "-"
-	}
-	return s
 }

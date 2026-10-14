@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3s — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3t — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`domain/log`/`domain/diff`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -492,6 +492,30 @@ HEAD → true, без сдвига → false, текст merge). Верифик�
 (`refreshRagIndex*`/`syncAgentBranchAsync`/`afterMainChanged`), `server/
 session.go` (оркестрация/HITL/событийность), `chatassist`/`actions`/`server`.
 Коммит F3s `0ede388`.
+
+Срез **F3t** — конкретные фоновые прогоны индексации RAG вынесены из
+`server/ragref.go`/`server/ragindex.go` в `application/rag/jobs.go`: `RefJob`
+(содержимое ветки по ref: загрузка снапшота, пропуск актуального индекса
+`BranchIndexUpToDate`, `EnsureCollection` + `IndexProject`), `RefDiffJob`
+(изменения ветки относительно базы) и `DirJob` (каталог под заранее
+определённой веткой/коммитом, `IndexProjectRAG`). Порты — `RefLoader`/
+`DiffLoader` (`func`-типы) и `IndexSink` для отчётов; `orDash` вместо серверного
+`orEmpty`. `server/ragref.go` — `loadRefItems`/`loadRefDiff` стали значениями
+`apprag.RefLoader`/`apprag.DiffLoader`, `ragIndexSink` (лог проекта + чат);
+`IndexRefBackground`/`IndexRefDiffBackground`/`IndexDirBackground` — тонкие
+обёртки, собирающие job и запускающие через `startIndexBackground` (single-flight
+`BackgroundIndexer`). Тесты: новые герметичные `application/rag/jobs_test.go`
+(`RefJob` — полный прогон/пропуск актуального индекса/ошибка загрузчика,
+`RefDiffJob`, `DirJob` на реальном temp-каталоге); серверные
+`ragref_test.go`/`ragindex_test.go` не менялись (переопределяют
+`buildProjectIndexer`/`loadRefItems`/`loadRefDiff`). Верификация: канонический
+набор зелёный (28 пакетов), `-race` по `application/rag` чист, `gofmt` по
+правкам чист. Документация: план (шапка + таблица F3t + narrative),
+`docs/00-overview/project-map.md` (строка `application/rag/` расширена
+`RefJob`/`RefDiffJob`/`DirJob`/`jobs.go`). Остаток Этапа 6 — F3+: RAG-хуки
+(`refreshRagIndex*`/`syncAgentBranchAsync`/`afterMainChanged`), `server/
+session.go` (оркестрация/HITL/событийность), `chatassist`/`actions`/`server`.
+Коммита нет (спросить пользователя).
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
