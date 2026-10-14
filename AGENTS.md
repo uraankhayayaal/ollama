@@ -422,8 +422,7 @@ F3+: `server/session.go` (оркестрация/HITL/событийность),
 `application/logs/` расширена `BuildAnalysis`/`analysis.go`),
 `docs/20-features/chat-assistant.md` (разбор логов → `application/logs`).
 Остаток Этапа 6 — F3+: `server/session.go` (оркестрация/HITL/событийность),
-git-flow хуки, `chatassist`/`actions`/`diff`/`server`. Коммита нет (спросить
-пользователя).
+git-flow хуки, `chatassist`/`actions`/`diff`/`server`. Коммит F3p `856f451`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
