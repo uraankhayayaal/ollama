@@ -1,5 +1,5 @@
 // Оболочка: селектор воркспейса, HITL-затворы, чат+доска 30/70. React-канон
-// зеркалит server/session.go + runevents + chat/store.go (см. web/src/types.ts).
+// зеркалит server/session.go + infrastructure/runevents + infrastructure/chat/store.go (см. web/src/types.ts).
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
