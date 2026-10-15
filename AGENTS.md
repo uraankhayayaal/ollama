@@ -1,5 +1,32 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Этап 8 «Dependency Rule» завершён, срезы H1–H7)
+
+**Этап 8 завершён ✅** (`docs/plans/PLAN-2026-10-15-done-dependency-rule.md`):
+направления зависимостей приведены к `domain ← application ← infrastructure ←
+outer`; все application-пакеты теперь без прямых не-тестовых импортов
+`ai/{agents,tools,runner,server,chat,checkpoint,runevents,workspace,
+infrastructure/*,gitops,repositories}` — зависимости идут через домен/порты.
+Срезы и коммиты: **H1** `125286d` (порты LLM/агент, провайдеры без `Generate`,
+`domain/toolargs.go`, `usecases.NewEscalating`; `repositories/` удалён),
+**H2** `54441f3` (алиасы board→domain), **H4** `93d8efd` (`agents/factory`,
+порт `AgentFactory`), **H3a–H3c** `0b4d29a`/`113355e`/`2c64d9f` (gitflow/rag от
+`infrastructure/git|rag` через доменные типы, порты и хост-порты; `domain/
+{gitmerge,rag,ignore}.go`, `domain/services/{rag,git}.go`, `application/rag`,
+`application/gitflow/{worktreerepo,open}.go`), **H6a/H6b** `9f72a9e`/`5162301`
+(агенты без infra: `board.LoadConfig()`, git-WIP/RAG→`runner/adapters`,
+`services.Searcher`), **H5a–H5e** `751c664`/`1d5192b`/`671202f`/`cd27bfb`/
+`35181b0` (вторичные: `agents.Agent`→`services.Agent`, диалог Web UI→
+`domain/dialog.go`, чекпоинт→`domain/checkpoint.go`+порт `CheckpointStore`,
+репортёр→`domain/services/reporter.go`, реестр→`domain/workspace.go`),
+**H7** `e7b6671` (импортный гейт `deprule_test.go`/`make depgate`, доки).
+Правила: домен — stdlib-only; `application` — только домен + порты +
+shared-утилиты (`logging`, `projects`, `tokens`, `langdetect`); инфраструктура
+реализует порты; composition root — `main.go`. Верификация: канонический набор
+`go build|vet|test -count=1` зелёный (флак `TestChatAssistant*` — предсуществующий
+env-флак, в изоляции зелёный), `-race` по новым тестам чист, `gofmt` по правкам
+чист.
+
 ## Состояние последней сессии (Этап 7 «Разбиение крупных файлов» завершён, срезы G1–G4)
 
 **Этап 7 завершён ✅** (`docs/plans/PLAN-2026-10-15-done-split-large-files.md`):
