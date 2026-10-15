@@ -9,7 +9,7 @@
 package lspclient
 
 import (
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"ai/tools/binpath"
 	"fmt"
 	"os"

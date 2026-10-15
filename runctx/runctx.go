@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"ai/infrastructure/rag"
+	"ai/infrastructure/stackdetect"
 	"ai/runner"
-	"ai/stackdetect"
 	"ai/tools"
 	"ai/tools/lspclient"
 )

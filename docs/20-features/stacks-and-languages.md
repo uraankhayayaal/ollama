@@ -30,7 +30,7 @@
 
 ## Определение `kind`
 
-`stackdetect.DetectKind` (`stackdetect/stackdetect.go:30-49`) — по маркерам
+`stackdetect.DetectKind` (`infrastructure/stackdetect/stackdetect.go:30-49`) — по маркерам
 в корне, с фиксированным приоритетом:
 
 ```
@@ -82,7 +82,7 @@ Node может быть frontend-only — поэтому проверка ка�
 | Компонент | Что делает со стеком |
 |---|---|
 | Архитектор | Назначает `assigned_role` по `roles`; требует эпик Makefile при `makefile: true` |
-| Приёмка | Выбирает команды проверки по стеку (`acceptor/detect.go`) |
+| Приёмка | Выбирает команды проверки по стеку (`agents/acceptor/detect.go`) |
 | [Песочница](sandbox.md) | Выбирает образ: `golang:1.24`, `node:22`, `python:3.12`, `php:8.3-cli` |
 | [LSP](lsp.md) | Выбирает сервер по расширению файла, с фолбэком на стек |
 | [Ревью](code-review.md) | Определяет язык диффа для промпта ревьюера |
@@ -117,12 +117,12 @@ ls -d infra deploy ops tests test __tests__ spec e2e 2>/dev/null
 
 ## Добавить стек
 
-1. Добавить `Kind` в `stackdetect/stackdetect.go:15-19`.
+1. Добавить `Kind` в `infrastructure/stackdetect/stackdetect.go:15-19`.
 2. Добавить ветку в `DetectKind` (`:30-49`) с правильным приоритетом.
 3. Добавить кейс в `detectStackAt` (`tools/stacktool.go:81-160`): роли и
    маркеры.
 4. Обновить образ песочницы (`tools/sandbox.go:268-279`).
-5. Обновить `acceptor/detect.go` — команды проверки.
+5. Обновить `agents/acceptor/detect.go` — команды проверки.
 6. Обновить [эту таблицу](../30-reference/agent-tools.md) и
    [чеклист](../40-operations/adding-a-feature.md).
 

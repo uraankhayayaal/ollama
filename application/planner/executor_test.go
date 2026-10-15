@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/acceptor"
+	"ai/agents/acceptor"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/infrastructure/checkpoint"

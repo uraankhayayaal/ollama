@@ -9,12 +9,12 @@ func TestScopeMatcherAllow(t *testing.T) {
 		rel  string
 		want bool
 	}{
-		{"src/main.go", true},       // точное совпадение с файлом
-		{"internal/order/repo.go", true}, // файл внутри директории
-		{"internal/order", true},     // сама директория
+		{"src/main.go", true},             // точное совпадение с файлом
+		{"internal/order/repo.go", true},  // файл внутри директории
+		{"internal/order", true},          // сама директория
 		{"internal/order/sub/x.go", true}, // вложенный файл
-		{"src/other.go", false},      // соседний файл вне области
-		{"internal/misc.go", false},  // в другой папке internal
+		{"src/other.go", false},           // соседний файл вне области
+		{"internal/misc.go", false},       // в другой папке internal
 		{"internal/handlers.go", false},
 		{"go.mod", false},
 	}

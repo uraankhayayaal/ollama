@@ -1,8 +1,8 @@
 package server
 
 import (
-	"ai/forges"
 	"ai/infrastructure/chat"
+	"ai/infrastructure/forges"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
 	"ai/projects"

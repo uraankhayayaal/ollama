@@ -41,7 +41,7 @@
 | `qaengineer/` | QA-инженер: автотесты, баг-репорты |
 | `codereviewer/` | Код-ревью MR (GitLab/GitHub), `README.md` внутри |
 | `chatassist/` | Чат-ассистент Web UI, `ragcontext.go` |
-| `acceptor/` | Приёмка без LLM: `accept.go`, `config.go`, `detect.go` (автодетект + Makefile), `checks.go`, `run.go`, `lsp.go`, `report.go`, `plan.go` |
+| `agents/acceptor/` | Приёмка без LLM: `accept.go`, `config.go`, `detect.go` (автодетект + Makefile), `checks.go`, `run.go`, `lsp.go`, `report.go`, `plan.go` |
 | `planner/` | Планировщик и оркестрация: `planner.go`, `plan.go`, `executor.go`, `kanban.go`, `lspgate.go`, `project_map.go`, `ragcontext.go`, `tokens.go`, `plan_doc.go` |
 | `promptcheck/` | Проверка качества промптов |
 
@@ -153,7 +153,7 @@
 | Файл/папка | Назначение |
 |---|---|
 | `infrastructure/git/` | Git-изоляция: `gitops.go`, `merge.go`, `taskmerge.go`, `conflicts.go`, `submodule.go`, `count.go`, `cli.go` |
-| `forges/` | Реестр форджей (`registry.go`), интерфейс `Forge` (`forges.go`), `github/`, `gitlab/`, `local.go`, `scope.go`, `ignore.go` |
+| `infrastructure/forges/` | Реестр форджей (`registry.go`), интерфейс `Forge` (`forges.go`), `github/`, `gitlab/`, `local.go`, `scope.go`, `ignore.go` |
 | `infrastructure/board/` | `entity.go` (Epic/Task/BugReport, статусы, переходы), `store.go` (Redis), `tokens.go` |
 | `infrastructure/checkpoint/` | Чекпоинты плана в Redis |
 | `infrastructure/chat/` | Redis Streams: история чата и pub/sub |
@@ -163,9 +163,9 @@
 | `infrastructure/llm/` | LLM-провайдеры: `resolve.go` (выбор провайдера), `OllamaModel.go`, `OpenAIProvider.go`, `layered.go`, `ModelSettings.go`, `ports.go` (реализация `domain/services.LLMClient`). Бывший `models/` |
 | `logging/` | Файлы логов, `LOG_DIR` |
 | `langdetect/` | Определение языка по диффу (21 язык) |
-| `stackdetect/` | Определение стека по маркерам проекта |
+| `infrastructure/stackdetect/` | Определение стека по маркерам проекта |
 | `repositories/` | Клонированные репозитории |
-| `services/mrlistener/` | Слушатель новых MR (`listen`) |
+| `infrastructure/mrlistener/` | Слушатель новых MR (`listen`) |
 | `infrastructure/sandbox/` | `Dockerfile` и `compose.yaml` для образа песочницы |
 
 ## Связанное

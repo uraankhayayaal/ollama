@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 // hunkHeaderRe разбирает заголовок ханка: "@@ -a,b +c,d @@".

@@ -71,9 +71,9 @@ gofmt -w <файл>
 | `server/` | Web UI: REST, WebSocket, git-flow, чат, логи, метрики |
 | `infrastructure/workspace/` | Реестр проектов, ветки, worktree |
 | `infrastructure/git/` | Обёртки над git: клон, ветки, worktree, diff, сабмодули |
-| `forges/` | Форджи: GitHub, GitLab, local |
+| `infrastructure/forges/` | Форджи: GitHub, GitLab, local |
 | `langdetect/` | Определение языка диффа |
-| `stackdetect/` | Определение стека проекта |
+| `infrastructure/stackdetect/` | Определение стека проекта |
 | `infrastructure/checkpoint/` | Чекпоинты плана в Redis |
 | `infrastructure/chat/` | История чата в Redis |
 | `infrastructure/board/`, `infrastructure/runmetrics/`, `tokens/` | Токены, метрики, цены |
@@ -94,7 +94,7 @@ agents/  runner/            ← оркестрация
       ↓
 tools/   infrastructure/rag/   infrastructure/board/      ← инструменты и хранилища
       ↓
-infrastructure/llm/  infrastructure/git/  forges/    ← внешний мир
+infrastructure/llm/  infrastructure/git/  infrastructure/forges/    ← внешний мир
 ```
 
 Правило: **`tools` не знает про `server`**. Серверные мосты добавляются

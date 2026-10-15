@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"ai/infrastructure/git"
 	"ai/infrastructure/runmetrics"
 	"ai/infrastructure/workspace"

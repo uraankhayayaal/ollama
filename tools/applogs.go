@@ -40,7 +40,7 @@ import (
 	"syscall"
 	"time"
 
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 )
 
 // ReadAppLogs — имя инструмента чтения логов рантайма.

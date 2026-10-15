@@ -1,8 +1,8 @@
 package main
 
 import (
-	"ai/acceptor"
 	"ai/agents"
+	"ai/agents/acceptor"
 	"ai/agents/backendlead"
 	"ai/agents/codereviewer"
 	"ai/agents/developer"
@@ -20,15 +20,15 @@ import (
 
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
-	_ "ai/forges/all"
+	_ "ai/infrastructure/forges/all"
 	"ai/infrastructure/llm"
+	"ai/infrastructure/mrlistener"
 	"ai/infrastructure/rag"
 	"ai/infrastructure/runmetrics"
 	"ai/logging"
 	"ai/projects"
 	"ai/runctx"
 	"ai/server"
-	"ai/services/mrlistener"
 	"ai/tokens"
 	"ai/tools"
 	"context"

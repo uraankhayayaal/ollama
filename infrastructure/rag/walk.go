@@ -8,7 +8,7 @@
 package rag
 
 import (
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"os"
 	"path/filepath"
 	"regexp"

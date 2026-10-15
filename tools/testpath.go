@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"path/filepath"
 	"strings"
 )

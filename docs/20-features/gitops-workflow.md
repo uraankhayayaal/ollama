@@ -203,11 +203,11 @@ GITLAB_URL=...                  # адрес GitLab без завершающе�
 
 ## Merge Request
 
-Создаётся через форджи (`forges/registry.go`):
+Создаётся через форджи (`infrastructure/forges/registry.go`):
 
-- `forges/github` — GitHub (`GITHUB_TOKEN`).
-- `forges/gitlab` — GitLab (`GITLAB_TOKEN`, `GITLAB_URL`).
-- `forges/local` — локальный репозиторий без MR.
+- `infrastructure/forges/github` — GitHub (`GITHUB_TOKEN`).
+- `infrastructure/forges/gitlab` — GitLab (`GITLAB_TOKEN`, `GITLAB_URL`).
+- `infrastructure/forges/local` — локальный репозиторий без MR.
 
 `RemoteBuilder` используется для кнопки «Принять → MR» в HITL-режиме.
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"ai/tools"
 )
 

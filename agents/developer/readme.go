@@ -1,7 +1,7 @@
 package developer
 
 import (
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"ai/logging"
 	"fmt"
 	"os"

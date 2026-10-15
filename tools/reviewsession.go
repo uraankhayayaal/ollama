@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 // ReviewSession — разделяемое состояние цикла код-ревью, которое живёт между

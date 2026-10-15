@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 // Модели (особенно YandexGPT) иногда вместо вызова инструментов пишут

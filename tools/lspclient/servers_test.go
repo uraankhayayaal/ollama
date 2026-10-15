@@ -1,7 +1,7 @@
 package lspclient
 
 import (
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"go.lsp.dev/protocol"
 	"testing"
 )

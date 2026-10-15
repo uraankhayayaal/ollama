@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 // stubForge — минимальный Forge для проверки публикации замечаний.

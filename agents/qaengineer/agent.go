@@ -1,8 +1,8 @@
 package qaengineer
 
 import (
-	"ai/acceptor"
 	"ai/agents"
+	"ai/agents/acceptor"
 	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"

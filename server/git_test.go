@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
 	"ai/projects"

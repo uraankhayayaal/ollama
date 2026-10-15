@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"ai/tools/binpath"
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"

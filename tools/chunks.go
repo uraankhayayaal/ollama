@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 // SplitDiffChunks разбивает diff на чанки так, чтобы не разрезать ханк

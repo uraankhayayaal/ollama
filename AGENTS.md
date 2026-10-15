@@ -1,5 +1,28 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (вторая косметическая уборка корня)
+
+Ещё четыре корневых пакета разложены по слоям: `forges/` →
+`infrastructure/forges/`, `stackdetect/` → `infrastructure/stackdetect/`,
+`services/mrlistener/` → `infrastructure/mrlistener/` (каталог `services/` после
+этого опустел и удалён), `acceptor/` → `agents/acceptor/` (детерминированный
+агент-приёмщик). Пакеты только перемещены (`git mv`), имена не менялись;
+правлены пути импорта (`ai/<pkg>` → `ai/infrastructure/<pkg>`,
+`ai/services/mrlistener` → `ai/infrastructure/mrlistener`,
+`ai/acceptor` → `ai/agents/acceptor`) и порядок импортов (`gofmt -w`).
+Проверено: `forges`←domain+logging, `stackdetect` без ai-зависимостей,
+`mrlistener`←logging, `acceptor`←domain+sandbox+logging+stackdetect+tools
+(outer→outer + outer→infrastructure — не нарушает правило). Оставлены в корне:
+`logging/`, `projects/`, `tokens/`, `langdetect/` (shared-утилиты — от них зависит
+`application`), `runctx/` (outer-обвязка: импортирует `runner`+`tools`),
+`archive/` и `compress/` (не код модуля: скрач-каталоги). Верификация:
+канонический набор `go build|vet|test -count=1` зелёный (падают только
+предсуществующие host-флаки `TestAcceptBuild*` на GNU Make 3.81 и иногда
+`TestChatAssistant*` на живой модели), `-race` по `infrastructure/{forges,
+stackdetect,mrlistener}` чист, `gofmt` по правкам чист. Документация: живые доки
+(`architecture.md`, `project-map.md`, `20-features/*`, `40-operations/*`) —
+пути пакетов обновлены; исторические `PLAN-*-done-*.md` не трогались.
+
 ## Состояние последней сессии (косметическая уборка корня после Этапа 8)
 
 Шесть корневых инфраструктурных Go-пакетов перенесены под `infrastructure/`:
@@ -1001,7 +1024,10 @@ PLAN-2026-10-12, этап 3); предсуществовавшие падени�
 убран из перечня); `./infrastructure/{chat,checkpoint,injections,runevents,
 runmetrics,workspace}` — бывшие корневые `chat/`, `checkpoint/`, `injections/`,
 `runevents/`, `runmetrics/`, `workspace/` (косметический перенос после Этапа 8;
-`logs/` — не код, а каталог рантайм-логов, не переносился). `./tools/...` — с
+`logs/` — не код, а каталог рантайм-логов, не переносился); `./infrastructure/
+{forges,stackdetect,mrlistener}` — бывшие корневые `forges/`, `stackdetect/`,
+`services/mrlistener/`; `./agents/acceptor` — бывший корневой `acceptor/` (пакет
+`acceptor` — детерминированный агент-приёмщик). `./tools/...` — с
 под-пакетами `tools/git` (E6e1),
 `tools/lspclient`, `tools/binpath`. `./domain/...` — доменные пакеты с тестами
 (`domain/log`, `domain/diff`), добавлен на Этапе 6.

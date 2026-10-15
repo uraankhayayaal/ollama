@@ -7,7 +7,7 @@
 go run . review <URL_MR>
 ```
 
-Поддерживаются GitLab и GitHub (через `forges/`).
+Поддерживаются GitLab и GitHub (через `infrastructure/forges/`).
 
 ## Настройка
 
@@ -117,7 +117,7 @@ DB_FILENAME=discovered_mrs.txt  # файл-база уже известных MR
 POLL_INTERVAL=30s
 ```
 
-`services/mrlistener` — периодический опрос новых MR. База известных MR
+`infrastructure/mrlistener` — периодический опрос новых MR. База известных MR
 хранится в файле, поэтому повторно один и тот же MR не ревьюится.
 
 > Слушатель работает **только с GitLab** — по `GITLAB_URL` + `GITLAB_PROJECTS`.
@@ -131,8 +131,8 @@ POLL_INTERVAL=30s
 | `github` | `GITHUB_TOKEN` | То же для GitHub |
 | `local` | — | Локальный git без форджа (только чтение) |
 
-Реестр с саморегистрацией через `init` (`forges/registry.go:13-36`).
-Интерфейс `Forge` — `forges/forges.go:20-35`.
+Реестр с саморегистрацией через `init` (`infrastructure/forges/registry.go:13-36`).
+Интерфейс `Forge` — `infrastructure/forges/forges.go:20-35`.
 
 ## Определение языка
 

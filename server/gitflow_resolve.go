@@ -12,7 +12,7 @@
 package server
 
 import (
-	"ai/acceptor"
+	"ai/agents/acceptor"
 	"ai/application/gitflow"
 	"ai/domain"
 	"ai/infrastructure/chat"

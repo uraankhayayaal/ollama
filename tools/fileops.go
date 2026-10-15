@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"ai/logging"
 )
 

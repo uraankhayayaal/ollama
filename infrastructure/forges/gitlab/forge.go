@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strings"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"ai/logging"
 )
 

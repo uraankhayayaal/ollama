@@ -8,7 +8,7 @@
 package server
 
 import (
-	"ai/acceptor"
+	"ai/agents/acceptor"
 	"ai/application/gitflow"
 	"ai/application/planner"
 	"ai/application/usecases"

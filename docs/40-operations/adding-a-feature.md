@@ -11,8 +11,8 @@
 | Новый REST-эндпоинт | `server/` | `mux.HandleFunc` + хендлер |
 | Новый источник данных | `runner/`, `infrastructure/board/`, `infrastructure/rag/` | интерфейс + реализация |
 | Новый провайдер | `infrastructure/llm/` | интерфейс + `ResolveProvider` |
-| Новый фордж | `forges/` | реализация + саморегистрация в `init` |
-| Новый стек | `stackdetect/`, `tools/stacktool.go` | детектор + роли |
+| Новый фордж | `infrastructure/forges/` | реализация + саморегистрация в `init` |
+| Новый стек | `infrastructure/stackdetect/`, `tools/stacktool.go` | детектор + роли |
 
 ### 2. Реализовать
 

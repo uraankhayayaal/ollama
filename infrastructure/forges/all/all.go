@@ -5,12 +5,12 @@
 // Достаточно один раз (blank) импортировать этот пакет там, где нужна
 // фабрика, например в main:
 //
-//	import _ "ai/forges/all"
+//	import _ "ai/infrastructure/forges/all"
 //	...
 //	forge, err := forges.New(url, token)
 package all
 
 import (
-	_ "ai/forges/github"
-	_ "ai/forges/gitlab"
+	_ "ai/infrastructure/forges/github"
+	_ "ai/infrastructure/forges/gitlab"
 )

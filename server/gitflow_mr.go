@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"ai/application/gitflow"
-	"ai/forges"
 	"ai/infrastructure/board"
 	"ai/infrastructure/chat"
+	"ai/infrastructure/forges"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
 	"ai/logging"

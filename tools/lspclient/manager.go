@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 )
 
 // lspStart запускает клиент; подменяется в тестах (не стартует процессы).
@@ -36,11 +36,11 @@ type startCall struct {
 
 // Manager хранит активные клиенты. Потокобезопасен.
 type Manager struct {
-	mu        sync.Mutex
-	clients   map[string]*Client
-	lastUsed  map[string]time.Time
-	inflight  map[string]*startCall
-	lastReap  time.Time
+	mu       sync.Mutex
+	clients  map[string]*Client
+	lastUsed map[string]time.Time
+	inflight map[string]*startCall
+	lastReap time.Time
 }
 
 var (

@@ -9,7 +9,7 @@ package tools
 // детерминированный (hermetic).
 
 import (
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"encoding/json"
 	"os"
 	"path/filepath"

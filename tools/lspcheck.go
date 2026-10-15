@@ -12,7 +12,7 @@ package tools
 // проверки; пусто — проверка проекта (подпроекта) целиком.
 
 import (
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"ai/tools/binpath"
 	"encoding/json"
 	"fmt"

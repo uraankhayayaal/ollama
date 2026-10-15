@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"ai/domain/services"
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"ai/tools/lspclient"
 )
 

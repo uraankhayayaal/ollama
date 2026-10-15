@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 // config хранит параметры подключения, извлеченные из URL Pull/Merge Request.

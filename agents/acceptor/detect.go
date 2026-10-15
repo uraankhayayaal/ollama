@@ -1,7 +1,7 @@
 package acceptor
 
 import (
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"encoding/json"
 	"os"
 	"os/exec"

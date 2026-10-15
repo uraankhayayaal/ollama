@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"ai/tools/lspclient"
 )
 

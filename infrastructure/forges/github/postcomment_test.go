@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 func TestPostCommentFallbackToPRThread(t *testing.T) {

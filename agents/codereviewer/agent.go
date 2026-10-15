@@ -2,7 +2,7 @@ package codereviewer
 
 import (
 	"ai/agents"
-	"ai/forges"
+	"ai/infrastructure/forges"
 	"ai/langdetect"
 	"ai/logging"
 	"ai/tools"

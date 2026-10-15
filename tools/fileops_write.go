@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 
-	"ai/forges"
+	"ai/infrastructure/forges"
 )
 
 // DeleteParams соответствует JSON-параметрам инструмента DeleteFiles

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/stackdetect"
+	"ai/infrastructure/stackdetect"
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
