@@ -17,6 +17,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"ai/domain/services"
 )
 
 // EventType — тип события.
@@ -111,7 +113,7 @@ func NewRouter(sink Sink) *Router {
 }
 
 // WithAgent возвращает клон с установленным именем агента (общий sink).
-func (r *Router) WithAgent(name string) *Router {
+func (r *Router) WithAgent(name string) services.Reporter {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return &Router{agent: name, sink: r.sink}
@@ -121,7 +123,7 @@ func (r *Router) WithAgent(name string) *Router {
 // (Ф-2 PLAN-2026-09-19-done-epic-task-token.md): имя агента и sink сохраняются,
 // токены раундов помечаются этим scope. Пустой scope — расход без атрибуции
 // (счётчик проекта).
-func (r *Router) WithScope(scope string) *Router {
+func (r *Router) WithScope(scope string) services.Reporter {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return &Router{agent: r.agent, scope: scope, sink: r.sink}
@@ -177,28 +179,23 @@ func (r *Router) emit(ev Event) {
 	}
 }
 
-// reporterKey — тип ключа контекста для передачи Router.
-type reporterKey struct{}
-
-// WithReporter помещает Router в контекст (по образцу runner.WithResumeState).
-func WithReporter(ctx context.Context, r *Router) context.Context {
-	return context.WithValue(ctx, reporterKey{}, r)
+// WithReporter помещает репортёр в контекст (по образцу runner.WithResumeState).
+// Репортёр хранится как services.Reporter (Этап 8, H5d), чтобы application-слой
+// (planner) читал его через доменный порт, а не через outer-пакет.
+func WithReporter(ctx context.Context, r services.Reporter) context.Context {
+	return services.WithReporter(ctx, r)
 }
 
-// ReporterFromContext извлекает Router из контекста. nil, если не установлен.
-func ReporterFromContext(ctx context.Context) *Router {
-	if r, ok := ctx.Value(reporterKey{}).(*Router); ok {
-		return r
-	}
-	return nil
+// ReporterFromContext извлекает репортёр из контекста как services.Reporter.
+// nil, если не установлен.
+func ReporterFromContext(ctx context.Context) services.Reporter {
+	return services.ReporterFromContext(ctx)
 }
 
 // WithScope помечает атрибуцию токенов в контексте вызова Generate: вложенный
 // контекст несёт клон репортёра с заданным scope. Если репортёра в контексте
-// нет (консольный режим), контекст возвращается без изменений.
+// нет (консольный режим), контекст возвращается без изменений. Делегирует в
+// domain/services (единый ключ контекста).
 func WithScope(ctx context.Context, scope string) context.Context {
-	if r := ReporterFromContext(ctx); r != nil {
-		return WithReporter(ctx, r.WithScope(scope))
-	}
-	return ctx
+	return services.WithScope(ctx, scope)
 }

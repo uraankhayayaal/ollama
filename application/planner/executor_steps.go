@@ -11,7 +11,6 @@ import (
 	"ai/domain/services"
 	"ai/logging"
 	"ai/projects"
-	"ai/runevents"
 )
 
 // executeStep выполняет один шаг плана нужным агентом.
@@ -66,8 +65,8 @@ func (e *Executor) runCodingAgent(ctx context.Context, step *Step, projectName s
 	if agent == nil {
 		return nil, fmt.Errorf("неизвестный тип агента: %s", step.Agent)
 	}
-	if rep := runevents.ReporterFromContext(ctx); rep != nil {
-		ctx = runevents.WithReporter(ctx, rep.WithAgent(agentDisplayName(step.Agent)))
+	if rep := services.ReporterFromContext(ctx); rep != nil {
+		ctx = services.WithReporter(ctx, rep.WithAgent(agentDisplayName(step.Agent)))
 	}
 
 	// Ограничиваем инструменты агента областью работы шага: вне scope он не
@@ -278,8 +277,8 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 	e.clearRoundState(ctx, step)
 
 	leadCtx := ctx
-	if rep := runevents.ReporterFromContext(leadCtx); rep != nil {
-		leadCtx = runevents.WithReporter(leadCtx, rep.WithAgent(agentDisplayName(step.Agent)))
+	if rep := services.ReporterFromContext(leadCtx); rep != nil {
+		leadCtx = services.WithReporter(leadCtx, rep.WithAgent(agentDisplayName(step.Agent)))
 	}
 	resp, err := e.provider.Generate(leadCtx, lead)
 	if err != nil {
@@ -337,8 +336,8 @@ func (e *Executor) runLeadStep(ctx context.Context, step *Step, projectName stri
 		e.log.Infof("[задача %s] специалист %s выполняет: %s", ts.TaskID, truncateText(ts.AssignedRole, 30), truncateText(ts.Title, 60))
 		specCtx := ctx
 		specName := chatNameForSpec(spec, ts.AssignedRole)
-		if rep := runevents.ReporterFromContext(specCtx); rep != nil {
-			specCtx = runevents.WithReporter(specCtx, rep.WithAgent(specName))
+		if rep := services.ReporterFromContext(specCtx); rep != nil {
+			specCtx = services.WithReporter(specCtx, rep.WithAgent(specName))
 		}
 		resp, err := e.provider.Generate(specCtx, spec)
 		if err != nil {

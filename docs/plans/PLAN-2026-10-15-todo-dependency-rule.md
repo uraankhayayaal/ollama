@@ -63,7 +63,7 @@ Dependency Rule: внутренние слои импортируют внешн
 | H5a | `agents.Agent`→`services.Agent` (алиас) + planner без импорта `ai/agents` | ✅ |
 | H5b | `chat.Ask*`/`chat.Message`/`chat.Role*`→domain (`chat` алиасит) | ✅ |
 | H5c | `checkpoint`-порт (`planner` без `ai/checkpoint`) | ✅ |
-| H5d | `runevents.Reporter`-порт (`planner` без `ai/runevents`) | Ожидает |
+| H5d | `runevents.Reporter`-порт (`planner` без `ai/runevents`) | ✅ |
 | H5e | `workspace.Info`/`AddParams`/`Kind`→domain (`gitflow` без `ai/workspace`) | Ожидает |
 | H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
 
@@ -278,8 +278,19 @@ application-пакеты теперь без не-тестовых импорт�
 и передаёт в порт). Поведение не менялось — это чистый перенос типов и
 подмена конкретного типа на порт.
 
+Срез **H5d**: репортёр событий агентского цикла вынесен в доменный порт
+(`domain/services/reporter.go`): интерфейс `Reporter` (`WithAgent`/`WithScope`/
+`OnMessage`/`OnMessageDelta`/`OnToolStart`/`OnToolResult`/`OnTokens`/
+`OnAppLog`) + контекст-хелперы `WithReporter`/`ReporterFromContext`/`WithScope`
+(ключ контекста живёт в домене, чтобы сервер и планировщик делили его).
+`runevents.Router` реализует порт: `WithAgent`/`WithScope` теперь возвращают
+`services.Reporter`, а контекст-хелперы пакета делегируют в `domain/services`.
+`application/{planner,tokens}` переведены на `services.*` — `planner` больше не
+импортирует `ai/runevents`. Поведение не менялось (репортёр по-прежнему кладёт
+в контекст сервер и читает оркестратор; `runner` читает `services.Reporter`
+и присваивает в `usecases.Reporter`).
+
 Осталось по H5:
-- `runevents.Reporter`-порт → `domain/services` (контекст-хелперы + интерфейс).
 - `workspace.Info`/`AddParams`/`Kind` → domain-данные (реестр остаётся за
   портом `OpenRegistry`).
 

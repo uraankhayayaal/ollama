@@ -22,7 +22,6 @@ import (
 	"ai/domain/services"
 	"context"
 
-	"ai/runevents"
 	"ai/tokens"
 )
 
@@ -30,7 +29,7 @@ import (
 // атрибутируется этой единице и по нему записывается факт при завершении
 // (Ф-2). Пустой scope — расход без атрибуции (счётчик проекта).
 func (k *KanbanRunner) generate(ctx context.Context, scope string, a services.Agent) (*domain.AgentResponse, error) {
-	return k.provider.Generate(runevents.WithScope(ctx, scope), a)
+	return k.provider.Generate(services.WithScope(ctx, scope), a)
 }
 
 // finalizeTaskTokens фиксирует факт расхода токенов терминальной задачи:

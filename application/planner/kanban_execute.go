@@ -4,7 +4,6 @@ import (
 	"ai/application/usecases"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/runevents"
 	"ai/tokens"
 	"context"
 	"errors"
@@ -128,8 +127,8 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 
 		k.markActive(t.TaskID)
 		chatName := agentChatNameForKanban(specialist, t.Assignee)
-		if rep := runevents.ReporterFromContext(taskCtx); rep != nil {
-			taskCtx = runevents.WithReporter(taskCtx, rep.WithAgent(chatName))
+		if rep := services.ReporterFromContext(taskCtx); rep != nil {
+			taskCtx = services.WithReporter(taskCtx, rep.WithAgent(chatName))
 		}
 		resp, genErr := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
 		k.unmarkActive(t.TaskID)

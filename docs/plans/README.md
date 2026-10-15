@@ -52,7 +52,7 @@
 | [PLAN-2026-10-07-todo-harness-rework.md](PLAN-2026-10-07-todo-harness-rework.md) | Перестройка харнесса: архитектор → лиды (скелетон) → разработчики → тестировщик, статусы «На тестирование»/«Помощь человека», комментарии | В работе |
 | [PLAN-2026-10-12-todo-clean-architecture.md](PLAN-2026-10-12-todo-clean-architecture.md) | Рефакторинг по Clean Architecture: domain/application/interfaces/infrastructure, разрыв циклических зависимостей, устранение дублирования агентов | В работе (этапы 1–2; этап 3: run-типы/tokens в domain, loop.go/policy.go/compress.go в application) |
 | [PLAN-2026-10-15-done-split-large-files.md](PLAN-2026-10-15-done-split-large-files.md) | Этап 7: разбиение крупных файлов на логические под-файлы без изменения поведения | Выполнено |
-| [PLAN-2026-10-15-todo-dependency-rule.md](PLAN-2026-10-15-todo-dependency-rule.md) | Этап 8: Dependency Rule — направления зависимостей domain/application/infrastructure/outer | В работе (H1 ✅, H4 ✅, H3 ✅, H6 ✅, H5a–H5c ✅; далее H5d) |
+| [PLAN-2026-10-15-todo-dependency-rule.md](PLAN-2026-10-15-todo-dependency-rule.md) | Этап 8: Dependency Rule — направления зависимостей domain/application/infrastructure/outer | В работе (H1 ✅, H4 ✅, H3 ✅, H6 ✅, H5a–H5d ✅; далее H5e) |
 
 ## Что из планов важно знать
 
