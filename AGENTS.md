@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3ad — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6 завершён, срезы F1–F3ad — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -705,6 +705,12 @@ approve, отказ, отмена контекста → `Reset`, останов
 Документация: план (шапка + таблица F3ad + narrative),
 `docs/00-overview/project-map.md` (строка `application/chatassist/` расширена).
 Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3ad `e94f952`.
+
+**Этап 6 завершён ✅** — критерий выполнен: `server/` не содержит
+бизнес-логики; только маршрутизация, сериализация, авторизация и адаптеры.
+Срезы F1–F3ad закрыты. Остаток F3+ — server-хендлеры (HTTP-маршрутизация,
+сериализация, оркестрация сессий, мосты инструментов) — остаются в `server/`
+по дизайну. Коммит `f74a9ce`.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 
