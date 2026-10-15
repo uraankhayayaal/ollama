@@ -56,6 +56,20 @@ infrastructure), но внутри пакетов остались слишко�
 Проверено: канонический набор зелёный, число деклараций сохранено (63),
 `gofmt` по правкам чист.
 
-### G3: `application/planner/executor.go` → под-файлы по фазам
+### G3: `application/planner/executor.go` → под-файлы по фазам ✅
+
+Было: один файл `application/planner/executor.go` (1555 строк, 64 декларации).
+Стало:
+
+| Файл | Строк | Содержимое |
+|---|---|---|
+| `application/planner/executor.go` | 395 | ядро жизненного цикла: `Executor`/`NewExecutor`, сеттеры, `SetCheckpoint`/`MetricSink`, `Run`, `runWave`/`runOneStep`, чекпойнт-статусы (`markRunning`/`markDone`/`markFailed`/`persistStatus`), `parallelEnabled`/`planProject`/`toDomainTaskSpecs` |
+| `application/planner/executor_audit.go` | 186 | аудит/откат: `trackStepMetrics`/`metricScope`/`metricFloat`, `rollbackEnabled`/`contractAuditEnabled`, `auditContractStep`/`auditFileChanges`/`rollbackStep` |
+| `application/planner/executor_steps.go` | 397 | выполнение шагов: `executeStep`/`newStepAgent`, `runCodingAgent`, `runLeadStep`, `leadTaskPrompt`/`printDecomposedTasks`/`sortTaskSpecs` |
+| `application/planner/executor_state.go` | 127 | персистентность плана/раундов: `persistPlan`/`writePlan`, `clearRoundState`, `truncatedStepError`, `loadResumeState`/`persistRoundState` |
+| `application/planner/executor_acceptance.go` | 497 | приёмка: `runAcceptorAgent`, scope-хелперы (`acceptanceDir`/`topLevelScopeDir`/`leadStepScope`/`effectiveCreationScope`), `runAcceptanceLoop`/`planFixSteps`, `leadWithHint`/`leadHintAgent`, `fixStepID`/`uniqueSlash`/`bullet`/`findStep`/`chatNameForSpec` |
+
+Проверено: канонический набор зелёный (в т.ч. `application/planner` без
+базовых падений), число деклараций сохранено (64), `gofmt` по правкам чист.
 
 ### G4: `infrastructure/board/store.go` → под-файлы по сущностям

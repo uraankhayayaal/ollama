@@ -1,5 +1,25 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Этап 7 «Разбиение крупных файлов», срез G3 — `application/planner/executor.go`)
+
+Срез **G3**: `application/planner/executor.go` (1555 строк, 64 декларации)
+разрезан по фазам на пять файлов — `executor.go` (395: `Executor`/
+`NewExecutor`, сеттеры, `Run`/`runWave`/`runOneStep`, чекпойнт-статусы,
+`parallelEnabled`/`planProject`/`toDomainTaskSpecs`), `executor_audit.go` (186:
+`trackStepMetrics`/`metricScope`/`metricFloat`, `rollbackEnabled`/
+`contractAuditEnabled`, `auditContractStep`/`auditFileChanges`/`rollbackStep`),
+`executor_steps.go` (397: `executeStep`/`newStepAgent`/`runCodingAgent`/
+`runLeadStep`/`leadTaskPrompt`/`printDecomposedTasks`/`sortTaskSpecs`),
+`executor_state.go` (127: `persistPlan`/`writePlan`/`clearRoundState`/
+`truncatedStepError`/`loadResumeState`/`persistRoundState`),
+`executor_acceptance.go` (497: `runAcceptorAgent`/scope-хелперы/
+`runAcceptanceLoop`/`planFixSteps`/`leadWithHint`/`leadHintAgent`/
+`chatNameForSpec`). Верификация: канонический набор (`go build`/`go vet`/
+`go test -count=1`) зелёный (в т.ч. `application/planner` без падений), число
+деклараций сохранено (64), `gofmt` по правкам чист. Документация: план обновлён
+(G3 ✅). Остаток Этапа 7 — G4 (`infrastructure/board/store.go`). Коммита нет
+(спросить пользователя).
+
 ## Состояние последней сессии (Этап 7 «Разбиение крупных файлов», срез G2 — `tools/fileops.go`)
 
 Срез **G2**: `tools/fileops.go` (1707 строк, 63 декларации) разрезан по
