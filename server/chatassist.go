@@ -222,71 +222,16 @@ func looksLikeBoardWriteClaim(content string) bool {
 // запись стрима (добавлена handlePostChat перед вызовом) — пропускается: она
 // уже отдельно в «Вопрос пользователя». Возвращает "" — истории нет (пустой
 // диалог/ошибка чтения).
+// chatDialogueHistory — обёртка над application/chatassist.DialogueHistory
+// (Этап 6, срез F3ad): политика форматирования истории диалога переехала в
+// application/chatassist. Сигнатура сохранена для существующих вызовов/тестов.
 func (sess *Session) chatDialogueHistory(ctx context.Context) string {
-	const (
-		chatDialogueMaxTurns = 12  // сколько последних реплик передаём модели
-		chatDialogueMsgLen   = 400 // лимит символов на одну реплику
-		chatDialogueHistoryN = 40  // столько читаем из Redis (запас на фильтрацию)
-	)
-	hist, err := sess.chat.History(ctx, chatDialogueHistoryN)
-	if err != nil || len(hist) == 0 {
+	hist, err := sess.chat.History(ctx, appchatassist.DialogueHistoryN)
+	if err != nil {
 		return ""
 	}
-
-	// Порядок в hist хронологический (старые → новые), последняя запись —
-	// только что добавленное сообщение пользователя. Пропускаем её.
-	start := 0
-	if hist[len(hist)-1].Role == chat.RoleUser {
-		start = 1
-	}
-
-	var lines []string
-	for i := len(hist) - 1 - start; i >= 0; i-- {
-		if len(lines) >= chatDialogueMaxTurns {
-			break
-		}
-		m := hist[i]
-		switch m.Role {
-		case chat.RoleUser, chat.RoleAssistant:
-			if txt := strings.TrimSpace(m.Content); txt != "" {
-				speaker := "пользователь"
-				if m.Role == chat.RoleAssistant {
-					speaker = "ассистент"
-				}
-				lines = append(lines, "["+speaker+"] "+oneLine(txt, chatDialogueMsgLen))
-			}
-		case chat.RoleAsk:
-			if txt := askSummary(m.Ask); txt != "" {
-				lines = append(lines, "[ассистент] "+oneLine(txt, chatDialogueMsgLen))
-			}
-		case chat.RoleTool:
-			if txt := strings.TrimSpace(m.Content); txt != "" {
-				spyateli := "инструмент"
-				if m.Tool != "" {
-					spyateli = m.Tool + " →"
-				}
-				lines = append(lines, "["+spyateli+"] "+oneLine(txt, chatDialogueMsgLen))
-			}
-		}
-	}
-
-	// Собирали свежие → старые; разворачиваем в хронологический порядок.
-	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
-		lines[i], lines[j] = lines[j], lines[i]
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
+	return appchatassist.DialogueHistory(hist)
 }
-
-// oneLine сводит многострочный текст в одну строку (лимит символов).
-func oneLine(s string, n int) string {
-	return strings.ReplaceAll(truncateText(s, n), "\n", " ")
-}
-
-// askSummary — тонкая обёртка над application/chatassist.AskSummary.
-func askSummary(a *chat.Ask) string { return appchatassist.AskSummary(a) }
 
 // --- Якорь действия (антизацикливание) ---
 //

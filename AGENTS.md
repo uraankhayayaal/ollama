@@ -1,6 +1,6 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
-## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3ac — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
+## Состояние последней сессии (Clean Architecture Этап 6, срезы F1–F3ad — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
 адаптеры»; критерий — `server/` без бизнес-логики). Срез **F1** (коммит
@@ -693,6 +693,18 @@ approve, отказ, отмена контекста → `Reset`, останов
 таблица F3ac + narrative), `docs/00-overview/project-map.md` (строка
 `application/logs/` расширена `readslice.go`). Остаток Этапа 6 — F3+:
 `server`-хендлеры. Коммит F3ac `6bef367`.
+
+Срез **F3ad** — форматирование истории диалога вынесено из `server/chatassist.go`
+в `application/chatassist/dialogue.go`: `DialogueHistory` (последние реплики в
+хронологическом порядке, пропуск последней реплики пользователя, лимиты
+`DialogueMaxTurns`/`DialogueMsgLen`, роли user/assistant/ask/tool), `OneLine`.
+Серверный `chatDialogueHistory` стал тонкой обёрткой (читает историю из Redis,
+делегирует). Тесты: новые `application/chatassist/dialogue_test.go`; серверные
+`chatassist_test.go` не менялись. Верификация: канонический набор зелёный,
+`-race` по `application/chatassist` чист, `gofmt` по правкам чист.
+Документация: план (шапка + таблица F3ad + narrative),
+`docs/00-overview/project-map.md` (строка `application/chatassist/` расширена).
+Остаток Этапа 6 — F3+: `server`-хендлеры. Коммит F3ad — ниже.
 
 ## Состояние последней сессии (Clean Architecture Этап 4, срезы E1–E5 + E6a/E6b/E6e1 — каркас `infrastructure/`)
 

@@ -119,7 +119,9 @@ git (`LoadRefItems`/`LoadRefDiff`), сбор файлов каталога (`Col
 (позиция/remainder/отпечаток, ротация, рескан) вынесен из `server/logbroker.go` в
  новый пакет `application/logtail` (порт `Publish func(project, line)`); срез
 **F3ac ✅** — чтение хвоста лог-файла с grep/limit/truncation (`ReadLogSlice`)
-вынесено из `server/actions_logs.go` в `application/logs` (`readslice.go`).
+вынесено из `server/actions_logs.go` в `application/logs` (`readslice.go`); срез **F3ad ✅** — форматирование истории
+диалога для промпта (`DialogueHistory`/`OneLine`) вынесено из
+`server/chatassist.go` в `application/chatassist` (`dialogue.go`).
 Остальное (git-flow хуки, остальная оркестрация, RAG-хуки)
 — в плане; разбивка в разделе «Этап 6» ниже.
 
@@ -613,6 +615,7 @@ nil-безопасный `ragCtx(deps.FileOps)`. Тест `tools/codesearch_test
 | F3aa | Кольцевой буфер логов рантайма (`appLogBuffer`/`appLogLine`/`appLogBufferLines`/`appLogDefaultTail`/`appLogMaxTail`) вынесен из `server/applog.go` в `application/logs` (`RingBuffer`/`Line`/`BufferLines`/`DefaultTail`/`MaxTail`); `server` оставил адаптер `appLogBuffer` с методами `push`/`tail`/`takeDirty` | ✅ |
 | F3ab | Инкрементальный хвост лог-файлов проектов (`Broker`: позиция/remainder/отпечаток начала, детекция ротации — усечение/copytruncate или подмена содержимого, идемпотентная подписка, рескан новых файлов, `Run`/`Subscribe`/`Broadcast`/`Rescan`, `ListLogFiles`, `SubFile.OpenAtEnd`/`OpenFromStart`/`Rotated`/`ReadNew`/`Close`, `Line`) вынесен из `server/logbroker.go` в новый пакет `application/logtail` (порт `Publish func(project, line Line)`); `server/logbroker.go` оставил адаптер, публикующий строки в хаб | ✅ |
 | F3ac | Чтение хвоста лог-файла с grep/limit/truncation (`ReadLogSlice` — хвост файла, фильтр grep, лимит строк, обрезка по байтам, тип `Slice`) вынесено из `server/actions_logs.go` в `application/logs` (`readslice.go`); `server/actions_logs.go` оставил тонкую обёртку `readLogSlice` | ✅ |
+| F3ad | Форматирование истории диалога для промпта ассистента (`DialogueHistory` — последние реплики в хронологическом порядке, пропуск последней реплики пользователя, лимиты `DialogueMaxTurns`/`DialogueMsgLen`, `OneLine`, роли user/assistant/ask/tool) вынесено из `server/chatassist.go` в `application/chatassist` (`dialogue.go`); `server` оставил тонкую обёртку `chatDialogueHistory` | ✅ |
 | F3+ | Остальная бизнес-логика `server/` (git-flow хуки, сессии/оркестрация, остальные RAG-хуки) → `application`/`domain/services` | в плане |
 
 **F1 ✅** — `application/usecases/rollback.go` (`RollbackTarget`/`RollbackTask` +
@@ -1033,6 +1036,16 @@ approve, отказ, отмена контекста → `Reset`, останов
 менялись. Верификация: канонический набор зелёный (предсуществующий флак
 `TestChatAssistant*` на живом прогоне — в изоляции зелёный), `-race` по
 `application/logs` чист, `gofmt` по правкам чист. Доки: `project-map.md`.
+
+**F3ad ✅** — форматирование истории диалога вынесено из `server/chatassist.go` в
+`application/chatassist/dialogue.go`: `DialogueHistory` (последние реплики в
+хронологическом порядке, пропуск последней реплики пользователя, лимиты
+`DialogueMaxTurns`/`DialogueMsgLen`, роли user/assistant/ask/tool), `OneLine`.
+Серверный `chatDialogueHistory` стал тонкой обёрткой (читает историю из Redis,
+делегирует). Тесты: новые `application/chatassist/dialogue_test.go`; серверные
+`chatassist_test.go` не менялись. Верификация: канонический набор зелёный,
+`-race` по `application/chatassist` чист, `gofmt` по правкам чист. Доки:
+`project-map.md`.
 
 ## Ключевые решения
 
