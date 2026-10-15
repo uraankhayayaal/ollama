@@ -2,7 +2,7 @@ package runner
 
 import (
 	"ai/agents"
-	"ai/runevents"
+	"ai/infrastructure/runevents"
 	"ai/tools"
 	"context"
 	"testing"

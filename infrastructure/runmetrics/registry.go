@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"ai/runevents"
+	"ai/infrastructure/runevents"
 	"ai/tokens"
 )
 

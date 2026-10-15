@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	appchatassist "ai/application/chatassist"
-	"ai/chat"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
 	"ai/tools"
 )

@@ -10,9 +10,9 @@ import (
 	"testing"
 
 	"ai/application/usecases"
-	"ai/chat"
 	logpkg "ai/domain/log"
 	"ai/domain/services"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/llm"
 	"ai/runner"
 )

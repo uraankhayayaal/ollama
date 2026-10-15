@@ -19,9 +19,9 @@ import (
 	"strings"
 
 	"ai/application/usecases"
-	"ai/chat"
 	"ai/domain"
 	"ai/infrastructure/board"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
 )
 

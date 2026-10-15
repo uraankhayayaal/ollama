@@ -15,7 +15,7 @@ import (
 
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 
 	"github.com/alicebob/miniredis/v2"
 )

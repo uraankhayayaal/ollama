@@ -20,8 +20,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
-	"ai/chat"
 	"ai/infrastructure/board"
+	"ai/infrastructure/chat"
 	"ai/web"
 )
 

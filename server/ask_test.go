@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/chat"
+	"ai/infrastructure/chat"
 	"ai/runner"
 	"ai/tools"
 )

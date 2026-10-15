@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/chat"
 	"ai/infrastructure/board"
+	"ai/infrastructure/chat"
+	"ai/infrastructure/workspace"
 	"ai/logging"
-	"ai/workspace"
 )
 
 // handleGetBoard возвращает снимок доски (meta + epics + tasks + bugs).

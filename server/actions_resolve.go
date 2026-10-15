@@ -33,7 +33,7 @@ import (
 	"strings"
 
 	"ai/application/gitflow"
-	"ai/chat"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
 	"ai/tools"
 )

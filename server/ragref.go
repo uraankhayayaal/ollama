@@ -28,8 +28,8 @@ import (
 	apprag "ai/application/rag"
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
+	"ai/infrastructure/workspace"
 	"ai/logging"
-	"ai/workspace"
 	"time"
 )
 

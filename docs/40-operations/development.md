@@ -69,16 +69,16 @@ gofmt -w <файл>
 | `infrastructure/rag/` | RAG: чанки, индекс, поиск, ветки, Qdrant-клиент |
 | `infrastructure/board/` | Эпики, задачи, багрепорты, статусы, токены |
 | `server/` | Web UI: REST, WebSocket, git-flow, чат, логи, метрики |
-| `workspace/` | Реестр проектов, ветки, worktree |
+| `infrastructure/workspace/` | Реестр проектов, ветки, worktree |
 | `infrastructure/git/` | Обёртки над git: клон, ветки, worktree, diff, сабмодули |
 | `forges/` | Форджи: GitHub, GitLab, local |
 | `langdetect/` | Определение языка диффа |
 | `stackdetect/` | Определение стека проекта |
-| `checkpoint/` | Чекпоинты плана в Redis |
-| `chat/` | История чата в Redis |
-| `infrastructure/board/`, `runmetrics/`, `tokens/` | Токены, метрики, цены |
+| `infrastructure/checkpoint/` | Чекпоинты плана в Redis |
+| `infrastructure/chat/` | История чата в Redis |
+| `infrastructure/board/`, `infrastructure/runmetrics/`, `tokens/` | Токены, метрики, цены |
 | `projects/` | Конфиг проекта, `ProjectDir` |
-| `runctx/`, `runevents/` | Контекст цикла и события |
+| `runctx/`, `infrastructure/runevents/` | Контекст цикла и события |
 | `web/` | Фронтенд React + TypeScript |
 | `docs/` | Эта документация |
 | `temp/` | **Хранилище проектов агентов**, не исходный код |

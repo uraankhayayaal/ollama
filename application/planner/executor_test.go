@@ -2,9 +2,9 @@ package planner
 
 import (
 	"ai/acceptor"
-	"ai/checkpoint"
 	"ai/domain"
 	"ai/domain/services"
+	"ai/infrastructure/checkpoint"
 	"ai/projects"
 	"ai/runner"
 	"context"

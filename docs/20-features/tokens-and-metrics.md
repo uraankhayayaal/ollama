@@ -58,7 +58,7 @@ LLM_CURRENCY=у.е.     # подпись валюты (по умолчанию �
 ## Метрики агентского цикла
 
 `runmetrics.Registry` собирает события через `runevents.Reporter`
-(`runmetrics/registry.go:153-158`) и отдаёт снимок `Snapshot`
+(`infrastructure/runmetrics/registry.go:153-158`) и отдаёт снимок `Snapshot`
 (`:490`).
 
 ### Счётчики
@@ -85,7 +85,7 @@ LLM_CURRENCY=у.е.     # подпись валюты (по умолчанию �
 ### Гистограммы
 
 `run_tool_duration_seconds` (по инструментам), `run_step_duration_seconds`
-(по scope и step) — `runmetrics/prom.go:78-93`.
+(по scope и step) — `infrastructure/runmetrics/prom.go:78-93`.
 
 > **Лимит кардинальности:** при большом числе scope/агентов единицы
 > схлопываются в `scope=other`, а счётчик увеличивает `run_series_overflow`.
@@ -101,7 +101,7 @@ LLM_CURRENCY=у.е.     # подпись валюты (по умолчанию �
 | `POST` | `/api/projects/{id}/metrics/reset` | Сброс реестра |
 | `GET` | `/api/metrics/prom` | Prometheus exposition, `text 0.0.4` |
 
-Обработчики — `server/metrics.go:84-137`; экспозиция — `runmetrics/prom.go:19-26`.
+Обработчики — `server/metrics.go:84-137`; экспозиция — `infrastructure/runmetrics/prom.go:19-26`.
 
 `Snapshot` сглаживает значения до трёх знаков (`round3`,
 `server/metrics.go:142`).

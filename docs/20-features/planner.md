@@ -132,7 +132,7 @@ exclude — попадает в чекпоинт и отчёт.
 `PLAN_CHECKPOINT=1`), а также при запросе resume.
 
 Статусы шагов: `pending`, `running`, `done`, `failed`, `skipped`
-(`checkpoint/checkpoint.go:22-28`).
+(`infrastructure/checkpoint/checkpoint.go:22-28`).
 
 ```bash
 # Прогон прервался — продолжаем с места остановки

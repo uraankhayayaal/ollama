@@ -86,8 +86,8 @@ domain  ←  application  ←  infrastructure  ←  outer (server, main, runner,
 | `runner/adapters/autofix.go` | Авто-починка кода по LSP-диагностикам |
 | `runner/adapters/applog.go` | Автоподмешивание логов приложения в промпт |
 | `runctx/` | Сборка сервисов сжатия для CLI/планировщика/сервера |
-| `runevents/` | События цикла для UI в реальном времени |
-| `runmetrics/` | Реестр метрик и Prometheus-экспорт |
+| `infrastructure/runevents/` | События цикла для UI в реальном времени |
+| `infrastructure/runmetrics/` | Реестр метрик и Prometheus-экспорт |
 
 Подробнее — [Сжатие контекста](../20-features/context-compression.md) и
 [Токены и метрики](../20-features/tokens-and-metrics.md).
@@ -114,15 +114,15 @@ domain  ←  application  ←  infrastructure  ←  outer (server, main, runner,
 | Что | Где | Пакет | Зачем |
 |---|---|---|---|
 | Kanban-доска | Redis, `BOARD_REDIS_ADDR` | `infrastructure/board/` | Эпики, задачи, багрепорты |
-| Чекпоинты плана | Redis, `REDIS_ADDR` | `checkpoint/` | Статусы шагов для `--resume` |
-| История и события чата | Redis Streams | `chat/` | Живой чат в Web UI |
+| Чекпоинты плана | Redis, `REDIS_ADDR` | `infrastructure/checkpoint/` | Статусы шагов для `--resume` |
+| История и события чата | Redis Streams | `infrastructure/chat/` | Живой чат в Web UI |
 | RAG-индекс | Qdrant, `QDRANT_ADDR` (gRPC) | `infrastructure/rag/` | Семантический поиск по коду |
-| Реестр проектов | Файл `$AI_WORKSPACES` | `workspace/` | Имя проекта → путь, git-метаданные |
+| Реестр проектов | Файл `$AI_WORKSPACES` | `infrastructure/workspace/` | Имя проекта → путь, git-метаданные |
 | Логи | Файлы в `LOG_DIR` | `logging/` | Лог каждого проекта и процесса |
 | Проекты агентов | `temp/<имя>/` | `projects/` | Рабочее хранилище (не коммитится) |
 
 `checkpoint` намеренно не зависит от типов planner: снимок хранит `PlanJSON`
-как непрозрачные байты (`checkpoint/checkpoint.go:3-7`). Это позволяет менять
+как непрозрачные байты (`infrastructure/checkpoint/checkpoint.go:3-7`). Это позволяет менять
 структуру плана, не ломая старые чекпоинты.
 
 ## Git-изоляция

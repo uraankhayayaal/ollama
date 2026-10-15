@@ -2,7 +2,7 @@ package runner
 
 import (
 	"ai/domain"
-	"ai/runevents"
+	"ai/infrastructure/runevents"
 	"ai/tools"
 	"context"
 	"strings"

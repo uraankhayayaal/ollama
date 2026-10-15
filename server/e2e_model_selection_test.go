@@ -18,7 +18,7 @@ package server
 // задать явно: E2E_MODEL_SMALL, E2E_MODEL_SECOND, E2E_MODEL_LARGE.
 
 import (
-	"ai/chat"
+	"ai/infrastructure/chat"
 	"ai/logging"
 	"bytes"
 	"encoding/json"

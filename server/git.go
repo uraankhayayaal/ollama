@@ -1,12 +1,12 @@
 package server
 
 import (
-	"ai/chat"
 	"ai/forges"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
+	"ai/infrastructure/workspace"
 	"ai/projects"
 	"ai/tools"
-	"ai/workspace"
 	"context"
 	"errors"
 	"fmt"

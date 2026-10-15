@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"ai/infrastructure/sandbox"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 func newSandboxTestServer(t *testing.T) *Server {

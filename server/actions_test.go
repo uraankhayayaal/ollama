@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"ai/chat"
 	"ai/domain/services"
 	"ai/infrastructure/board"
+	"ai/infrastructure/chat"
 	"ai/runner"
 	"ai/tools"
 )

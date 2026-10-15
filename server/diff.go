@@ -14,7 +14,7 @@ import (
 
 	"ai/domain/diff"
 	"ai/infrastructure/git"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 // diffModified — статус «изменён» для файла, не найденного в метаданных диффа.

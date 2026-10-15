@@ -20,12 +20,12 @@ import (
 	"time"
 
 	"ai/application/gitflow"
-	"ai/chat"
 	"ai/forges"
 	"ai/infrastructure/board"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
+	"ai/infrastructure/workspace"
 	"ai/logging"
-	"ai/workspace"
 )
 
 // errMREmptyBranch — алиас доменной ошибки gitflow.ErrEmptyBranch (Этап 6):

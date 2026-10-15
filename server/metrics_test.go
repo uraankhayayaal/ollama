@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"ai/runevents"
-	"ai/runmetrics"
+	"ai/infrastructure/runevents"
+	"ai/infrastructure/runmetrics"
 )
 
 // toolRound прогоняет через роутер сессии полный цикл «вызов инструмента»

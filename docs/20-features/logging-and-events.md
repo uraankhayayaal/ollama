@@ -108,7 +108,7 @@ APP_LOG_MAX_FEED_ROUNDS=2
 
 ## 5. События агентского цикла
 
-`runevents/reporter.go:50` — единая структура события:
+`infrastructure/runevents/reporter.go:50` — единая структура события:
 
 ```go
 type Event struct {

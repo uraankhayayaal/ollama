@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"ai/infrastructure/board"
-	"ai/chat"
+	"ai/infrastructure/chat"
 	"ai/tools"
 )
 

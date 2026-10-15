@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	apprag "ai/application/rag"
-	"ai/chat"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/rag"
 	"ai/projects"
 )

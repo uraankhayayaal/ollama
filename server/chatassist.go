@@ -9,12 +9,12 @@ import (
 	"ai/agents/chatassist"
 	appchatassist "ai/application/chatassist"
 	"ai/application/usecases"
-	"ai/chat"
 	"ai/infrastructure/board"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/rag"
+	"ai/infrastructure/runevents"
 	"ai/projects"
 	"ai/runctx"
-	"ai/runevents"
 	"ai/tools"
 )
 

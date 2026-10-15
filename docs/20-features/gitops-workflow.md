@@ -29,7 +29,7 @@ GITLAB_URL=...                  # адрес GitLab без завершающе�
 
 Префиксы — `application/gitflow/branches.go:24,27` (`EpicBranchPrefix`/
 `TaskBranchPrefix`); серверный `epicBranchPrefix` — алиас. Side-реестр —
-`workspace.GitBranchMap` (`workspace/branches.go:29-32`): `epics` и `tasks` →
+`workspace.GitBranchMap` (`infrastructure/workspace/branches.go:29-32`): `epics` и `tasks` →
 `BranchRef{Branch, Base, Worktree}`.
 
 ## Автоматические шаги

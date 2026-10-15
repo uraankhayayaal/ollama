@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"ai/infrastructure/runevents"
 	"ai/projects"
-	"ai/runevents"
 	"ai/tools"
 )
 

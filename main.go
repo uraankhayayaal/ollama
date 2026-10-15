@@ -15,18 +15,18 @@ import (
 	apprag "ai/application/rag"
 	"ai/application/usecases"
 
-	"ai/checkpoint"
 	"ai/infrastructure/board"
+	"ai/infrastructure/checkpoint"
 
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	_ "ai/forges/all"
 	"ai/infrastructure/llm"
 	"ai/infrastructure/rag"
+	"ai/infrastructure/runmetrics"
 	"ai/logging"
 	"ai/projects"
 	"ai/runctx"
-	"ai/runmetrics"
 	"ai/server"
 	"ai/services/mrlistener"
 	"ai/tokens"

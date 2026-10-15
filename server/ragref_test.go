@@ -13,7 +13,7 @@ import (
 	apprag "ai/application/rag"
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 // TestReleaseEpicRefreshesMainIndex — регрессия «main не попадает в RAG»:

@@ -15,7 +15,7 @@ import (
 
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 // setupEpicWorktreeRepo — общий каркас: origin с базовым коммитом → клон

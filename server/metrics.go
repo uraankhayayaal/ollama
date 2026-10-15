@@ -20,7 +20,7 @@ import (
 	"sort"
 
 	"ai/infrastructure/board"
-	"ai/runmetrics"
+	"ai/infrastructure/runmetrics"
 	"ai/tokens"
 )
 

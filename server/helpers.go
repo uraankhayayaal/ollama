@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"ai/infrastructure/board"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 func contains(list []string, v string) bool {

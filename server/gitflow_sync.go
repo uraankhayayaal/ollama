@@ -8,10 +8,10 @@ import (
 	"context"
 
 	"ai/application/gitflow"
-	"ai/chat"
 	"ai/domain"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 // epicMainHost — адаптер gitflow.EpicMainHost поверх серверных помощников.

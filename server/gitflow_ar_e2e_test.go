@@ -15,9 +15,9 @@ import (
 
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
+	"ai/infrastructure/workspace"
 	"ai/runner"
 	"ai/tools"
-	"ai/workspace"
 )
 
 func TestTaskLLMResolveE2E(t *testing.T) {

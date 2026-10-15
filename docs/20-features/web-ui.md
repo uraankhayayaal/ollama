@@ -25,11 +25,11 @@ go run . serve 0.0.0.0:8090
 `AI_WORKSPACES` — путь к JSON-файлу вида «имя → абс. путь, тип
 (temp/папка/git)». Если не задан — `$HOME/.ai-workspaces.json`, при ошибке
 `UserHomeDir` — `.ai-workspaces.json` в рабочем каталоге
-(`workspace/registry.go:100-107`).
+(`infrastructure/workspace/registry.go:100-107`).
 
 Файл хранит и git-метаданные проекта: `git_remote`, `git_branch`,
 `git_base`, `git_target`, `parent`, `git_branches`, `git_resolving`,
-`git_merge_requests` (`workspace/registry.go:36-60`).
+`git_merge_requests` (`infrastructure/workspace/registry.go:36-60`).
 
 ### Защита
 
@@ -209,7 +209,7 @@ POST /api/projects/{id}/metrics/reset
 ```
 
 Экспортируются `run_tokens_total`, `run_rounds_total`, `run_tool_calls_total`
-и гистограммы (`runmetrics/prom.go`).
+и гистограммы (`infrastructure/runmetrics/prom.go`).
 
 ## REST
 

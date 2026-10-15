@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"ai/chat"
+	"ai/infrastructure/chat"
 )
 
 // handlePostChat принимает сообщение. Чат работает ПАРАЛЛЕЛЬНО доске: сообщение

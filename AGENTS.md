@@ -1,5 +1,30 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (косметическая уборка корня после Этапа 8)
+
+Шесть корневых инфраструктурных Go-пакетов перенесены под `infrastructure/`:
+`chat/` → `infrastructure/chat/`, `checkpoint/` → `infrastructure/checkpoint/`,
+`runevents/` → `infrastructure/runevents/`, `workspace/` →
+`infrastructure/workspace/`, `runmetrics/` → `infrastructure/runmetrics/`,
+`injections/` → `infrastructure/injections/`. Пакеты только перемещены
+(`git mv`), содержимое и имена пакетов не менялись — изменены лишь пути импорта
+(`ai/<pkg>` → `ai/infrastructure/<pkg>`, включая тестовые) в 60 файлах и
+порядок импортов (`gofmt -w`). Проверено: ни один из шести не импортирует
+outer-код (`server`/`runner`/`agents`/`tools`/`application`) — правило
+зависимостей не нарушается (было: `chat`←domain, `checkpoint`←domain,
+`runevents`←domain/services, `workspace`←domain+projects,
+`runmetrics`←runevents+tokens, `injections`←domain). Импортный гейт
+(`deprule_test.go`) смотрит только НЕ-тестовые `.Imports` application-слоя — не
+затронут (`application` не импортирует ни один из них в non-test). `logs/` НЕ
+переносили — это каталог рантайм-логов (`server.log`, логи проектов), не код.
+Верификация: канонический набор `go build|vet|test -count=1` зелёный
+(`./infrastructure/...` теперь покрывает и эти пакеты напрямую), `gofmt` по
+правкам чист. Документация: живые доки (`docs/00-overview/architecture.md`,
+`project-map.md`, `docs/20-features/{web-ui,tokens-and-metrics,logging-and-events,
+gitops-workflow,planner}.md`, `docs/40-operations/{testing,development}.md`) —
+пути пакетов на `infrastructure/...`; исторические `PLAN-*-done-*.md` не
+трогались.
+
 ## Состояние последней сессии (Этап 8 «Dependency Rule» завершён, срезы H1–H7)
 
 **Этап 8 завершён ✅** (`docs/plans/PLAN-2026-10-15-done-dependency-rule.md`):
@@ -973,7 +998,11 @@ PLAN-2026-10-12, этап 3); предсуществовавшие падени�
 `./infrastructure/rag` — бывший `rag/` (срез E2); `./infrastructure/git` —
 бывший `gitops/` (срез E3); `./infrastructure/sandbox` — бывший `sandbox/`
 (срез E4); `./infrastructure/board` — бывший `board/` (срез E5, `./board/`
-убран из перечня). `./tools/...` — с под-пакетами `tools/git` (E6e1),
+убран из перечня); `./infrastructure/{chat,checkpoint,injections,runevents,
+runmetrics,workspace}` — бывшие корневые `chat/`, `checkpoint/`, `injections/`,
+`runevents/`, `runmetrics/`, `workspace/` (косметический перенос после Этапа 8;
+`logs/` — не код, а каталог рантайм-логов, не переносился). `./tools/...` — с
+под-пакетами `tools/git` (E6e1),
 `tools/lspclient`, `tools/binpath`. `./domain/...` — доменные пакеты с тестами
 (`domain/log`, `domain/diff`), добавлен на Этапе 6.
 

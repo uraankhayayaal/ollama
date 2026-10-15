@@ -17,8 +17,8 @@ import (
 	"ai/application/usecases"
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
+	"ai/infrastructure/workspace"
 	"ai/logging"
-	"ai/workspace"
 )
 
 // doneRequiresCommitEnabled — гард включён по умолчанию; KANBAN_DONE_REQUIRES_COMMIT=0

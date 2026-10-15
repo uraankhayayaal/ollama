@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"ai/infrastructure/board"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 // handleListProjects возвращает список зарегистрированных проектов.

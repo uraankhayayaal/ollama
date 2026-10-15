@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"ai/infrastructure/git"
-	"ai/workspace"
+	"ai/infrastructure/workspace"
 )
 
 // fakeExec — hermetic-исполнитель git: префиксные ответы/ошибки и запись команд.

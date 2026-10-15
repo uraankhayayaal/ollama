@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"ai/infrastructure/board"
-	"ai/chat"
+	"ai/infrastructure/chat"
 )
 
 // reopenRequest — тело POST .../reopen. Все поля необязательны: если body

@@ -6,13 +6,13 @@ package server
 
 import (
 	"ai/application/gitflow"
-	"ai/chat"
 	"ai/domain"
 	"ai/infrastructure/board"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
+	"ai/infrastructure/workspace"
 	"ai/logging"
 	"ai/projects"
-	"ai/workspace"
 	"context"
 	"errors"
 	"fmt"

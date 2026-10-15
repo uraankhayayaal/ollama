@@ -26,8 +26,8 @@ import (
 	"time"
 
 	applogs "ai/application/logs"
+	"ai/infrastructure/runevents"
 	"ai/projects"
-	"ai/runevents"
 	"ai/tools"
 )
 

@@ -16,7 +16,7 @@ import (
 	"time"
 
 	apprag "ai/application/rag"
-	"ai/chat"
+	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 )

@@ -13,9 +13,9 @@ import (
 
 	"ai/agents"
 	"ai/application/usecases"
-	"ai/infrastructure/board"
 	"ai/domain"
-	"ai/injections"
+	"ai/infrastructure/board"
+	"ai/infrastructure/injections"
 	"ai/logging"
 )
 

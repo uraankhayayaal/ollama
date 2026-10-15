@@ -11,7 +11,7 @@ import (
 
 	"ai/domain/services"
 	"ai/infrastructure/board"
-	"ai/runevents"
+	"ai/infrastructure/runevents"
 	"ai/runner"
 	"ai/tokens"
 )

@@ -13,10 +13,10 @@ import (
 
 	"ai/forges"
 	"ai/infrastructure/git"
+	"ai/infrastructure/runmetrics"
+	"ai/infrastructure/workspace"
 	"ai/logging"
-	"ai/runmetrics"
 	"ai/tools"
-	"ai/workspace"
 )
 
 // Config — параметры HTTP-сервера Web UI.

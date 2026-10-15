@@ -57,8 +57,8 @@
 | `applog.go` | Автоподмешивание логов приложения в промпт |
 | `debug.go` | Отладочный вывод |
 | `runctx/` | Сборка сервисов сжатия для CLI, планировщика и сервера |
-| `runevents/` | События цикла (сообщения, `message_delta`, tool-call, токены) |
-| `runmetrics/` | Реестр метрик + Prometheus-экспорт (`prom.go`) |
+| `infrastructure/runevents/` | События цикла (сообщения, `message_delta`, tool-call, токены) |
+| `infrastructure/runmetrics/` | Реестр метрик + Prometheus-экспорт (`prom.go`) |
 
 ### Инструменты — `tools/`
 
@@ -155,9 +155,9 @@
 | `infrastructure/git/` | Git-изоляция: `gitops.go`, `merge.go`, `taskmerge.go`, `conflicts.go`, `submodule.go`, `count.go`, `cli.go` |
 | `forges/` | Реестр форджей (`registry.go`), интерфейс `Forge` (`forges.go`), `github/`, `gitlab/`, `local.go`, `scope.go`, `ignore.go` |
 | `infrastructure/board/` | `entity.go` (Epic/Task/BugReport, статусы, переходы), `store.go` (Redis), `tokens.go` |
-| `checkpoint/` | Чекпоинты плана в Redis |
-| `chat/` | Redis Streams: история чата и pub/sub |
-| `workspace/` | Реестр проектов (`registry.go`), карта веток (`branches.go`) |
+| `infrastructure/checkpoint/` | Чекпоинты плана в Redis |
+| `infrastructure/chat/` | Redis Streams: история чата и pub/sub |
+| `infrastructure/workspace/` | Реестр проектов (`registry.go`), карта веток (`branches.go`) |
 | `projects/` | `ProjectDir` (`temp/<имя>`), `config.go` (CODEGEN_*) |
 | `tokens/` | `scoped.go`, `pricing.go`, `predict.go`, `history.go`, `store.go` |
 | `infrastructure/llm/` | LLM-провайдеры: `resolve.go` (выбор провайдера), `OllamaModel.go`, `OpenAIProvider.go`, `layered.go`, `ModelSettings.go`, `ports.go` (реализация `domain/services.LLMClient`). Бывший `models/` |

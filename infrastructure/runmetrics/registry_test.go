@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/runevents"
+	"ai/infrastructure/runevents"
 	"ai/tokens"
 )
 
