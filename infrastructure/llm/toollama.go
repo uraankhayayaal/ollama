@@ -1,14 +1,15 @@
-package tools
+package llm
 
 import (
+	"ai/domain"
+
 	"github.com/ollama/ollama/api"
 )
 
-// ToOllama конвертирует определения инструментов (единый JSON Schema формат)
-// в срез официальных инструментов Ollama. Это единая точка конвертации:
-// агентам больше не нужно вручную поддерживать дублирующую схему
-// для провайдера Ollama (как раньше в GetToolsForOllama).
-func ToOllama(defs []ToolDefinition) []api.Tool {
+// toOllamaTools конвертирует определения инструментов (единый JSON Schema
+// формат) в срез официальных инструментов Ollama. Это деталь провайдера
+// Ollama, поэтому живёт в инфраструктуре, а не в общих tools.
+func toOllamaTools(defs []domain.ToolDefinition) []api.Tool {
 	ollamaTools := make([]api.Tool, 0, len(defs))
 	for _, def := range defs {
 		ollamaTools = append(ollamaTools, toOllama(def))
@@ -17,7 +18,7 @@ func ToOllama(defs []ToolDefinition) []api.Tool {
 }
 
 // toOllama конвертирует одно определение в api.Tool.
-func toOllama(def ToolDefinition) api.Tool {
+func toOllama(def domain.ToolDefinition) api.Tool {
 	params := def.Parameters
 	if params == nil {
 		params = map[string]any{}

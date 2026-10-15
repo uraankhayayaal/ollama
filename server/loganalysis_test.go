@@ -9,9 +9,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"ai/agents"
+	"ai/application/usecases"
 	"ai/chat"
 	logpkg "ai/domain/log"
+	"ai/domain/services"
 	"ai/infrastructure/llm"
 	"ai/runner"
 )
@@ -174,15 +175,16 @@ type countingProvider struct {
 
 func newCountingProvider() *countingProvider { return &countingProvider{} }
 
-func (p *countingProvider) Generate(context.Context, agents.Agent) (*runner.AgentResponse, error) {
+func (p *countingProvider) Generate(context.Context, services.Agent) (*runner.AgentResponse, error) {
 	p.calls.Add(1)
 	return &runner.AgentResponse{Content: "разбор: главное — ошибка подключения к БД"}, nil
 }
 
-func setProviderForTest(srv *Server, p llm.LLMProvider) {
+func setProviderForTest(srv *Server, p usecases.FullCycle) {
 	srv.prov.mu.Lock()
 	defer srv.prov.mu.Unlock()
-	srv.prov.cached = &llm.Resolved{Provider: p, Name: "test"}
+	srv.prov.cached = &llm.Resolved{Name: "test"}
+	srv.prov.cycle = p
 	srv.prov.done = true
 	srv.prov.err = nil
 }

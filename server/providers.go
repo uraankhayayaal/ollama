@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"ai/application/usecases"
 	"ai/infrastructure/llm"
 )
 
@@ -182,9 +183,9 @@ func (s *Server) writeSelectionResult(w http.ResponseWriter, res *llm.Resolved, 
 	writeJSON(w, http.StatusOK, out)
 }
 
-// provider возвращает LLM-провайдер (ленивая инициализация). Возвращает
+// provider возвращает цикл агента (ленивая инициализация). Возвращает
 // ошибку, если провайдер не настроен (LLM_PROVIDER).
-func (s *Server) provider() (llm.LLMProvider, error) {
+func (s *Server) provider() (usecases.FullCycle, error) {
 	p, _, err := s.prov.get()
 	if err != nil {
 		return nil, err

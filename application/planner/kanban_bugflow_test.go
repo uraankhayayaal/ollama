@@ -1,11 +1,11 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/qaengineer"
-	"ai/infrastructure/board"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
@@ -29,7 +29,7 @@ import (
 //     инструментом BoardCreateBugReport.
 type bugFlowProvider struct{}
 
-func (p *bugFlowProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *bugFlowProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message

@@ -9,13 +9,13 @@ package server
 
 import (
 	"ai/acceptor"
-	"ai/agents"
 	"ai/application/gitflow"
 	"ai/application/planner"
+	"ai/application/usecases"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
-	"ai/infrastructure/llm"
 	"ai/logging"
 	"ai/workspace"
 	"context"
@@ -28,14 +28,14 @@ import (
 )
 
 // resolveDeveloper — адаптер gitflow.Developer: агент-специалист нужной роли
-// (planner.SpecialistForRole) и его прогон через LLM-провайдер сервера.
-type resolveDeveloper struct{ prov llm.LLMProvider }
+// (planner.SpecialistForRole) и его прогон через цикл агента сервера.
+type resolveDeveloper struct{ prov usecases.FullCycle }
 
-func (d resolveDeveloper) SpecialistForRole(project, role, prompt string) agents.Agent {
+func (d resolveDeveloper) SpecialistForRole(project, role, prompt string) services.Agent {
 	return planner.SpecialistForRole(project, role, prompt)
 }
 
-func (d resolveDeveloper) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
+func (d resolveDeveloper) Generate(ctx context.Context, agent services.Agent) (*domain.AgentResponse, error) {
 	return d.prov.Generate(ctx, agent)
 }
 

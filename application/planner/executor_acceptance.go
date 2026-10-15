@@ -10,7 +10,6 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"ai/projects"
-	"github.com/ollama/ollama/api"
 )
 
 // runAcceptorAgent выполняет детерминированную приёмку собранного приложения:
@@ -404,8 +403,6 @@ func (h *leadHintAgent) GetSystemMessages(text []agents.Message) []agents.Messag
 func (h *leadHintAgent) GetUserMessages() []agents.Message { return h.inner.GetUserMessages() }
 
 func (h *leadHintAgent) GetTools() []domain.ToolDefinition { return h.inner.GetTools() }
-
-func (h *leadHintAgent) GetToolsForOllama() []api.Tool { return h.inner.GetToolsForOllama() }
 
 func (h *leadHintAgent) CallFunction(name string, args map[string]any) ([]byte, error) {
 	return h.inner.CallFunction(name, args)

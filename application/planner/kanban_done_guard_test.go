@@ -7,8 +7,8 @@ package planner
 // петли).
 
 import (
-	"ai/agents"
 	"ai/agents/qaengineer"
+	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/runner"
 	"ai/tools"
@@ -30,7 +30,7 @@ type idleProvider struct {
 	loopedProvider
 }
 
-func (p *idleProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *idleProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
@@ -210,7 +210,7 @@ type humanHelpProvider struct {
 	store *board.Store
 }
 
-func (p *humanHelpProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *humanHelpProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message

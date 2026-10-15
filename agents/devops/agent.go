@@ -7,8 +7,6 @@ import (
 	"ai/tools"
 	"os"
 	"path/filepath"
-
-	"github.com/ollama/ollama/api"
 )
 
 // devopsToolNames — инструменты DevOps-инженера, выбираемые из общего реестра
@@ -44,7 +42,7 @@ type Devops struct {
 	Prompt string
 	Config Config
 	// Tools — выбранные агентом инструменты из общего реестра
-	// (единый источник для GetTools/GetToolsForOllama и диспетчеризации вызовов).
+	// (единый источник для GetTools и диспетчеризации вызовов).
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
@@ -179,12 +177,6 @@ func (d *Devops) GetSystemMessages(_ []agents.Message) []agents.Message {
 // формат для OpenAI/Yandex). Источник схем — реестр tools.
 func (d *Devops) GetTools() []tools.ToolDefinition {
 	return d.Tools.Definitions()
-}
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama.
-func (d *Devops) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(d.GetTools())
 }
 
 func (d *Devops) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {

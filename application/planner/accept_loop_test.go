@@ -2,8 +2,8 @@ package planner
 
 import (
 	"ai/acceptor"
-	"ai/agents"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -21,7 +21,7 @@ type fixPlanProvider struct {
 	fixIDs int
 }
 
-func (s *fixPlanProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (s *fixPlanProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	if _, ok := agent.(*Planner); ok {
 		s.plans++
 		s.fixIDs++
@@ -161,7 +161,7 @@ type fixPlanLeadProvider struct {
 	fixPlanProvider
 }
 
-func (s *fixPlanLeadProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (s *fixPlanLeadProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	if _, ok := agent.(*Planner); ok {
 		return &runner.AgentResponse{Content: `{
 			"project_name": "AcceptLoopLeadFix",

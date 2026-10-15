@@ -29,7 +29,7 @@ func ragCtx(ops *FileOps) rag.Context {
 
 // Set — набор инструментов, выбранных агентом из общего реестра.
 // Агент держит его в себе и использует для трёх вещей:
-// отдачи определений провайдерам (GetTools/GetToolsForOllama)
+// отдачи определений провайдерам (GetTools)
 // и диспетчеризации вызовов (CallFunction).
 type Set struct {
 	byName map[string]Tool

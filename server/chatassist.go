@@ -8,9 +8,9 @@ import (
 
 	"ai/agents/chatassist"
 	appchatassist "ai/application/chatassist"
+	"ai/application/usecases"
 	"ai/chat"
 	"ai/infrastructure/board"
-	"ai/infrastructure/llm"
 	"ai/infrastructure/rag"
 	"ai/projects"
 	"ai/runctx"
@@ -40,7 +40,7 @@ type chatAsk struct {
 // строит промпт с состоянием проекта и доски, вызывает ассистента (у которого
 // есть write-инструменты доски, семантический поиск CodeSearch по RAG и блок
 // «релевантный код» в промпте) и публикует ответ в чат.
-func (sess *Session) runChatAssistant(ctx context.Context, question string, provider llm.LLMProvider) {
+func (sess *Session) runChatAssistant(ctx context.Context, question string, provider usecases.FullCycle) {
 	sess.runChatAsk(ctx, chatAsk{question: question}, provider)
 }
 
@@ -48,13 +48,13 @@ func (sess *Session) runChatAssistant(ctx context.Context, question string, prov
 // панели логов. Отличие от обычного: в промпт уходит подготовленный сервером
 // дайджест лога, а «реплики пользователя» нет — пользователь не что-то
 // писал, он нажал кнопку. Выдумывать от его имени текст в истории нельзя.
-func (sess *Session) runChatLogAnalysis(ctx context.Context, a logAnalysis, provider llm.LLMProvider) {
+func (sess *Session) runChatLogAnalysis(ctx context.Context, a logAnalysis, provider usecases.FullCycle) {
 	question := fmt.Sprintf("Разбери лог %s и объясни, что в нём сломалось.", a.FilesLabel())
 	sess.runChatAsk(ctx, chatAsk{question: question, logDigestPrompt: LogDigestPrompt(a)}, provider)
 }
 
 // runChatAsk — общий запуск ассистента чата.
-func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider llm.LLMProvider) {
+func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider usecases.FullCycle) {
 	sess.wg.Add(1)
 	go func() {
 		defer sess.wg.Done()

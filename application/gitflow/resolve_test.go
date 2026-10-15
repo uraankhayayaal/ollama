@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"ai/agents"
 	"ai/domain"
+	"ai/domain/services"
 )
 
 // fakeDeveloper — заглушка gitflow.Developer: запоминает промпты и отдаёт
@@ -23,13 +23,13 @@ type fakeDeveloper struct {
 	calls     int
 }
 
-func (f *fakeDeveloper) SpecialistForRole(project, role, prompt string) agents.Agent {
+func (f *fakeDeveloper) SpecialistForRole(project, role, prompt string) services.Agent {
 	f.project, f.role = project, role
 	f.prompts = append(f.prompts, prompt)
 	return nil
 }
 
-func (f *fakeDeveloper) Generate(_ context.Context, _ agents.Agent) (*domain.AgentResponse, error) {
+func (f *fakeDeveloper) Generate(_ context.Context, _ services.Agent) (*domain.AgentResponse, error) {
 	i := f.calls
 	f.calls++
 	var resp *domain.AgentResponse

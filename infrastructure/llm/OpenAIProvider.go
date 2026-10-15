@@ -1,10 +1,7 @@
 package llm
 
 import (
-	"ai/agents"
-	"ai/application/usecases"
 	"ai/domain"
-	"ai/tools"
 	"context"
 	"fmt"
 	"strings"
@@ -65,10 +62,6 @@ func NewOpenAIProvider(name ProviderName, model string, cfg ProviderConfig) (*Op
 		},
 		forceTool: name == ProviderTrim || name == ProviderReg,
 	}, nil
-}
-
-func (p *OpenAIProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
-	return usecases.RunAgent(ctx, p, agent)
 }
 
 // ModelName — имя модели провайдера (контекст промпт-инъекций, см. ModelName
@@ -183,9 +176,9 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (
 
 	message := response.Choices[0].Message
 
-	var toolCalls []tools.ToolCall
+	var toolCalls []domain.ToolCall
 	for _, toolCall := range message.ToolCalls {
-		toolCalls = append(toolCalls, tools.ToolCall{
+		toolCalls = append(toolCalls, domain.ToolCall{
 			ID:        toolCall.ID,
 			Name:      toolCall.Function.Name,
 			Arguments: toolCall.Function.Arguments,
@@ -193,7 +186,7 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (
 	}
 
 	if len(toolCalls) == 0 && message.FunctionCall.Name != "" {
-		toolCalls = append(toolCalls, tools.ToolCall{
+		toolCalls = append(toolCalls, domain.ToolCall{
 			ID:        fmt.Sprintf("call_%s", message.FunctionCall.Name),
 			Name:      message.FunctionCall.Name,
 			Arguments: message.FunctionCall.Arguments,

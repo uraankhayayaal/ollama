@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"ai/agents"
 	"ai/agents/architect"
+	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
@@ -25,7 +25,7 @@ type reviewFlowProvider struct {
 	draftsLog     []string
 }
 
-func (p *reviewFlowProvider) Generate(_ context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *reviewFlowProvider) Generate(_ context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	if a, ok := agent.(*architect.Architect); ok && a.ReviewerMode {
 		p.reviewerCalls++
 		if us := agent.GetUserMessages(); len(us) > 0 {

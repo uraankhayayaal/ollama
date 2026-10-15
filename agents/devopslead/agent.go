@@ -220,5 +220,5 @@ func (d *DevopsLead) GetUserMessages() []agents.Message {
 }
 
 // NeedsHeavyModel — лид декомпозирует эпики на задачи с контрактами,
-// поэтому по умолчанию маршрутизируется на большую модель (см. LayeredProvider).
+// поэтому по умолчанию маршрутизируется на большую модель (см. usecases.NewEscalating).
 func (d *DevopsLead) NeedsHeavyModel() bool { return true }

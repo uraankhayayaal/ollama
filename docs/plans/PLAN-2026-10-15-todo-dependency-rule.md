@@ -50,7 +50,7 @@ Dependency Rule: внутренние слои импортируют внешн
 | Срез | Содержимое | Статус |
 |---|---|---|
 | H2 | Алиасы `board`→`domain` в `application/board`, `application/chatassist`, `tokens`, `injections`, `usecases` | ✅ |
-| H1 | `infrastructure/llm` чистый: порты→`domain/services`, убрать `Generate`, декоратор эскалации, `ToOllama`→llm, удалить `GetToolsForOllama` | Ожидает |
+| H1 | `infrastructure/llm` чистый: порты→`domain/services`, убрать `Generate`, декоратор эскалации, `ToOllama`→llm, удалить `GetToolsForOllama` | ✅ |
 | H4 | `planner`→конкретные agents: фабрики выносятся в `agents/factory`, подключение через `SetAgentFactory` в `main` | Ожидает |
 | H3 | `gitflow`/`rag`→домен: `MergeResult`/`MergeConflictError`/`Index*`/`SearchParams`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | Ожидает |
 | H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | Ожидает |
@@ -81,6 +81,30 @@ Dependency Rule: внутренние слои импортируют внешн
    `domain`; `tools.ToolCall` → `domain.ToolCall`.
 6. `agents.Agent` в сигнатурах портов → доменный порт `services.Agent`
    (структурно удовлетворяет `agents.Agent`).
+
+**Выполнено (H1):** `domain/services/llm.go` получил порты
+`ChatProvider`/`StreamChatProvider`/`ModelLimitsProvider`; новый
+`domain/services/agent.go` — `Agent`/`AgentRunner`/`AgentCycle`. `usecases/ports.go`
+переведён на алиасы (`ChatProvider`/`StreamChatProvider`/`ModelLimitsProvider`/
+`Agent`/`AgentRunner`) без импорта `ai/agents`; новый
+`application/usecases/provider.go` — `FullCycle = services.AgentCycle`,
+`NewCycle`/`NewEscalating` + перенесённая heavy-логика
+(`NeedsHeavyModel`/`agentName`/`llmAlwaysHeavy`/`heavyForContext`), эскалация
+повторяет слой large с `WithoutResumeState`. `infrastructure/llm`: удалены
+`LLMProvider.go`/`layered.go` (и `layered_test.go` → `usecases/provider_test.go`
+на фейковом `SetAgentRunner`), `Generate` у `*OllamaProvider`/`*OpenAIProvider`,
+`Resolved{Small,Large services.ChatProvider}`, `ResolveProvider() (*Resolved,…)`;
+`ToOllama` переехал в `infrastructure/llm/toollama.go`, `ParseArguments` — в
+`domain/toolargs.go` (в `tools` — тонкая обёртка + `unmarshalLikeModel` на
+`domain.RelaxJSON`); llm берёт `domain.ToolCall`/`domain.ParseArguments`. Удалён
+мёртвый `GetToolsForOllama` из `agents.Agent` и всех реализаций (+ планистские
+`SetOllamaToolConverter`/`ollamaToolConverter`). Потребители: `server/resolve.go`
+(`get()`→`usecases.FullCycle`, кэш `cycle`), `server/providers.go`, `session.go`,
+`chatassist.go`, `gitflow_ar.go`, `main.go`, порт `planner.LLMProvider` и
+`gitflow.Developer` → `services.AgentCycle`/`services.Agent`; `runner`-адаптер —
+на `services.AgentRunner`. `repositories/` (мёртвый) удалён досрочно (ломало
+`go build ./...`). Верификация: канонический набор зелёный, `infrastructure/llm`
+тянет только `domain`/`domain/services`/`logging`. Коммит — по запросу.
 
 ### H4: planner→конкретные agents
 

@@ -2,14 +2,12 @@ package agents
 
 import (
 	"ai/tools"
-
-	"github.com/ollama/ollama/api"
 )
 
 // Base — общая часть агентов-специализаций: разделяемый файловый контекст,
 // промпт задания и выбранные инструменты. Встраивается в специализацию
 // (*agents.Base) и снимает дублирование механических методов Agent
-// (GetUserMessages/GetTools/GetToolsForOllama/CallFunction и обёрток
+// (GetUserMessages/GetTools/CallFunction и обёрток
 // ReadFiles/List). Специфика роли — системный промпт, конкретный набор
 // инструментов, доска — остаётся в специализации (см. Этап 5,
 // PLAN-2026-10-12-todo-clean-architecture.md).
@@ -21,7 +19,7 @@ type Base struct {
 	// Prompt — текст задания пользователя (одно human-сообщение).
 	Prompt string
 	// Tools — выбранные агентом инструменты из общего реестра (единый источник
-	// для GetTools/GetToolsForOllama и диспетчеризации вызовов).
+	// для GetTools и диспетчеризации вызовов).
 	Tools *tools.Set
 	// SystemPrompt — опциональный системный промпт по умолчанию. Специализация
 	// может переопределить GetSystemMessages.
@@ -72,10 +70,6 @@ func (b *Base) GetUserMessages() []Message {
 // GetTools возвращает определения выбранных инструментов (единый JSON Schema
 // формат для OpenAI/Yandex). Источник схем — реестр tools.
 func (b *Base) GetTools() []tools.ToolDefinition { return b.Tools.Definitions() }
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama.
-func (b *Base) GetToolsForOllama() []api.Tool { return tools.ToOllama(b.GetTools()) }
 
 // CallFunction диспетчеризует вызов инструмента по имени через общий реестр.
 func (b *Base) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {

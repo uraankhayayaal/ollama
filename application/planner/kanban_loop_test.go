@@ -1,10 +1,10 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/architect"
-	"ai/infrastructure/board"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -20,7 +20,7 @@ import (
 // цикл прерван детектором, задача не выполнена.
 type loopedProvider struct{}
 
-func (p *loopedProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *loopedProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
@@ -158,7 +158,7 @@ func TestKanbanArchitectLoopFails(t *testing.T) {
 // architectLoopProvider — архитектор зациклился с первого же вызова.
 type architectLoopProvider struct{}
 
-func (p *architectLoopProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *architectLoopProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	return &runner.AgentResponse{
 		Looped:     true,
 		LoopReason: "последние 5 раундов подряд не дали ни одного успешного действия",

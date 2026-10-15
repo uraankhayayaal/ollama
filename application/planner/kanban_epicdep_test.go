@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/agents"
+	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
@@ -17,7 +17,7 @@ import (
 // лидов: на «Декомпозируй эпик» отдаёт одну задачу специалисту.
 type epicDepProvider struct{ decomposed []string }
 
-func (p *epicDepProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *epicDepProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message

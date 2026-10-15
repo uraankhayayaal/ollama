@@ -2,9 +2,9 @@ package planner
 
 import (
 	"ai/acceptor"
-	"ai/agents"
 	"ai/checkpoint"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -30,7 +30,7 @@ type stubProvider struct {
 	lengthEmpty bool
 }
 
-func (s *stubProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (s *stubProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	if s.errors {
 		return nil, genErr("Generate вызван, а не должен был")
 	}
@@ -339,7 +339,7 @@ type roundStubProvider struct {
 	resumeAt  int
 }
 
-func (s *roundStubProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (s *roundStubProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	s.calls++
 	if st := runner.ResumeStateFromContext(ctx); st != nil {
 		s.sawResume = true
@@ -471,7 +471,7 @@ type rollbackProvider struct {
 	chatCalls int
 }
 
-func (p *rollbackProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *rollbackProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	res, err := agent.CallFunction("WriteFiles", map[string]any{
 		"files": []map[string]any{
 			{"filename": p.filename, "content": p.content},
@@ -565,7 +565,7 @@ type overlapProvider struct {
 	sleep     time.Duration
 }
 
-func (p *overlapProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *overlapProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	p.mu.Lock()
 	p.active++
 	if p.active > p.maxActive {

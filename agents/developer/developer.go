@@ -7,8 +7,8 @@ package developer
 
 import (
 	"ai/agents"
-	"ai/infrastructure/board"
 	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 	"ai/logging"
@@ -20,8 +20,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/ollama/ollama/api"
 )
 
 // devToolNames — инструменты разработчика, выбираемые из общего реестра tools.
@@ -59,7 +57,7 @@ type base struct {
 	Prompt string
 	Config projects.Config
 	// Tools — выбранные агентом инструменты из общего реестра
-	// (единый источник для GetTools/GetToolsForOllama и диспетчеризации вызовов).
+	// (единый источник для GetTools и диспетчеризации вызовов).
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
@@ -433,12 +431,6 @@ func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {
 // формат для OpenAI/Yandex). Источник схем — реестр tools.
 func (d *base) GetTools() []tools.ToolDefinition {
 	return d.Tools.Definitions()
-}
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama.
-func (d *base) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(d.GetTools())
 }
 
 func (d *base) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {

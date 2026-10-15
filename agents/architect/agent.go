@@ -14,8 +14,8 @@ package architect
 
 import (
 	"ai/agents"
-	"ai/infrastructure/board"
 	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/infrastructure/rag"
 	"ai/projects"
 	"ai/tools"
@@ -25,13 +25,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/ollama/ollama/api"
 )
 
 // SubmitBacklogToolName — имя инструмента, которым архитектор публикует бэклог
 // на Kanban-доску. Обрабатывается самим агентом (CallFunction) и объявляется в
-// GetTools/GetToolsForOllama. Не регистрируется в общем реестре tools — это
+// GetTools. Не регистрируется в общем реестре tools — это
 // агент-специфичный инструмент, привязанный к хранилищу доски.
 const SubmitBacklogToolName = "submit_architecture_backlog"
 
@@ -399,12 +397,6 @@ func (a *Architect) GetTools() []tools.ToolDefinition {
 		return defs
 	}
 	return append(defs, submitBacklogDefinition())
-}
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama.
-func (a *Architect) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(a.GetTools())
 }
 
 // submitBacklogDefinition описывает схему инструмента submit_architecture_backlog

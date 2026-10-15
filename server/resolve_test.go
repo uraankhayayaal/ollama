@@ -1,6 +1,7 @@
 package server
 
 import (
+	"ai/application/usecases"
 	"ai/infrastructure/llm"
 	"encoding/json"
 	"net/http"
@@ -15,9 +16,10 @@ import (
 // providers.json: тесты не должны зависеть от конфигурации окружения.
 // nil — «провайдер настроен, но не создан» (используется в тестах
 // недоступного LLM).
-func stubProviderResolve(prov llm.LLMProvider) providerResolve {
+func stubProviderResolve(prov usecases.FullCycle) providerResolve {
 	return providerResolve{
-		cached: &llm.Resolved{Provider: prov, Name: "stub", Model: "stub-model"},
+		cached: &llm.Resolved{Name: "stub", Model: "stub-model"},
+		cycle:  prov,
 		done:   true,
 	}
 }

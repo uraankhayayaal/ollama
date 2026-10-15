@@ -6,7 +6,6 @@ import (
 	"ai/tools"
 	"context"
 	"fmt"
-	"github.com/ollama/ollama/api"
 	"strings"
 	"sync"
 	"testing"
@@ -33,7 +32,6 @@ func (f *fakeAgent) GetSystemMessages(text []agents.Message) []agents.Message {
 func (f *fakeAgent) GetTools() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{Name: "WriteFiles", Description: "писать файлы"}}
 }
-func (f *fakeAgent) GetToolsForOllama() []api.Tool { return nil }
 func (f *fakeAgent) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

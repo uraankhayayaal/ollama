@@ -24,8 +24,8 @@ import (
 	"sort"
 	"strings"
 
-	"ai/agents"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/logging"
 )
 
@@ -48,9 +48,9 @@ type Store interface {
 // Реализуется специалистом `planner.SpecialistForRole` + LLM-провайдером.
 type Developer interface {
 	// SpecialistForRole собирает агента нужной специализации с заданием.
-	SpecialistForRole(project, role, prompt string) agents.Agent
+	SpecialistForRole(project, role, prompt string) services.Agent
 	// Generate прогоняет агента и возвращает его ответ.
-	Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error)
+	Generate(ctx context.Context, agent services.Agent) (*domain.AgentResponse, error)
 }
 
 // Acceptor — детерминированная приёмка директории (сборка, формат, анализ).

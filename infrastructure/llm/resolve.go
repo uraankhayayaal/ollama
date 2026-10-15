@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"ai/domain/services"
 	"fmt"
 	"os"
 	"strings"
@@ -28,11 +29,16 @@ type Selection struct {
 	LargeModel string
 }
 
-// Resolved — созданный провайдер и ФАКТИЧЕСКИ выбранные модели (после
-// применения дефолтов из providers.json). Нужен, чтобы логи и Web UI
-// показывали реально работающую модель, а не только запрошенную.
+// Resolved — созданные провайдеры (малый и большой слои) и ФАКТИЧЕСКИ
+// выбранные модели (после применения дефолтов из providers.json). Нужен, чтобы
+// логи и Web UI показывали реально работающую модель, а не только запрошенную.
+//
+// Полный агентский цикл и эскалацию малого слоя на большой собирает
+// application-слой (usecases.NewEscalating) из Small и Large — инфраструктура
+// отдаёт только чат-провайдеров (реализации порта services.ChatProvider).
 type Resolved struct {
-	Provider   LLMProvider
+	Small      services.ChatProvider
+	Large      services.ChatProvider // nil, если большая модель не задана/совпадает
 	Name       ProviderName
 	Model      string
 	LargeModel string
@@ -76,25 +82,28 @@ func EnvSelection() Selection {
 // из providers.json (см. LoadProvidersConfig). Переменные окружения:
 //   - LLM_PROVIDER — выбор провайдера
 //   - MODEL — выбор модели (если не задано, используется default_model из конфига)
-//   - MODEL_LARGE — большая модель для LayeredProvider (если не задано, используется large_model из конфига)
+//   - MODEL_LARGE — большая модель для эскалации (если не задано, используется large_model из конфига)
 //
-// Возвращает провайдера, имя провайдера и ошибку.
-func ResolveProvider() (LLMProvider, ProviderName, error) {
+// Возвращает созданные слои и имя провайдера.
+func ResolveProvider() (*Resolved, ProviderName, error) {
 	r, err := ResolveSelection(EnvSelection())
-	if err != nil {
-		name := ProviderName(strings.TrimSpace(os.Getenv("LLM_PROVIDER")))
-		if r != nil {
-			name = r.Name
-		}
-		return nil, name, err
+	name := ProviderName(strings.TrimSpace(os.Getenv("LLM_PROVIDER")))
+	if r != nil {
+		name = r.Name
 	}
-	return r.Provider, r.Name, nil
+	if err != nil {
+		return r, name, err
+	}
+	return r, r.Name, nil
 }
 
-// ResolveSelection создаёт провайдера по ЯВНОМУ выбору (провайдер + модели).
+// ResolveSelection создаёт провайдеров по ЯВНОМУ выбору (провайдер + модели).
 // Пустые Model/LargeModel берутся из providers.json. В отличие от старого
 // ResolveProvider не мутирует os.Environ — вызов из Web UI меняет модель на
 // лету, не затрагивая остальной процесс.
+//
+// Большая модель создаётся как ОТДЕЛЬНЫЙ провайдер (Large) и не оборачивается
+// здесь в маршрутизацию: политику «когда эскалировать» задаёт application-слой.
 func ResolveSelection(sel Selection) (*Resolved, error) {
 	cfg, err := LoadProvidersConfig()
 	if err != nil {
@@ -118,35 +127,32 @@ func ResolveSelection(sel Selection) (*Resolved, error) {
 		largeModel = providerCfg.LargeModel
 	}
 
-	var provider LLMProvider
-
 	switch sel.Provider {
 	case ProviderOllama:
-		// Двухслойная маршрутизация по размеру модели: если задана большая
-		// модель — быстрые шаги идут на маленькую, тяжёлые (лиды/ревью) и
-		// эскалации — на большую.
-		var largeProvider LLMProvider
-		provider, err = NewOllamaProvider(model, providerCfg)
-		if err == nil && largeModel != "" && largeModel != model {
-			largeProvider, err = NewOllamaProvider(largeModel, providerCfg)
-			if err == nil {
-				out.LargeModel = largeModel
-			}
+		small, serr := NewOllamaProvider(model, providerCfg)
+		if serr != nil {
+			return out, serr
 		}
-		if err == nil {
-			provider = NewLayeredProvider(provider, largeProvider)
+		out.Small = small
+		if largeModel != "" && largeModel != model {
+			large, lerr := NewOllamaProvider(largeModel, providerCfg)
+			if lerr != nil {
+				return out, lerr
+			}
+			out.Large = large
+			out.LargeModel = largeModel
 		}
 
 	case ProviderAlisa, ProviderTrim, ProviderReg, ProviderLlamaCpp:
-		provider, err = NewOpenAIProvider(sel.Provider, model, providerCfg)
+		p, perr := NewOpenAIProvider(sel.Provider, model, providerCfg)
+		if perr != nil {
+			return out, perr
+		}
+		out.Small = p
 
 	default:
 		return nil, fmt.Errorf("unknown provider: %s. Use 'ollama', 'yandex', 'trim', 'reg' or 'llama.cpp'", sel.Provider)
 	}
 
-	if err != nil {
-		return out, err
-	}
-	out.Provider = provider
 	return out, nil
 }

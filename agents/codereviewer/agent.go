@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/ollama/ollama/api"
 )
 
 // reviewToolNames — инструменты, которые ревьюер выбирает из общего реестра
@@ -32,7 +30,7 @@ type Codereviewer struct {
 	// раундом (например, trim), где цикл NextChunk недоступен.
 	NoChunk bool
 	// Tools — выбранные ревьюером инструменты из общего реестра
-	// (единый источник для GetTools/GetToolsForOllama и диспетчеризации вызовов).
+	// (единый источник для GetTools и диспетчеризации вызовов).
 	Tools *tools.Set
 }
 
@@ -191,12 +189,6 @@ func diffFromMessages(messages []agents.Message) string {
 // формат для OpenAI/Yandex). Источник схем — реестр tools.
 func (cr Codereviewer) GetTools() []tools.ToolDefinition {
 	return cr.Tools.Definitions()
-}
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama (без ручного дублирования схем).
-func (cr Codereviewer) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(cr.GetTools())
 }
 
 func (cr *Codereviewer) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {

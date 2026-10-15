@@ -7,21 +7,14 @@ import (
 	"ai/infrastructure/rag"
 	"ai/projects"
 	"fmt"
-
-	"github.com/ollama/ollama/api"
 )
 
 var (
-	plannerToolBuilder  services.ToolSetBuilder
-	ollamaToolConverter func([]domain.ToolDefinition) []api.Tool
+	plannerToolBuilder services.ToolSetBuilder
 )
 
 func SetPlannerToolBuilder(b services.ToolSetBuilder) {
 	plannerToolBuilder = b
-}
-
-func SetOllamaToolConverter(f func([]domain.ToolDefinition) []api.Tool) {
-	ollamaToolConverter = f
 }
 
 type Planner struct {
@@ -174,13 +167,6 @@ func (p *Planner) GetTools() []domain.ToolDefinition {
 		return nil
 	}
 	return p.Tools.Definitions()
-}
-
-func (p *Planner) GetToolsForOllama() []api.Tool {
-	if p.Tools == nil || ollamaToolConverter == nil {
-		return nil
-	}
-	return ollamaToolConverter(p.GetTools())
 }
 
 func (p *Planner) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {

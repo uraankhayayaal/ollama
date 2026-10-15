@@ -14,7 +14,7 @@ type ToolDefinition struct {
 // application-слоя с infra-пакетами.
 type ChatRequest struct {
 	// Role — роль/имя агента, запросившего раунд: используется маршрутизацией
-	// слоёв модели (LayeredProvider) и контекстом промпт-инъекций.
+	// слоёв модели (эскалация small → large) и контекстом промпт-инъекций.
 	Role AgentRole
 	// Messages — полная история диалога раунда (без провайдер-специфичных полей).
 	Messages []Message

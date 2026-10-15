@@ -10,16 +10,14 @@ package chatassist
 
 import (
 	"ai/agents"
-	"ai/infrastructure/board"
 	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/tools"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/ollama/ollama/api"
 )
 
 // assistantToolNames — инструменты ассистента: чтение файлов (List/ReadFiles/
@@ -231,11 +229,6 @@ func (a *Assistant) GetInjections() []board.Injection {
 
 // GetInjectionRole — роль агента для условий when промпт-инъекций.
 func (a *Assistant) GetInjectionRole() string { return "assistant" }
-
-// GetToolsForOllama возвращает определения инструментов в формате Ollama.
-func (a *Assistant) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(a.GetTools())
-}
 
 // CallFunction диспетчеризует вызов модели к инструменту.
 //

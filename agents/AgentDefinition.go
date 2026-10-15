@@ -3,8 +3,6 @@ package agents
 import (
 	"ai/domain"
 	"ai/tools"
-
-	"github.com/ollama/ollama/api"
 )
 
 // Message — алиас доменного типа (domain.AgentMessage): промпт-сообщение
@@ -27,6 +25,5 @@ type Agent interface {
 	GetSystemMessages(text []Message) []Message
 	GetUserMessages() []Message
 	GetTools() []tools.ToolDefinition
-	GetToolsForOllama() []api.Tool
 	CallFunction(functionName string, functionArgs map[string]any) ([]byte, error)
 }

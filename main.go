@@ -12,9 +12,10 @@ import (
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/application/planner"
+	"ai/application/usecases"
 
-	"ai/infrastructure/board"
 	"ai/checkpoint"
+	"ai/infrastructure/board"
 
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
@@ -52,7 +53,6 @@ func main() {
 	}
 
 	planner.SetPlannerToolBuilder(tools.PlannerToolSet)
-	planner.SetOllamaToolConverter(tools.ToOllama)
 	planner.SetLSPDiagnoser(tools.LSPDiagnoserAdapter{})
 	planner.SetSnapshotFactory(tools.SnapshotAdapterFactory{})
 	planner.SetPublicAPIAuditor(tools.PublicAPIAuditorAdapter{})
@@ -124,10 +124,13 @@ func main() {
 
 	// Провайдер LLM создаётся общей функцией (CLI и Web UI используют одну
 	// логику выбора модели по окружению; подробности в llm.ResolveProvider).
-	provider, providerType, err := llm.ResolveProvider()
+	// Полный агентский цикл с эскалацией собирает application-слой из слоёв,
+	// которые вернула инфраструктура.
+	res, providerType, err := llm.ResolveProvider()
 	if err != nil {
 		logging.Fatalf("Failed to init provider: %v", err)
 	}
+	provider := usecases.NewEscalating(res.Small, res.Large)
 
 	// Провайдеры с одним раундом (например, trim) не умеют цикл NextChunk
 	// у ревьювера — дифф передаём целиком без разбиения на части.
@@ -597,7 +600,7 @@ func installStatusWord(res *acceptor.InstallResult) string {
 // планировщика. Иначе планировщик строит план (с повторной попыткой при
 // некорректном JSON), и каждый шаг выполняется отдельным агентом с чистым
 // контекстом (экономия токенов).
-func runPlanMode(ctx context.Context, provider llm.LLMProvider, projectName, originalPrompt string) {
+func runPlanMode(ctx context.Context, provider usecases.FullCycle, projectName, originalPrompt string) {
 	store, resume := plannerStore(ctx, projectName)
 	if store != nil {
 		defer store.Close()

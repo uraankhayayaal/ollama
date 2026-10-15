@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"ai/agents"
-	"ai/infrastructure/board"
 	"ai/chat"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/runner"
 	"ai/tools"
 )
@@ -83,7 +83,7 @@ func (f *fakeActions) ConflictFinish(_ context.Context, epicID string) (map[stri
 // многократных вызовов (планер зовёт Generate на каждом шаге) и не паникует.
 type harnessStubProvider struct{}
 
-func (harnessStubProvider) Generate(context.Context, agents.Agent) (*runner.AgentResponse, error) {
+func (harnessStubProvider) Generate(context.Context, services.Agent) (*runner.AgentResponse, error) {
 	return nil, errors.New("стоп: тестовый провайдер")
 }
 
@@ -92,7 +92,7 @@ func (harnessStubProvider) Generate(context.Context, agents.Agent) (*runner.Agen
 // декомпозицию), а не ушёл сразу в standby. Цикл останавливает ошибкой.
 type leadSeenProvider struct{ called int32 }
 
-func (p *leadSeenProvider) Generate(context.Context, agents.Agent) (*runner.AgentResponse, error) {
+func (p *leadSeenProvider) Generate(context.Context, services.Agent) (*runner.AgentResponse, error) {
 	atomic.AddInt32(&p.called, 1)
 	return nil, errors.New("стоп: тестовый провайдер")
 }

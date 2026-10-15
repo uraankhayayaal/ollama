@@ -23,7 +23,7 @@ type ProviderConfig struct {
 	Models []string `json:"models"`
 	// DefaultModel — модель по умолчанию (если не указана через env MODEL).
 	DefaultModel string `json:"default_model,omitempty"`
-	// LargeModel — большая модель для LayeredProvider (опционально).
+	// LargeModel — большая модель для эскалации (опционально).
 	LargeModel string `json:"large_model,omitempty"`
 	// Settings — лимиты токенов и настройки thinking.
 	Settings ModelSettings `json:"settings"`

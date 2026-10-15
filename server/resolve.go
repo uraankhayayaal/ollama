@@ -1,6 +1,7 @@
 package server
 
 import (
+	"ai/application/usecases"
 	"ai/infrastructure/llm"
 	"ai/logging"
 	"fmt"
@@ -24,6 +25,7 @@ type providerResolve struct {
 	over bool // true — выбор сделан пользователем (UI), false — из окружения
 
 	cached *llm.Resolved
+	cycle  usecases.FullCycle
 	err    error
 	done   bool
 }
@@ -56,7 +58,7 @@ func (p *providerResolve) setOverride(sel llm.Selection) (*llm.Resolved, error) 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sel, p.over, p.done = sel, true, false
-	p.cached, p.err = nil, nil
+	p.cached, p.cycle, p.err = nil, nil, nil
 	return p.resolveLocked()
 }
 
@@ -65,23 +67,37 @@ func (p *providerResolve) clearOverride() (*llm.Resolved, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.over, p.done = false, false
-	p.cached, p.err = nil, nil
+	p.cached, p.cycle, p.err = nil, nil, nil
 	return p.resolveLocked()
 }
 
-// get возвращает провайдера, инициируя ResolveSelection при первом вызове.
-// Фактически выбранные модели логируются: без этого в логах не видно, на
-// какой модели реально идёт работа.
-func (p *providerResolve) get() (llm.LLMProvider, llm.ProviderName, error) {
-	res, err := p.resolved()
+// get возвращает цикл агента (малый слой + эскалация на большой), инициируя
+// ResolveSelection при первом вызове. Фактически выбранные модели логируются:
+// без этого в логах не видно, на какой модели реально идёт работа.
+//
+// Политику «когда эскалировать» собирает application-слой
+// (usecases.NewEscalating) из слоёв, которые вернула инфраструктура; сервер от
+// провайдера конкретной модели не зависит.
+func (p *providerResolve) get() (usecases.FullCycle, llm.ProviderName, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	res, err := p.resolveLocked()
 	if err != nil {
-		name := p.selection().Provider
+		name := p.selectLocked().Provider
 		if res != nil {
 			name = res.Name
 		}
 		return nil, name, err
 	}
-	return res.Provider, res.Name, nil
+	return p.cycle, res.Name, nil
+}
+
+// selectLocked возвращает действующий выбор под уже взятым mu.
+func (p *providerResolve) selectLocked() llm.Selection {
+	if p.over {
+		return p.sel
+	}
+	return llm.EnvSelection()
 }
 
 // resolved возвращает кэшированный (или только что созданный) провайдера
@@ -107,11 +123,12 @@ func (p *providerResolve) resolveLocked() (*llm.Resolved, error) {
 	if err != nil {
 		err = fmt.Errorf("инициализация провайдера LLM: %w", err)
 		logging.Warnf("server: LLM: %v", err)
-		p.cached, p.err = res, err
+		p.cached, p.cycle, p.err = res, nil, err
 		return p.cached, p.err
 	}
 	logging.Infof("server: LLM: %s", res.Describe())
 	p.cached, p.err = res, nil
+	p.cycle = usecases.NewEscalating(res.Small, res.Large)
 	return p.cached, p.err
 }
 

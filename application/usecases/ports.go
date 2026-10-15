@@ -1,29 +1,29 @@
 package usecases
 
 import (
-	"ai/agents"
 	"ai/domain"
+	"ai/domain/services"
 	"context"
 	"fmt"
 )
 
-// ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели по
-// нейтральному domain.ChatRequest (без привязки к agents.Agent).
-type ChatProvider interface {
-	ChatOnce(ctx context.Context, req domain.ChatRequest) (*domain.ModelReply, error)
-}
-
-// StreamChatProvider — опциональное расширение ChatProvider: отдаёт текст
-// ответа по кускам через onChunk.
-type StreamChatProvider interface {
-	ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(domain.StreamChunk)) (*domain.ModelReply, error)
-}
-
-// ModelLimitsProvider — опциональный интерфейс провайдера: сообщает лимиты
-// модели до запроса (для упреждающего сжатия контекста).
-type ModelLimitsProvider interface {
-	ModelLimits() domain.ModelLimits
-}
+// Порты LLM и агента объявлены в domain/services (внутренний слой) и
+// алиасятся здесь ради удобства application-кода.
+type (
+	// ChatProvider — провайдер, умеющий сделать ОДИН запрос к модели по
+	// нейтральному domain.ChatRequest (без привязки к agents.Agent).
+	ChatProvider = services.ChatProvider
+	// StreamChatProvider — опциональное потоковое расширение ChatProvider.
+	StreamChatProvider = services.StreamChatProvider
+	// ModelLimitsProvider — опциональный интерфейс провайдера: лимиты модели.
+	ModelLimitsProvider = services.ModelLimitsProvider
+	// AgentRunner — порт агентского раннера: выполняет полный агентский цикл
+	// для конкретного провайдера и агента. Реализуется инфраструктурой (runner).
+	AgentRunner = services.AgentRunner
+	// Agent — доменный порт агента, запускаемого в цикле: промпты, доступные
+	// инструменты и диспетчер вызовов (определён в domain/services).
+	Agent = services.Agent
+)
 
 // Reporter — порт трансляции live-событий агентского цикла (Web UI). Реализуется
 // runevents.Router в инфраструктуре; use-cases зависит только от этого набора.
@@ -33,16 +33,6 @@ type Reporter interface {
 	OnToolStart(tool, args string)
 	OnToolResult(tool, result string, ok bool)
 	OnTokens(in, out int64, tps float64)
-}
-
-// Agent — доменный порт агента, запускаемого в цикле: промпты, доступные
-// инструменты и диспетчер вызовов. agents.Agent структурно удовлетворяет ему
-// (за счёт алиасов domain.AgentMessage/domain.ToolDefinition).
-type Agent interface {
-	GetSystemMessages(text []domain.AgentMessage) []domain.AgentMessage
-	GetUserMessages() []domain.AgentMessage
-	GetTools() []domain.ToolDefinition
-	CallFunction(functionName string, functionArgs map[string]any) ([]byte, error)
 }
 
 // ToolRequiringAgent — необязательный интерфейс агента: имя инструмента,
@@ -88,13 +78,6 @@ type RoundStateReporter interface {
 	ReportRoundState(domain.RoundState)
 }
 
-// AgentRunner — порт агентского раннера: выполняет полный агентский цикл
-// (диалог + инструменты) для конкретного провайдера и агента. Реализуется
-// инфраструктурой (runner).
-type AgentRunner interface {
-	Generate(ctx context.Context, provider ChatProvider, agent agents.Agent) (*domain.AgentResponse, error)
-}
-
 // agentRunner — подключённая реализация AgentRunner (инфраструктура).
 var agentRunner AgentRunner
 
@@ -102,7 +85,7 @@ var agentRunner AgentRunner
 func SetAgentRunner(r AgentRunner) { agentRunner = r }
 
 // RunAgent запускает полный агентский цикл через подключённый раннер.
-func RunAgent(ctx context.Context, provider ChatProvider, agent agents.Agent) (*domain.AgentResponse, error) {
+func RunAgent(ctx context.Context, provider ChatProvider, agent Agent) (*domain.AgentResponse, error) {
 	if agentRunner == nil {
 		return nil, fmt.Errorf("агентский раннер не подключён (usecases.SetAgentRunner)")
 	}

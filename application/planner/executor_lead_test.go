@@ -5,6 +5,7 @@ import (
 	"ai/agents/backendlead"
 	"ai/agents/frontendlead"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -30,7 +31,7 @@ const leadDecompJSON = `{
   ]
 }`
 
-func (p *leadDecompProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *leadDecompProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	if _, ok := agent.(*backendlead.BackendLead); ok {
 		p.leadCalls++
 		return &runner.AgentResponse{Content: leadDecompJSON, Rounds: 1}, nil
@@ -166,7 +167,7 @@ func TestLeadWithHintSystemMessage(t *testing.T) {
 // textProvider возвращает просто текст, без JSON-декомпозиции.
 type textProvider struct{}
 
-func (t *textProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (t *textProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	return &runner.AgentResponse{Content: "не понял задачи, отвечаю текстом", Rounds: 1}, nil
 }
 

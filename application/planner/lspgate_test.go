@@ -4,8 +4,8 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
@@ -22,7 +22,7 @@ type lspWriteProvider struct {
 	content  string
 }
 
-func (p *lspWriteProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *lspWriteProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	_, err := agent.CallFunction("WriteFiles", map[string]any{
 		"files": []map[string]any{
 			{"filename": p.filename, "content": p.content},
@@ -41,7 +41,7 @@ func (p *lspWriteProvider) ChatOnce(context.Context, domain.ChatRequest) (*runne
 // lspNoopProvider не меняет ничего — гейт видит пустой diff и пропускается.
 type lspNoopProvider struct{}
 
-func (p *lspNoopProvider) Generate(_ context.Context, _ agents.Agent) (*runner.AgentResponse, error) {
+func (p *lspNoopProvider) Generate(_ context.Context, _ services.Agent) (*runner.AgentResponse, error) {
 	return &runner.AgentResponse{}, nil
 }
 func (p *lspNoopProvider) ChatOnce(_ context.Context, _ domain.ChatRequest) (*runner.ModelReply, error) {

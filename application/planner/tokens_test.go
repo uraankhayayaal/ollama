@@ -4,10 +4,10 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/qaengineer"
-	"ai/infrastructure/board"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runevents"
 	"ai/runner"
@@ -25,7 +25,7 @@ import (
 // не атрибутируется, и вызов не падает.
 type scopeProvider struct{ t *testing.T }
 
-func (p *scopeProvider) Generate(ctx context.Context, _ agents.Agent) (*runner.AgentResponse, error) {
+func (p *scopeProvider) Generate(ctx context.Context, _ services.Agent) (*runner.AgentResponse, error) {
 	if rep := runevents.ReporterFromContext(ctx); rep != nil {
 		rep.OnTokens(100, 20, 0)
 	}
@@ -272,7 +272,7 @@ func TestFinalizeTokensNoopWithoutStore(t *testing.T) {
 // эмитящий расход токенов в каждом раунде (как это делает runner.Generate).
 type tokenEchoProvider struct{ t *testing.T }
 
-func (p *tokenEchoProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *tokenEchoProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	if rep := runevents.ReporterFromContext(ctx); rep != nil {
 		rep.OnTokens(1000, 200, 0)
 	}

@@ -1,10 +1,10 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/architect"
-	"ai/infrastructure/board"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
@@ -42,7 +42,7 @@ func (t *fakeAskTool) Execute(map[string]any) ([]byte, error) {
 // Остальные роли — как у kanbanProvider.
 type askFirstProvider struct{}
 
-func (p *askFirstProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *askFirstProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
@@ -124,7 +124,7 @@ func TestKanbanArchitectAsksUserBeforeBacklog(t *testing.T) {
 // архитектора, RAG не подключён (degrade), бэклог публикуется без падений.
 type autonomyProvider struct{ noAsk, noRAG bool }
 
-func (p *autonomyProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *autonomyProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message

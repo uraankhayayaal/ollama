@@ -3,9 +3,10 @@ package server
 import (
 	"ai/agents"
 	"ai/agents/chatassist"
-	"ai/infrastructure/board"
 	"ai/chat"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/injections"
 	"ai/runner"
 	"ai/tools"
@@ -32,7 +33,7 @@ type qaStubProvider struct {
 	err      error
 }
 
-func (p *qaStubProvider) Generate(_ context.Context, a agents.Agent) (*runner.AgentResponse, error) {
+func (p *qaStubProvider) Generate(_ context.Context, a services.Agent) (*runner.AgentResponse, error) {
 	p.gotAgent = a
 	close(p.called)
 	return p.resp, p.err
@@ -97,7 +98,7 @@ type scriptedGenerateProvider struct {
 	chat *scriptedChatProvider
 }
 
-func (p *scriptedGenerateProvider) Generate(ctx context.Context, a agents.Agent) (*runner.AgentResponse, error) {
+func (p *scriptedGenerateProvider) Generate(ctx context.Context, a services.Agent) (*runner.AgentResponse, error) {
 	return runner.Generate(ctx, p.chat, a)
 }
 

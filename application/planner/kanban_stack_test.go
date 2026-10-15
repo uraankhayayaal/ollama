@@ -1,10 +1,10 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/architect"
-	"ai/infrastructure/board"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
 	"ai/stackdetect"
@@ -26,7 +26,7 @@ type stackProvider struct {
 	detectCalled bool
 }
 
-func (p *stackProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *stackProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
@@ -71,7 +71,7 @@ func (p *stackProvider) leadDecomposition(umsg string) string {
 
 // architectBacklog — симулирует архитектора: сначала DetectStack (Ф-2), затем
 // публикация бэклога по фактическим ролям.
-func (p *stackProvider) architectBacklog(agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *stackProvider) architectBacklog(agent services.Agent) (*runner.AgentResponse, error) {
 	a, ok := agent.(*architect.Architect)
 	if !ok {
 		return &runner.AgentResponse{Content: ""}, nil

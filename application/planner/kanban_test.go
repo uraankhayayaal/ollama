@@ -1,11 +1,11 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/qaengineer"
-	"ai/infrastructure/board"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
 	"ai/tools"
@@ -27,7 +27,7 @@ import (
 //     переводит задачу в «выполнена»).
 type kanbanProvider struct{}
 
-func (p *kanbanProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *kanbanProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
@@ -349,7 +349,7 @@ func taskIDFromPrompt(umsg string) string {
 // (llm.OllamaProvider.Generate → usecases.RunAgent → runner.Generate).
 // Ошибки перехода (например, отказ гарда «phantom done») намеренно
 // игнорируются: оркестратор сам разбирает итоговый статус задачи.
-func executeBoardToolCalls(agent agents.Agent, resp *runner.AgentResponse) {
+func executeBoardToolCalls(agent services.Agent, resp *runner.AgentResponse) {
 	if resp == nil || agent == nil {
 		return
 	}

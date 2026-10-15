@@ -14,10 +14,10 @@ import (
 	applogs "ai/application/logs"
 	"ai/application/planner"
 	apprag "ai/application/rag"
+	"ai/application/usecases"
 	"ai/chat"
 	"ai/domain"
 	"ai/infrastructure/board"
-	"ai/infrastructure/llm"
 	"ai/infrastructure/rag"
 	"ai/logging"
 	"ai/projects"
@@ -264,7 +264,7 @@ func (sess *Session) continueTaskText(ctx context.Context) (string, error) {
 // записанные (включая эпики без задач — их декомпозируют лиды) берутся в
 // работу, а при отсутствии работы раннер уходит в standby. Так стартует
 // кнопка «Продолжить» (handleContinue) и KanbanStart без текста задачи.
-func (sess *Session) start(ctx context.Context, taskText string, provider llm.LLMProvider, boardOnly bool) error {
+func (sess *Session) start(ctx context.Context, taskText string, provider usecases.FullCycle, boardOnly bool) error {
 	sess.mu.Lock()
 	if sess.running {
 		sess.mu.Unlock()
@@ -435,7 +435,7 @@ func (sess *Session) isRunning() bool {
 // (running=false), возвращает nil без действий: порядок применится при
 // следующем запуске. boardOnly всегда true: пересортировка не создаёт новых
 // эпиков, работает ровно с тем, что уже на доске.
-func (sess *Session) Restart(ctx context.Context, provider llm.LLMProvider) error {
+func (sess *Session) Restart(ctx context.Context, provider usecases.FullCycle) error {
 	sess.mu.Lock()
 	running := sess.running
 	cancel := sess.cancel

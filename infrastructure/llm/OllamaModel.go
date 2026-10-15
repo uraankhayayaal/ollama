@@ -1,11 +1,8 @@
 package llm
 
 import (
-	"ai/agents"
-	"ai/application/usecases"
 	"ai/domain"
 	"ai/logging"
-	"ai/tools"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,10 +52,6 @@ func NewOllamaProvider(model string, cfg ProviderConfig) (*OllamaProvider, error
 			OutputTokens: cfg.Settings.OutputTokens,
 		},
 	}, nil
-}
-
-func (o *OllamaProvider) Generate(ctx context.Context, agent agents.Agent) (*domain.AgentResponse, error) {
-	return usecases.RunAgent(ctx, o, agent)
 }
 
 // ModelName — имя модели, реально выбранной для этого провайдера. Раннер
@@ -156,9 +149,9 @@ func streamIdleInterval() time.Duration {
 
 // ChatStream выполняет один запрос к модели Ollama в потоковом режиме: фрагменты
 // текста отдаются через onChunk (накопленный Partial), полный текст возвращается
-// в ModelReply. Реализует usecases.StreamChatProvider.
+// в ModelReply. Реализует services.StreamChatProvider.
 func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest, onChunk func(domain.StreamChunk)) (*domain.ModelReply, error) {
-	ollamaTools := tools.ToOllama(req.Tools)
+	ollamaTools := toOllamaTools(req.Tools)
 	msgs := req.Messages
 
 	// Перевод нейтральных сообщений в формат Ollama
@@ -176,7 +169,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 			am := api.Message{Role: m.Role, Content: m.Content}
 			if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 				for _, tc := range m.ToolCalls {
-					argsMap, err := tools.ParseArguments(tc.Arguments)
+					argsMap, err := domain.ParseArguments(tc.Arguments)
 					if err != nil {
 						return nil, fmt.Errorf("разбор аргументов истории вызова %s: %w", tc.Name, err)
 					}
@@ -250,7 +243,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 	}
 
 	var content strings.Builder
-	var toolCalls []tools.ToolCall
+	var toolCalls []domain.ToolCall
 	var doneReason string
 	var usage *domain.Usage
 
@@ -296,7 +289,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 					id = fmt.Sprintf("call_%d", i+1)
 				}
 
-				toolCalls = append(toolCalls, tools.ToolCall{ID: id, Name: tc.Function.Name, Arguments: string(argsBytes)})
+				toolCalls = append(toolCalls, domain.ToolCall{ID: id, Name: tc.Function.Name, Arguments: string(argsBytes)})
 				logging.Debugf("OLLAMA: tool_call %q (id=%q) args=%s", tc.Function.Name, id, string(argsBytes))
 			}
 		}

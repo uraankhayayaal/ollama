@@ -1,10 +1,10 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/backendlead"
-	"ai/infrastructure/board"
 	"ai/domain"
+	"ai/domain/services"
+	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/runner"
 	"context"
@@ -21,7 +21,7 @@ import (
 // перевести эпик в human_help и вернуть ошибку, а не крутить цикл заново.
 type leadFailProvider struct{}
 
-func (p *leadFailProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *leadFailProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
@@ -39,10 +39,10 @@ func (p *leadFailProvider) ChatOnce(context.Context, domain.ChatRequest) (*runne
 // leadCaptureProvider — фиксирует агента-лида, которому отдаётся эпик, и
 // отвечает корректной JSON-декомпозицией (5.2: проверка резолвера worktree).
 type leadCaptureProvider struct {
-	lead agents.Agent
+	lead services.Agent
 }
 
-func (p *leadCaptureProvider) Generate(ctx context.Context, agent agents.Agent) (*runner.AgentResponse, error) {
+func (p *leadCaptureProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
 	var umsg string
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message

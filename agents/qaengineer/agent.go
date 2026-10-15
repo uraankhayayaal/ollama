@@ -1,16 +1,14 @@
 package qaengineer
 
 import (
-	"ai/agents"
 	"ai/acceptor"
+	"ai/agents"
 	"ai/domain/services"
 	"ai/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/ollama/ollama/api"
 )
 
 // qaToolNames — инструменты QA Engineer, выбираемые из общего реестра tools.
@@ -48,7 +46,7 @@ type QAEngineer struct {
 	Prompt string
 	Config Config
 	// Tools — выбранные агентом инструменты из общего реестра
-	// (единый источник для GetTools/GetToolsForOllama и диспетчеризации вызовов).
+	// (единый источник для GetTools и диспетчеризации вызовов).
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
@@ -259,12 +257,6 @@ func (q *QAEngineer) defectRule() string {
 // формат для OpenAI/Yandex). Источник схем — реестр tools.
 func (q *QAEngineer) GetTools() []tools.ToolDefinition {
 	return q.Tools.Definitions()
-}
-
-// GetToolsForOllama конвертирует определения инструментов в формат Ollama
-// через единый конвертер tools.ToOllama.
-func (q *QAEngineer) GetToolsForOllama() []api.Tool {
-	return tools.ToOllama(q.GetTools())
 }
 
 func (q *QAEngineer) CallFunction(functionName string, functionArgs map[string]any) ([]byte, error) {

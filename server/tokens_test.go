@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"ai/agents"
+	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/runevents"
 	"ai/runner"
@@ -150,7 +150,7 @@ func TestTokensAccumulateByScope(t *testing.T) {
 // Kanban-раннер не ушёл в бесконечный цикл.
 type wiredReporterProvider struct{ t *testing.T }
 
-func (p *wiredReporterProvider) Generate(ctx context.Context, _ agents.Agent) (*runner.AgentResponse, error) {
+func (p *wiredReporterProvider) Generate(ctx context.Context, _ services.Agent) (*runner.AgentResponse, error) {
 	rep := runevents.ReporterFromContext(ctx)
 	if rep == nil {
 		p.t.Fatal("сессия не внедрила репортёр в контекст провайдера — токены не будут считаться")
