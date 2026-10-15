@@ -1,5 +1,18 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Этап 7 «Разбиение крупных файлов» завершён, срезы G1–G4)
+
+**Этап 7 завершён ✅** (`docs/plans/PLAN-2026-10-15-done-split-large-files.md`):
+четыре крупных файла разрезаны на 22 под-файла внутри тех же пакетов, API и
+поведение не менялись. Срезы: **G1** `server/server.go` (1833) → 7 файлов;
+**G2** `tools/fileops.go` (1707) → 5 файлов; **G3**
+`application/planner/executor.go` (1555) → 5 файлов; **G4**
+`infrastructure/board/store.go` (1298) → 5 файлов (`store.go` ядро,
+`store_epic.go`, `store_task.go`, `store_bug.go`, `store_meta.go`). Ни один
+под-файл не превышает 500 строк, число деклараций в каждом срезе сохранено,
+канонический набор (`go build`/`go vet`/`go test -count=1`) зелёный, `gofmt`
+по правкам чист. Коммиты: G1 `fe7e12e`, G2 `75e2a35`, G3 `fbd01e1`.
+
 ## Состояние последней сессии (Этап 7 «Разбиение крупных файлов», срез G3 — `application/planner/executor.go`)
 
 Срез **G3**: `application/planner/executor.go` (1555 строк, 64 декларации)

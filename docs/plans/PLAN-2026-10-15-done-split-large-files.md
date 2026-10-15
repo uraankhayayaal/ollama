@@ -72,4 +72,27 @@ infrastructure), но внутри пакетов остались слишко�
 Проверено: канонический набор зелёный (в т.ч. `application/planner` без
 базовых падений), число деклараций сохранено (64), `gofmt` по правкам чист.
 
-### G4: `infrastructure/board/store.go` → под-файлы по сущностям
+### G4: `infrastructure/board/store.go` → под-файлы по сущностям ✅
+
+Было: один файл `infrastructure/board/store.go` (1298 строк, 67 деклараций).
+Стало:
+
+| Файл | Строк | Содержимое |
+|---|---|---|
+| `infrastructure/board/store.go` | 202 | ядро: `ErrNotFound`/`ErrExists`/`ErrDependency`, `StoreConfig`/`Store`, key-хелперы, `NewStore`/`NewStoreNoCheck`/`Close`/`Client`/`Project`, `SetRepositories`/`applyRepositories`/`setTTL`, `now`, `removeString` |
+| `infrastructure/board/store_epic.go` | 318 | эпики: `CreateEpic`/`GetEpic`/`SaveEpic`/`ListEpics`/`ReorderEpics`/`SetEpicStatus`, `setEpicTasksStatus`/`pauseEpicTasks`/`resumeEpicTasks`, `DeleteEpic`, `checkNoDependents` |
+| `infrastructure/board/store_task.go` | 489 | задачи: CRUD (`CreateTask`/`GetTask`/`SaveTask`/`ListTasks`/`TasksByEpic`/`DeleteTask`), `PatchTask`/`MoveTask`/`SetTaskStatus`/`ReopenTask`, инъекции и комментарии задач |
+| `infrastructure/board/store_bug.go` | 128 | баги: `CreateBugReport`/`GetBugReport`/`SaveBugReport`/`ListBugReports`/`SetBugStatus`/`MarkBugsFixedForEpic` |
+| `infrastructure/board/store_meta.go` | 144 | meta и счётчики: `referenceExists`/`ReferenceExists`, `GetMeta`/`SaveMeta`, `EpicCounts`/`TaskCounts`/`AllDone`, `FirstNonZeroStatus`/`FirstNonZeroBugStatus` |
+
+Проверено: канонический набор зелёный, число деклараций сохранено (67),
+`gofmt` по правкам чист.
+
+## Итог
+
+Этап 7 завершён: четыре крупных файла (`server/server.go` 1833,
+`tools/fileops.go` 1707, `application/planner/executor.go` 1555,
+`infrastructure/board/store.go` 1298) разрезаны на 22 под-файла внутри тех же
+пакетов. Ни один под-файл не превышает 500 строк, публичный API и поведение
+не менялись, канонический набор зелёный.
+
