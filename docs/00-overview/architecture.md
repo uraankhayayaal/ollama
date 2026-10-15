@@ -34,6 +34,34 @@
 └───────────────────────────────────────────────────────────────────┘
 ```
 
+### Правило зависимостей (Этап 8, Clean Architecture)
+
+Направление зависимостей — только внутрь, по слоям:
+
+```
+domain  ←  application  ←  infrastructure  ←  outer (server, main, runner, agents, tools)
+   ↑            ↑                ↑
+ доменные    порты/          реализация
+  типы      use-cases        портов
+```
+
+- `domain/` (+ `domain/services/` — порты): сущности, политики, интерфейсы.
+  Только stdlib (и под-пакеты домена). Не импортирует ничего проектного.
+- `application/*`: use-cases и оркестрация. Импортирует только домен
+  (`ai/domain`, `ai/domain/services`) и допустимые shared-утилиты. **Не**
+  импортирует `ai/{agents,tools,runner,server,chat,checkpoint,runevents,
+  workspace,infrastructure/*}` напрямую — всё через порты.
+- `infrastructure/*`: реализация портов домена (Redis, git, LLM, RAG, песочница).
+- outer (`server`, `main`, `runner`, `agents`, `tools`): точка сборки
+  (composition root — `main.go`), HTTP/CLI, инфраструктурные адаптеры.
+
+**Допустимые shared-утилиты** (могут импортироваться любым слоем):
+`logging`, `projects`, `tokens`, `langdetect`.
+
+Гейт: тест `deprule_test.go` (`go test .` / `make depgate`) гоняет `go list`
+по `./application/...` и падает на прямом импорте application-пакета чего-либо
+вне allowlist'а.
+
 ## Агентский цикл (`runner/`)
 
 Центральный цикл — `runner.Runner`. Один раунд:

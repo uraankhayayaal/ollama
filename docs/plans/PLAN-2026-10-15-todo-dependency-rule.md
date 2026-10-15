@@ -65,7 +65,7 @@ Dependency Rule: внутренние слои импортируют внешн
 | H5c | `checkpoint`-порт (`planner` без `ai/checkpoint`) | ✅ |
 | H5d | `runevents.Reporter`-порт (`planner` без `ai/runevents`) | ✅ |
 | H5e | `workspace.Info`/`AddParams`/`Kind`→domain (`gitflow` без `ai/workspace`) | ✅ |
-| H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
+| H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | ✅ |
 
 ### H2: алиасы board→domain
 
@@ -300,16 +300,23 @@ application-пакеты теперь без не-тестовых импорт�
 `ai/workspace`. Порт `OpenRegistry` по-прежнему реализуется `*workspace.Registry`
 напрямую (алиасы идентичны). Поведение не менялось.
 
-Этап 8 (H1–H7, кроме H7) завершён: все application-пакеты без прямых
+Этап 8 (H1–H6, H5a–H5e) завершён: все application-пакеты без прямых
 не-тестовых импортов `ai/{agents,tools,infrastructure,chat,checkpoint,
 runevents,workspace,gitops}` — зависимости идут через домен/порты.
 
-### H7: уборка и верификация
+### H7: уборка и верификация ✅
 
-Удаление `repositories/`; скрипт импортного гейта; канонический набор +
-`-race` по новым тестам + `gofmt` по правкам; обновление
-`docs/00-overview/project-map.md` и `docs/10-architecture/architecture.md`
-(модель слоёв + список допустимых shared-утилит).
+`repositories/` удалён ещё на H1. Добавлен импортный гейт: тест
+`deprule_test.go` (`package main`, `go test .` / `make depgate`) гоняет
+`go list` по `./application/...` и падает на прямом импорте application-пакета
+чего-либо вне allowlist'а префиксов (`ai/domain`, `ai/application`,
+`ai/{logging,projects,tokens,langdetect}`). Финальная верификация:
+канонический набор `go build|vet|test -count=1` зелёный; `-race` по новым
+тестам чист; `gofmt` по правкам чист. Документация: секция «Правило
+зависимостей (Этап 8)» в `docs/00-overview/architecture.md` (модель слоёв,
+допустимые shared-утилиты, гейт) и новые доменные файлы в
+`docs/00-overview/project-map.md` (`domain/{dialog,checkpoint,workspace}.go`,
+`domain/services/reporter.go`).
 
 ## Риски
 
