@@ -1,21 +1,16 @@
 //go:build e2e
 
-package main
+package tests
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"ai/infrastructure/board"
-	"ai/server"
-	"ai/tools"
 )
 
 // E2E тест для проверки полного цикла нового харнесса
@@ -40,18 +35,18 @@ func TestE2EHarnessFullCycle(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Имитируем основной процесс выполнения задачи
-	ctx := context.Background()
-
 	// Проверяем создание эпика с новыми статусами
 	projectID := "test-project"
 
 	// Создаем эпик с новыми статусами
 	epic := board.Epic{
-		TaskID:       "epic-001",
-		ProjectID:    projectID,
-		AssignedRole: "qa",
-		Status:       board.StatusDone,
+		TaskSpec:    board.TaskSpec{TaskID: "epic-001", AssignedRole: "qa"},
+		ProjectName: projectID,
+		Status:      board.StatusDone,
+	}
+
+	if !epic.Status.Valid() {
+		t.Errorf("Статус эпика %s должен быть валидным", epic.Status)
 	}
 
 	// Проверяем, что статусы теперь валидны
@@ -83,8 +78,8 @@ func TestE2EHarnessFullCycle(t *testing.T) {
 	}
 
 	for _, tr := range transitions {
-		if !board.ValidateTransition(tr.from, tr.to) {
-			t.Errorf("Переход %s → %s должен быть допустимым", tr.from, tr.to)
+		if err := board.ValidateTransition(tr.from, tr.to); err != nil {
+			t.Errorf("Переход %s → %s должен быть допустимым: %v", tr.from, tr.to, err)
 		}
 	}
 
