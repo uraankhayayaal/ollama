@@ -31,6 +31,8 @@ import (
 	"strings"
 
 	"ai/application/usecases"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/infrastructure/rag"
 )
 
@@ -93,6 +95,35 @@ func ReindexFiles(ctx context.Context, cl ReindexClient, scopeOf func(rel string
 		reindexed++
 	}
 	return reindexed, nil
+}
+
+// RAGClient — векторная память агента-разработчика: поиск по смыслу
+// (CodeSearch, порт services.Searcher) и частичная переиндексация (Ф-5,
+// ReindexClient). Реализуется *rag.Client.
+type RAGClient interface {
+	services.Searcher
+	ReindexClient
+}
+
+// NewRAGClient собирает безопасный клиент векторной памяти (degrade при
+// недоступном Qdrant): при ошибке возвращает nil, и RAG-инструменты отдают
+// skipped. Агенты-разработчики получают клиент отсюда, чтобы не зависеть от
+// инфраструктурного пакета rag напрямую.
+func NewRAGClient() RAGClient {
+	c := rag.NewClientSafe(rag.Config{})
+	if c == nil {
+		return nil
+	}
+	return c
+}
+
+// ReindexTouched переиндексирует затронутые раундом файлы в ветке рабочего
+// каталога contentDir: scope определяется через domain.ScopeForPath, версия
+// индексации (branch/commit_sha) — по каталогу через rag.DetectIndexOptions
+// (см. PLAN-2026-09-27-done-branch-aware-rag.md, Р-7). Обёртка над
+// ReindexFiles с параметрами агента-разработчика.
+func ReindexTouched(ctx context.Context, cl ReindexClient, contentDir, project string, files []string) (int, error) {
+	return ReindexFiles(ctx, cl, domain.ScopeForPath, contentDir, project, files, rag.DetectIndexOptions(contentDir))
 }
 
 // ReindexEnabled сообщает, включена ли частичная переиндексация RAG

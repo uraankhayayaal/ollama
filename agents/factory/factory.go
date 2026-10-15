@@ -1,7 +1,8 @@
 // Package factory — реализация порта planner.AgentFactory поверх конкретных
 // пакетов агентов. Живёт в outer-слое (agents), поэтому вправе импортировать
-// concrete agents/* и infrastructure/rag; application/planner от них не зависит.
-// Установка — в composition root (main.go): planner.SetAgentFactory(factory.New()).
+// concrete agents/*; application/planner от них не зависит (RAG-зависимость
+// выражена портом domain/services.Searcher). Установка — в composition root
+// (main.go): planner.SetAgentFactory(factory.New()).
 package factory
 
 import (
@@ -15,7 +16,6 @@ import (
 	"ai/agents/qaengineer"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/infrastructure/rag"
 	"strings"
 )
 
@@ -110,13 +110,13 @@ func (architectFactory) ArchitectBugExpert(project, prompt string, store service
 	return architect.NewArchitectWithStore(project, prompt, store).AsBugExpert()
 }
 
-func (architectFactory) ConfigureArchitect(a agents.Agent, rag rag.Searcher, extras ...services.Tool) agents.Agent {
+func (architectFactory) ConfigureArchitect(a agents.Agent, searcher services.Searcher, extras ...services.Tool) agents.Agent {
 	arch, ok := a.(*architect.Architect)
 	if !ok {
 		return a
 	}
-	if rag != nil {
-		arch.SetRAG(rag)
+	if searcher != nil {
+		arch.SetRAG(searcher)
 	}
 	if len(extras) > 0 {
 		arch.Tools.Add(extras...)

@@ -7,10 +7,8 @@ package developer
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/domain/services"
-	"ai/infrastructure/board"
-	"ai/infrastructure/git"
-	"ai/infrastructure/rag"
 	"ai/logging"
 	"ai/projects"
 	"ai/runner/adapters"
@@ -63,9 +61,9 @@ type base struct {
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
 	Store services.BoardStore
 	// RAG — клиент векторной памяти (Qdrant) для инструмента CodeSearch.
-	// Создаётся ленивым rag.NewClientSafe: при недоступном Qdrant/degrade
+	// Создаётся через adapters.NewRAGClient: при недоступном Qdrant/degrade
 	// клиент nil, а инструмент возвращает skipped.
-	RAG *rag.Client
+	RAG adapters.RAGClient
 	// label — префикс логов агента ("backend-разработчик"/"frontend-разработчик").
 	label string
 	// roleDesc — инструкция роли для системного промпта (область работы, стек,
@@ -75,12 +73,10 @@ type base struct {
 	// ("Ты — опытный разработчик на ... и архитектор"). Пусто — используется
 	// Config.Language (глобальный CODEGEN_LANG).
 	langDesc string
-	// wipSubs — сабмодули рабочего каталога для промежуточных коммитов,
-	// читаются один раз (при первом коммите) и кэшируются: набор сабмодулей
-	// в ходе прогона не меняется, а git-вызов на каждом раунде лишний.
-	wipSubs []git.Submodule
-	// wipSubsDone — сабмодули уже читались (в том числе когда их нет).
-	wipSubsDone bool
+	// wip — состояние промежуточных коммитов раунда (Ф-6): кэш сабмодулей и
+	// git-логика вынесены в adapters.WipRepo, чтобы агент не зависел от
+	// инфраструктурного пакета git.
+	wip adapters.WipRepo
 	// taskID — id задачи, ради которой построен агент (SetTaskID). Нужен для
 	// State Tracking: в какую запись доски писать состояние раунда.
 	taskID string
@@ -166,7 +162,7 @@ func newFrontendDeveloperInDir(prompt, dir string) *FrontendDeveloper {
 // инструмент отдаст skipped).
 func newBase(prompt, dir string, cfg projects.Config, label, roleDesc string) *base {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
-	ragClient := rag.NewClientSafe(rag.Config{})
+	ragClient := adapters.NewRAGClient()
 	return &base{
 		FileOps:  ops,
 		Prompt:   prompt,
@@ -205,55 +201,17 @@ func (d *base) ReindexTouched(touched []string) (int, error) {
 	if project == "" {
 		return 0, nil
 	}
-	return adapters.ReindexFiles(context.Background(), d.RAG, rag.ScopeForPath, d.OutputDir, project, touched,
-		rag.DetectIndexOptions(d.OutputDir))
+	return adapters.ReindexTouched(context.Background(), d.RAG, d.OutputDir, project, touched)
 }
 
 // CommitRoundTouched фиксирует правки раунда промежуточным коммитом (Ф-6,
 // реализует adapters.WIPCommitter). Вызывается раннером в пост-раундовом хуке
-// из единой очереди затронутых файлов.
-//
-// Гард области: коммит создаётся только в изолированной копии задачи
-// (git.InTaskBranch). Общий клон temp/<проект>, где агент пишет в режиме
-// `plan`, стоит на ветке ai/<проект> — там коммит не создаётся, и это
-// правильно: общий клон делят все шаги плана, коммитить его нельзя.
-//
-// Сабмодули читаются один раз и кэшируются: набор сабмодулей в ходе прогона
-// не меняется, а лишний git-вызов на каждом раунде не нужен. Без них
-// `git add -A` закоммитил бы изменённый gitlink на коммит, которого нет на
-// remote сабмодуля, — сломанная ссылка.
-//
-// Ошибка не должна ронять генерацию: раннер деградирует её в лог, а правки
-// останутся в рабочем дереве до следующего раунда.
+// из единой очереди затронутых файлов. Гард области (коммит только в ветке
+// задачи ai/task/<id>, кэш сабмодулей, средства git) — в
+// adapters.WipRepo.CommitWipRound; здесь только делегирование, чтобы агент не
+// зависел от инфраструктурного пакета git.
 func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, error) {
-	if d.OutputDir == "" {
-		return "", false, nil
-	}
-	// RepoFromState — единственный способ получить Repo с реальным
-	// исполнителем (поле ex не экспортируется): промежуточный коммит —
-	// локальная операция, remote и точка отхода ему не нужны.
-	repo := git.RepoFromState(&git.CLIExecutor{}, d.OutputDir, "", "", "")
-	inTask, err := repo.InTaskBranch(context.Background())
-	if err != nil {
-		return "", false, err
-	}
-	if !inTask {
-		return "", false, nil
-	}
-	if !d.wipSubsDone {
-		subs, err := git.ListSubmodules(context.Background(), &git.CLIExecutor{}, d.OutputDir)
-		if err != nil {
-			return "", false, err
-		}
-		d.wipSubs = subs
-		d.wipSubsDone = true
-	}
-	repo.Submodules = d.wipSubs
-	sha, committed, err := repo.CommitIfDirty(context.Background(), adapters.WipRoundMessage(round, touched))
-	if err != nil {
-		return "", false, err
-	}
-	return sha, committed, nil
+	return d.wip.CommitWipRound(context.Background(), d.OutputDir, touched, round)
 }
 
 // SetBoardStore подключает разработчика к общей Kanban-доске проекта: добавляет
@@ -305,7 +263,7 @@ func (d *base) ReportRoundState(rs adapters.RoundState) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	rs.Agent = d.label
 	errText := adapters.RoundStateErrorText(rs)
-	err := d.Store.PatchTask(context.Background(), d.taskID, func(t *board.Task) error {
+	err := d.Store.PatchTask(context.Background(), d.taskID, func(t *domain.Task) error {
 		t.AgentState = rs.State
 		t.ActiveAgent = d.label
 		t.HeartbeatAt = now
@@ -316,7 +274,7 @@ func (d *base) ReportRoundState(rs adapters.RoundState) {
 		}
 		if rs.Committed && rs.CommitSHA != "" {
 			if t.Checkpoint == nil {
-				t.Checkpoint = &board.TaskCheckpoint{}
+				t.Checkpoint = &domain.TaskCheckpoint{}
 			}
 			t.Checkpoint.LastSHA = rs.CommitSHA
 			// Проверка прошла в этом же раунде: коммит раунда — точка,

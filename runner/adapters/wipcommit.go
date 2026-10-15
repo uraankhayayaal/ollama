@@ -22,11 +22,13 @@ package adapters
 // окружения — здесь, фиксация средствами git — на стороне агента.
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
 
 	"ai/application/usecases"
+	"ai/infrastructure/git"
 )
 
 // WIPCommitOnEnv — env-флаг промежуточных коммитов (KANBAN_WIP_COMMIT).
@@ -46,6 +48,50 @@ const wipCommitFilesMaxEnv = "KANBAN_WIP_COMMIT_FILES"
 // каталога. Отказываться от реализации можно молча: без неё промежуточные
 // коммиты просто не делаются, поведение прежнее.
 type WIPCommitter = usecases.WIPCommitter
+
+// WipRepo — состояние промежуточных коммитов рабочего каталога
+// агента-разработчика. Сабмодули читаются один раз (при первом коммите) и
+// кэшируются: набор в ходе прогона не меняется, а git-вызов на каждом раунде
+// лишний. Нулевое значение готово к использованию; поле живёт в агенте,
+// git-логика — здесь.
+type WipRepo struct {
+	subs   []git.Submodule
+	loaded bool
+}
+
+// CommitWipRound фиксирует правки раунда промежуточным коммитом в рабочей
+// копии dir (Ф-6). Гард области: коммит создаётся только в изолированной копии
+// задачи (git.InTaskBranch); общий клон temp/<проект>, где агент пишет в режиме
+// `plan`, стоит на ветке ai/<проект> — там коммит не делается (клон делят все
+// шаги плана). Сабмодули добавляются, чтобы `git add -A` не закоммитил
+// изменённый gitlink на коммит, которого нет на remote сабмодуля.
+//
+// Возвращает (sha, committed, err); пустой dir → (".", false, nil) без
+// обращения к git. Ошибка не должна ронять генерацию: вызывающий логирует её,
+// а правки остаются в рабочем дереве до следующего раунда.
+func (r *WipRepo) CommitWipRound(ctx context.Context, dir string, touched []string, round int) (string, bool, error) {
+	if dir == "" {
+		return "", false, nil
+	}
+	repo := git.RepoFromState(&git.CLIExecutor{}, dir, "", "", "")
+	inTask, err := repo.InTaskBranch(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	if !inTask {
+		return "", false, nil
+	}
+	if !r.loaded {
+		subs, err := git.ListSubmodules(ctx, &git.CLIExecutor{}, dir)
+		if err != nil {
+			return "", false, err
+		}
+		r.subs = subs
+		r.loaded = true
+	}
+	repo.Submodules = r.subs
+	return repo.CommitIfDirty(ctx, WipRoundMessage(round, touched))
+}
 
 // WIPCommitEnabled сообщает, включены ли промежуточные коммиты.
 func WIPCommitEnabled() bool {

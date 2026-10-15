@@ -56,7 +56,9 @@ Dependency Rule: внутренние слои импортируют внешн
 | H3a | git-данные: `MergeResult`/`MergeFeatureOptions`/`MergeConflictError`/`SanitizeBranchName`/`TaskBranchPrefix`/`RedactSecrets`/`ErrWorkflowScope`→`domain` (+alias в `git`) | ✅ |
 | H3b | `rag`→домен: `Index*`/`SearchParams`/`SearchResult`/`IsIgnoredDir`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | ✅ |
 | H3c | `gitflow` прямые git-операции (`Clone`/`HasCommit`/`RepoFromState`/`Worktree`/`EnsureSubmodules`/`HasConflictMarkers`/`*git.Repo`)→ хост-порты | ✅ |
-| H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | Ожидает |
+| H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | разбит на H6a–H6b |
+| H6a | `architect`/`chatassist`: `board.*`/rag-типы→`domain`, `Config`/`LoadConfig`→`infrastructure/board/storeconfig.go` | ✅ |
+| H6b | `developer`/`factory`: `board.*`→`domain`, git-WIP и RAG-переиндексация→`runner/adapters`, `rag.Searcher`→`services.Searcher` | ✅ |
 | H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | Ожидает |
 | H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
 
@@ -216,6 +218,27 @@ git без `|||||||`). `open.go`: новые типы `ClonedRepo`/`ClonedSubmod
 `architect`/`chatassist`/`developer`: `board.Store` → `services.BoardStore`,
 `board.*`-типы → `domain`, rag/git-типы → доменные (появляются в H3).
 `agents`→`tools`/`projects`/`logging` остаются (outer→outer / утилиты).
+
+Срез **H6a** (`9f72a9e`): `architect`/`chatassist` отвязаны от
+`ai/infrastructure/{board,rag}`. `board.Config`/`LoadConfig`/`StoreConfig` и
+env-хелперы перенесены из `agents/architect/config.go` в
+`infrastructure/board/storeconfig.go` (`agents/architect/config.go` удалён);
+`agents/architect` использует `domain.*` (в т.ч. `UnmarshalBacklog`/`Epic`/
+`ErrExists`/`Opportunity`) и `services.Searcher`; мёртвый `NewArchitect`
+(строил Redis-store) удалён. Callers `architect.LoadConfig()` →
+`board.LoadConfig()` (`main.go`, `server/*.go`, тесты).
+
+Срез **H6b**: `agents/developer` и `agents/factory` отвязаны от
+`ai/infrastructure/*` (во всех агентах прямых infra-импортов не осталось).
+`developer`: `board.Task`/`board.TaskCheckpoint`→`domain.*`; git-WIP-коммит
+(`RepoFromState`/`CLIExecutor`/`ListSubmodules`/`InTaskBranch`/`CommitIfDirty`,
+кэш сабмодулей) и RAG-переиндексация (`rag.ScopeForPath`→`domain.ScopeForPath`,
+`rag.DetectIndexOptions`, сборка клиента) вынесены в `runner/adapters`
+(`WipRepo.CommitWipRound`, `ReindexTouched`, `NewRAGClient`, а также порт
+`RAGClient{Searcher;ReindexClient}`); агент только делегирует, поле
+`RAG` имеет тип `adapters.RAGClient`, git-логика — в адаптере-пакете
+(разрешено: `runner/adapters` — outer/адаптеры). `factory.ConfigureArchitect`
+принимает `services.Searcher` (было `rag.Searcher`-алиас).
 
 ### H5: вторичные application→внешние
 
