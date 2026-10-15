@@ -19,7 +19,7 @@
 (57), `gofmt` по правкам чист. Документация: новый план + строка в
 `docs/plans/README.md`. Остаток Этапа 7 — G2 (`tools/fileops.go`), G3
 (`application/planner/executor.go`), G4 (`infrastructure/board/store.go`).
-Коммита нет (спросить пользователя).
+Коммит G1 `fe7e12e`.
 
 ## Состояние последней сессии (Clean Architecture Этап 6 завершён, срезы F1–F3ad — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
