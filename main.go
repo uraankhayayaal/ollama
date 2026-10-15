@@ -25,7 +25,7 @@ import (
 	"ai/infrastructure/mrlistener"
 	"ai/infrastructure/rag"
 	"ai/infrastructure/runmetrics"
-	"ai/runctx"
+	"ai/internal/runctx"
 	"ai/server"
 	"ai/shared/logging"
 	"ai/shared/projects"

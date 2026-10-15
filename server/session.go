@@ -21,7 +21,7 @@ import (
 	"ai/infrastructure/runevents"
 	"ai/infrastructure/runmetrics"
 	"ai/infrastructure/workspace"
-	"ai/runctx"
+	"ai/internal/runctx"
 	"ai/shared/logging"
 	"ai/shared/projects"
 	"ai/shared/tokens"

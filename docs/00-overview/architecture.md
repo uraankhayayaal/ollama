@@ -85,7 +85,7 @@ domain  ←  application  ←  infrastructure  ←  outer (server, main, runner,
 | `runner/adapters/reindex.go` | Авто-переиндексация RAG после мутаций |
 | `runner/adapters/autofix.go` | Авто-починка кода по LSP-диагностикам |
 | `runner/adapters/applog.go` | Автоподмешивание логов приложения в промпт |
-| `runctx/` | Сборка сервисов сжатия для CLI/планировщика/сервера |
+| `internal/runctx/` | Сборка сервисов сжатия для CLI/планировщика/сервера |
 | `infrastructure/runevents/` | События цикла для UI в реальном времени |
 | `infrastructure/runmetrics/` | Реестр метрик и Prometheus-экспорт |
 

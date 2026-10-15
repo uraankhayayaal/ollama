@@ -78,7 +78,7 @@ gofmt -w <файл>
 | `infrastructure/chat/` | История чата в Redis |
 | `infrastructure/board/`, `infrastructure/runmetrics/`, `shared/tokens/` | Токены, метрики, цены |
 | `shared/projects/` | Конфиг проекта, `ProjectDir` |
-| `runctx/`, `infrastructure/runevents/` | Контекст цикла и события |
+| `internal/runctx/`, `infrastructure/runevents/` | Контекст цикла и события |
 | `web/` | Фронтенд React + TypeScript |
 | `docs/` | Эта документация |
 | `temp/` | **Хранилище проектов агентов**, не исходный код |

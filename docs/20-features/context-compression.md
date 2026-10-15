@@ -103,7 +103,7 @@ compressHistoryForRound(...)  — перед каждым раундом
 
 `runctx.WithCompression(ctx, project, dir, ragc)` — единая точка сборки
 сервисов сжатия. Подключается в трёх местах: CLI, планировщик, сервер
-(`runctx/runctx.go:25-48`).
+(`internal/runctx/runctx.go:25-48`).
 
 Сами флаги читаются в цикле раннера, не здесь.
 

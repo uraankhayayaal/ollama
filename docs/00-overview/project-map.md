@@ -56,7 +56,7 @@
 | `autofix.go` | Авто-починка кода по LSP-диагностикам |
 | `applog.go` | Автоподмешивание логов приложения в промпт |
 | `debug.go` | Отладочный вывод |
-| `runctx/` | Сборка сервисов сжатия для CLI, планировщика и сервера |
+| `internal/runctx/` | Сборка сервисов сжатия для CLI, планировщика и сервера |
 | `infrastructure/runevents/` | События цикла (сообщения, `message_delta`, tool-call, токены) |
 | `infrastructure/runmetrics/` | Реестр метрик + Prometheus-экспорт (`prom.go`) |
 

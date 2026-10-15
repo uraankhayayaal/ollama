@@ -13,7 +13,7 @@ import (
 	"ai/infrastructure/chat"
 	"ai/infrastructure/rag"
 	"ai/infrastructure/runevents"
-	"ai/runctx"
+	"ai/internal/runctx"
 	"ai/shared/projects"
 	"ai/tools"
 )

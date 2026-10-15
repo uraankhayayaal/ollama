@@ -1,5 +1,17 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (runctx → internal/)
+
+`runctx/` → `internal/runctx/` (обвязка сжатия истории: собирает
+`runner.CompressionClient` из RAG + LSP + stackdetect и кладёт в контекст;
+импортирует `runner`+`tools` — outer, поэтому не в `infrastructure/`). Пакет
+только перемещён (`git mv`), имя не менялось; правлен путь импорта `ai/runctx`
+→ `ai/internal/runctx` в 3 файлах + `gofmt -w`. Верификация: канонический набор
+зелёный (падают только предсуществующие host-флаки `TestAcceptBuild*`), `gofmt`
+по правкам чист. Документация: живые доки (`architecture.md`, `project-map.md`,
+`20-features/context-compression.md`, `40-operations/development.md`) — путь на
+`internal/runctx/`; исторические `PLAN-*-done-*.md` не трогались.
+
 ## Состояние последней сессии (shared-утилиты → shared/)
 
 Четыре корневые shared-утилиты сгруппированы под `shared/`: `logging/` →
@@ -31,7 +43,7 @@ domain остаётся stdlib-only; `application` по-прежнему имп�
 `mrlistener`←logging, `acceptor`←domain+sandbox+logging+stackdetect+tools
 (outer→outer + outer→infrastructure — не нарушает правило). Оставлены в корне:
 `shared/{logging,projects,tokens,langdetect}` (shared-утилиты — от них зависит
-`application`), `runctx/` (outer-обвязка: импортирует `runner`+`tools`),
+`application`), `internal/runctx/` (outer-обвязка: импортирует `runner`+`tools`),
 `archive/` (не код модуля: скрач-каталог). Верификация:
 канонический набор `go build|vet|test -count=1` зелёный (падают только
 предсуществующие host-флаки `TestAcceptBuild*` на GNU Make 3.81 и иногда
