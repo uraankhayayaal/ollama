@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"ai/domain"
-	"ai/infrastructure/git"
 )
 
 // fakeEpicRepo — заглушка EpicRepo: фиксирует вызовы, отдаёт заданные исходы.
@@ -15,7 +14,7 @@ type fakeEpicRepo struct {
 	root string
 
 	mergeFeatureErr  error
-	mergeFeatureRes  *git.MergeResult
+	mergeFeatureRes  *domain.MergeResult
 	mergeFeatureCall int
 
 	addWorktreePath string
@@ -27,7 +26,7 @@ type fakeEpicRepo struct {
 
 func (r *fakeEpicRepo) Root() string { return r.root }
 
-func (r *fakeEpicRepo) MergeFeature(context.Context, string, string, git.MergeFeatureOptions) (*git.MergeResult, error) {
+func (r *fakeEpicRepo) MergeFeature(context.Context, string, string, domain.MergeFeatureOptions) (*domain.MergeResult, error) {
 	r.mergeFeatureCall++
 	return r.mergeFeatureRes, r.mergeFeatureErr
 }
@@ -51,8 +50,8 @@ type fakeWorktreeOps struct {
 	stageErr error
 }
 
-func (w *fakeWorktreeOps) MergeBranch(context.Context, string, string) (*git.MergeResult, error) {
-	return &git.MergeResult{}, nil
+func (w *fakeWorktreeOps) MergeBranch(context.Context, string, string) (*domain.MergeResult, error) {
+	return &domain.MergeResult{}, nil
 }
 
 func (w *fakeWorktreeOps) UnmergedFiles(context.Context) ([]string, error) { return w.unmerged, nil }
@@ -167,7 +166,7 @@ func TestEpicMainSyncerFastPath(t *testing.T) {
 		refOK:   true,
 		repo: &fakeEpicRepo{
 			root:            "/tmp/projects/myrepo",
-			mergeFeatureRes: &git.MergeResult{AlreadyMerged: true},
+			mergeFeatureRes: &domain.MergeResult{AlreadyMerged: true},
 		},
 	}
 	(&EpicMainSyncer{Host: h}).SyncEpicMain(ctx, "p", newEpic())
@@ -222,7 +221,7 @@ func TestEpicMainSyncerTrivialResolve(t *testing.T) {
 		refOK:   true,
 		repo: &fakeEpicRepo{
 			root:            "/tmp/projects/myrepo",
-			mergeFeatureErr: &git.MergeConflictError{Feature: "main", Files: []string{"a.go", "b.go"}},
+			mergeFeatureErr: &domain.MergeConflictError{Feature: "main", Files: []string{"a.go", "b.go"}},
 			wt:              wt,
 		},
 		trivialResolved: []string{"a.go", "b.go"},
@@ -256,7 +255,7 @@ func TestEpicMainSyncerHardConflictLLMResolved(t *testing.T) {
 		refOK:   true,
 		repo: &fakeEpicRepo{
 			root:            "/tmp/projects/myrepo",
-			mergeFeatureErr: &git.MergeConflictError{Feature: "main", Files: []string{"hard.go"}},
+			mergeFeatureErr: &domain.MergeConflictError{Feature: "main", Files: []string{"hard.go"}},
 			wt:              &fakeWorktreeOps{unmerged: []string{"hard.go"}},
 		},
 		trivialHard: []string{"hard.go"},
@@ -286,7 +285,7 @@ func TestEpicMainSyncerHardConflictNeedsHuman(t *testing.T) {
 		refOK:   true,
 		repo: &fakeEpicRepo{
 			root:            "/tmp/projects/myrepo",
-			mergeFeatureErr: &git.MergeConflictError{Feature: "main", Files: []string{"hard.go"}},
+			mergeFeatureErr: &domain.MergeConflictError{Feature: "main", Files: []string{"hard.go"}},
 			wt:              &fakeWorktreeOps{unmerged: []string{"hard.go"}},
 		},
 		trivialHard: []string{"hard.go"},
@@ -318,7 +317,7 @@ func TestEpicMainSyncerForTaskNoLock(t *testing.T) {
 		refOK:   true,
 		repo: &fakeEpicRepo{
 			root:            "/tmp/projects/myrepo",
-			mergeFeatureRes: &git.MergeResult{},
+			mergeFeatureRes: &domain.MergeResult{},
 		},
 	}
 	(&EpicMainSyncer{Host: h}).SyncMainForTask(ctx, "p", "E-1")

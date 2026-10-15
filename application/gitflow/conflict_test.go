@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"ai/domain"
-	"ai/infrastructure/git"
 )
 
 // --- заглушки ---------------------------------------------------------------
@@ -23,14 +22,14 @@ type fakeConflictRepo struct {
 	addCalls     []string
 	removed      []string
 	removeErr    error
-	mergeRes     *git.MergeResult
+	mergeRes     *domain.MergeResult
 	mergeErr     error
 	mergeCalls   []mergeCall
 }
 
 type mergeCall struct{ base, source string }
 
-func (r *fakeConflictRepo) MergeFeature(_ context.Context, base, source string, _ git.MergeFeatureOptions) (*git.MergeResult, error) {
+func (r *fakeConflictRepo) MergeFeature(_ context.Context, base, source string, _ domain.MergeFeatureOptions) (*domain.MergeResult, error) {
 	r.mergeCalls = append(r.mergeCalls, mergeCall{base, source})
 	if r.mergeErr != nil {
 		return nil, r.mergeErr
@@ -38,7 +37,7 @@ func (r *fakeConflictRepo) MergeFeature(_ context.Context, base, source string, 
 	if r.mergeRes != nil {
 		return r.mergeRes, nil
 	}
-	return &git.MergeResult{Message: "merged"}, nil
+	return &domain.MergeResult{Message: "merged"}, nil
 }
 
 func (r *fakeConflictRepo) MergeBase(context.Context, string, string) (string, error) {
@@ -78,8 +77,8 @@ type fakeConflictWorktree struct {
 	allowEmpty     []string
 }
 
-func (w *fakeConflictWorktree) MergeBranch(context.Context, string, string) (*git.MergeResult, error) {
-	return &git.MergeResult{}, w.mergeBranchErr
+func (w *fakeConflictWorktree) MergeBranch(context.Context, string, string) (*domain.MergeResult, error) {
+	return &domain.MergeResult{}, w.mergeBranchErr
 }
 
 func (w *fakeConflictWorktree) UnmergedFiles(context.Context) ([]string, error) {
@@ -339,7 +338,7 @@ func resolveHost(t *testing.T) (*fakeConflictHost, string) {
 
 func TestConflictResolveOK(t *testing.T) {
 	h, wtDir := resolveHost(t)
-	h.repo.mergeRes = &git.MergeResult{Message: "merged", AlreadyMerged: false}
+	h.repo.mergeRes = &domain.MergeResult{Message: "merged", AlreadyMerged: false}
 	out, err := ConflictResolver{Host: h}.FinishResolve(context.Background(), "myrepo", "e1")
 	if err != nil {
 		t.Fatal(err)
@@ -448,7 +447,7 @@ func TestConflictResolveAcceptanceFailed(t *testing.T) {
 
 func TestConflictResolveFinalConflict(t *testing.T) {
 	h, _ := resolveHost(t)
-	h.repo.mergeErr = &git.MergeConflictError{Feature: "ai/epic/e1", Files: []string{"z.txt"}}
+	h.repo.mergeErr = &domain.MergeConflictError{Feature: "ai/epic/e1", Files: []string{"z.txt"}}
 	out, err := ConflictResolver{Host: h}.FinishResolve(context.Background(), "myrepo", "e1")
 	if err != nil {
 		t.Fatal(err)

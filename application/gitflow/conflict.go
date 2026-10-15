@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"ai/domain"
-	"ai/infrastructure/git"
 	"ai/logging"
 )
 
@@ -35,7 +34,7 @@ var (
 
 // ConflictRepo — git-операции конфликтного резолва.
 type ConflictRepo interface {
-	MergeFeature(ctx context.Context, base, source string, opts git.MergeFeatureOptions) (*git.MergeResult, error)
+	MergeFeature(ctx context.Context, base, source string, opts domain.MergeFeatureOptions) (*domain.MergeResult, error)
 	MergeBase(ctx context.Context, a, b string) (string, error)
 	MergeTree(ctx context.Context, base, ours, theirs string) ([]string, error)
 	Root() string
@@ -45,7 +44,7 @@ type ConflictRepo interface {
 
 // ConflictWorktree — операции в конфликтном worktree.
 type ConflictWorktree interface {
-	MergeBranch(ctx context.Context, branch, message string) (*git.MergeResult, error)
+	MergeBranch(ctx context.Context, branch, message string) (*domain.MergeResult, error)
 	UnmergedFiles(ctx context.Context) ([]string, error)
 	Stage(ctx context.Context, paths []string) error
 	Dirty(ctx context.Context) (bool, error)
@@ -194,7 +193,7 @@ func (r ConflictResolver) startRebaseLocked(ctx context.Context, project, epicID
 		}, nil
 	}
 
-	wtPath := filepath.Join(filepath.Dir(repo.Root()), ".conflict-"+project+"-"+git.SanitizeBranchName(epicID))
+	wtPath := filepath.Join(filepath.Dir(repo.Root()), ".conflict-"+project+"-"+domain.SanitizeBranchName(epicID))
 
 	// 4.1: worktree ветки эпика (архитектор) держит релизную ветку checked-out —
 	// конфликтный worktree не смог бы её получить.
@@ -372,12 +371,12 @@ func (r ConflictResolver) finishResolveLocked(ctx context.Context, project, epic
 	}
 
 	// 4) Финальный merge main ← релизной ветки (после резолва merge-tree чист).
-	res, mergeErr := repo.MergeFeature(ctx, main, rs.Branch, git.MergeFeatureOptions{
+	res, mergeErr := repo.MergeFeature(ctx, main, rs.Branch, domain.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: релиз в main после резолва конфликтов", epicID),
 		PushURL: pushURL,
 	})
 	if mergeErr != nil {
-		var ce *git.MergeConflictError
+		var ce *domain.MergeConflictError
 		if errors.As(mergeErr, &ce) {
 			return &ResolveOutcome{
 				Status:  "conflicts",

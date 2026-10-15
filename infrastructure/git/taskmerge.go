@@ -17,29 +17,6 @@ import (
 	"strings"
 )
 
-// MergeConflictError — слияние feature в release невозможно из-за конфликтов.
-// Files содержит конфликтующие пути, полученные через merge-tree БЕЗ изменения
-// рабочей копии. Это вход для Ф-4 (авто-резолв + приёмка) — тут только прячем
-// список наружу.
-type MergeConflictError struct {
-	Feature string   // вливаемый источник (ai/task/<id>)
-	Files   []string // конфликтующие пути
-}
-
-func (e *MergeConflictError) Error() string {
-	return "gitops: конфликт при вливании " + e.Feature + ": " + strings.Join(e.Files, ", ")
-}
-
-// MergeFeatureOptions — параметры вливания фича-ветки в релизную.
-type MergeFeatureOptions struct {
-	// Message — сообщение merge-коммита (обязательно, в HEAD попадает как
-	// «Merge branch 'ai/task/<id>' ...» — связывает коммит с задачей).
-	Message string
-	// PushURL — remote-URL, куда после слияния пушится релизная ветка.
-	// Пустая строка — без push (например, локальный клон без remote).
-	PushURL string
-}
-
 // MergeFeature вливает фича-ветку feature в релизную ветку release в общем
 // клоне r.Root. Возвращаемые случаи:
 //

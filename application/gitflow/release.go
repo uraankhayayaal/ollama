@@ -1,7 +1,7 @@
 // Политика вливания ветки задачи в релизную ветку её эпика — общая механика
 // REST-эндпоинта «Влить» и авто-хука done→merge (Ф-3, Ф-4).
 //
-// Слияние идёт через git.MergeFeature (прогноз конфликтов через merge-tree БЕЗ
+// Слияние идёт через MergeFeature (прогноз конфликтов через merge-tree БЕЗ
 // изменения рабочей копии, затем настоящий merge-коммит во временном worktree и
 // push релизной ветки). Рабочая копия клона и HEAD агента не трогаются.
 package gitflow
@@ -12,7 +12,6 @@ import (
 	"fmt"
 
 	"ai/domain"
-	"ai/infrastructure/git"
 )
 
 // Доменные ошибки релиза эпика в базу (маппятся адаптером в HTTP-коды).
@@ -38,7 +37,7 @@ type MergeProject struct {
 
 // MergeRepo — git-операции, нужные слиянию feature-ветки.
 type MergeRepo interface {
-	MergeFeature(ctx context.Context, base, source string, opts git.MergeFeatureOptions) (*git.MergeResult, error)
+	MergeFeature(ctx context.Context, base, source string, opts domain.MergeFeatureOptions) (*domain.MergeResult, error)
 }
 
 // MergeTaskHost — окружение политики слияния веток задачи: доступ к git-проекту,
@@ -59,9 +58,9 @@ type TaskMerger struct {
 }
 
 // MergeTaskBranch вливает ветку задачи в ветку её эпика. Возвращает результат
-// слияния или *git.MergeConflictError при конфликтах. Потокобезопасно: слияния
+// слияния или *domain.MergeConflictError при конфликтах. Потокобезопасно: слияния
 // проекта сериализуются пер-проектным локом.
-func (m TaskMerger) MergeTaskBranch(ctx context.Context, project string, t *domain.Task) (*git.MergeResult, error) {
+func (m TaskMerger) MergeTaskBranch(ctx context.Context, project string, t *domain.Task) (*domain.MergeResult, error) {
 	if t == nil || t.EpicID == "" {
 		return nil, fmt.Errorf("задача без эпика")
 	}
@@ -85,13 +84,13 @@ func (m TaskMerger) MergeTaskBranch(ctx context.Context, project string, t *doma
 		return nil, fmt.Errorf("сначала создайте ветку задачи %s: %v", t.TaskID, err)
 	}
 
-	var res *git.MergeResult
+	var res *domain.MergeResult
 	var mergeErr error
 	m.Host.Locked(project, func() {
 		// 4.1: worktree ветки эпика (архитектор) держит релизную ветку
 		// checked-out — MergeFeature не смог бы поставить её во временный worktree.
 		m.Host.DropEpicWorktreeLocked(ctx, project, t.EpicID)
-		res, mergeErr = repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, git.MergeFeatureOptions{
+		res, mergeErr = repo.MergeFeature(ctx, epicRef.Branch, taskRef.Branch, domain.MergeFeatureOptions{
 			Message: fmt.Sprintf("задача %s: влитие в релиз эпика %s", t.TaskID, t.EpicID),
 			PushURL: inf.PushURL,
 		})
@@ -125,8 +124,8 @@ type Releaser struct {
 // ReleaseEpic вливает релизную ветку эпика в базовую (main) — общая механика
 // REST-эндпоинта «Залить в main» и моста-инструмента ассистента EpicRelease.
 // Эпик должен быть в статусе done (ручной затвор человека); сама операция
-// необратима. Конфликт слияния возвращается как *git.MergeConflictError.
-func (r Releaser) ReleaseEpic(ctx context.Context, project, epicID string) (*git.MergeResult, string, string, error) {
+// необратима. Конфликт слияния возвращается как *domain.MergeConflictError.
+func (r Releaser) ReleaseEpic(ctx context.Context, project, epicID string) (*domain.MergeResult, string, string, error) {
 	inf, err := r.Host.Project(project)
 	if err != nil {
 		return nil, "", "", ErrProjectNotFound
@@ -160,16 +159,16 @@ func (r Releaser) ReleaseEpic(ctx context.Context, project, epicID string) (*git
 		return nil, "", "", fmt.Errorf("%w: %v", ErrEpicBranchMissing, err)
 	}
 
-	var res *git.MergeResult
+	var res *domain.MergeResult
 	var mergeErr error
 	r.Host.Locked(project, func() {
-		res, mergeErr = repo.MergeFeature(ctx, main, epicRef.Branch, git.MergeFeatureOptions{
+		res, mergeErr = repo.MergeFeature(ctx, main, epicRef.Branch, domain.MergeFeatureOptions{
 			Message: fmt.Sprintf("эпик %s: релиз в main из %s", epicID, epicRef.Branch),
 			PushURL: inf.PushURL,
 		})
 	})
 	if mergeErr != nil {
-		var ce *git.MergeConflictError
+		var ce *domain.MergeConflictError
 		if errors.As(mergeErr, &ce) {
 			return nil, "", "", mergeErr
 		}

@@ -2,10 +2,8 @@ package git
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
 )
 
@@ -13,29 +11,6 @@ import (
 // сервером Web UI (Ф-2-3): единственная реализация Executor вне тестов.
 // В тестах подставляются fake-исполнители (собесредственный dry-run).
 type CLIExecutor struct{}
-
-// ErrWorkflowScope — GitHub отклонил push: у токена форджа (GITHUB_TOKEN)
-// нет scope `workflow`, а ветка меняет `.github/workflows/*`. Перехватывается
-// вызывающим слоем (авто-MR/авто-мёрдж), чтобы показать на доске понятную
-// инструкцию вместо сырого вывода git.
-var ErrWorkflowScope = errors.New("у токена форджа нет scope `workflow`: GitHub отклоняет push веток с правками .github/workflows/* — добавь scope `workflow` к GITHUB_TOKEN")
-
-// tokenInURL маскирует userinfo credentialed URL push
-// (https://x-access-token:<токен>@host/…) — пароль userinfo не должен
-// попадать в логи проекта и ответы REST.
-var tokenInURL = regexp.MustCompile(`(://[^:/@\s]+):[^@\s]+@`)
-
-// knownTokens маскирует известные префиксы токенов GitHub/GitLab, если они
-// попали в текст не в URL (например, в stderr git или сообщении API-клиента).
-var knownTokens = regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|glpat-[A-Za-z0-9_-]{16,}`)
-
-// RedactSecrets скрывает секреты в тексте git-команд и вывода git: пароль в
-// userinfo credentialed URL и известные префиксы токенов GitHub/GitLab.
-// Вызывается в CLIExecutor, чтобы токен push не оседал в логах и ошибках.
-func RedactSecrets(s string) string {
-	s = tokenInURL.ReplaceAllString(s, "$1:***@")
-	return knownTokens.ReplaceAllString(s, "***")
-}
 
 // workflowScopeRefused распознаёт отказ GitHub по отсутствию scope `workflow`
 // (реальный текст: «…to create or update workflow `.github/workflows/ci.yml`

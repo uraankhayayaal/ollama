@@ -7,20 +7,19 @@ import (
 	"testing"
 
 	"ai/domain"
-	"ai/infrastructure/git"
 )
 
 // fakeMergeRepo — заглушка MergeRepo.
 type fakeMergeRepo struct {
-	res    *git.MergeResult
+	res    *domain.MergeResult
 	err    error
 	calls  int
 	base   string
 	source string
-	opts   git.MergeFeatureOptions
+	opts   domain.MergeFeatureOptions
 }
 
-func (r *fakeMergeRepo) MergeFeature(_ context.Context, base, source string, opts git.MergeFeatureOptions) (*git.MergeResult, error) {
+func (r *fakeMergeRepo) MergeFeature(_ context.Context, base, source string, opts domain.MergeFeatureOptions) (*domain.MergeResult, error) {
 	r.calls++
 	r.base, r.source, r.opts = base, source, opts
 	return r.res, r.err
@@ -72,7 +71,7 @@ func (h *fakeMergeHost) InvalidateDiffs(string) { h.invalidate++ }
 func okMergeHost() *fakeMergeHost {
 	return &fakeMergeHost{
 		project: MergeProject{IsGit: true, Kind: "git", Base: "main", PushURL: "https://token@x"},
-		repo:    &fakeMergeRepo{res: &git.MergeResult{Message: "merged"}},
+		repo:    &fakeMergeRepo{res: &domain.MergeResult{Message: "merged"}},
 		epicRef: BranchRef{Branch: "ai/epic/E-1"},
 		taskRef: BranchRef{Branch: "ai/task/T-1"},
 	}
@@ -180,13 +179,13 @@ func TestTaskMergerMissingBranches(t *testing.T) {
 // Ошибка слияния (конфликт): возвращается, диффы НЕ инвалидируются.
 func TestTaskMergerConflictNoInvalidate(t *testing.T) {
 	h := okMergeHost()
-	conflict := &git.MergeConflictError{Files: []string{"a.go"}}
+	conflict := &domain.MergeConflictError{Files: []string{"a.go"}}
 	h.repo.err = conflict
 
 	_, err := TaskMerger{Host: h}.MergeTaskBranch(context.Background(), "p", mergeTask())
-	var ce *git.MergeConflictError
+	var ce *domain.MergeConflictError
 	if !errors.As(err, &ce) {
-		t.Fatalf("err = %v, want *git.MergeConflictError", err)
+		t.Fatalf("err = %v, want *domain.MergeConflictError", err)
 	}
 	if h.invalidate != 0 {
 		t.Fatalf("конфликт не должен инвалидировать диффы: %d", h.invalidate)
@@ -251,7 +250,7 @@ func TestReleaserReleaseEpicSuccess(t *testing.T) {
 // AlreadyMerged прокидывается в MainChanged.
 func TestReleaserReleaseEpicAlreadyMerged(t *testing.T) {
 	h := newFakeReleaseHost()
-	h.repo.res = &git.MergeResult{AlreadyMerged: true}
+	h.repo.res = &domain.MergeResult{AlreadyMerged: true}
 	if _, _, _, err := (Releaser{Host: h}).ReleaseEpic(context.Background(), "p", "E-1"); err != nil {
 		t.Fatalf("ReleaseEpic: %v", err)
 	}
@@ -317,19 +316,19 @@ func TestReleaserReleaseEpicStateErrors(t *testing.T) {
 	}
 }
 
-// Ошибка слияния: конфликт возвращается как *git.MergeConflictError, прочее —
+// Ошибка слияния: конфликт возвращается как *domain.MergeConflictError, прочее —
 // ErrMergeFailed; MainChanged не зовётся.
 func TestReleaserReleaseEpicMergeErrors(t *testing.T) {
 	ctx := context.Background()
 
 	conflict := newFakeReleaseHost()
-	conflict.repo.err = &git.MergeConflictError{Files: []string{"a.go"}}
+	conflict.repo.err = &domain.MergeConflictError{Files: []string{"a.go"}}
 	if _, _, _, err := (Releaser{Host: conflict}).ReleaseEpic(ctx, "p", "E-1"); err == nil {
 		t.Fatal("ожидали ошибку конфликта")
 	} else {
-		var ce *git.MergeConflictError
+		var ce *domain.MergeConflictError
 		if !errors.As(err, &ce) {
-			t.Fatalf("err = %v, want *git.MergeConflictError", err)
+			t.Fatalf("err = %v, want *domain.MergeConflictError", err)
 		}
 	}
 	if conflict.mainChanged != 0 || conflict.invalidate != 0 {

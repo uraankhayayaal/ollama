@@ -52,7 +52,10 @@ Dependency Rule: внутренние слои импортируют внешн
 | H2 | Алиасы `board`→`domain` в `application/board`, `application/chatassist`, `tokens`, `injections`, `usecases` | ✅ |
 | H1 | `infrastructure/llm` чистый: порты→`domain/services`, убрать `Generate`, декоратор эскалации, `ToOllama`→llm, удалить `GetToolsForOllama` | ✅ |
 | H4 | `planner`→конкретные agents: фабрики выносятся в `agents/factory`, подключение через `SetAgentFactory` в `main` | ✅ |
-| H3 | `gitflow`/`rag`→домен: `MergeResult`/`MergeConflictError`/`Index*`/`SearchParams`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | Ожидает |
+| H3 | `gitflow`/`rag`→домен: данные git-слияния и rag-типы→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | разбит на H3a–H3c |
+| H3a | git-данные: `MergeResult`/`MergeFeatureOptions`/`MergeConflictError`/`SanitizeBranchName`/`TaskBranchPrefix`/`RedactSecrets`/`ErrWorkflowScope`→`domain` (+alias в `git`) | ✅ |
+| H3b | `rag`→домен: `Index*`/`SearchParams`/`SearchResult`/`IsIgnoredDir`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | Ожидает |
+| H3c | `gitflow` прямые git-операции (`Clone`/`HasCommit`/`RepoFromState`/`Worktree`/`EnsureSubmodules`/`HasConflictMarkers`/`*git.Repo`)→ хост-порты | Ожидает |
 | H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | Ожидает |
 | H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | Ожидает |
 | H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
@@ -129,7 +132,7 @@ Dependency Rule: внутренние слои импортируют внешн
 (осталась только базовая `ai/agents` с типами `Agent`/`Message` — вне H4);
 `agents/factory` не тянет `application/planner` (цикла нет).
 
-### H3: gitflow/rag→домен
+### H3: gitflow/rag→домен (срезы H3a–H3c)
 
 1. Типы данных → domain: `MergeResult`, `MergeConflictError`,
    `MergeFeatureOptions`, `IndexItem`/`IndexResult`/`IndexOptions`,
@@ -141,6 +144,23 @@ Dependency Rule: внутренние слои импортируют внешн
    существующие хост-порты или func-инъекция, сборка в `main`.
 4. Порты gitflow с git-типами в сигнатуре становятся доменными —
    вызывающий код (server) почти не меняется.
+
+**Выполнено (H3a):** git-данные вынесены в `domain/gitmerge.go`
+(`MergeResult`, `MergeConflictError`+`Error()`, `MergeFeatureOptions`,
+`TaskBranchPrefix`, `SanitizeBranchName`, `ErrWorkflowScope`, `RedactSecrets`
+с приватными regexp-хелперами). `infrastructure/git/domain_alias.go` даёт
+алиасы (`git.MergeResult = domain.MergeResult` и т.п.), поэтому реализация git
+и outer-слой (server/tools) не менялись. `application/gitflow` переведён на
+`domain.*`: исчез импорт `ai/infrastructure/git` в `branches.go`, `release.go`,
+`sync.go`, `conflict.go`, `worktree.go` (и в тестах `conflict/release/sync/
+worktree_test.go`); во всех этих файлах портовые сигнатуры типизированы
+доменными типами. Остались импортировать git только `conflictfiles.go`
+(`HasConflictMarkers`), `lifecycle.go` (`*git.Repo`/`EnsureSubmodules`/
+`Worktree`/`RepoFromState`) и `open.go` (`Clone`/`HasCommit`/`Executor`) —
+это H3c. Верификация: канонический набор + `./domain/`/`./infrastructure/git/`
+зелёные, `gofmt` по правкам чист.
+
+Остаток: **H3b** (rag→домен) и **H3c** (gitflow прямые git-операции).
 
 ### H6: agents→infrastructure
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/infrastructure/git"
+	"ai/domain"
 )
 
 // Раскладка worktree: соседи основного клона, id санитизируется.
@@ -102,7 +102,7 @@ func TestEnsureTaskGitignoreEmptyRoot(t *testing.T) {
 func TestGitflowErrBoardPolicy(t *testing.T) {
 	wrapped := fmt.Errorf("подготовка базы MR: %w",
 		fmt.Errorf("gitops: git push %s: %w", "ai/epic/e1",
-			fmt.Errorf("exit status 1: %s: %w", " ! [remote rejected] … without `workflow` scope", git.ErrWorkflowScope)))
+			fmt.Errorf("exit status 1: %s: %w", " ! [remote rejected] … without `workflow` scope", domain.ErrWorkflowScope)))
 	msg := GitflowErrBoard("авто-MR задачи T-01 не создан", wrapped)
 	if !strings.Contains(msg, "авто-MR задачи T-01 не создан") || !strings.Contains(msg, "GITHUB_TOKEN") {
 		t.Fatalf("нет подсказки про scope workflow: %q", msg)

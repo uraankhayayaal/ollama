@@ -290,11 +290,6 @@ func (r *Repo) HeadSHA(ctx context.Context) (string, error) {
 	return r.revParse(ctx, "HEAD")
 }
 
-// TaskBranchPrefix — префикс фича-ветки задачи (ai/task/<id>). Единственный
-// источник правды: сервер строит по нему ветки, а InTaskBranch проверяет по
-// нему, что рабочая копия принадлежит задаче.
-const TaskBranchPrefix = "ai/task/"
-
 // CurrentBranch возвращает имя ветки, на которой стоит рабочее дерево.
 func (r *Repo) CurrentBranch(ctx context.Context) (string, error) {
 	if r == nil || r.Root == "" {

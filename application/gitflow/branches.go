@@ -15,7 +15,6 @@ import (
 	"fmt"
 
 	"ai/domain"
-	"ai/infrastructure/git"
 	"ai/logging"
 )
 
@@ -24,7 +23,7 @@ const (
 	EpicBranchPrefix = "ai/epic/"
 	// TaskBranchPrefix — префикс фича-ветки задачи. Источник правды — gitops:
 	// тем же префиксом проверяется принадлежность рабочей копии задаче.
-	TaskBranchPrefix = git.TaskBranchPrefix
+	TaskBranchPrefix = domain.TaskBranchPrefix
 )
 
 // ErrEpicBranchMissing — ветка эпика ещё не создана, поэтому фича-ветка задачи
@@ -87,7 +86,7 @@ func (b Brancher) CreateEpicBranch(ctx context.Context, epic *domain.Epic) (Bran
 	if b.Base == "" {
 		return BranchRef{}, fmt.Errorf("у проекта не задана базовая ветка (git_base)")
 	}
-	branch := EpicBranchPrefix + git.SanitizeBranchName(epic.TaskID)
+	branch := EpicBranchPrefix + domain.SanitizeBranchName(epic.TaskID)
 	if err := b.EnsureBranch(ctx, branch, b.Base); err != nil {
 		return BranchRef{}, fmt.Errorf("%w: %v", ErrBranchCreate, err)
 	}
@@ -118,7 +117,7 @@ func (b Brancher) CreateTaskBranch(ctx context.Context, task *domain.Task) (Bran
 		return BranchRef{}, fmt.Errorf("%w %s: %v", ErrEpicBranchMissing, task.EpicID, err)
 	}
 
-	branch := TaskBranchPrefix + git.SanitizeBranchName(task.TaskID)
+	branch := TaskBranchPrefix + domain.SanitizeBranchName(task.TaskID)
 	if err := b.EnsureBranch(ctx, branch, epicRef.Branch); err != nil {
 		return BranchRef{}, fmt.Errorf("%w: %v", ErrBranchCreate, err)
 	}

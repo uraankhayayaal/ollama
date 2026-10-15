@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai/infrastructure/git"
+	"ai/domain"
 	"ai/logging"
 )
 
@@ -22,14 +22,14 @@ import (
 // сосед основного клона (как MergeFeature/конфликтные worktree).
 func TaskWorktreePath(repoRoot, project, taskID string) string {
 	return filepath.Join(filepath.Dir(repoRoot),
-		".wt-task-"+project+"-"+git.SanitizeBranchName(taskID))
+		".wt-task-"+project+"-"+domain.SanitizeBranchName(taskID))
 }
 
 // EpicWorktreePath — каталог постоянного worktree релизной ветки эпика
 // (4.1): сосед основного клона, как worktree задачи.
 func EpicWorktreePath(repoRoot, project, epicID string) string {
 	return filepath.Join(filepath.Dir(repoRoot),
-		".wt-epic-"+project+"-"+git.SanitizeBranchName(epicID))
+		".wt-epic-"+project+"-"+domain.SanitizeBranchName(epicID))
 }
 
 // ChildTaskKey — ключ задачи дочернего (сабмодульного) проекта в общем
@@ -138,10 +138,10 @@ func EnsureTaskGitignore(project, taskID, root string) {
 // скрыты, многострочный вывод git не тащится), иначе — первая строка ошибки,
 // сжатая до 200 символов. Исходная причина целиком остаётся в логе проекта.
 func GitflowErrBoard(prefix string, err error) string {
-	if errors.Is(err, git.ErrWorkflowScope) {
-		return prefix + ": " + git.ErrWorkflowScope.Error()
+	if errors.Is(err, domain.ErrWorkflowScope) {
+		return prefix + ": " + domain.ErrWorkflowScope.Error()
 	}
-	msg := git.RedactSecrets(err.Error())
+	msg := domain.RedactSecrets(err.Error())
 	if i := strings.IndexByte(msg, '\n'); i >= 0 {
 		msg = msg[:i]
 	}

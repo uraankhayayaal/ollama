@@ -20,20 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode"
 )
-
-// MergeResult — исход слияния ветки в текущую.
-type MergeResult struct {
-	// Message — сообщение merge-коммита.
-	Message string
-	// FastForward — слияние было fast-forward. Всегда false: MergeBranch
-	// использует --no-ff, чтобы фича-ветка оставалась видимой в истории.
-	FastForward bool
-	// AlreadyMerged — вливаемый источник уже является анцестором целевой
-	// ветки (ничего менять не нужно). Заполняется MergeFeature.
-	AlreadyMerged bool
-}
 
 // MergeBranch вливает ветку branch в текущую (HEAD) через `git merge --no-ff`
 // и фиксирует merge-коммит с сообщением message. При конфликте git оставляет
@@ -153,38 +140,6 @@ func (r *Repo) Rebase(ctx context.Context, branch, onto string) error {
 		return fmt.Errorf("gitops: git rebase %s %s: %w", onto, branch, err)
 	}
 	return nil
-}
-
-// SanitizeBranchName приводит произвольный ID (эпика/задачи из LLM-схем) к
-// допустимому имени git-ветки: буквы/цифры (в т.ч. юникод) сохраняются,
-// остальное (пробелы, ~^:?*[\\ и пр.) заменяется на '_'; добиваются точки,
-// запрещённые подстроки. Санитизация консервативна: даже странные ID не
-// сломают `git branch`.
-func SanitizeBranchName(id string) string {
-	s := strings.TrimSpace(id)
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			b.WriteRune(r)
-		case r == '.', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	out := strings.Trim(b.String(), ".")
-	out = strings.Trim(out, "_")
-	// git check-ref-format запрещает подстроку ".." — заменяем на '_'.
-	for strings.Contains(out, "..") {
-		out = strings.ReplaceAll(out, "..", "_")
-	}
-	// Запрещённые слова git check-ref-format.
-	switch out {
-	case "", ".":
-		return "id"
-	}
-	return out
 }
 
 // mergeTreeConflicts разбирает вывод старого `git merge-tree <base> <ours>

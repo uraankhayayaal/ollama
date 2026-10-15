@@ -23,21 +23,20 @@ import (
 	"strings"
 
 	"ai/domain"
-	"ai/infrastructure/git"
 	"ai/logging"
 )
 
 // EpicRepo — операции с репозиторием проекта и его worktree.
 type EpicRepo interface {
 	Root() string
-	MergeFeature(ctx context.Context, release, feature string, opts git.MergeFeatureOptions) (*git.MergeResult, error)
+	MergeFeature(ctx context.Context, release, feature string, opts domain.MergeFeatureOptions) (*domain.MergeResult, error)
 	AddWorktree(ctx context.Context, worktreePath, branch string) (WorktreeOps, error)
 	RemoveWorktree(ctx context.Context, worktreePath string) error
 }
 
 // WorktreeOps — операции с временным worktree релизной ветки эпика.
 type WorktreeOps interface {
-	MergeBranch(ctx context.Context, branch, message string) (*git.MergeResult, error)
+	MergeBranch(ctx context.Context, branch, message string) (*domain.MergeResult, error)
 	UnmergedFiles(ctx context.Context) ([]string, error)
 	Stage(ctx context.Context, paths []string) error
 	CommitAllowEmpty(ctx context.Context, message string) error
@@ -110,7 +109,7 @@ func (s *EpicMainSyncer) syncOnceLocked(ctx context.Context, project string, epi
 	// checked-out — MergeFeature не смог бы поставить её во временный worktree.
 	s.Host.DropEpicWorktreeLocked(ctx, epic.TaskID)
 
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, base, git.MergeFeatureOptions{
+	res, err := repo.MergeFeature(ctx, epicRef.Branch, base, domain.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: синхрон релизной ветки %s с main", epic.TaskID, epicRef.Branch),
 		PushURL: pushURL,
 	})
@@ -120,7 +119,7 @@ func (s *EpicMainSyncer) syncOnceLocked(ctx context.Context, project string, epi
 		s.Host.Notify("gitflow: авто-синхрон эпика с main")
 		return
 	}
-	var ce *git.MergeConflictError
+	var ce *domain.MergeConflictError
 	if !errors.As(err, &ce) {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -148,7 +147,7 @@ func (s *EpicMainSyncer) syncForTaskLocked(ctx context.Context, project, epicID 
 	// 4.1: worktree ветки эпика (архитектор) мешает MergeFeature поставить
 	// релизную ветку во временный worktree — снимаем (автокоммит правок).
 	s.Host.DropEpicWorktreeLocked(ctx, epicID)
-	res, err := repo.MergeFeature(ctx, epicRef.Branch, base, git.MergeFeatureOptions{
+	res, err := repo.MergeFeature(ctx, epicRef.Branch, base, domain.MergeFeatureOptions{
 		Message: fmt.Sprintf("эпик %s: синхрон с main перед стартом задачи", epicID),
 		PushURL: pushURL,
 	})
@@ -158,7 +157,7 @@ func (s *EpicMainSyncer) syncForTaskLocked(ctx context.Context, project, epicID 
 		return
 	}
 
-	var ce *git.MergeConflictError
+	var ce *domain.MergeConflictError
 	if !errors.As(err, &ce) {
 		logging.For(project).Warnf("gitflow: синхрон эпика %s с main перед задачей: %v", epicID, err)
 		return
@@ -175,7 +174,7 @@ func (s *EpicMainSyncer) syncForTaskLocked(ctx context.Context, project, epicID 
 // handleEpicRebase/handleEpicResolve.
 func (s *EpicMainSyncer) autoResolve(ctx context.Context, project string, epic *domain.Epic, base, pushURL string, repo EpicRepo, epicRef BranchRef) {
 	wtPath := filepath.Join(filepath.Dir(repo.Root()),
-		".conflict-"+project+"-"+git.SanitizeBranchName(epic.TaskID))
+		".conflict-"+project+"-"+domain.SanitizeBranchName(epic.TaskID))
 	if _, err := os.Stat(wtPath); err == nil {
 		logging.For(project).Warnf("gitflow: удаляю осиротевший конфликтный worktree %s", wtPath)
 		_ = repo.RemoveWorktree(ctx, wtPath)
