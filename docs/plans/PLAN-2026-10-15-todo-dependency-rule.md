@@ -59,12 +59,12 @@ Dependency Rule: внутренние слои импортируют внешн
 | H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | разбит на H6a–H6b |
 | H6a | `architect`/`chatassist`: `board.*`/rag-типы→`domain`, `Config`/`LoadConfig`→`infrastructure/board/storeconfig.go` | ✅ |
 | H6b | `developer`/`factory`: `board.*`→`domain`, git-WIP и RAG-переиндексация→`runner/adapters`, `rag.Searcher`→`services.Searcher` | ✅ |
-| H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | разбит на H5a–H5e |
+| H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | ✅ (H5a–H5e) |
 | H5a | `agents.Agent`→`services.Agent` (алиас) + planner без импорта `ai/agents` | ✅ |
 | H5b | `chat.Ask*`/`chat.Message`/`chat.Role*`→domain (`chat` алиасит) | ✅ |
 | H5c | `checkpoint`-порт (`planner` без `ai/checkpoint`) | ✅ |
 | H5d | `runevents.Reporter`-порт (`planner` без `ai/runevents`) | ✅ |
-| H5e | `workspace.Info`/`AddParams`/`Kind`→domain (`gitflow` без `ai/workspace`) | Ожидает |
+| H5e | `workspace.Info`/`AddParams`/`Kind`→domain (`gitflow` без `ai/workspace`) | ✅ |
 | H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
 
 ### H2: алиасы board→domain
@@ -290,9 +290,19 @@ application-пакеты теперь без не-тестовых импорт�
 в контекст сервер и читает оркестратор; `runner` читает `services.Reporter`
 и присваивает в `usecases.Reporter`).
 
-Осталось по H5:
-- `workspace.Info`/`AddParams`/`Kind` → domain-данные (реестр остаётся за
-  портом `OpenRegistry`).
+Срез **H5e**: данные реестра рабочих пространств вынесены в домен
+(`domain/workspace.go`): `Kind` (+`KindTemp`/`KindDir`/`KindGit`), `Info`,
+`AddParams` и транзитивно `BranchRef`/`GitBranchMap`/`MRRef`/`MergeRequestMap`/
+`EpicResolve` (поля `Info.GitBranches`/`GitResolving`/`GitMergeRequests`).
+`workspace` алиасит их (`type Info = domain.Info` и т.д.); сам реестр
+(`*workspace.Registry` и его методы) остаётся в workspace. `gitflow/open.go`
+переведён на `domain.*` — `application/gitflow` больше не импортирует
+`ai/workspace`. Порт `OpenRegistry` по-прежнему реализуется `*workspace.Registry`
+напрямую (алиасы идентичны). Поведение не менялось.
+
+Этап 8 (H1–H7, кроме H7) завершён: все application-пакеты без прямых
+не-тестовых импортов `ai/{agents,tools,infrastructure,chat,checkpoint,
+runevents,workspace,gitops}` — зависимости идут через домен/порты.
 
 ### H7: уборка и верификация
 

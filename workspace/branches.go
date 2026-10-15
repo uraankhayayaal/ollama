@@ -12,24 +12,19 @@ package workspace
 import (
 	"errors"
 	"fmt"
+
+	"ai/domain"
 )
 
 // BranchRef — привязка git-ветки: имя ветки и точка отхода (база), от которой
 // ветка создана. Worktree — каталог постоянного worktree задачи (Ф-3): задаётся
 // сервером при переводе задачи «в работу» и снимается на done; пусто — worktree
-// не создан (или уже снят).
-type BranchRef struct {
-	Branch   string `json:"branch"`
-	Base     string `json:"base,omitempty"`
-	Worktree string `json:"worktree,omitempty"`
-}
+// не создан (или уже снят). Алиас domain.BranchRef (Этап 8, H5e).
+type BranchRef = domain.BranchRef
 
 // GitBranchMap — реестр веток эпиков (релизные ветки, база = main) и задач
-// (фича-ветки, база = ветка эпика) git-проекта.
-type GitBranchMap struct {
-	Epics map[string]BranchRef `json:"epics,omitempty"` // epic_id → ветка эпика
-	Tasks map[string]BranchRef `json:"tasks,omitempty"` // task_id → ветка задачи
-}
+// (фича-ветки, база = ветка эпика) git-проекта (алиас domain.GitBranchMap).
+type GitBranchMap = domain.GitBranchMap
 
 var (
 	// ErrEpicBranchMissing — ветка эпика ещё не создана (задача не может

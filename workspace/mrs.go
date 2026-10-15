@@ -14,27 +14,24 @@ package workspace
 import (
 	"errors"
 	"fmt"
+
+	"ai/domain"
 )
 
-// MRRef — привязка Merge/Pull Request: ссылка, ветка-источник и ветка-цель.
-type MRRef struct {
-	URL    string `json:"url"`
-	Source string `json:"source,omitempty"` // ветка-источник (ai/epic/… или ai/task/…)
-	Target string `json:"target,omitempty"` // ветка-цель (main или ветка эпика)
-	State  string `json:"state,omitempty"`  // open|merged|closed|"" (неизвестно)
-}
+// MRRef — привязка Merge/Pull Request: ссылка, ветка-источник и ветка-цель
+// (алиас domain.MRRef).
+type MRRef = domain.MRRef
 
-// MergeRequestMap — реестр MR эпиков и задач git-проекта.
-type MergeRequestMap struct {
-	Project *MRRef               `json:"project,omitempty"`
-	Epics map[string]MRRef `json:"epics,omitempty"` // epic_id → MR эпика (→ main)
-	Tasks map[string]MRRef `json:"tasks,omitempty"` // task_id → MR задачи (→ ветка эпика)
-}
+// MergeRequestMap — реестр MR эпиков и задач git-проекта
+// (алиас domain.MergeRequestMap).
+type MergeRequestMap = domain.MergeRequestMap
 
 // SetProjectMR records the project-level MR created by accept.
 func (r *Registry) SetProjectMR(name string, ref MRRef) error {
 	return r.update(name, func(in *Info) {
-		if in.GitMergeRequests == nil { in.GitMergeRequests = &MergeRequestMap{} }
+		if in.GitMergeRequests == nil {
+			in.GitMergeRequests = &MergeRequestMap{}
+		}
 		copy := ref
 		in.GitMergeRequests.Project = &copy
 	})
@@ -43,7 +40,9 @@ func (r *Registry) SetProjectMR(name string, ref MRRef) error {
 // ProjectMR returns the project-level MR when one has been recorded.
 func (r *Registry) ProjectMR(name string) (MRRef, error) {
 	inf, err := r.Get(name)
-	if err != nil { return MRRef{}, err }
+	if err != nil {
+		return MRRef{}, err
+	}
 	if inf.GitMergeRequests == nil || inf.GitMergeRequests.Project == nil {
 		return MRRef{}, errors.New("MR проекта не создан")
 	}

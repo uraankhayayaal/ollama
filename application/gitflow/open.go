@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"ai/domain"
 	"ai/logging"
-	"ai/workspace"
 )
 
 // ClonedSubmodule — сабмодуль клонированного проекта.
@@ -65,14 +65,14 @@ var ErrRegisterFailed = errors.New("ошибка регистрации")
 // OpenRegistry — реестр проектов: поиск и добавление. Реализуется
 // *workspace.Registry напрямую.
 type OpenRegistry interface {
-	Get(name string) (workspace.Info, error)
-	Add(p workspace.AddParams) (workspace.Info, error)
+	Get(name string) (domain.Info, error)
+	Add(p domain.AddParams) (domain.Info, error)
 }
 
 // OpenedProject — результат открытия: имя проекта и его запись в реестре.
 type OpenedProject struct {
 	Name string
-	Info workspace.Info
+	Info domain.Info
 }
 
 // ProjectOpener клонирует и регистрирует git-проект. Host, Registry и
@@ -121,9 +121,9 @@ func (o *ProjectOpener) Open(ctx context.Context, gitURL string) (*OpenedProject
 		return nil, fmt.Errorf("%w: %v", ErrCloneFailed, err)
 	}
 
-	inf, err := o.Registry.Add(workspace.AddParams{
+	inf, err := o.Registry.Add(domain.AddParams{
 		Name:      name,
-		Kind:      workspace.KindGit,
+		Kind:      domain.KindGit,
 		Root:      repo.Root,
 		GitRemote: repo.Remote,
 		GitBranch: repo.Branch,
@@ -135,8 +135,8 @@ func (o *ProjectOpener) Open(ctx context.Context, gitURL string) (*OpenedProject
 	logging.For(name).Infof("git-проект %s: клон %s → ветка %s (база %s)", name, repo.Remote, repo.Branch, repo.Base)
 	for _, sub := range repo.Submodules {
 		childName := SubmoduleProjectName(name, sub.Path)
-		if _, err := o.Registry.Add(workspace.AddParams{
-			Name: childName, Kind: workspace.KindGit, Root: sub.Root,
+		if _, err := o.Registry.Add(domain.AddParams{
+			Name: childName, Kind: domain.KindGit, Root: sub.Root,
 			GitRemote: sub.Remote, GitBranch: sub.Branch, GitBase: sub.Base,
 			GitTarget: sub.DefaultBranch,
 			Parent:    name,

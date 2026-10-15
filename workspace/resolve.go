@@ -11,17 +11,13 @@ package workspace
 import (
 	"errors"
 	"fmt"
-	"time"
+
+	"ai/domain"
 )
 
-// EpicResolve — активный процесс решения конфликтов релизной ветки эпика.
-type EpicResolve struct {
-	EpicID    string    `json:"epic_id"`
-	Branch    string    `json:"branch"`     // релизная ветка (ai/epic/<id>)
-	Worktree  string    `json:"worktree"`   // путь постоянного конфликтного worktree
-	Files     []string  `json:"files"`      // «сложные» конфликтные пути, ждущие правок
-	StartedAt time.Time `json:"started_at"` // время начала резолва (UTC)
-}
+// EpicResolve — активный процесс решения конфликтов релизной ветки эпика
+// (алиас domain.EpicResolve).
+type EpicResolve = domain.EpicResolve
 
 // ErrNoResolve — активного процесса решения конфликтов нет.
 var ErrNoResolve = errors.New("нет активного процесса решения конфликтов")
