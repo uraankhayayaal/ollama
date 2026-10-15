@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/logging"
@@ -239,7 +238,7 @@ func (k *KanbanRunner) SetArchitectExtras(extra ...services.Tool) *KanbanRunner 
 // добавляется в набор инструментов. Повторный вызов безопасен (Set.Add не
 // дублирует уже присутствующие имена, SetRAG пересобирает набор из реестра).
 // Конкретное применение — в инфраструктурной фабрике агентов.
-func (k *KanbanRunner) prepareArchitect(a agents.Agent) agents.Agent {
+func (k *KanbanRunner) prepareArchitect(a services.Agent) services.Agent {
 	return agentFactory().ConfigureArchitect(a, k.rag, k.architectExtras...)
 }
 

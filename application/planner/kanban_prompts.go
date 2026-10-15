@@ -1,8 +1,8 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/domain"
+	"ai/domain/services"
 	"context"
 	"fmt"
 	"strings"
@@ -29,7 +29,7 @@ func (k *KanbanRunner) boardSummary(ctx context.Context) string {
 // промпт декомпозиции. Лиды пишут ТОЛЬКО скелетон (allowlist в инструменте,
 // worktree ветки эпика подключается в phaseLeads через epicOutputDir); для QA
 // эпика лидом становится qaengineer.
-func (k *KanbanRunner) leadFor(epic *domain.Epic) (agents.Agent, error) {
+func (k *KanbanRunner) leadFor(epic *domain.Epic) (services.Agent, error) {
 	prompt := k.leadPrompt(epic)
 	project := k.store.Project()
 	return agentFactory().Lead(project, epic.AssignedRole, prompt), nil
@@ -135,7 +135,7 @@ func (k *KanbanRunner) leadPrompt(epic *domain.Epic) string {
 // структуру подпроекта с нуля и дорабатывает существующий код; выбор
 // специализации (frontend/backend) идёт по роли задачи (маркеры фронтенда)
 // либо по умолчанию — backend.
-func (k *KanbanRunner) specialistFor(t *domain.Task) (agents.Agent, error) {
+func (k *KanbanRunner) specialistFor(t *domain.Task) (services.Agent, error) {
 	return SpecialistForRole(k.store.Project(), t.AssignedRole, k.taskPrompt(t)), nil
 }
 
@@ -143,7 +143,7 @@ func (k *KanbanRunner) specialistFor(t *domain.Task) (agents.Agent, error) {
 // разработчик (backend/frontend). Общий для Kanban- и plan-исполнителей:
 // выбор специализации (QA/DevOps/frontend/backend) идёт по роли задачи.
 // Экспортирован для server (авторезолвинг конфликтов мёрджа через разработчика).
-func SpecialistForRole(project, role, prompt string) agents.Agent {
+func SpecialistForRole(project, role, prompt string) services.Agent {
 	return agentFactory().Specialist(project, role, prompt)
 }
 

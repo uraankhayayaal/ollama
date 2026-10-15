@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai/agents"
 	"ai/domain"
+	"ai/domain/services"
 	"ai/projects"
 )
 
@@ -379,7 +379,7 @@ func (e *Executor) planFixSteps(ctx context.Context, rep *domain.Report) ([]Step
 // одна попытка на тот же промпт, но с подсказкой, что предыдущий ответ не был
 // JSON. Новый контекст (чистый), поэтому подсказка кладётся в системные
 // сообщения, чтобы модель сразу её видела.
-func leadWithHint(lead agents.Agent, prevContent string) agents.Agent {
+func leadWithHint(lead services.Agent, prevContent string) services.Agent {
 	hint := "Ваш предыдущий ответ не был распознан как JSON-декомпозиция задач.\n" +
 		"Верните ТОЛЬКО допустимый JSON — массив объектов вида:\n" +
 		`[{"title":"...","description":"...","role":"backend|frontend","files":["..."]}]` + "\n" +
@@ -388,19 +388,19 @@ func leadWithHint(lead agents.Agent, prevContent string) agents.Agent {
 	return &leadHintAgent{inner: lead, hint: hint}
 }
 
-// leadHintAgent — декоратор agents.Agent, добавляющий подсказку к системным
+// leadHintAgent — декоратор services.Agent, добавляющий подсказку к системным
 // сообщениям лида (остальное делегирует внутреннему агенту).
 type leadHintAgent struct {
-	inner agents.Agent
+	inner services.Agent
 	hint  string
 }
 
-func (h *leadHintAgent) GetSystemMessages(text []agents.Message) []agents.Message {
+func (h *leadHintAgent) GetSystemMessages(text []domain.AgentMessage) []domain.AgentMessage {
 	base := h.inner.GetSystemMessages(text)
-	return append(base, agents.Message{Type: agents.MessageTypeSystem, Message: h.hint})
+	return append(base, domain.AgentMessage{Type: domain.MessageTypeSystem, Message: h.hint})
 }
 
-func (h *leadHintAgent) GetUserMessages() []agents.Message { return h.inner.GetUserMessages() }
+func (h *leadHintAgent) GetUserMessages() []domain.AgentMessage { return h.inner.GetUserMessages() }
 
 func (h *leadHintAgent) GetTools() []domain.ToolDefinition { return h.inner.GetTools() }
 
@@ -464,7 +464,7 @@ func (e *Executor) findStep(id string) *Step {
 }
 
 // chatNameForSpec возвращает имя агента для чата по типу агента и роли задачи.
-func chatNameForSpec(spec agents.Agent, role string) string {
+func chatNameForSpec(spec services.Agent, role string) string {
 	type labler interface{ Label() string }
 	if l, ok := spec.(labler); ok && l.Label() != "" {
 		return l.Label()

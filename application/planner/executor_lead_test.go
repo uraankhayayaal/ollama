@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/agents/backendlead"
 	"ai/agents/frontendlead"
 	"ai/domain"
@@ -152,7 +151,7 @@ func TestLeadWithHintSystemMessage(t *testing.T) {
 	msgs := wrapped.GetSystemMessages(nil)
 	found := false
 	for _, m := range msgs {
-		if m.Type == agents.MessageTypeSystem && strings.Contains(m.Message, "JSON-декомпозиц") && strings.Contains(m.Message, "раньше я ответил путями") {
+		if m.Type == domain.MessageTypeSystem && strings.Contains(m.Message, "JSON-декомпозиц") && strings.Contains(m.Message, "раньше я ответил путями") {
 			found = true
 		}
 	}

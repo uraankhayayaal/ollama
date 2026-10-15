@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/application/usecases"
 	"ai/domain"
 	"ai/domain/services"
@@ -367,7 +366,7 @@ func (k *KanbanRunner) leadFail(ctx context.Context, epic *domain.Epic, err erro
 }
 
 // agentChatNameForKanban возвращает человекочитаемое имя агента для чата.
-func agentChatNameForKanban(spec agents.Agent, assignee string) string {
+func agentChatNameForKanban(spec services.Agent, assignee string) string {
 	type labler interface{ Label() string }
 	if l, ok := spec.(labler); ok && l.Label() != "" {
 		return l.Label()

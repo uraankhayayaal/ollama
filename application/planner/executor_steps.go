@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"ai/agents"
 	"ai/application/usecases"
 	"ai/domain"
 	"ai/domain/services"
@@ -41,7 +40,7 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 
 // newStepAgent создаёт агента шага по его типу (разработчик, специалист или
 // лид направления). Возвращает nil для неизвестного типа.
-func newStepAgent(step *Step, projectName string) agents.Agent {
+func newStepAgent(step *Step, projectName string) services.Agent {
 	return agentFactory().Step(step.Agent, projectName, step.Prompt)
 }
 

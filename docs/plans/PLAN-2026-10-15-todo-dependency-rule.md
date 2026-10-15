@@ -59,7 +59,12 @@ Dependency Rule: внутренние слои импортируют внешн
 | H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | разбит на H6a–H6b |
 | H6a | `architect`/`chatassist`: `board.*`/rag-типы→`domain`, `Config`/`LoadConfig`→`infrastructure/board/storeconfig.go` | ✅ |
 | H6b | `developer`/`factory`: `board.*`→`domain`, git-WIP и RAG-переиндексация→`runner/adapters`, `rag.Searcher`→`services.Searcher` | ✅ |
-| H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | Ожидает |
+| H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | разбит на H5a–H5e |
+| H5a | `agents.Agent`→`services.Agent` (алиас) + planner без импорта `ai/agents` | ✅ |
+| H5b | `chat.Ask*`→domain (`chat` алиасит) | Ожидает |
+| H5c | `checkpoint`-порт (`planner` без `ai/checkpoint`) | Ожидает |
+| H5d | `runevents.Reporter`-порт (`planner` без `ai/runevents`) | Ожидает |
+| H5e | `workspace.Info`/`AddParams`/`Kind`→domain (`gitflow` без `ai/workspace`) | Ожидает |
 | H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
 
 ### H2: алиасы board→domain
@@ -241,6 +246,15 @@ env-хелперы перенесены из `agents/architect/config.go` в
 принимает `services.Searcher` (было `rag.Searcher`-алиас).
 
 ### H5: вторичные application→внешние
+
+Срез **H5a**: `agents.Agent` стал алиасом доменного порта `services.Agent`
+(методы структурно совпадают: `[]domain.AgentMessage`/`[]domain.ToolDefinition`,
+т.к. `tools.ToolDefinition = domain.ToolDefinition`); `agents/AgentDefinition.go`
+больше не импортирует `ai/tools`. `application/planner` переведён с
+`agents.{Agent,Message,MessageType*}` на `services.Agent` и
+`domain.{AgentMessage,MessageType*}` (включая `kanban_testing.go`); все
+application-пакеты теперь без не-тестовых импортов `ai/{agents,tools,infrastructure}`.
+Остаётся `checkpoint`/`runevents` (H5c/H5d) и `chat`/`workspace` (H5b/H5e).
 
 - `chat.Ask`/`AskQuestion`/`AskAnswer` → domain (`chat` алиасит).
 - `checkpoint.Snapshot`/`Status*` → domain + порт-интерфейс, инъекция из main.

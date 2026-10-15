@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
 )
@@ -20,22 +19,22 @@ import (
 // planner → agents/factory → planner).
 type AgentFactory interface {
 	// Lead создаёт агента-лида направления по assigned_role эпика.
-	Lead(project, role, prompt string) agents.Agent
+	Lead(project, role, prompt string) services.Agent
 	// Specialist создаёт агента-специалиста по assigned_role задачи.
-	Specialist(project, role, prompt string) agents.Agent
+	Specialist(project, role, prompt string) services.Agent
 	// Step создаёт агента шага plan-исполнителя по типу шага; nil — неизвестный.
-	Step(agentType domain.AgentType, projectName, prompt string) agents.Agent
+	Step(agentType domain.AgentType, projectName, prompt string) services.Agent
 	// Architect создаёт системного архитектора (обычный режим).
-	Architect(project, prompt string, store services.BoardStore) agents.Agent
+	Architect(project, prompt string, store services.BoardStore) services.Agent
 	// ArchitectReviewer создаёт архитектора в режиме ревизии черновиков эпиков.
-	ArchitectReviewer(project, prompt string, store services.BoardStore) agents.Agent
+	ArchitectReviewer(project, prompt string, store services.BoardStore) services.Agent
 	// ArchitectBugExpert создаёт архитектора в режиме экспертизы багрепортов.
-	ArchitectBugExpert(project, prompt string, store services.BoardStore) agents.Agent
+	ArchitectBugExpert(project, prompt string, store services.BoardStore) services.Agent
 	// ConfigureArchitect применяет к архитектору RAG и серверные инструменты
 	// (Ф-4/Р-5); не-архитектор возвращается без изменений.
-	ConfigureArchitect(a agents.Agent, rag services.Searcher, extras ...services.Tool) agents.Agent
+	ConfigureArchitect(a services.Agent, rag services.Searcher, extras ...services.Tool) services.Agent
 	// SetArchitectEpicWorkdir задаёт резолвер worktree ветки эпика (4.1).
-	SetArchitectEpicWorkdir(a agents.Agent, fn func() (string, string)) agents.Agent
+	SetArchitectEpicWorkdir(a services.Agent, fn func() (string, string)) services.Agent
 }
 
 // noopAgentFactory — фабрика по умолчанию, пока composition root не установил
@@ -43,24 +42,24 @@ type AgentFactory interface {
 // установленной фабрики — ошибка сборки, а не молчаливое поведение.
 type noopAgentFactory struct{}
 
-func (noopAgentFactory) Lead(string, string, string) agents.Agent       { return nil }
-func (noopAgentFactory) Specialist(string, string, string) agents.Agent { return nil }
-func (noopAgentFactory) Step(domain.AgentType, string, string) agents.Agent {
+func (noopAgentFactory) Lead(string, string, string) services.Agent       { return nil }
+func (noopAgentFactory) Specialist(string, string, string) services.Agent { return nil }
+func (noopAgentFactory) Step(domain.AgentType, string, string) services.Agent {
 	return nil
 }
-func (noopAgentFactory) Architect(string, string, services.BoardStore) agents.Agent {
+func (noopAgentFactory) Architect(string, string, services.BoardStore) services.Agent {
 	return nil
 }
-func (noopAgentFactory) ArchitectReviewer(string, string, services.BoardStore) agents.Agent {
+func (noopAgentFactory) ArchitectReviewer(string, string, services.BoardStore) services.Agent {
 	return nil
 }
-func (noopAgentFactory) ArchitectBugExpert(string, string, services.BoardStore) agents.Agent {
+func (noopAgentFactory) ArchitectBugExpert(string, string, services.BoardStore) services.Agent {
 	return nil
 }
-func (noopAgentFactory) ConfigureArchitect(a agents.Agent, _ services.Searcher, _ ...services.Tool) agents.Agent {
+func (noopAgentFactory) ConfigureArchitect(a services.Agent, _ services.Searcher, _ ...services.Tool) services.Agent {
 	return a
 }
-func (noopAgentFactory) SetArchitectEpicWorkdir(a agents.Agent, _ func() (string, string)) agents.Agent {
+func (noopAgentFactory) SetArchitectEpicWorkdir(a services.Agent, _ func() (string, string)) services.Agent {
 	return a
 }
 

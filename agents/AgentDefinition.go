@@ -2,7 +2,7 @@ package agents
 
 import (
 	"ai/domain"
-	"ai/tools"
+	"ai/domain/services"
 )
 
 // Message — алиас доменного типа (domain.AgentMessage): промпт-сообщение
@@ -21,9 +21,7 @@ const (
 	MessageTypeTool     = domain.MessageTypeTool
 )
 
-type Agent interface {
-	GetSystemMessages(text []Message) []Message
-	GetUserMessages() []Message
-	GetTools() []tools.ToolDefinition
-	CallFunction(functionName string, functionArgs map[string]any) ([]byte, error)
-}
+// Agent — алиас доменного порта services.Agent (H5a): промпты, доступные
+// инструменты и диспетчер вызовов. application-слой зависит от порта, а не от
+// пакета agents; конкретные агенты agents/* структурно удовлетворяют ему.
+type Agent = services.Agent

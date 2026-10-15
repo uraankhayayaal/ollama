@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/projects"
@@ -48,9 +47,9 @@ func NewPlanner(projectName, prompt string) *Planner {
 	return p
 }
 
-func (p *Planner) GetUserMessages() []agents.Message {
-	return []agents.Message{
-		{Type: agents.MessageTypeHuman, Message: p.Prompt},
+func (p *Planner) GetUserMessages() []domain.AgentMessage {
+	return []domain.AgentMessage{
+		{Type: domain.MessageTypeHuman, Message: p.Prompt},
 	}
 }
 
@@ -60,10 +59,10 @@ func (p *Planner) RequiredToolFirstRound() (string, bool) {
 	return "", false
 }
 
-func (p *Planner) GetSystemMessages(_ []agents.Message) []agents.Message {
-	return []agents.Message{
+func (p *Planner) GetSystemMessages(_ []domain.AgentMessage) []domain.AgentMessage {
+	return []domain.AgentMessage{
 		{
-			Type: agents.MessageTypeSystem,
+			Type: domain.MessageTypeSystem,
 			Message: fmt.Sprintf(`Ты — архитектор-планировщик. Твоя задача — разбить запрос пользователя на поэтапный план из чётких инструкций.
 
 Проект: %s

@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/tokens"
@@ -204,7 +203,7 @@ func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
 		k.noteEpicProgress(ctx, t.EpicID)
 		// Тестировщик перехватывает задачу после разработчика (Этап 7):
 		// назначаем QA-инженера независимо от Assignee задачи.
-		var specialist agents.Agent = agentFactory().Specialist(k.store.Project(), "qa", k.taskPrompt(t))
+		var specialist services.Agent = agentFactory().Specialist(k.store.Project(), "qa", k.taskPrompt(t))
 		if sb, ok := specialist.(interface {
 			SetBoardStore(services.BoardStore)
 		}); ok {
