@@ -5,6 +5,7 @@
 package chat
 
 import (
+	"ai/domain"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,78 +16,31 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Role — роль автора сообщения в диалоге.
-type Role string
-
-const (
-	RoleUser      Role = "user"      // сообщение пользователя
-	RoleAssistant Role = "assistant" // текст модели
-	RoleTool      Role = "tool"      // результат инструмента
-	RoleSystem    Role = "system"    // служебное (начало сессии и т.п.)
-	RoleStatus    Role = "status"    // статусная строка (агент начал/закончил работу)
-	RoleBoard     Role = "board"     // событие доски / HITL-затвор
-	RoleAsk       Role = "ask"       // структурированный вопрос ассистента пользователю
+// Данные диалога (Role/Message/Ask*) определены в домене (domain.ChatRole/
+// ChatMessage/Ask*) — общие для application-слоя и этого хранилища (Этап 8,
+// H5b). Здесь они алиасы: имена chat.* сохранены для совместимости.
+type (
+	Role        = domain.ChatRole
+	Message     = domain.ChatMessage
+	AskKind     = domain.AskKind
+	Ask         = domain.Ask
+	AskQuestion = domain.AskQuestion
+	AskOption   = domain.AskOption
+	AskAnswer   = domain.AskAnswer
 )
 
-// Message — единица диалога. ID заполняется из ID записи Redis Stream при
-// чтении истории; при Append может быть пустым.
-type Message struct {
-	ID      string    `json:"id,omitempty"`
-	Role    Role      `json:"role"`
-	Content string    `json:"content"`
-	Agent   string    `json:"agent,omitempty"` // имя агента (для assistant/tool)
-	Tool    string    `json:"tool,omitempty"`  // имя инструмента (для role=tool)
-	OK      *bool     `json:"ok,omitempty"`    // успешен ли результат инструмента
-	Ask     *Ask      `json:"ask,omitempty"`   // структурированный вопрос (для role=ask)
-	Time    time.Time `json:"time"`
-}
-
-// AskKind — тип структурированного вопроса: одиночный выбор (single) или
-// множественный (multi). Каждый вопрос дополняется вариантами ответа и
-// необязательным кастомным вариантом с полем ввода (план «спроси пользователя
-// при неоднозначности»).
-type AskKind string
-
 const (
-	AskSingle AskKind = "single" // клик по одному варианту = ответ
-	AskMulti  AskKind = "multi"  // несколько чекбоксов + кнопка «Подтвердить»
+	RoleUser      = domain.ChatRoleUser
+	RoleAssistant = domain.ChatRoleAssistant
+	RoleTool      = domain.ChatRoleTool
+	RoleSystem    = domain.ChatRoleSystem
+	RoleStatus    = domain.ChatRoleStatus
+	RoleBoard     = domain.ChatRoleBoard
+	RoleAsk       = domain.ChatRoleAsk
+
+	AskSingle = domain.AskSingle
+	AskMulti  = domain.AskMulti
 )
-
-// Ask — структурированный вопрос ассистента (инструмент AskUser): пачка
-// вопросов, которая показывается пользователю пошагово в чате. Frontend
-// рендерит карточку-вардин: один вопрос на шаг, кастомный вариант с полем
-// ввода, выделение предпочтительного ответа (recommended).
-type Ask struct {
-	ID        string        `json:"id,omitempty"` // id пачки вопросов (для REST-ответа)
-	Questions []AskQuestion `json:"questions"`
-}
-
-// AskQuestion — один шаг вардина.
-type AskQuestion struct {
-	ID   string  `json:"id"`
-	Text string  `json:"text"`
-	Kind AskKind `json:"kind"` // single | multi
-	// AllowCustom — показывать ли вариант «Свой ответ» с полем ввода
-	// (по умолчанию true, если не указано).
-	AllowCustom bool        `json:"allow_custom,omitempty"`
-	Options     []AskOption `json:"options"`
-}
-
-// AskOption — вариант ответа. Recommended — предпочтительный вариант: в UI
-// выделен бейджем «рекомендую», но решение остаётся за пользователем.
-type AskOption struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	Recommended bool   `json:"recommended,omitempty"`
-}
-
-// AskAnswer — ответ пользователя на один вопрос (возвращается модели как
-// результат инструмента AskUser).
-type AskAnswer struct {
-	QuestionID string   `json:"question_id"`
-	Selected   []string `json:"selected"`         // выбранные id вариантов
-	Custom     string   `json:"custom,omitempty"` // текст кастомного ответа (если выбран)
-}
 
 // StoreConfig — параметры подключения Redis-хранилища диалога.
 type StoreConfig struct {
@@ -155,7 +109,7 @@ func (s *Store) Append(ctx context.Context, m Message) (string, error) {
 	if m.Time.IsZero() {
 		m.Time = time.Now().UTC()
 	}
-	fields := m.fields()
+	fields := messageFields(m)
 	id, err := s.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: s.stream,
 		MaxLen: maxStreamLen,
@@ -216,8 +170,10 @@ func (s *Store) Subscribe(ctx context.Context) (*redis.PubSub, error) {
 	return ps, nil
 }
 
-// fields разворачивает Message в поля записи Redis Stream.
-func (m Message) fields() map[string]any {
+// messageFields разворачивает Message в поля записи Redis Stream. Свободная
+// функция (а не метод): Message — алиас доменного типа, методы на нём
+// определить нельзя.
+func messageFields(m Message) map[string]any {
 	out := map[string]any{
 		"role":    string(m.Role),
 		"content": m.Content,

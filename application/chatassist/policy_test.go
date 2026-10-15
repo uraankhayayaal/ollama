@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/chat"
+	"ai/domain"
 )
 
 func TestConfirmAffirmative(t *testing.T) {
@@ -79,19 +79,19 @@ func TestAskSummary(t *testing.T) {
 	if got := AskSummary(nil); got != "" {
 		t.Fatalf("nil → %q", got)
 	}
-	a := &chat.Ask{Questions: []chat.AskQuestion{{Text: "первый"}, {Text: "  "}, {Text: "второй"}}}
+	a := &domain.Ask{Questions: []domain.AskQuestion{{Text: "первый"}, {Text: "  "}, {Text: "второй"}}}
 	if got := AskSummary(a); got != "первый; второй" {
 		t.Fatalf("AskSummary = %q", got)
 	}
 }
 
-func hist(msgs ...chat.Message) []chat.Message { return msgs }
+func hist(msgs ...domain.ChatMessage) []domain.ChatMessage { return msgs }
 
 func TestActionAnchorConfirmLoop(t *testing.T) {
 	h := hist(
-		chat.Message{Role: chat.RoleUser, Content: "давай удалим rust"},
-		chat.Message{Role: chat.RoleAssistant, Content: "Удалить Rust полностью? (да/нет)"},
-		chat.Message{Role: chat.RoleUser, Content: "да"},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "давай удалим rust"},
+		domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: "Удалить Rust полностью? (да/нет)"},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "да"},
 	)
 	got := ActionAnchor(h, "да")
 	if !strings.Contains(got, "ВЫПОЛНЯЙ") {
@@ -101,9 +101,9 @@ func TestActionAnchorConfirmLoop(t *testing.T) {
 
 func TestActionAnchorShortAffirmative(t *testing.T) {
 	h := hist(
-		chat.Message{Role: chat.RoleUser, Content: "давай удалим rust"},
-		chat.Message{Role: chat.RoleAssistant, Content: "Удалить Rust полностью? (да/нет)"},
-		chat.Message{Role: chat.RoleUser, Content: "lf"},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "давай удалим rust"},
+		domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: "Удалить Rust полностью? (да/нет)"},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "lf"},
 	)
 	if got := ActionAnchor(h, "lf"); !strings.Contains(got, "ВЫПОЛНЯЙ") {
 		t.Fatalf("«lf» не распознано как согласие: %q", got)
@@ -112,10 +112,10 @@ func TestActionAnchorShortAffirmative(t *testing.T) {
 
 func TestActionAnchorNewTopic(t *testing.T) {
 	h := hist(
-		chat.Message{Role: chat.RoleUser, Content: "а"},
-		chat.Message{Role: chat.RoleAssistant, Content: "Какой эпик создать, про RAG или про билд?"},
-		chat.Message{Role: chat.RoleAssistant, Content: "Уточните, о каком модуле речь?"},
-		chat.Message{Role: chat.RoleUser, Content: "вообще-то давай посмотрим, что там по безопасности проекта"},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "а"},
+		domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: "Какой эпик создать, про RAG или про билд?"},
+		domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: "Уточните, о каком модуле речь?"},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "вообще-то давай посмотрим, что там по безопасности проекта"},
 	)
 	if got := ActionAnchor(h, "вообще-то давай посмотрим, что там по безопасности проекта"); got != "" {
 		t.Fatalf("на новой теме якорь должен быть пуст:\n%s", got)
@@ -124,9 +124,9 @@ func TestActionAnchorNewTopic(t *testing.T) {
 
 func TestActionAnchorTwoQuestionsNonYes(t *testing.T) {
 	h := hist(
-		chat.Message{Role: chat.RoleAssistant, Content: "Первый вопрос?"},
-		chat.Message{Role: chat.RoleAssistant, Content: "Второй вопрос?"},
-		chat.Message{Role: chat.RoleUser, Content: "хм"},
+		domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: "Первый вопрос?"},
+		domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: "Второй вопрос?"},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "хм"},
 	)
 	if got := ActionAnchor(h, "хм"); !strings.Contains(got, "ВНИМАНИЕ") {
 		t.Fatalf("два вопроса подряд без явного ответа → лимитер:\n%s", got)
@@ -142,8 +142,8 @@ func TestActionAnchorEmpty(t *testing.T) {
 func TestActionAnchorAskRole(t *testing.T) {
 	// Структурированный вопрос (role=ask) распознаётся как вопрос ассистента.
 	h := hist(
-		chat.Message{Role: chat.RoleAsk, Ask: &chat.Ask{Questions: []chat.AskQuestion{{Text: "Удалить?"}}}},
-		chat.Message{Role: chat.RoleUser, Content: "да"},
+		domain.ChatMessage{Role: domain.ChatRoleAsk, Ask: &domain.Ask{Questions: []domain.AskQuestion{{Text: "Удалить?"}}}},
+		domain.ChatMessage{Role: domain.ChatRoleUser, Content: "да"},
 	)
 	if got := ActionAnchor(h, "да"); !strings.Contains(got, "ВЫПОЛНЯЙ") {
 		t.Fatalf("ask-вопрос не распознан: %q", got)

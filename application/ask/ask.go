@@ -5,7 +5,7 @@
 //
 // Пакет не зависит от HTTP и от пакета server: публикация карточки-вардинга в
 // чат, протокольной статус-строки и лога идёт через порт Announcer; сами
-// chat.AskQuestion/AskAnswer — общие типы пакета chat.
+// domain.AskQuestion/AskAnswer — общие доменные типы.
 package ask
 
 import (
@@ -14,13 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"ai/chat"
+	"ai/domain"
 )
 
 // Announcer — вывод состояния вопроса во внешний мир: карточка-вардинг в чат
 // (role=ask), протокольная статус-строка в историю и лог сервера.
 type Announcer interface {
-	Ask(a chat.Ask)
+	Ask(a domain.Ask)
 	Status(msg string)
 	Info(msg string)
 }
@@ -37,9 +37,9 @@ type Pending struct {
 // waiting — ожидающая ответа пачка вопросов.
 type waiting struct {
 	id        string
-	questions []chat.AskQuestion
-	answers   map[string]chat.AskAnswer // по question_id
-	resolved  chan []chat.AskAnswer     // буфер 1 — разблокировка Ask
+	questions []domain.AskQuestion
+	answers   map[string]domain.AskAnswer // по question_id
+	resolved  chan []domain.AskAnswer     // буфер 1 — разблокировка Ask
 }
 
 // NewPending создаёт состояние вопросов с заданным выводом. Идентификатор
@@ -55,12 +55,12 @@ func defaultAskID() string {
 // Ask публикует вопросы в чат и блокируется до ответа на все из них. Один
 // активный вопрос на сессию: повторный вызов при уже заданном — ошибка (модель
 // должна сначала дождаться ответа или отменить вопрос по контексту).
-func (p *Pending) Ask(ctx context.Context, questions []chat.AskQuestion) ([]chat.AskAnswer, error) {
+func (p *Pending) Ask(ctx context.Context, questions []domain.AskQuestion) ([]domain.AskAnswer, error) {
 	cur := &waiting{
 		id:        p.newID(),
 		questions: questions,
-		answers:   make(map[string]chat.AskAnswer),
-		resolved:  make(chan []chat.AskAnswer, 1),
+		answers:   make(map[string]domain.AskAnswer),
+		resolved:  make(chan []domain.AskAnswer, 1),
 	}
 
 	p.mu.Lock()
@@ -72,7 +72,7 @@ func (p *Pending) Ask(ctx context.Context, questions []chat.AskQuestion) ([]chat
 	p.cur = cur
 	p.mu.Unlock()
 
-	p.ann.Ask(chat.Ask{ID: cur.id, Questions: questions})
+	p.ann.Ask(domain.Ask{ID: cur.id, Questions: questions})
 	p.ann.Info(fmt.Sprintf("assistant: задаёт вопрос %s (%d вопросов)", cur.id, len(questions)))
 
 	select {
@@ -110,7 +110,7 @@ func (p *Pending) Answer(askID, questionID string, selected []string, custom str
 			return 0, 0, fmt.Errorf("вариант %q не существует в вопросе %s", sid, questionID)
 		}
 	}
-	cur.answers[questionID] = chat.AskAnswer{
+	cur.answers[questionID] = domain.AskAnswer{
 		QuestionID: questionID,
 		Selected:   selected,
 		Custom:     custom,
@@ -124,7 +124,7 @@ func (p *Pending) Answer(askID, questionID string, selected []string, custom str
 
 	if done {
 		// Ответы в порядке вопросов — модель видит их так же, как задавала.
-		out := make([]chat.AskAnswer, 0, total)
+		out := make([]domain.AskAnswer, 0, total)
 		for _, qq := range cur.questions {
 			out = append(out, cur.answers[qq.ID])
 		}
@@ -139,7 +139,7 @@ func (p *Pending) Answer(askID, questionID string, selected []string, custom str
 
 // ParseQuestions извлекает и валидирует пачку вопросов из аргументов
 // инструмента AskUser.
-func ParseQuestions(args map[string]any) ([]chat.AskQuestion, error) {
+func ParseQuestions(args map[string]any) ([]domain.AskQuestion, error) {
 	raw, ok := args["questions"]
 	if !ok {
 		return nil, fmt.Errorf("нет ключа questions")
@@ -149,13 +149,13 @@ func ParseQuestions(args map[string]any) ([]chat.AskQuestion, error) {
 		return nil, fmt.Errorf("questions: нужен непустой массив")
 	}
 	seen := map[string]bool{}
-	qs := make([]chat.AskQuestion, 0, len(items))
+	qs := make([]domain.AskQuestion, 0, len(items))
 	for _, it := range items {
 		m, ok := it.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("questions: элемент не объект")
 		}
-		q := chat.AskQuestion{
+		q := domain.AskQuestion{
 			ID:   StrAny(m, "id"),
 			Text: StrAny(m, "text"),
 		}
@@ -166,11 +166,11 @@ func ParseQuestions(args map[string]any) ([]chat.AskQuestion, error) {
 			return nil, fmt.Errorf("questions: дубликат id %q", q.ID)
 		}
 		seen[q.ID] = true
-		switch chat.AskKind(StrAny(m, "kind")) {
-		case chat.AskSingle, chat.AskMulti:
-			q.Kind = chat.AskKind(StrAny(m, "kind"))
+		switch domain.AskKind(StrAny(m, "kind")) {
+		case domain.AskSingle, domain.AskMulti:
+			q.Kind = domain.AskKind(StrAny(m, "kind"))
 		case "":
-			q.Kind = chat.AskSingle
+			q.Kind = domain.AskSingle
 		default:
 			return nil, fmt.Errorf("questions[%s].kind: только single|multi", q.ID)
 		}
@@ -185,7 +185,7 @@ func ParseQuestions(args map[string]any) ([]chat.AskQuestion, error) {
 			if !ok {
 				return nil, fmt.Errorf("questions[%s].options: элемент не объект", q.ID)
 			}
-			o := chat.AskOption{
+			o := domain.AskOption{
 				ID:          StrAny(om, "id"),
 				Label:       StrAny(om, "label"),
 				Recommended: BoolAny(om, "recommended", false),
@@ -218,7 +218,7 @@ func BoolAny(m map[string]any, k string, def bool) bool {
 }
 
 // findQuestion ищет вопрос по id в пачке.
-func findQuestion(qs []chat.AskQuestion, id string) *chat.AskQuestion {
+func findQuestion(qs []domain.AskQuestion, id string) *domain.AskQuestion {
 	for i := range qs {
 		if qs[i].ID == id {
 			return &qs[i]
@@ -228,7 +228,7 @@ func findQuestion(qs []chat.AskQuestion, id string) *chat.AskQuestion {
 }
 
 // hasOption сообщает, есть ли вариант с указанным id у вопроса.
-func hasOption(q *chat.AskQuestion, id string) bool {
+func hasOption(q *domain.AskQuestion, id string) bool {
 	for _, o := range q.Options {
 		if o.ID == id {
 			return true
@@ -238,7 +238,7 @@ func hasOption(q *chat.AskQuestion, id string) bool {
 }
 
 // Summarize — компактный протокол ответов для status-строки истории чата.
-func Summarize(qs []chat.AskQuestion, ans []chat.AskAnswer) string {
+func Summarize(qs []domain.AskQuestion, ans []domain.AskAnswer) string {
 	byQ := make(map[string]string, len(ans))
 	for _, a := range ans {
 		s := ""

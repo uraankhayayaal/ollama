@@ -4,23 +4,23 @@ import (
 	"testing"
 	"time"
 
-	"ai/chat"
+	"ai/domain"
 )
 
 func TestDialogueHistoryEmpty(t *testing.T) {
 	if got := DialogueHistory(nil); got != "" {
 		t.Fatalf("nil: %q", got)
 	}
-	if got := DialogueHistory([]chat.Message{}); got != "" {
+	if got := DialogueHistory([]domain.ChatMessage{}); got != "" {
 		t.Fatalf("empty: %q", got)
 	}
 }
 
 func TestDialogueHistorySkipsLastUser(t *testing.T) {
-	hist := []chat.Message{
-		{Role: chat.RoleUser, Content: "первый вопрос"},
-		{Role: chat.RoleAssistant, Content: "первый ответ"},
-		{Role: chat.RoleUser, Content: "второй вопрос"},
+	hist := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: "первый вопрос"},
+		{Role: domain.ChatRoleAssistant, Content: "первый ответ"},
+		{Role: domain.ChatRoleUser, Content: "второй вопрос"},
 	}
 	got := DialogueHistory(hist)
 	if got == "" {
@@ -35,11 +35,11 @@ func TestDialogueHistorySkipsLastUser(t *testing.T) {
 }
 
 func TestDialogueHistoryChronologicalOrder(t *testing.T) {
-	hist := []chat.Message{
-		{Role: chat.RoleUser, Content: "вопрос 1"},
-		{Role: chat.RoleAssistant, Content: "ответ 1"},
-		{Role: chat.RoleUser, Content: "вопрос 2"},
-		{Role: chat.RoleAssistant, Content: "ответ 2"},
+	hist := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: "вопрос 1"},
+		{Role: domain.ChatRoleAssistant, Content: "ответ 1"},
+		{Role: domain.ChatRoleUser, Content: "вопрос 2"},
+		{Role: domain.ChatRoleAssistant, Content: "ответ 2"},
 	}
 	got := DialogueHistory(hist)
 	want := "[пользователь] вопрос 1\n[ассистент] ответ 1\n[пользователь] вопрос 2\n[ассистент] ответ 2"
@@ -49,10 +49,10 @@ func TestDialogueHistoryChronologicalOrder(t *testing.T) {
 }
 
 func TestDialogueHistoryMaxTurns(t *testing.T) {
-	var hist []chat.Message
+	var hist []domain.ChatMessage
 	for i := 0; i < DialogueMaxTurns+10; i++ {
-		hist = append(hist, chat.Message{Role: chat.RoleUser, Content: "вопрос"})
-		hist = append(hist, chat.Message{Role: chat.RoleAssistant, Content: "ответ"})
+		hist = append(hist, domain.ChatMessage{Role: domain.ChatRoleUser, Content: "вопрос"})
+		hist = append(hist, domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: "ответ"})
 	}
 	got := DialogueHistory(hist)
 	count := 0
@@ -67,11 +67,11 @@ func TestDialogueHistoryMaxTurns(t *testing.T) {
 }
 
 func TestDialogueHistorySkipsNonDialogueRoles(t *testing.T) {
-	hist := []chat.Message{
-		{Role: chat.RoleUser, Content: "вопрос"},
-		{Role: chat.RoleStatus, Content: "агент начал работу"},
-		{Role: chat.RoleSystem, Content: "сессия создана"},
-		{Role: chat.RoleAssistant, Content: "ответ"},
+	hist := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: "вопрос"},
+		{Role: domain.ChatRoleStatus, Content: "агент начал работу"},
+		{Role: domain.ChatRoleSystem, Content: "сессия создана"},
+		{Role: domain.ChatRoleAssistant, Content: "ответ"},
 	}
 	got := DialogueHistory(hist)
 	if contains(got, "агент начал") || contains(got, "сессия создана") {
@@ -83,9 +83,9 @@ func TestDialogueHistorySkipsNonDialogueRoles(t *testing.T) {
 }
 
 func TestDialogueHistoryTrimsWhitespace(t *testing.T) {
-	hist := []chat.Message{
-		{Role: chat.RoleUser, Content: "  "},
-		{Role: chat.RoleAssistant, Content: "\nответ\n"},
+	hist := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: "  "},
+		{Role: domain.ChatRoleAssistant, Content: "\nответ\n"},
 	}
 	got := DialogueHistory(hist)
 	if contains(got, "  ") && !contains(got, "ответ") {
@@ -97,9 +97,9 @@ func TestDialogueHistoryTrimsWhitespace(t *testing.T) {
 }
 
 func TestDialogueHistoryToolMessages(t *testing.T) {
-	hist := []chat.Message{
-		{Role: chat.RoleUser, Content: "создай эпик"},
-		{Role: chat.RoleTool, Tool: "BoardCreateEpic", Content: "эпик создан"},
+	hist := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: "создай эпик"},
+		{Role: domain.ChatRoleTool, Tool: "BoardCreateEpic", Content: "эпик создан"},
 	}
 	got := DialogueHistory(hist)
 	if !contains(got, "BoardCreateEpic →] эпик создан") {
@@ -119,10 +119,10 @@ func TestOneLine(t *testing.T) {
 }
 
 func TestDialogueHistoryAskRole(t *testing.T) {
-	hist := []chat.Message{
-		{Role: chat.RoleUser, Content: "вопрос?"},
-		{Role: chat.RoleAsk, Ask: &chat.Ask{Questions: []chat.AskQuestion{
-			{ID: "q1", Text: "Какой вариант?", Kind: chat.AskSingle, Options: []chat.AskOption{
+	hist := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: "вопрос?"},
+		{Role: domain.ChatRoleAsk, Ask: &domain.Ask{Questions: []domain.AskQuestion{
+			{ID: "q1", Text: "Какой вариант?", Kind: domain.AskSingle, Options: []domain.AskOption{
 				{ID: "a", Label: "A", Recommended: true},
 				{ID: "b", Label: "B"},
 			}},

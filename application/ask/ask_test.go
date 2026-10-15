@@ -7,19 +7,19 @@ import (
 	"testing"
 	"time"
 
-	"ai/chat"
+	"ai/domain"
 )
 
 // recAnnouncer — заглушка Announcer: копит опубликованные вопросы, статусы и
 // логи.
 type recAnnouncer struct {
 	mu     sync.Mutex
-	asks   []chat.Ask
+	asks   []domain.Ask
 	status []string
 	info   []string
 }
 
-func (r *recAnnouncer) Ask(a chat.Ask) {
+func (r *recAnnouncer) Ask(a domain.Ask) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.asks = append(r.asks, a)
@@ -37,11 +37,11 @@ func (r *recAnnouncer) Info(msg string) {
 	r.info = append(r.info, msg)
 }
 
-func (r *recAnnouncer) lastAsk() chat.Ask {
+func (r *recAnnouncer) lastAsk() domain.Ask {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.asks) == 0 {
-		return chat.Ask{}
+		return domain.Ask{}
 	}
 	return r.asks[len(r.asks)-1]
 }
@@ -76,13 +76,13 @@ func TestParseQuestionsValid(t *testing.T) {
 	if len(qs) != 2 {
 		t.Fatalf("len = %d", len(qs))
 	}
-	if qs[0].ID != "q1" || qs[0].Kind != chat.AskSingle || !qs[0].AllowCustom {
+	if qs[0].ID != "q1" || qs[0].Kind != domain.AskSingle || !qs[0].AllowCustom {
 		t.Fatalf("q0 = %+v", qs[0])
 	}
 	if !qs[0].Options[0].Recommended || qs[0].Options[1].Recommended {
 		t.Fatalf("recommended = %+v", qs[0].Options)
 	}
-	if qs[1].Kind != chat.AskMulti || qs[1].AllowCustom {
+	if qs[1].Kind != domain.AskMulti || qs[1].AllowCustom {
 		t.Fatalf("q1 = %+v", qs[1])
 	}
 }
@@ -96,7 +96,7 @@ func TestParseQuestionsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseQuestions: %v", err)
 	}
-	if qs[0].Kind != chat.AskSingle {
+	if qs[0].Kind != domain.AskSingle {
 		t.Fatalf("kind = %q, want single", qs[0].Kind)
 	}
 	if !qs[0].AllowCustom {
@@ -129,13 +129,13 @@ func TestParseQuestionsErrors(t *testing.T) {
 func TestPendingAskBlocksUntilAnswered(t *testing.T) {
 	ann := &recAnnouncer{}
 	p := NewPending(ann)
-	questions := []chat.AskQuestion{
-		{ID: "q1", Text: "Язык?", Kind: chat.AskSingle, Options: []chat.AskOption{{ID: "go", Label: "Go"}}},
-		{ID: "q2", Text: "Фичи?", Kind: chat.AskMulti, Options: []chat.AskOption{{ID: "a", Label: "А"}}},
+	questions := []domain.AskQuestion{
+		{ID: "q1", Text: "Язык?", Kind: domain.AskSingle, Options: []domain.AskOption{{ID: "go", Label: "Go"}}},
+		{ID: "q2", Text: "Фичи?", Kind: domain.AskMulti, Options: []domain.AskOption{{ID: "a", Label: "А"}}},
 	}
 
 	type out struct {
-		ans []chat.AskAnswer
+		ans []domain.AskAnswer
 		err error
 	}
 	done := make(chan out, 1)
@@ -193,7 +193,7 @@ func TestPendingAskBlocksUntilAnswered(t *testing.T) {
 func TestPendingGuardAndValidation(t *testing.T) {
 	ann := &recAnnouncer{}
 	p := NewPending(ann)
-	qs := []chat.AskQuestion{{ID: "q", Text: "?", Kind: chat.AskSingle, Options: []chat.AskOption{{ID: "a", Label: "А"}}}}
+	qs := []domain.AskQuestion{{ID: "q", Text: "?", Kind: domain.AskSingle, Options: []domain.AskOption{{ID: "a", Label: "А"}}}}
 
 	done := make(chan error, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -240,7 +240,7 @@ func TestPendingAskContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.Ask(ctx, []chat.AskQuestion{{ID: "q", Text: "?", Kind: chat.AskSingle, Options: []chat.AskOption{{ID: "a", Label: "А"}}}})
+		_, err := p.Ask(ctx, []domain.AskQuestion{{ID: "q", Text: "?", Kind: domain.AskSingle, Options: []domain.AskOption{{ID: "a", Label: "А"}}}})
 		done <- err
 	}()
 	ask := waitAsk(t, ann)
@@ -256,7 +256,7 @@ func TestPendingAskContextCancel(t *testing.T) {
 	// После отмены активный вопрос снят — можно задать новый.
 	done2 := make(chan error, 1)
 	go func() {
-		_, err := p.Ask(context.Background(), []chat.AskQuestion{{ID: "q", Text: "?", Kind: chat.AskSingle, Options: []chat.AskOption{{ID: "a", Label: "А"}}}})
+		_, err := p.Ask(context.Background(), []domain.AskQuestion{{ID: "q", Text: "?", Kind: domain.AskSingle, Options: []domain.AskOption{{ID: "a", Label: "А"}}}})
 		done2 <- err
 	}()
 	ask2 := waitAskCount(t, ann, 2)
@@ -270,11 +270,11 @@ func TestPendingAskContextCancel(t *testing.T) {
 }
 
 func TestSummarize(t *testing.T) {
-	qs := []chat.AskQuestion{
-		{ID: "q1", Text: "Язык?", Options: []chat.AskOption{{ID: "go", Label: "Go"}, {ID: "rust", Label: "Rust"}}},
-		{ID: "q2", Text: "Фичи?", Options: []chat.AskOption{{ID: "a", Label: "Авторизация"}}},
+	qs := []domain.AskQuestion{
+		{ID: "q1", Text: "Язык?", Options: []domain.AskOption{{ID: "go", Label: "Go"}, {ID: "rust", Label: "Rust"}}},
+		{ID: "q2", Text: "Фичи?", Options: []domain.AskOption{{ID: "a", Label: "Авторизация"}}},
 	}
-	ans := []chat.AskAnswer{
+	ans := []domain.AskAnswer{
 		{QuestionID: "q1", Selected: []string{"go"}},
 		{QuestionID: "q2", Custom: "своё"},
 	}
@@ -285,13 +285,13 @@ func TestSummarize(t *testing.T) {
 }
 
 // waitAsk ждёт первую публикацию вопроса от Announcer.
-func waitAsk(t *testing.T, ann *recAnnouncer) chat.Ask {
+func waitAsk(t *testing.T, ann *recAnnouncer) domain.Ask {
 	t.Helper()
 	return waitAskCount(t, ann, 1)
 }
 
 // waitAskCount ждёт появления как минимум n опубликованных вопросов.
-func waitAskCount(t *testing.T, ann *recAnnouncer, n int) chat.Ask {
+func waitAskCount(t *testing.T, ann *recAnnouncer, n int) domain.Ask {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -304,5 +304,5 @@ func waitAskCount(t *testing.T, ann *recAnnouncer, n int) chat.Ask {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("вопрос не опубликован (нужно %d)", n)
-	return chat.Ask{}
+	return domain.Ask{}
 }

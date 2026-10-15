@@ -9,7 +9,7 @@ package chatassist
 import (
 	"strings"
 
-	"ai/chat"
+	"ai/domain"
 )
 
 // ConfirmTokens — слова-согласия, по которым деструктивное действие ассистента
@@ -75,7 +75,7 @@ func LooksLikeBoardWriteClaim(content string) bool {
 }
 
 // AskSummary собирает текст вопросов структурированного AskUser в одну строку.
-func AskSummary(a *chat.Ask) string {
+func AskSummary(a *domain.Ask) string {
 	if a == nil {
 		return ""
 	}
@@ -128,27 +128,27 @@ func PrevUserDiffers(asked, answer string) bool {
 // Проблема, которую снимает якорь: ассистент на каждом ходе заново решает, что
 // делать, и не помнит, что уже спрашивал; пользователь отвечает «да», а модель
 // снова задаёт тот же вопрос, и ни одного инструмента не вызывается.
-func ActionAnchor(hist []chat.Message, question string) string {
+func ActionAnchor(hist []domain.ChatMessage, question string) string {
 	if len(hist) == 0 {
 		return ""
 	}
 	// Текущая реплика пользователя — последняя запись; предыдущие собираем
 	// в обратном порядке (свежие → старые).
-	if last := hist[len(hist)-1]; last.Role == chat.RoleUser {
+	if last := hist[len(hist)-1]; last.Role == domain.ChatRoleUser {
 		hist = hist[:len(hist)-1]
 	}
 
 	// Ищем две последние содержательные реплики ассистента.
-	var assistants []chat.Message
+	var assistants []domain.ChatMessage
 	for i := len(hist) - 1; i >= 0 && len(assistants) < 2; i-- {
 		switch hist[i].Role {
-		case chat.RoleAssistant:
+		case domain.ChatRoleAssistant:
 			if strings.TrimSpace(hist[i].Content) != "" {
 				assistants = append(assistants, hist[i])
 			}
-		case chat.RoleAsk:
+		case domain.ChatRoleAsk:
 			if t := AskSummary(hist[i].Ask); t != "" {
-				assistants = append(assistants, chat.Message{Content: t})
+				assistants = append(assistants, domain.ChatMessage{Content: t})
 			}
 		}
 	}

@@ -61,7 +61,7 @@ Dependency Rule: внутренние слои импортируют внешн
 | H6b | `developer`/`factory`: `board.*`→`domain`, git-WIP и RAG-переиндексация→`runner/adapters`, `rag.Searcher`→`services.Searcher` | ✅ |
 | H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | разбит на H5a–H5e |
 | H5a | `agents.Agent`→`services.Agent` (алиас) + planner без импорта `ai/agents` | ✅ |
-| H5b | `chat.Ask*`→domain (`chat` алиасит) | Ожидает |
+| H5b | `chat.Ask*`/`chat.Message`/`chat.Role*`→domain (`chat` алиасит) | ✅ |
 | H5c | `checkpoint`-порт (`planner` без `ai/checkpoint`) | Ожидает |
 | H5d | `runevents.Reporter`-порт (`planner` без `ai/runevents`) | Ожидает |
 | H5e | `workspace.Info`/`AddParams`/`Kind`→domain (`gitflow` без `ai/workspace`) | Ожидает |
@@ -255,6 +255,15 @@ env-хелперы перенесены из `agents/architect/config.go` в
 `domain.{AgentMessage,MessageType*}` (включая `kanban_testing.go`); все
 application-пакеты теперь без не-тестовых импортов `ai/{agents,tools,infrastructure}`.
 Остаётся `checkpoint`/`runevents` (H5c/H5d) и `chat`/`workspace` (H5b/H5e).
+
+Срез **H5b**: данные диалога Web UI вынесены в домен (`domain/dialog.go`):
+`ChatRole` (+`ChatRole*`), `ChatMessage`, `AskKind` (+`AskSingle`/`AskMulti`),
+`Ask`, `AskQuestion`, `AskOption`, `AskAnswer` (префикс `Chat` для ролей/
+сообщений — чтобы не сталкиваться с `domain.Role`/`domain.Message`). `chat`
+алиасит все эти типы и константы (`chat.Role`/`chat.Message`/`chat.Ask*`
+сохранены), метод `Message.fields` стал свободной `messageFields` (метод на
+алиас-типе определить нельзя). `application/{ask,chatassist}` и их тесты
+переведены на `domain.*` — `application` больше не импортирует `ai/chat`.
 
 - `chat.Ask`/`AskQuestion`/`AskAnswer` → domain (`chat` алиасит).
 - `checkpoint.Snapshot`/`Status*` → domain + порт-интерфейс, инъекция из main.

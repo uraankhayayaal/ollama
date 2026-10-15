@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	appboard "ai/application/board"
-	"ai/chat"
+	"ai/domain"
 )
 
 const (
@@ -24,13 +24,13 @@ func OneLine(s string, n int) string {
 // DialogueHistory форматирует последние реплики диалога в строки промпта.
 // Порядок в messages хронологический (старые → новые), последняя запись —
 // только что добавленное сообщение пользователя. Пропускаем её.
-func DialogueHistory(messages []chat.Message) string {
+func DialogueHistory(messages []domain.ChatMessage) string {
 	if len(messages) == 0 {
 		return ""
 	}
 
 	start := 0
-	if messages[len(messages)-1].Role == chat.RoleUser {
+	if messages[len(messages)-1].Role == domain.ChatRoleUser {
 		start = 1
 	}
 
@@ -41,19 +41,19 @@ func DialogueHistory(messages []chat.Message) string {
 		}
 		m := messages[i]
 		switch m.Role {
-		case chat.RoleUser, chat.RoleAssistant:
+		case domain.ChatRoleUser, domain.ChatRoleAssistant:
 			if txt := strings.TrimSpace(m.Content); txt != "" {
 				speaker := "пользователь"
-				if m.Role == chat.RoleAssistant {
+				if m.Role == domain.ChatRoleAssistant {
 					speaker = "ассистент"
 				}
 				lines = append(lines, "["+speaker+"] "+OneLine(txt, DialogueMsgLen))
 			}
-		case chat.RoleAsk:
+		case domain.ChatRoleAsk:
 			if txt := AskSummary(m.Ask); txt != "" {
 				lines = append(lines, "[ассистент] "+OneLine(txt, DialogueMsgLen))
 			}
-		case chat.RoleTool:
+		case domain.ChatRoleTool:
 			if txt := strings.TrimSpace(m.Content); txt != "" {
 				spyateli := "инструмент"
 				if m.Tool != "" {
