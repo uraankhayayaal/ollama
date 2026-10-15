@@ -1,5 +1,26 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Этап 7 «Разбиение крупных файлов», срез G1 — `server/server.go`)
+
+Начат Этап 7 (`docs/plans/PLAN-2026-10-15-todo-split-large-files.md`):
+механическое разбиение крупных файлов на логические под-файлы **внутри того же
+пакета**, без изменения API/поведения и без переноса бизнес-логики. Срез **G1**:
+`server/server.go` (1833 строки, 57 функций) разрезан по доменам на семь
+файлов — `server/server.go` (305: `Config`/`Server`, `NewServer`, `Run`,
+`routes`, `getOrCreate`, `session`), `server/projects.go` (166: проекты/meta/
+`isGitURL`/`dirBase`), `server/providers.go` (224: провайдеры/модели/`provider`/
+`sessionFlags`/`anySessionRunning`), `server/board.go` (427: доска/эпики/задачи +
+`decodeInjections`/`decodeTaskComments`), `server/chat.go` (386: чат/сессия/WS),
+`server/injections.go` (260: инъекции и комментарии), `server/helpers.go` (128:
+`contains`/`computeStatus`/`statusDetail`/`projectMeta`/`writeJSON`/`writeErr`/
+`decodeBody`/`decodeBodyStrict`). Doc-комментарии хендлеров (включая
+`const standbyReason`) перенесены вместе с функциями. Верификация: канонический
+набор (`go build`/`go vet`/`go test -count=1`) зелёный, число функций сохранено
+(57), `gofmt` по правкам чист. Документация: новый план + строка в
+`docs/plans/README.md`. Остаток Этапа 7 — G2 (`tools/fileops.go`), G3
+(`application/planner/executor.go`), G4 (`infrastructure/board/store.go`).
+Коммита нет (спросить пользователя).
+
 ## Состояние последней сессии (Clean Architecture Этап 6 завершён, срезы F1–F3ad — `server` → `application/usecases`/`application/gitflow`/`application/rag`/`application/ask`/`application/logs`/`application/chatassist`/`application/hitl`/`application/board`/`domain/log`/`domain/diff`/`domain`)
 
 Продолжен Этап 6 (`PLAN-2026-10-12-todo-clean-architecture.md`, «Интерфейсы и
