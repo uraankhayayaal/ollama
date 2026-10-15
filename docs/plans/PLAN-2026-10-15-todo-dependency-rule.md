@@ -62,7 +62,7 @@ Dependency Rule: внутренние слои импортируют внешн
 | H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | разбит на H5a–H5e |
 | H5a | `agents.Agent`→`services.Agent` (алиас) + planner без импорта `ai/agents` | ✅ |
 | H5b | `chat.Ask*`/`chat.Message`/`chat.Role*`→domain (`chat` алиасит) | ✅ |
-| H5c | `checkpoint`-порт (`planner` без `ai/checkpoint`) | Ожидает |
+| H5c | `checkpoint`-порт (`planner` без `ai/checkpoint`) | ✅ |
 | H5d | `runevents.Reporter`-порт (`planner` без `ai/runevents`) | Ожидает |
 | H5e | `workspace.Info`/`AddParams`/`Kind`→domain (`gitflow` без `ai/workspace`) | Ожидает |
 | H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
@@ -265,12 +265,23 @@ application-пакеты теперь без не-тестовых импорт�
 алиас-типе определить нельзя). `application/{ask,chatassist}` и их тесты
 переведены на `domain.*` — `application` больше не импортирует `ai/chat`.
 
-- `chat.Ask`/`AskQuestion`/`AskAnswer` → domain (`chat` алиасит).
-- `checkpoint.Snapshot`/`Status*` → domain + порт-интерфейс, инъекция из main.
+Срез **H5c**: чекпоинт плана (снимок, статусы шагов) вынесен в домен
+(`domain/checkpoint.go`): `CheckpointSnapshot`, нетипизированные
+`Checkpoint{Pending,Running,Done,Failed,Skipped}` и
+`ErrCheckpointNotFound` (статусы непроизводны, чтобы не конфликтовать с
+существующим `domain.StatusDone` таска). `checkpoint` алиасит их
+(`Snapshot`/`Status*`/`ErrNotFound`), `*checkpoint.Store` реализует новый
+порт `planner.CheckpointStore` (`Save`/`Load`/`MarkStep`/`SaveRoundState`/
+`ClearRoundState`/`TrackMetric`), который инжектится из `main` через
+`SetCheckpoint(store, resume)`. `application/planner` больше не импортирует
+`ai/checkpoint`; `main` остаётся composition root (строит `checkpoint.Store`
+и передаёт в порт). Поведение не менялось — это чистый перенос типов и
+подмена конкретного типа на порт.
+
+Осталось по H5:
 - `runevents.Reporter`-порт → `domain/services` (контекст-хелперы + интерфейс).
 - `workspace.Info`/`AddParams`/`Kind` → domain-данные (реестр остаётся за
   портом `OpenRegistry`).
-- `usecases`→`tokens`/`agents` закрывается портами из H1/H2.
 
 ### H7: уборка и верификация
 

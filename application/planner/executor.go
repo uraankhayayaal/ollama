@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"ai/checkpoint"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/logging"
@@ -60,8 +59,8 @@ type Executor struct {
 	// acceptor — порт детерминированной приёмки (acceptor.PlannerAdapter).
 	// nil — приёмка по шагам qa отключена.
 	acceptor Acceptor
-	// store — Redis-хранилище чекпоинтов; nil — контрольные точки отключены.
-	store *checkpoint.Store
+	// store — хранилище чекпоинтов (порт); nil — контрольные точки отключены.
+	store CheckpointStore
 	// resume — возобновлять ли выполнение с чекпоинта.
 	resume bool
 	// metrics — приёмник именованных метрик шага в единый реестр телеметрии
@@ -108,12 +107,25 @@ func planProject(plan *Plan) string {
 	return plan.ProjectName
 }
 
-// SetCheckpoint подключает Redis-хранилище чекпоинтов и включает/выключает
-// режим resume. Возвращает сам исполнитель для цепочек вызовов.
-func (e *Executor) SetCheckpoint(store *checkpoint.Store, resume bool) *Executor {
+// SetCheckpoint подключает хранилище чекпоинтов и включает/выключает режим
+// resume. Возвращает сам исполнитель для цепочек вызовов.
+func (e *Executor) SetCheckpoint(store CheckpointStore, resume bool) *Executor {
 	e.store = store
 	e.resume = resume
 	return e
+}
+
+// CheckpointStore — порт хранилища чекпоинтов плана (реализуется
+// checkpoint.Store поверх Redis; инъекция из main). Снимок и статусы —
+// доменные типы (domain.CheckpointSnapshot), чтобы application не зависел от
+// инфраструктурного пакета checkpoint.
+type CheckpointStore interface {
+	Save(ctx context.Context, snap *domain.CheckpointSnapshot) error
+	Load(ctx context.Context) (*domain.CheckpointSnapshot, error)
+	MarkStep(ctx context.Context, snap *domain.CheckpointSnapshot, stepID, status string) error
+	SaveRoundState(ctx context.Context, snap *domain.CheckpointSnapshot, stepID string, rounds int, conversation json.RawMessage) error
+	ClearRoundState(ctx context.Context, snap *domain.CheckpointSnapshot, stepID string) error
+	TrackMetric(ctx context.Context, snap *domain.CheckpointSnapshot, stepID string, values map[string]any) error
 }
 
 // MetricSink — приёмник именованных метрик шага в единый реестр телеметрии
@@ -300,12 +312,12 @@ func (e *Executor) initCheckpoint(ctx context.Context, waves [][]string) error {
 			// Восстанавливаем завершённые шаги из чекпоинта.
 			for id := range snap.Completed {
 				e.completed[id] = true
-				e.statuses[id] = checkpoint.StatusDone
+				e.statuses[id] = domain.CheckpointDone
 			}
 			n := len(snap.Completed)
 			e.log.Infof("[Checkpoint] resume: восстановлено %d завершённых шагов", n)
 			return nil
-		} else if err != nil && err != checkpoint.ErrNotFound {
+		} else if err != nil && err != domain.ErrCheckpointNotFound {
 			e.log.Warnf("[Checkpoint] не удалось прочитать чекпоинт (%v), начинаю заново", err)
 		}
 	}
@@ -319,13 +331,13 @@ func (e *Executor) initCheckpoint(ctx context.Context, waves [][]string) error {
 }
 
 // newSnapshot собирает стартовое состояние выполнения плана.
-func (e *Executor) newSnapshot(waves [][]string) *checkpoint.Snapshot {
+func (e *Executor) newSnapshot(waves [][]string) *domain.CheckpointSnapshot {
 	planJSON, _ := json.Marshal(e.plan)
 	statuses := make(map[string]string, len(e.plan.Steps))
 	for _, s := range e.plan.Steps {
-		statuses[s.ID] = checkpoint.StatusPending
+		statuses[s.ID] = domain.CheckpointPending
 	}
-	return &checkpoint.Snapshot{
+	return &domain.CheckpointSnapshot{
 		ProjectName: e.plan.ProjectName,
 		Summary:     e.plan.Summary,
 		PlanJSON:    planJSON,
@@ -339,8 +351,8 @@ func (e *Executor) newSnapshot(waves [][]string) *checkpoint.Snapshot {
 func (e *Executor) markRunning(ctx context.Context, stepID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.statuses[stepID] = checkpoint.StatusRunning
-	e.persistStatus(ctx, stepID, checkpoint.StatusRunning)
+	e.statuses[stepID] = domain.CheckpointRunning
+	e.persistStatus(ctx, stepID, domain.CheckpointRunning)
 }
 
 // markDone помечает шаг завершённым и сбрасывает в чекпоинт.
@@ -348,8 +360,8 @@ func (e *Executor) markDone(ctx context.Context, stepID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.completed[stepID] = true
-	e.statuses[stepID] = checkpoint.StatusDone
-	e.persistStatus(ctx, stepID, checkpoint.StatusDone)
+	e.statuses[stepID] = domain.CheckpointDone
+	e.persistStatus(ctx, stepID, domain.CheckpointDone)
 	// Шаг успешно завершён — история агентского цикла для resume больше не
 	// нужна, удаляем её, чтобы не занимала место в чекпоинте.
 	if e.store != nil {
@@ -369,11 +381,11 @@ func (e *Executor) markDone(ctx context.Context, stepID string) {
 func (e *Executor) markFailed(ctx context.Context, stepID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.statuses[stepID] = checkpoint.StatusFailed
+	e.statuses[stepID] = domain.CheckpointFailed
 	if e.store != nil {
 		// Загружаем свежий снапшот и обновляем статус.
 		if snap, err := e.store.Load(ctx); err == nil {
-			_ = e.store.MarkStep(ctx, snap, stepID, checkpoint.StatusFailed)
+			_ = e.store.MarkStep(ctx, snap, stepID, domain.CheckpointFailed)
 		}
 	}
 }

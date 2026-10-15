@@ -10,54 +10,29 @@ package checkpoint
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
+
+	"ai/domain"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrNotFound — чекпоинт для ключа не найден.
-var ErrNotFound = errors.New("чекпоинт не найден")
+// ErrNotFound — чекпоинт для ключа не найден (алиас domain.ErrCheckpointNotFound).
+var ErrNotFound = domain.ErrCheckpointNotFound
 
-// StepStatus — статус шага плана.
+// StepStatus — статус шага плана (алиасы domain.Checkpoint*).
 const (
-	StatusPending = "pending"
-	StatusRunning = "running"
-	StatusDone    = "done"
-	StatusFailed  = "failed"
-	StatusSkipped = "skipped"
+	StatusPending = domain.CheckpointPending
+	StatusRunning = domain.CheckpointRunning
+	StatusDone    = domain.CheckpointDone
+	StatusFailed  = domain.CheckpointFailed
+	StatusSkipped = domain.CheckpointSkipped
 )
 
-// Snapshot — состояние выполнения плана в момент контрольной точки.
-type Snapshot struct {
-	// ProjectName — имя проекта, к которому относится план.
-	ProjectName string `json:"project_name"`
-	// Summary — короткое описание плана (для логов/UI).
-	Summary string `json:"summary"`
-	// PlanJSON — план (сериализованный в JSON), как его вернул планировщик.
-	PlanJSON json.RawMessage `json:"plan"`
-	// Completed — шаги, успешно завершённые к моменту контрольной точки.
-	Completed map[string]bool `json:"completed"`
-	// Statuses — детальный статус каждого шага (pending/running/done/failed).
-	Statuses map[string]string `json:"statuses"`
-	// Rounds — количество раундов агентского цикла, потраченных на каждый шаг
-	// до момента остановки (для resume после лимита раундов).
-	Rounds map[string]int `json:"rounds,omitempty"`
-	// Conversations — история диалога агента незавершённого шага, сериализованная
-	// в JSON (массив runner.Message). Позволяет при resume продолжить агентский
-	// цикл с потраченных раундов, а не начинать шаг заново.
-	Conversations map[string]json.RawMessage `json:"conversations,omitempty"`
-	// Metrics — детальные метрики выполнения шагов (стадии): каждый шаг — карта
-	// ключ→значение (например вердикт приёмки, число изменений контракта, число
-	// раундов, список изменённых файлов). Чистая телеметрия для анализа, на
-	// resume не влияет.
-	Metrics map[string]map[string]any `json:"metrics,omitempty"`
-	// Waves — шаги, сгруппированные по волнам параллельности (для resume).
-	Waves [][]string `json:"waves,omitempty"`
-	// UpdatedAt — время последнего обновления чекпоинта (RFC3339).
-	UpdatedAt string `json:"updated_at"`
-}
+// Snapshot — состояние выполнения плана в момент контрольной точки
+// (алиас domain.CheckpointSnapshot; типы вынесены в домен, срез H5c).
+type Snapshot = domain.CheckpointSnapshot
 
 // Store — Redis-хранилище чекпоинтов.
 type Store struct {
