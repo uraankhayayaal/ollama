@@ -51,7 +51,7 @@ Dependency Rule: внутренние слои импортируют внешн
 |---|---|---|
 | H2 | Алиасы `board`→`domain` в `application/board`, `application/chatassist`, `tokens`, `injections`, `usecases` | ✅ |
 | H1 | `infrastructure/llm` чистый: порты→`domain/services`, убрать `Generate`, декоратор эскалации, `ToOllama`→llm, удалить `GetToolsForOllama` | ✅ |
-| H4 | `planner`→конкретные agents: фабрики выносятся в `agents/factory`, подключение через `SetAgentFactory` в `main` | Ожидает |
+| H4 | `planner`→конкретные agents: фабрики выносятся в `agents/factory`, подключение через `SetAgentFactory` в `main` | ✅ |
 | H3 | `gitflow`/`rag`→домен: `MergeResult`/`MergeConflictError`/`Index*`/`SearchParams`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | Ожидает |
 | H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | Ожидает |
 | H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | Ожидает |
@@ -112,6 +112,22 @@ Dependency Rule: внутренние слои импортируют внешн
 внешний пакет `agents/factory`; `planner` оставляет только порт
 `AgentFactory` и подключение через существующий `SetAgentFactory`
 (сборка — в `main.go`; `server/gitflow_ar.go` зовёт фабрику напрямую).
+
+**Выполнено (H4):** конкретные `roleAgentFactory`/`architectFactory`/
+`infraAgentFactory` переехали в новый пакет `agents/factory` (`Factory`/`New`,
+`roleFactory` + `architectFactory`); `agents/factory` не импортирует `planner`
+(метод `Step` порта принимает доменный `domain.AgentType` вместо `*planner.Step`,
+поэтому порт плана и реализация связаны только структурно). В `planner` остались
+порт `AgentFactory`, `SetAgentFactory`/`agentFactory()` и noop-заглушка по
+умолчанию (возвращает nil — запуск без установленной фабрики теперь явная ошибка
+сборки, а не молчаливый дефолт). Установка — в composition root: `main.go`
+(`planner.SetAgentFactory(factory.New())`), `application/planner/testmain_test.go`,
+новый `server/testmain_test.go` (серверный gitflow-резолвер зовёт
+`planner.SpecialistForRole`). Тесты фабрики переехали в
+`agents/factory/factory_test.go`. Верификация: канонический набор зелёный;
+`go list -deps ./application/planner/` больше не содержит `ai/agents/*`
+(осталась только базовая `ai/agents` с типами `Agent`/`Message` — вне H4);
+`agents/factory` не тянет `application/planner` (цикла нет).
 
 ### H3: gitflow/rag→домен
 

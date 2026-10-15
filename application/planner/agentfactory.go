@@ -2,33 +2,30 @@ package planner
 
 import (
 	"ai/agents"
-	"ai/agents/backendlead"
-	"ai/agents/developer"
-	"ai/agents/devops"
-	"ai/agents/devopslead"
-	"ai/agents/frontendlead"
-	"ai/agents/qaengineer"
+	"ai/domain"
 	"ai/domain/services"
 	"ai/infrastructure/rag"
 )
 
 // AgentFactory — порт конструирования ролевых агентов оркестратора: лидов
-// направлений (Lead), специалистов по assigned_role задачи (Specialist) и
-// агента шага plan-исполнителя (Step). Логика оркестрации зависит только от
-// этого порта; конкретные пакеты агентов (backendlead/developer/devops/…)
-// сведены в одну реализацию roleAgentFactory ниже — это инфраструктурный шов.
+// направлений (Lead), специалистов по assigned_role задачи (Specialist),
+// агента шага plan-исполнителя (Step) и системного архитектора. Логика
+// оркестрации зависит только от этого порта; конкретные пакеты агентов
+// (backendlead/developer/devops/architect/…) сведены в реализацию внешнего
+// пакета `ai/agents/factory`, которую устанавливает composition root
+// (`main.go`) через SetAgentFactory. Так application/planner не импортирует
+// agents/* — направление зависимости соблюдено.
 //
-// Инверсия продолжается: в следующих срезах реализация переедет в отдельный
-// инфраструктурный пакет (agents/roles) и будет внедряться в оркестратор, а
-// application/planner перестанет импортировать agents/*. Пока порт внутренний:
-// вызовы оркестратора уже не знают о конкретных агентах.
+// `Step` намеренно принимает доменный AgentType, а не *Step, чтобы реализация
+// фабрики не зависела от этого пакета (иначе получился бы цикл импорта
+// planner → agents/factory → planner).
 type AgentFactory interface {
 	// Lead создаёт агента-лида направления по assigned_role эпика.
 	Lead(project, role, prompt string) agents.Agent
 	// Specialist создаёт агента-специалиста по assigned_role задачи.
 	Specialist(project, role, prompt string) agents.Agent
 	// Step создаёт агента шага plan-исполнителя по типу шага; nil — неизвестный.
-	Step(step *Step, projectName string) agents.Agent
+	Step(agentType domain.AgentType, projectName, prompt string) agents.Agent
 	// Architect создаёт системного архитектора (обычный режим).
 	Architect(project, prompt string, store services.BoardStore) agents.Agent
 	// ArchitectReviewer создаёт архитектора в режиме ревизии черновиков эпиков.
@@ -42,20 +39,40 @@ type AgentFactory interface {
 	SetArchitectEpicWorkdir(a agents.Agent, fn func() (string, string)) agents.Agent
 }
 
-// infraAgentFactory — фабрика по умолчанию: ролевые агенты + архитектор.
-type infraAgentFactory struct {
-	roleAgentFactory
-	architectFactory
+// noopAgentFactory — фабрика по умолчанию, пока composition root не установил
+// реальную (`agents/factory`). Возвращает nil-агентов: запуск агента без
+// установленной фабрики — ошибка сборки, а не молчаливое поведение.
+type noopAgentFactory struct{}
+
+func (noopAgentFactory) Lead(string, string, string) agents.Agent       { return nil }
+func (noopAgentFactory) Specialist(string, string, string) agents.Agent { return nil }
+func (noopAgentFactory) Step(domain.AgentType, string, string) agents.Agent {
+	return nil
+}
+func (noopAgentFactory) Architect(string, string, services.BoardStore) agents.Agent {
+	return nil
+}
+func (noopAgentFactory) ArchitectReviewer(string, string, services.BoardStore) agents.Agent {
+	return nil
+}
+func (noopAgentFactory) ArchitectBugExpert(string, string, services.BoardStore) agents.Agent {
+	return nil
+}
+func (noopAgentFactory) ConfigureArchitect(a agents.Agent, _ rag.Searcher, _ ...services.Tool) agents.Agent {
+	return a
+}
+func (noopAgentFactory) SetArchitectEpicWorkdir(a agents.Agent, _ func() (string, string)) agents.Agent {
+	return a
 }
 
-// defaultAgentFactory — фабрика по умолчанию (реальная инфраструктура).
-var defaultAgentFactory AgentFactory = infraAgentFactory{}
+// defaultAgentFactory — фабрика по умолчанию (устанавливается в main.go).
+var defaultAgentFactory AgentFactory = noopAgentFactory{}
 
 // SetAgentFactory переопределяет фабрику ролевых агентов (тесты, инфраструктура).
-// nil восстанавливает фабрику по умолчанию.
+// nil возвращает заглушку-пустышку.
 func SetAgentFactory(f AgentFactory) {
 	if f == nil {
-		defaultAgentFactory = infraAgentFactory{}
+		defaultAgentFactory = noopAgentFactory{}
 		return
 	}
 	defaultAgentFactory = f
@@ -63,56 +80,3 @@ func SetAgentFactory(f AgentFactory) {
 
 // agentFactory возвращает активную фабрику ролевых агентов.
 func agentFactory() AgentFactory { return defaultAgentFactory }
-
-// roleAgentFactory — конкретная реализация поверх пакетов агентов.
-type roleAgentFactory struct{}
-
-func (roleAgentFactory) Lead(project, role, prompt string) agents.Agent {
-	switch {
-	case isRole(role, "qa", "тест", "testing"):
-		return qaengineer.NewQAEngineer(project, prompt)
-	case isRole(role, "devops", "инфра", "infra", "dev", "sre", "ci"):
-		return devopslead.NewDevopsLead(project, prompt)
-	case isRole(role, "front", "react", "ui", "client", "фронт"):
-		return frontendlead.NewFrontendLead(project, prompt)
-	default: // backend
-		return backendlead.NewBackendLead(project, prompt)
-	}
-}
-
-func (roleAgentFactory) Specialist(project, role, prompt string) agents.Agent {
-	switch {
-	case isRole(role, "qa", "тест", "testing"):
-		return qaengineer.NewQAEngineer(project, prompt)
-	case isRole(role, "devops", "инфра", "infra", "sre", "docker", "k8s", "ci"):
-		return devops.NewDevops(project, prompt)
-	}
-	// Разработка кода: задача с фронтенд-маркерами отдаётся Frontend-агенту,
-	// всё остальное (включая смешанные/backend/универсальные задачи) — Backend-
-	// агенту. Оба агента работают в temp/<project> в корне модуля и сами
-	// создают недостающую структуру подпроекта.
-	if isRole(role, "front", "react", "ui", "client", "фронт", "js", "ts", "vue") {
-		return developer.NewFrontendDeveloper(project, prompt)
-	}
-	return developer.NewBackendDeveloper(project, prompt)
-}
-
-func (roleAgentFactory) Step(step *Step, projectName string) agents.Agent {
-	switch step.Agent {
-	case AgentBackendDev:
-		return developer.NewBackendDeveloper(projectName, step.Prompt)
-	case AgentFrontendDev:
-		return developer.NewFrontendDeveloper(projectName, step.Prompt)
-	case AgentDevops:
-		return devops.NewDevops(projectName, step.Prompt)
-	case AgentDevopsLead:
-		return devopslead.NewDevopsLead(projectName, step.Prompt)
-	case AgentQAEngineer:
-		return qaengineer.NewQAEngineer(projectName, step.Prompt)
-	case AgentFrontendLead:
-		return frontendlead.NewFrontendLead(projectName, step.Prompt)
-	case AgentBackendLead:
-		return backendlead.NewBackendLead(projectName, step.Prompt)
-	}
-	return nil
-}

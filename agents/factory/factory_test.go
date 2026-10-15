@@ -1,15 +1,16 @@
-package planner
+package factory
 
 import (
+	"ai/domain"
 	"reflect"
 	"testing"
 )
 
-// TestRoleAgentFactoryMapsRoles фиксирует соответствие «роль → конкретный агент»
-// в порту AgentFactory: инверсия зависимости не должна менять поведение выбора
-// специалиста/лида по маркерам assigned_role.
-func TestRoleAgentFactoryMapsRoles(t *testing.T) {
-	f := roleAgentFactory{}
+// TestRoleFactoryMapsRoles фиксирует соответствие «роль → конкретный агент»
+// в порту planner.AgentFactory: инверсия зависимости не должна менять
+// поведение выбора специалиста/лида по маркерам assigned_role.
+func TestRoleFactoryMapsRoles(t *testing.T) {
+	f := roleFactory{}
 	typeName := func(a any) string {
 		if a == nil {
 			return "<nil>"
@@ -52,24 +53,24 @@ func TestRoleAgentFactoryMapsRoles(t *testing.T) {
 	}
 }
 
-func TestRoleAgentFactoryStep(t *testing.T) {
-	f := roleAgentFactory{}
-	cases := map[AgentType]string{
-		AgentBackendDev:   "*developer.BackendDeveloper",
-		AgentFrontendDev:  "*developer.FrontendDeveloper",
-		AgentDevops:       "*devops.Devops",
-		AgentDevopsLead:   "*devopslead.DevopsLead",
-		AgentQAEngineer:   "*qaengineer.QAEngineer",
-		AgentFrontendLead: "*frontendlead.FrontendLead",
-		AgentBackendLead:  "*backendlead.BackendLead",
+func TestRoleFactoryStep(t *testing.T) {
+	f := roleFactory{}
+	cases := map[domain.AgentType]string{
+		domain.AgentBackendDev:   "*developer.BackendDeveloper",
+		domain.AgentFrontendDev:  "*developer.FrontendDeveloper",
+		domain.AgentDevops:       "*devops.Devops",
+		domain.AgentDevopsLead:   "*devopslead.DevopsLead",
+		domain.AgentQAEngineer:   "*qaengineer.QAEngineer",
+		domain.AgentFrontendLead: "*frontendlead.FrontendLead",
+		domain.AgentBackendLead:  "*backendlead.BackendLead",
 	}
 	for at, want := range cases {
-		got := reflect.TypeOf(f.Step(&Step{Agent: at, Prompt: "p"}, "proj")).String()
+		got := reflect.TypeOf(f.Step(at, "proj", "p")).String()
 		if got != want {
 			t.Errorf("Step(%s) = %s, ожидался %s", at, got, want)
 		}
 	}
-	if a := f.Step(&Step{Agent: AgentType("unknown")}, "p"); a != nil {
+	if a := f.Step(domain.AgentType("unknown"), "p", "p"); a != nil {
 		t.Errorf("Step(unknown) = %v, ожидался nil", a)
 	}
 }

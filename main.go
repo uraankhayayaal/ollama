@@ -9,6 +9,7 @@ import (
 	"ai/agents/developer"
 	"ai/agents/devops"
 	"ai/agents/devopslead"
+	"ai/agents/factory"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/application/planner"
@@ -56,6 +57,7 @@ func main() {
 	planner.SetLSPDiagnoser(tools.LSPDiagnoserAdapter{})
 	planner.SetSnapshotFactory(tools.SnapshotAdapterFactory{})
 	planner.SetPublicAPIAuditor(tools.PublicAPIAuditorAdapter{})
+	planner.SetAgentFactory(factory.New())
 
 	// Сервис мониторинга новых MR — не требует провайдера модели.
 	if len(os.Args) > 1 && os.Args[1] == "listen" {

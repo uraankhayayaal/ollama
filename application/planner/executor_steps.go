@@ -42,7 +42,7 @@ func (e *Executor) executeStep(ctx context.Context, step *Step) error {
 // newStepAgent создаёт агента шага по его типу (разработчик, специалист или
 // лид направления). Возвращает nil для неизвестного типа.
 func newStepAgent(step *Step, projectName string) agents.Agent {
-	return agentFactory().Step(step, projectName)
+	return agentFactory().Step(step.Agent, projectName, step.Prompt)
 }
 
 // runCodingAgent запускает агента-разработчика (backend/frontend) или другого
