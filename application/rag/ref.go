@@ -16,7 +16,7 @@ import (
 
 	"ai/domain"
 	"ai/domain/services"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // MaxRefFileBytes — предел размера файла, который читается из ветки (крупные

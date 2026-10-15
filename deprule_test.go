@@ -20,10 +20,7 @@ import (
 var allowedPrefixes = []string{
 	"ai/domain",      // домен и его под-пакеты (domain/services, domain/log, …)
 	"ai/application", // соседние под-пакеты application
-	"ai/logging",     // shared-утилита логирования
-	"ai/projects",    // shared-утилита путей проектов
-	"ai/tokens",      // shared-утилита счётчиков токенов
-	"ai/langdetect",  // shared-утилита определения языка
+	"ai/shared",      // shared-утилиты (logging, projects, tokens, langdetect)
 }
 
 func allowedImport(imp string) bool {

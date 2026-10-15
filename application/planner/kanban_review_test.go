@@ -9,8 +9,8 @@ import (
 	"ai/agents/architect"
 	"ai/domain/services"
 	"ai/infrastructure/board"
-	"ai/projects"
 	"ai/runner"
+	"ai/shared/projects"
 	"ai/tools"
 
 	"github.com/alicebob/miniredis/v2"

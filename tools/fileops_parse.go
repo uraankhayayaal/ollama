@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // FileItem описывает структуру одного файла, приходящего из аргументов ИИ

@@ -4,7 +4,7 @@ import (
 	"ai/application/usecases"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/tokens"
+	"ai/shared/tokens"
 	"context"
 	"errors"
 	"fmt"

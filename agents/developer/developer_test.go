@@ -3,7 +3,7 @@ package developer
 import (
 	"ai/agents/promptcheck"
 	"ai/infrastructure/board"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"

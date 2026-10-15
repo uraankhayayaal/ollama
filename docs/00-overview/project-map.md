@@ -158,11 +158,11 @@
 | `infrastructure/checkpoint/` | Чекпоинты плана в Redis |
 | `infrastructure/chat/` | Redis Streams: история чата и pub/sub |
 | `infrastructure/workspace/` | Реестр проектов (`registry.go`), карта веток (`branches.go`) |
-| `projects/` | `ProjectDir` (`temp/<имя>`), `config.go` (CODEGEN_*) |
-| `tokens/` | `scoped.go`, `pricing.go`, `predict.go`, `history.go`, `store.go` |
+| `shared/projects/` | `ProjectDir` (`temp/<имя>`), `config.go` (CODEGEN_*) |
+| `shared/tokens/` | `scoped.go`, `pricing.go`, `predict.go`, `history.go`, `store.go` |
 | `infrastructure/llm/` | LLM-провайдеры: `resolve.go` (выбор провайдера), `OllamaModel.go`, `OpenAIProvider.go`, `layered.go`, `ModelSettings.go`, `ports.go` (реализация `domain/services.LLMClient`). Бывший `models/` |
-| `logging/` | Файлы логов, `LOG_DIR` |
-| `langdetect/` | Определение языка по диффу (21 язык) |
+| `shared/logging/` | Файлы логов, `LOG_DIR` |
+| `shared/langdetect/` | Определение языка по диффу (21 язык) |
 | `infrastructure/stackdetect/` | Определение стека по маркерам проекта |
 | `repositories/` | Клонированные репозитории |
 | `infrastructure/mrlistener/` | Слушатель новых MR (`listen`) |

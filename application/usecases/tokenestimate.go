@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"ai/domain"
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 // Прогноз расхода токенов для новых единиц доски (Ф-5

@@ -21,10 +21,10 @@ import (
 	"ai/infrastructure/runevents"
 	"ai/infrastructure/runmetrics"
 	"ai/infrastructure/workspace"
-	"ai/logging"
-	"ai/projects"
 	"ai/runctx"
-	"ai/tokens"
+	"ai/shared/logging"
+	"ai/shared/projects"
+	"ai/shared/tokens"
 	"ai/tools"
 	"sync/atomic"
 )

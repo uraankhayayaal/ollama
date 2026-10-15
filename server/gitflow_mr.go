@@ -25,7 +25,7 @@ import (
 	"ai/infrastructure/forges"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // errMREmptyBranch — алиас доменной ошибки gitflow.ErrEmptyBranch (Этап 6):

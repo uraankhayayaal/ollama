@@ -22,7 +22,7 @@ import (
 	"ai/domain/services"
 	"context"
 
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 // generate вызывает провайдера в scope'е единицы работы: расход токенов раундов

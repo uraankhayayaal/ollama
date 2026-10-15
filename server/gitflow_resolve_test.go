@@ -15,7 +15,7 @@ import (
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 // conflictMergeOutput — вывод merge-tree для конфликтующего файла f.txt.

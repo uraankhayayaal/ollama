@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"ai/infrastructure/runevents"
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 // maxSeries — потолок числа различных scope в реестре. Имена единиц работы

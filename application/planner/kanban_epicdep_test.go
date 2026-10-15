@@ -3,8 +3,8 @@ package planner
 import (
 	"ai/domain/services"
 	"ai/infrastructure/board"
-	"ai/projects"
 	"ai/runner"
+	"ai/shared/projects"
 	"context"
 	"os"
 	"strings"

@@ -16,9 +16,9 @@ import (
 	"strings"
 
 	"ai/application/usecases"
-	"ai/infrastructure/board"
 	"ai/domain"
-	"ai/logging"
+	"ai/infrastructure/board"
+	"ai/shared/logging"
 )
 
 // RoundStateErrorMax — сколько символов вывода упавшей проверки писать в

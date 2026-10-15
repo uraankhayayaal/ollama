@@ -29,7 +29,7 @@ import (
 	"ai/infrastructure/git"
 	"ai/infrastructure/rag"
 	"ai/infrastructure/workspace"
-	"ai/logging"
+	"ai/shared/logging"
 	"time"
 )
 

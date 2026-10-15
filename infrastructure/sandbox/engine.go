@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // defaultDockerSocket — путь к сокету демона по умолчанию.

@@ -3,7 +3,7 @@ package planner
 import (
 	"ai/domain"
 	"ai/domain/services"
-	"ai/tokens"
+	"ai/shared/tokens"
 	"context"
 	"fmt"
 	"strings"

@@ -2,7 +2,7 @@ package developer
 
 import (
 	"ai/infrastructure/forges"
-	"ai/logging"
+	"ai/shared/logging"
 	"fmt"
 	"os"
 	"path/filepath"

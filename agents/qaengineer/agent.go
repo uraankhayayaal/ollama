@@ -4,7 +4,7 @@ import (
 	"ai/agents"
 	"ai/agents/acceptor"
 	"ai/domain/services"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"

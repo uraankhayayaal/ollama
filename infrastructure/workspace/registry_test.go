@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 func TestDefaultPathEnvOverride(t *testing.T) {

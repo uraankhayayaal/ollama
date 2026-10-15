@@ -8,7 +8,7 @@ package tools
 import (
 	"ai/domain"
 	"ai/domain/services"
-	"ai/logging"
+	"ai/shared/logging"
 	"context"
 	"encoding/json"
 	"errors"

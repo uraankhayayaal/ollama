@@ -8,7 +8,7 @@ package planner
 
 import (
 	"ai/infrastructure/rag"
-	"ai/projects"
+	"ai/shared/projects"
 	"context"
 	"errors"
 	"os"

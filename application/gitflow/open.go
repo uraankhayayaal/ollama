@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // ClonedSubmodule — сабмодуль клонированного проекта.

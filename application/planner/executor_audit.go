@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"ai/domain/services"
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 // trackStepMetrics обновляет метрики шага (теляметрия стадий: раунды, вердикт

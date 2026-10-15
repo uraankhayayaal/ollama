@@ -72,12 +72,12 @@ gofmt -w <файл>
 | `infrastructure/workspace/` | Реестр проектов, ветки, worktree |
 | `infrastructure/git/` | Обёртки над git: клон, ветки, worktree, diff, сабмодули |
 | `infrastructure/forges/` | Форджи: GitHub, GitLab, local |
-| `langdetect/` | Определение языка диффа |
+| `shared/langdetect/` | Определение языка диффа |
 | `infrastructure/stackdetect/` | Определение стека проекта |
 | `infrastructure/checkpoint/` | Чекпоинты плана в Redis |
 | `infrastructure/chat/` | История чата в Redis |
-| `infrastructure/board/`, `infrastructure/runmetrics/`, `tokens/` | Токены, метрики, цены |
-| `projects/` | Конфиг проекта, `ProjectDir` |
+| `infrastructure/board/`, `infrastructure/runmetrics/`, `shared/tokens/` | Токены, метрики, цены |
+| `shared/projects/` | Конфиг проекта, `ProjectDir` |
 | `runctx/`, `infrastructure/runevents/` | Контекст цикла и события |
 | `web/` | Фронтенд React + TypeScript |
 | `docs/` | Эта документация |

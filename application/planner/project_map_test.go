@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/projects"
+	"ai/shared/projects"
 	"os"
 	"path/filepath"
 	"strconv"

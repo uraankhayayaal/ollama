@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	applogs "ai/application/logs"
-	"ai/logging"
+	"ai/shared/logging"
 	"ai/tools"
 )
 

@@ -1,5 +1,22 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (shared-утилиты → shared/)
+
+Четыре корневые shared-утилиты сгруппированы под `shared/`: `logging/` →
+`shared/logging/`, `projects/` → `shared/projects/`, `tokens/` →
+`shared/tokens/`, `langdetect/` → `shared/langdetect/`. Пакеты только
+перемещены (`git mv`), имена не менялись; правлены пути импорта (`ai/<pkg>` →
+`ai/shared/<pkg>`, включая тестовые) в ~150 файлах + `gofmt -w`. Проверено:
+domain остаётся stdlib-only; `application` по-прежнему импортирует только
+`ai/domain`, `ai/domain/*` и `ai/shared/*`; инфраструктура — только домен,
+`ai/projects` и shared-утилиты. Импортный гейт `deprule_test.go`: allowlist
+ужат до префиксов `ai/{domain,application,shared}` (вместо четырёх отдельных
+`ai/{logging,projects,tokens,langdetect}`). Верификация: канонический набор
+зелёный (падают только предсуществующие host-флаки `TestAcceptBuild*`), `gofmt`
+по правкам чист. Документация: живые доки (`architecture.md`, `project-map.md`,
+`20-features/*`, `40-operations/development.md`) — пути на `shared/...`;
+исторические `PLAN-*-done-*.md` не трогались.
+
 ## Состояние последней сессии (вторая косметическая уборка корня)
 
 Ещё четыре корневых пакета разложены по слоям: `forges/` →
@@ -13,9 +30,9 @@
 Проверено: `forges`←domain+logging, `stackdetect` без ai-зависимостей,
 `mrlistener`←logging, `acceptor`←domain+sandbox+logging+stackdetect+tools
 (outer→outer + outer→infrastructure — не нарушает правило). Оставлены в корне:
-`logging/`, `projects/`, `tokens/`, `langdetect/` (shared-утилиты — от них зависит
+`shared/{logging,projects,tokens,langdetect}` (shared-утилиты — от них зависит
 `application`), `runctx/` (outer-обвязка: импортирует `runner`+`tools`),
-`archive/` и `compress/` (не код модуля: скрач-каталоги). Верификация:
+`archive/` (не код модуля: скрач-каталог). Верификация:
 канонический набор `go build|vet|test -count=1` зелёный (падают только
 предсуществующие host-флаки `TestAcceptBuild*` на GNU Make 3.81 и иногда
 `TestChatAssistant*` на живой модели), `-race` по `infrastructure/{forges,
@@ -69,7 +86,7 @@ infrastructure/*,gitops,repositories}` — зависимости идут че�
 репортёр→`domain/services/reporter.go`, реестр→`domain/workspace.go`),
 **H7** `e7b6671` (импортный гейт `deprule_test.go`/`make depgate`, доки).
 Правила: домен — stdlib-only; `application` — только домен + порты +
-shared-утилиты (`logging`, `projects`, `tokens`, `langdetect`); инфраструктура
+shared-утилиты (`shared/{logging,projects,tokens,langdetect}`); инфраструктура
 реализует порты; composition root — `main.go`. Верификация: канонический набор
 `go build|vet|test -count=1` зелёный (флак `TestChatAssistant*` — предсуществующий
 env-флак, в изоляции зелёный), `-race` по новым тестам чист, `gofmt` по правкам

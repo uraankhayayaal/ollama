@@ -23,7 +23,7 @@ import (
 	"strings"
 	"sync"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 //go:embed Dockerfile

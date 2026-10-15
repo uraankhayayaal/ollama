@@ -22,7 +22,7 @@ import (
 	"time"
 
 	applogs "ai/application/logs"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // logFileEntry/logsResponse — алиасы доменных типов панели логов (собранных в

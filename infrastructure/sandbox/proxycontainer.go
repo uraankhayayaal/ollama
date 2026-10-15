@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // proxyListen — фиксированный порт прокси внутри контейнера: IP контейнера

@@ -2,7 +2,7 @@ package runner
 
 import (
 	"ai/application/usecases"
-	"ai/logging"
+	"ai/shared/logging"
 	"encoding/json"
 )
 

@@ -17,7 +17,7 @@ import (
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
-	"ai/logging"
+	"ai/shared/logging"
 	"context"
 	"fmt"
 	"net/http"

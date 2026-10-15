@@ -2,7 +2,7 @@ package planner
 
 import (
 	"ai/infrastructure/board"
-	"ai/projects"
+	"ai/shared/projects"
 	"context"
 	"errors"
 	"os"

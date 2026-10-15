@@ -10,7 +10,7 @@ import (
 	"ai/agents/devopslead"
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 	"os"
 	"strings"

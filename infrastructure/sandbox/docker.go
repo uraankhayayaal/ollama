@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // SessionOptions — параметры старта контейнера сессии.

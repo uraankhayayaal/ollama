@@ -3,7 +3,7 @@ package server
 import (
 	"ai/application/usecases"
 	"ai/infrastructure/llm"
-	"ai/logging"
+	"ai/shared/logging"
 	"fmt"
 	"sync"
 )

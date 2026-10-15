@@ -12,7 +12,7 @@ import (
 	"ai/infrastructure/board"
 	"ai/infrastructure/chat"
 	"ai/infrastructure/workspace"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // handleGetBoard возвращает снимок доски (meta + epics + tasks + bugs).

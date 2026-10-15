@@ -118,8 +118,8 @@ domain  ←  application  ←  infrastructure  ←  outer (server, main, runner,
 | История и события чата | Redis Streams | `infrastructure/chat/` | Живой чат в Web UI |
 | RAG-индекс | Qdrant, `QDRANT_ADDR` (gRPC) | `infrastructure/rag/` | Семантический поиск по коду |
 | Реестр проектов | Файл `$AI_WORKSPACES` | `infrastructure/workspace/` | Имя проекта → путь, git-метаданные |
-| Логи | Файлы в `LOG_DIR` | `logging/` | Лог каждого проекта и процесса |
-| Проекты агентов | `temp/<имя>/` | `projects/` | Рабочее хранилище (не коммитится) |
+| Логи | Файлы в `LOG_DIR` | `shared/logging/` | Лог каждого проекта и процесса |
+| Проекты агентов | `temp/<имя>/` | `shared/projects/` | Рабочее хранилище (не коммитится) |
 
 `checkpoint` намеренно не зависит от типов planner: снимок хранит `PlanJSON`
 как непрозрачные байты (`infrastructure/checkpoint/checkpoint.go:3-7`). Это позволяет менять

@@ -16,7 +16,7 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 	"context"
 	"encoding/json"

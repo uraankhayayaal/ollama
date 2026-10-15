@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"ai/infrastructure/runevents"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 )
 

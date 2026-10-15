@@ -37,7 +37,7 @@ import (
 	"syscall"
 	"time"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // egressNetworkName — внутренняя сеть сессий. Одна на процесс: сеть

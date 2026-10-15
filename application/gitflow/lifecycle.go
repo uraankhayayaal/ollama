@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // WorktreeProject — срез info проекта, нужный жизненному циклу worktree.

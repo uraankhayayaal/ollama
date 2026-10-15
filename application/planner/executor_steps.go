@@ -9,8 +9,8 @@ import (
 	"ai/application/usecases"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/logging"
-	"ai/projects"
+	"ai/shared/logging"
+	"ai/shared/projects"
 )
 
 // executeStep выполняет один шаг плана нужным агентом.

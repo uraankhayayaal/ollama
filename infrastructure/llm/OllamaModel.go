@@ -2,7 +2,7 @@ package llm
 
 import (
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 	"context"
 	"encoding/json"
 	"fmt"

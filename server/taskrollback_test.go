@@ -20,7 +20,7 @@ import (
 	"ai/infrastructure/board"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 // rollbackFixture: реальный git-проект (bare origin + клон в temp/), задача на

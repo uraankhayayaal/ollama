@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"ai/infrastructure/runevents"
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 func write(t *testing.T, snaps ...Snapshot) string {

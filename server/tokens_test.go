@@ -13,7 +13,7 @@ import (
 	"ai/infrastructure/board"
 	"ai/infrastructure/runevents"
 	"ai/runner"
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 // TestGetTokensStartsAtZero проверяет REST-эндпоинт счётчика токенов:

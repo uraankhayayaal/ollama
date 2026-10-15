@@ -3,8 +3,8 @@ package codereviewer
 import (
 	"ai/agents"
 	"ai/infrastructure/forges"
-	"ai/langdetect"
-	"ai/logging"
+	"ai/shared/langdetect"
+	"ai/shared/logging"
 	"ai/tools"
 	"fmt"
 	"os"

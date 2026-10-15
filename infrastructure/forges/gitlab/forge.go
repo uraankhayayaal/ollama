@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"ai/infrastructure/forges"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // Forge — реализация интерфейса forges.Forge для GitLab.

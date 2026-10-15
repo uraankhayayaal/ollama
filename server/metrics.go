@@ -21,7 +21,7 @@ import (
 
 	"ai/infrastructure/board"
 	"ai/infrastructure/runmetrics"
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 // metricsView — ответ дашборда: снимок реестра плюс итоги за всё время жизни

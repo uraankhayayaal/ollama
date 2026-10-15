@@ -16,7 +16,7 @@ import (
 	"ai/domain"
 	"ai/infrastructure/board"
 	"ai/infrastructure/injections"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // injectionSet — инъекции агентского цикла, собираемые из источников.

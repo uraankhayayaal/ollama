@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // Доменные ошибки ошибок резолва (маппятся адаптером в ответы).

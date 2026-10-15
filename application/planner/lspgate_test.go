@@ -6,8 +6,8 @@ package planner
 import (
 	"ai/domain"
 	"ai/domain/services"
-	"ai/projects"
 	"ai/runner"
+	"ai/shared/projects"
 	"ai/tools"
 	"context"
 	"os"

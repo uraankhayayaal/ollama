@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"ai/infrastructure/board"
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 // seedTokenHistory кладёт на доску завершённые единицы с фактом расхода — так

@@ -10,7 +10,7 @@ import (
 
 	"ai/domain"
 	"ai/domain/services"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 var (

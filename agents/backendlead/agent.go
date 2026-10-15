@@ -3,7 +3,7 @@ package backendlead
 import (
 	"ai/agents"
 	"ai/domain/services"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 	"os"
 	"path/filepath"

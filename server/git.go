@@ -5,7 +5,7 @@ import (
 	"ai/infrastructure/forges"
 	"ai/infrastructure/git"
 	"ai/infrastructure/workspace"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 	"context"
 	"errors"
@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"ai/application/gitflow"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // --- открытие git-проектов (Ф-2-3) ---

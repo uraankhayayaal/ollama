@@ -4,7 +4,7 @@
 package mrlistener
 
 import (
-	"ai/logging"
+	"ai/shared/logging"
 	"bufio"
 	"context"
 	"encoding/json"

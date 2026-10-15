@@ -24,7 +24,7 @@ import (
 	apprag "ai/application/rag"
 	"ai/infrastructure/chat"
 	"ai/infrastructure/rag"
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 // ragIndexSink — приёмник отчётов фоновой индексации (порт

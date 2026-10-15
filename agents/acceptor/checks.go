@@ -1,7 +1,7 @@
 package acceptor
 
 import (
-	"ai/logging"
+	"ai/shared/logging"
 	"fmt"
 	"strings"
 )

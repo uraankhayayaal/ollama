@@ -19,7 +19,7 @@ package server
 
 import (
 	"ai/infrastructure/chat"
-	"ai/logging"
+	"ai/shared/logging"
 	"bytes"
 	"encoding/json"
 	"fmt"

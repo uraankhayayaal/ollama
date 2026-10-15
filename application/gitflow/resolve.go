@@ -26,7 +26,7 @@ import (
 
 	"ai/domain"
 	"ai/domain/services"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // Result — итог одного цикла разрешения конфликтов.

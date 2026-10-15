@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // EpicRepo — операции с репозиторием проекта и его worktree.

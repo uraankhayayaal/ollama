@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // KindLocal — локальная директория как «система ревью».

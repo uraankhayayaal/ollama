@@ -185,7 +185,7 @@ new ──► confirmed ──► fix ──► fixed
 ## Токены
 
 `TokenUsage` встроен в Epic и Task (`infrastructure/board/entity.go:173-201`), дублирует
-данные из `tokens/scoped.go`:
+данные из `shared/tokens/scoped.go`:
 
 ```json
 {"tokens_in": 0, "tokens_out": 0, "tokens_total": 0, "token_estimate": 0}

@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"ai/infrastructure/board"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // handleAddInjection добавляет сессионную инъекцию. Идентификатор выдаётся

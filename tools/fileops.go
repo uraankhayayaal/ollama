@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"ai/infrastructure/forges"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // FileOps — разделяемое состояние файловых инструментов генератора кода

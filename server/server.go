@@ -15,7 +15,7 @@ import (
 	"ai/infrastructure/git"
 	"ai/infrastructure/runmetrics"
 	"ai/infrastructure/workspace"
-	"ai/logging"
+	"ai/shared/logging"
 	"ai/tools"
 )
 

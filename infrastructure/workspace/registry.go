@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"ai/domain"
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 // Kind — тип рабочего проекта (алиас domain.Kind; данные записей реестра

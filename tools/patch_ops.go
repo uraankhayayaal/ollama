@@ -8,7 +8,7 @@ package tools
 // удалить или переписать чужой функционал.
 
 import (
-	"ai/logging"
+	"ai/shared/logging"
 	"encoding/json"
 	"fmt"
 	"os"

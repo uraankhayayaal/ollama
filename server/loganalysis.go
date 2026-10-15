@@ -5,7 +5,7 @@ import (
 	"time"
 
 	applogs "ai/application/logs"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // Разбор логов по запросу панели логов (кнопка «Разобрать»).

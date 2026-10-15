@@ -15,7 +15,7 @@ import (
 	"fmt"
 
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 const (

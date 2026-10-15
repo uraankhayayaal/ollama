@@ -15,7 +15,7 @@ import (
 
 	"ai/infrastructure/board"
 	"ai/infrastructure/workspace"
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 // TestAutoCreateEpicBranchOnHook — Ф-1: добавление эпика на доску через

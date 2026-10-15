@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/projects"
+	"ai/shared/projects"
 	"os"
 
 	"github.com/alicebob/miniredis/v2"

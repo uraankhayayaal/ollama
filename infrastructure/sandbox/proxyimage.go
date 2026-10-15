@@ -20,7 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // proxyImageName — тег образа egress-прокси.

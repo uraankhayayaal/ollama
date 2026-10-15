@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // ErrMergeConflict — мёрдж ветки задачи не прошёл из-за конфликта; список

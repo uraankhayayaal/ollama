@@ -27,7 +27,7 @@ import (
 
 	applogs "ai/application/logs"
 	"ai/infrastructure/runevents"
-	"ai/projects"
+	"ai/shared/projects"
 	"ai/tools"
 )
 

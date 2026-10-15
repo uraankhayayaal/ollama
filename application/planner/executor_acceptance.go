@@ -9,7 +9,7 @@ import (
 
 	"ai/domain"
 	"ai/domain/services"
-	"ai/projects"
+	"ai/shared/projects"
 )
 
 // runAcceptorAgent выполняет детерминированную приёмку собранного приложения:

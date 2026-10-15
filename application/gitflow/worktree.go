@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"ai/domain"
-	"ai/logging"
+	"ai/shared/logging"
 )
 
 // TaskWorktreePath возвращает каталог постоянного worktree ветки задачи —

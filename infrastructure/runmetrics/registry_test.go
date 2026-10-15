@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"ai/infrastructure/runevents"
-	"ai/tokens"
+	"ai/shared/tokens"
 )
 
 func start(tool, agent, scope string, at time.Time) runevents.Event {

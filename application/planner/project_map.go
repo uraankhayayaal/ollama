@@ -2,7 +2,7 @@ package planner
 
 import (
 	"ai/domain"
-	"ai/projects"
+	"ai/shared/projects"
 	"fmt"
 	"io/fs"
 	"os"

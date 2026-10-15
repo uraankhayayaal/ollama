@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 
-	"ai/logging"
+	"ai/shared/logging"
 
 	"github.com/qdrant/go-client/qdrant"
 )
