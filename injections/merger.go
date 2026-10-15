@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"ai/infrastructure/board"
+	"ai/domain"
 )
 
 // MergeContext — контекст для применения инъекций: что сейчас в промпте и
@@ -76,7 +76,7 @@ type MergeResult struct {
 }
 
 // MaxContentSize — максимальный размер контента одной инъекции (байт).
-const MaxContentSize = board.MaxInjectionContentSize
+const MaxContentSize = domain.MaxInjectionContentSize
 
 // MaxTotalSize — максимальный суммарный размер всех инъекций (байт).
 const MaxTotalSize = 50 * 1024
@@ -85,7 +85,7 @@ const MaxTotalSize = 50 * 1024
 // Порядок: global → assistant → session → runtime (task).
 // Внутри scope: по priority (убывание), при равенстве — порядок объявления.
 // Инъекции с одинаковым id схлопываются: последняя перекрывает (DeduplicateByID).
-func ApplyInjections(baseSystem string, baseMessages []Message, injections []board.Injection, ctx MergeContext) (*MergeResult, error) {
+func ApplyInjections(baseSystem string, baseMessages []Message, injections []domain.Injection, ctx MergeContext) (*MergeResult, error) {
 	if len(injections) == 0 {
 		return &MergeResult{
 			System:   baseSystem,
@@ -140,9 +140,9 @@ func ApplyInjections(baseSystem string, baseMessages []Message, injections []boa
 		}
 
 		switch inj.Target {
-		case board.InjectionTargetSystem:
+		case domain.InjectionTargetSystem:
 			system = applyToSystem(system, content, inj)
-		case board.InjectionTargetMessages, board.InjectionTargetUserLast, board.InjectionTargetAssistantLast:
+		case domain.InjectionTargetMessages, domain.InjectionTargetUserLast, domain.InjectionTargetAssistantLast:
 			messages = applyToMessages(messages, content, inj)
 		default:
 			// Неизвестный target отсеян Validate выше; на всякий случай не
@@ -175,8 +175,8 @@ func ApplyInjections(baseSystem string, baseMessages []Message, injections []boa
 
 // filterInjections отсеивает выключенные инъекции и те, чьё условие when
 // ложно. Отсеянные возвращаются вторым значением — для наблюдаемости.
-func filterInjections(injs []board.Injection, ctx MergeContext) ([]board.Injection, []SkippedInjection) {
-	out := make([]board.Injection, 0, len(injs))
+func filterInjections(injs []domain.Injection, ctx MergeContext) ([]domain.Injection, []SkippedInjection) {
+	out := make([]domain.Injection, 0, len(injs))
 	var skipped []SkippedInjection
 	for _, inj := range injs {
 		if !inj.IsEnabled() {
@@ -194,7 +194,7 @@ func filterInjections(injs []board.Injection, ctx MergeContext) ([]board.Injecti
 	return out, skipped
 }
 
-func sortInjections(injs []board.Injection) {
+func sortInjections(injs []domain.Injection) {
 	sort.SliceStable(injs, func(i, j int) bool {
 		si := scopePriority(injs[i].EffectiveScope())
 		sj := scopePriority(injs[j].EffectiveScope())
@@ -210,29 +210,29 @@ func sortInjections(injs []board.Injection) {
 
 func scopePriority(scope string) int {
 	switch scope {
-	case board.InjectionScopeGlobal:
+	case domain.InjectionScopeGlobal:
 		return 0
-	case board.InjectionScopeAssistant:
+	case domain.InjectionScopeAssistant:
 		return 1
-	case board.InjectionScopeSession:
+	case domain.InjectionScopeSession:
 		return 2
-	case board.InjectionScopeRuntime:
+	case domain.InjectionScopeRuntime:
 		return 3
 	default:
 		return 4
 	}
 }
 
-func applyToSystem(system, content string, inj board.Injection) string {
+func applyToSystem(system, content string, inj domain.Injection) string {
 	switch inj.Position {
-	case board.InjectionPosPrepend:
+	case domain.InjectionPosPrepend:
 		if strings.TrimSpace(system) == "" {
 			return content
 		}
 		return content + "\n\n" + system
-	case board.InjectionPosReplace:
+	case domain.InjectionPosReplace:
 		return content
-	case board.InjectionPosInjectAtIndex:
+	case domain.InjectionPosInjectAtIndex:
 		if inj.Index == 0 {
 			return prependToSystem(system, content)
 		}
@@ -256,18 +256,18 @@ func appendToSystem(system, content string) string {
 	return system + "\n\n" + content
 }
 
-func applyToMessages(messages []Message, content string, inj board.Injection) []Message {
+func applyToMessages(messages []Message, content string, inj domain.Injection) []Message {
 	switch inj.Target {
-	case board.InjectionTargetUserLast:
+	case domain.InjectionTargetUserLast:
 		return applyToLastMessage(messages, content, inj, "user")
-	case board.InjectionTargetAssistantLast:
+	case domain.InjectionTargetAssistantLast:
 		return applyToLastMessage(messages, content, inj, "assistant")
 	default:
 		return applyToMessagesGeneric(messages, content, inj)
 	}
 }
 
-func applyToLastMessage(messages []Message, content string, inj board.Injection, role string) []Message {
+func applyToLastMessage(messages []Message, content string, inj domain.Injection, role string) []Message {
 	idx := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == role {
@@ -280,11 +280,11 @@ func applyToLastMessage(messages []Message, content string, inj board.Injection,
 	}
 
 	switch inj.Position {
-	case board.InjectionPosPrepend:
+	case domain.InjectionPosPrepend:
 		messages[idx].Content = prependToSystem(messages[idx].Content, content)
-	case board.InjectionPosReplace:
+	case domain.InjectionPosReplace:
 		messages[idx].Content = content
-	case board.InjectionPosInjectAtIndex:
+	case domain.InjectionPosInjectAtIndex:
 		messages[idx].Content = appendToSystem(messages[idx].Content, content)
 	default: // append
 		messages[idx].Content = appendToSystem(messages[idx].Content, content)
@@ -296,16 +296,16 @@ func applyToLastMessage(messages []Message, content string, inj board.Injection,
 // получают роль user (обычное продолжение диалога, которое модель ожидает
 // увидеть), а не system: роль system допустима лишь в начале истории, и
 // системный блок, который приходит на середину, ломает некоторые провайдеры.
-func applyToMessagesGeneric(messages []Message, content string, inj board.Injection) []Message {
+func applyToMessagesGeneric(messages []Message, content string, inj domain.Injection) []Message {
 	newMsg := Message{Role: "user", Content: content}
 	switch inj.Position {
-	case board.InjectionPosPrepend:
+	case domain.InjectionPosPrepend:
 		return append([]Message{newMsg}, messages...)
-	case board.InjectionPosReplace:
+	case domain.InjectionPosReplace:
 		// replace у messages оставляет саму инъекцию: история диалога без
 		// исходных сообщений бессмысленна.
 		return []Message{newMsg}
-	case board.InjectionPosInjectAtIndex:
+	case domain.InjectionPosInjectAtIndex:
 		idx := inj.Index
 		if idx > len(messages) {
 			idx = len(messages)
@@ -324,8 +324,8 @@ func applyToMessagesGeneric(messages []Message, content string, inj board.Inject
 }
 
 // CollectInjections собирает инъекции из всех источников в правильном порядке.
-func CollectInjections(global, assistant, session, runtime []board.Injection) []board.Injection {
-	out := make([]board.Injection, 0, len(global)+len(assistant)+len(session)+len(runtime))
+func CollectInjections(global, assistant, session, runtime []domain.Injection) []domain.Injection {
+	out := make([]domain.Injection, 0, len(global)+len(assistant)+len(session)+len(runtime))
 	out = append(out, global...)
 	out = append(out, assistant...)
 	out = append(out, session...)
@@ -334,9 +334,9 @@ func CollectInjections(global, assistant, session, runtime []board.Injection) []
 }
 
 // DeduplicateByID удаляет дубликаты по id (последний перекрывает).
-func DeduplicateByID(injs []board.Injection) []board.Injection {
+func DeduplicateByID(injs []domain.Injection) []domain.Injection {
 	seen := make(map[string]int, len(injs))
-	out := make([]board.Injection, 0, len(injs))
+	out := make([]domain.Injection, 0, len(injs))
 	for _, inj := range injs {
 		if inj.ID != "" {
 			if idx, ok := seen[inj.ID]; ok {
@@ -361,10 +361,10 @@ func TruncateContent(content string, max int) string {
 // ScopeOrder возвращает порядок scope для отладки.
 func ScopeOrder() []string {
 	return []string{
-		board.InjectionScopeGlobal,
-		board.InjectionScopeAssistant,
-		board.InjectionScopeSession,
-		board.InjectionScopeRuntime,
+		domain.InjectionScopeGlobal,
+		domain.InjectionScopeAssistant,
+		domain.InjectionScopeSession,
+		domain.InjectionScopeRuntime,
 	}
 }
 

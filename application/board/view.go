@@ -10,23 +10,23 @@ package board
 import (
 	"context"
 
-	iboard "ai/infrastructure/board"
+	"ai/domain"
 )
 
 // Store — источник данных доски (реализуется *infrastructure/board.Store).
 type Store interface {
-	ListEpics(ctx context.Context) ([]*iboard.Epic, error)
-	ListTasks(ctx context.Context) ([]*iboard.Task, error)
-	ListBugReports(ctx context.Context) ([]*iboard.BugReport, error)
-	GetMeta(ctx context.Context) (*iboard.Meta, error)
+	ListEpics(ctx context.Context) ([]*domain.Epic, error)
+	ListTasks(ctx context.Context) ([]*domain.Task, error)
+	ListBugReports(ctx context.Context) ([]*domain.BugReport, error)
+	GetMeta(ctx context.Context) (*domain.Meta, error)
 }
 
 // Snapshot — полный снимок доски для REST/SSE.
 type Snapshot struct {
-	Meta  *iboard.Meta        `json:"meta,omitempty"`
-	Epics []*iboard.Epic      `json:"epics"`
-	Tasks []*iboard.Task      `json:"tasks"`
-	Bugs  []*iboard.BugReport `json:"bugs"`
+	Meta  *domain.Meta        `json:"meta,omitempty"`
+	Epics []*domain.Epic      `json:"epics"`
+	Tasks []*domain.Task      `json:"tasks"`
+	Bugs  []*domain.BugReport `json:"bugs"`
 	Total *Total              `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
 }
 
@@ -47,7 +47,7 @@ func View(ctx context.Context, store Store) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	iboard.SortEpics(epics)
+	domain.SortEpics(epics)
 	tasks, err := store.ListTasks(ctx)
 	if err != nil {
 		return Snapshot{}, err

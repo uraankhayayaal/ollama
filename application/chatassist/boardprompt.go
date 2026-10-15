@@ -5,15 +5,15 @@ import (
 	"strings"
 
 	appboard "ai/application/board"
-	iboard "ai/infrastructure/board"
+	"ai/domain"
 )
 
 // BoardView — данные доски для детерминированной сводки промпта ассистента.
 type BoardView struct {
-	Meta  *iboard.Meta
-	Epics []*iboard.Epic
-	Tasks []*iboard.Task
-	Bugs  []*iboard.BugReport
+	Meta  *domain.Meta
+	Epics []*domain.Epic
+	Tasks []*domain.Task
+	Bugs  []*domain.BugReport
 }
 
 // OrchestrationStatus возвращает строку состояния оркестрации для промпта:
@@ -59,11 +59,11 @@ func BoardSummary(v BoardView) string {
 	}
 
 	// Задачи: сводка по статусам + список в работе.
-	taskByStatus := map[iboard.Status]int{}
-	var inProgress []*iboard.Task
+	taskByStatus := map[domain.Status]int{}
+	var inProgress []*domain.Task
 	for _, t := range v.Tasks {
 		taskByStatus[t.Status]++
-		if t.Status == iboard.StatusInProgress {
+		if t.Status == domain.StatusInProgress {
 			inProgress = append(inProgress, t)
 		}
 	}
@@ -71,7 +71,7 @@ func BoardSummary(v BoardView) string {
 		b.WriteString("\nЗадач нет.\n")
 	} else {
 		b.WriteString("\nЗадачи по статусам:\n")
-		for _, st := range []iboard.Status{iboard.StatusNew, iboard.StatusAnalysis, iboard.StatusReady, iboard.StatusHumanHelp, iboard.StatusInProgress, iboard.StatusTesting, iboard.StatusDone, iboard.StatusCancelled} {
+		for _, st := range []domain.Status{domain.StatusNew, domain.StatusAnalysis, domain.StatusReady, domain.StatusHumanHelp, domain.StatusInProgress, domain.StatusTesting, domain.StatusDone, domain.StatusCancelled} {
 			if n := taskByStatus[st]; n > 0 {
 				fmt.Fprintf(&b, "- %s: %d\n", st.Label(), n)
 			}
@@ -119,7 +119,7 @@ func BoardSummary(v BoardView) string {
 	}
 
 	// Баги: сводка по статусам.
-	bugByStatus := map[iboard.BugStatus]int{}
+	bugByStatus := map[domain.BugStatus]int{}
 	for _, bg := range v.Bugs {
 		bugByStatus[bg.Status]++
 	}
@@ -127,7 +127,7 @@ func BoardSummary(v BoardView) string {
 		b.WriteString("\nБагов нет.\n")
 	} else {
 		b.WriteString("\nБаги:\n")
-		for _, st := range []iboard.BugStatus{iboard.BugStatusNew, iboard.BugStatusConfirmed, iboard.BugStatusSlop, iboard.BugStatusFix, iboard.BugStatusFixed} {
+		for _, st := range []domain.BugStatus{domain.BugStatusNew, domain.BugStatusConfirmed, domain.BugStatusSlop, domain.BugStatusFix, domain.BugStatusFixed} {
 			if n := bugByStatus[st]; n > 0 {
 				fmt.Fprintf(&b, "- %s: %d\n", st.Label(), n)
 			}

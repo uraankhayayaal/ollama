@@ -4,24 +4,24 @@
 // В выборку попадают только завершённые (done) задачи и эпики с записанным
 // фактом расхода — незавершённые единицы и записи без факта прогнозу не
 // учат. Признаки (роль, длины заголовка/описания, число задач) берутся из
-// сущностей доски, а факт — из board.TokenUsage.
+// сущностей доски, а факт — из domain.TokenUsage.
 package tokens
 
 import (
 	"context"
 
-	"ai/infrastructure/board"
+	"ai/domain"
 )
 
 // HistoryStore — минимальный доступ к доске для сборки выборки (реализуется
 // board.Store).
 type HistoryStore interface {
-	ListEpics(ctx context.Context) ([]*board.Epic, error)
-	ListTasks(ctx context.Context) ([]*board.Task, error)
+	ListEpics(ctx context.Context) ([]*domain.Epic, error)
+	ListTasks(ctx context.Context) ([]*domain.Task, error)
 }
 
 // SampleFromTask строит признаки задачи по её сущности доски.
-func SampleFromTask(t *board.Task) Sample {
+func SampleFromTask(t *domain.Task) Sample {
 	if t == nil {
 		return Sample{}
 	}
@@ -36,7 +36,7 @@ func SampleFromTask(t *board.Task) Sample {
 
 // SampleFromEpic строит признаки эпика. numTasks — число его задач (передаётся
 // отдельно: на момент создания эпика список задач пуст).
-func SampleFromEpic(e *board.Epic, numTasks int) Sample {
+func SampleFromEpic(e *domain.Epic, numTasks int) Sample {
 	if e == nil {
 		return Sample{}
 	}
@@ -70,13 +70,13 @@ func HistoryFromBoard(ctx context.Context, st HistoryStore) ([]Sample, error) {
 	}
 	samples := make([]Sample, 0, len(tasks)+len(epics))
 	for _, t := range tasks {
-		if t.Status != board.StatusDone || t.TokensTotal <= 0 {
+		if t.Status != domain.StatusDone || t.TokensTotal <= 0 {
 			continue
 		}
 		samples = append(samples, SampleFromTask(t))
 	}
 	for _, e := range epics {
-		if e.Status != board.StatusDone || e.TokensTotal <= 0 {
+		if e.Status != domain.StatusDone || e.TokensTotal <= 0 {
 			continue
 		}
 		samples = append(samples, SampleFromEpic(e, len(e.Tasks)))
