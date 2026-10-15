@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai/infrastructure/git"
+	"ai/domain"
 	"ai/logging"
 )
 
@@ -39,10 +39,18 @@ type WorktreeTask struct {
 type WorktreeHost interface {
 	// Info — свойства проекта (git? root, ветка агента, база).
 	Info(project string) (WorktreeProject, error)
-	// Repo — git-репозиторий основного клона проекта.
-	Repo(ctx context.Context, project string) (*git.Repo, error)
-	// Exec — git-исполнитель (подъём сабмодулей, worktree сабмодулей).
-	Exec() git.Executor
+	// Repo — рабочая копия основного клона проекта.
+	Repo(ctx context.Context, project string) (WorktreeRepo, error)
+	// EnsureSubmodules — поднять worktree сабмодулей в каталоге dir.
+	EnsureSubmodules(ctx context.Context, dir string) ([]Submodule, error)
+	// SubmoduleBase — SHA HEAD сабмодуля (rev-parse HEAD) в каталоге dir.
+	SubmoduleBase(ctx context.Context, dir string) (string, error)
+	// DeinitSubmodule — `git submodule deinit -f` сабмодуля path в каталоге dir.
+	DeinitSubmodule(ctx context.Context, dir, path string) error
+	// SubmoduleWorktree — worktree ветки branch (base) сабмодуля в каталоге.
+	SubmoduleWorktree(ctx context.Context, dir, branch, base, dest string) error
+	// CommitWorktree — авто-коммит правок рабочей копии dir под сообщением.
+	CommitWorktree(ctx context.Context, dir, msg string) error
 	// TaskBranch/EpicBranch — ветка/worktree из side-реестра.
 	TaskBranch(project, taskID string) (BranchRef, error)
 	EpicBranch(project, epicID string) (BranchRef, error)
@@ -99,7 +107,7 @@ func (m WorktreeManager) TaskWorktree(ctx context.Context, project string, t Wor
 	if err != nil {
 		return
 	}
-	wtPath := TaskWorktreePath(repo.Root, project, t.ID)
+	wtPath := TaskWorktreePath(repo.Root(), project, t.ID)
 
 	m.Host.Locked(project, func() {
 		// 0) Актуальность main в индексе RAG: задача стартует, и её агент должен
@@ -152,7 +160,7 @@ func (m WorktreeManager) TaskWorktree(ctx context.Context, project string, t Wor
 			return
 		}
 		EnsureTaskGitignore(project, t.ID, wtPath)
-		if subs, err := git.EnsureSubmodules(ctx, m.Host.Exec(), wt.Root); err != nil {
+		if subs, err := m.Host.EnsureSubmodules(ctx, wt.Root()); err != nil {
 			_ = wt.RemoveWorktree(ctx, wtPath)
 			logging.For(project).Warnf("gitflow: submodule worktree задачи %s: %v", t.ID, err)
 			return
@@ -162,19 +170,19 @@ func (m WorktreeManager) TaskWorktree(ctx context.Context, project string, t Wor
 				if !ok {
 					continue
 				}
-				base, err := m.Host.Exec().Exec(ctx, sub.Root, "git", "rev-parse", "HEAD")
+				base, err := m.Host.SubmoduleBase(ctx, sub.Root)
 				if err != nil {
 					_ = wt.RemoveWorktree(ctx, wtPath)
 					logging.For(project).Warnf("gitflow: base сабмодуля %s задачи %s: %v", sub.Path, t.ID, err)
 					return
 				}
-				branch := taskRef.Branch + "/submodule/" + git.SanitizeBranchName(filepath.ToSlash(sub.Path))
-				if _, err := m.Host.Exec().Exec(ctx, wt.Root, "git", "submodule", "deinit", "-f", "--", sub.Path); err != nil {
+				branch := taskRef.Branch + "/submodule/" + domain.SanitizeBranchName(filepath.ToSlash(sub.Path))
+				if err := m.Host.DeinitSubmodule(ctx, wt.Root(), sub.Path); err != nil {
 					_ = wt.RemoveWorktree(ctx, wtPath)
 					logging.For(project).Warnf("gitflow: deinit сабмодуля %s для task worktree: %v", sub.Path, err)
 					return
 				}
-				if _, err := git.Worktree(ctx, m.Host.Exec(), childRoot, branch, strings.TrimSpace(base), sub.Root); err != nil {
+				if err := m.Host.SubmoduleWorktree(ctx, childRoot, branch, strings.TrimSpace(base), sub.Root); err != nil {
 					_ = wt.RemoveWorktree(ctx, wtPath)
 					logging.For(project).Warnf("gitflow: worktree сабмодуля %s задачи %s: %v", sub.Path, t.ID, err)
 					return
@@ -233,7 +241,7 @@ func (m WorktreeManager) EpicWorktree(ctx context.Context, project, epicID strin
 	if err != nil {
 		return ""
 	}
-	wtPath := EpicWorktreePath(repo.Root, project, epicID)
+	wtPath := EpicWorktreePath(repo.Root(), project, epicID)
 
 	result := ""
 	// Под локом: параллельные merge-операции снимают worktree перед checkout
@@ -302,8 +310,7 @@ func (m WorktreeManager) DropEpicWorktreeLocked(ctx context.Context, project, ep
 	}
 	if repo, rerr := m.Host.Repo(ctx, project); rerr == nil {
 		if _, serr := os.Stat(wtPath); serr == nil {
-			wt := git.RepoFromState(m.Host.Exec(), wtPath, ref.Branch, ref.Base, "")
-			if _, _, cerr := wt.CommitIfDirty(ctx,
+			if cerr := m.Host.CommitWorktree(ctx, wtPath,
 				fmt.Sprintf("эпик %s: структура проекта (авто-коммит)", epicID)); cerr != nil {
 				logging.For(project).Warnf("gitflow: worktree эпика %s: автокоммит перед снятием: %v", epicID, cerr)
 			}

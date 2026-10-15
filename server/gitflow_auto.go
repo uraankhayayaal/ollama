@@ -421,11 +421,83 @@ func (h *worktreeHost) Info(project string) (gitflow.WorktreeProject, error) {
 	}, nil
 }
 
-func (h *worktreeHost) Repo(ctx context.Context, project string) (*git.Repo, error) {
-	return h.s.repoOf(ctx, project)
+func (h *worktreeHost) Repo(ctx context.Context, project string) (gitflow.WorktreeRepo, error) {
+	repo, err := h.s.repoOf(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return serverWorktreeRepo{repo}, nil
 }
 
-func (h *worktreeHost) Exec() git.Executor { return h.s.gitExec }
+func (h *worktreeHost) EnsureSubmodules(ctx context.Context, dir string) ([]gitflow.Submodule, error) {
+	subs, err := git.EnsureSubmodules(ctx, h.s.gitExec, dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]gitflow.Submodule, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, gitflow.Submodule{Path: sub.Path, Root: sub.Root})
+	}
+	return out, nil
+}
+
+func (h *worktreeHost) SubmoduleBase(ctx context.Context, dir string) (string, error) {
+	return h.s.gitExec.Exec(ctx, dir, "git", "rev-parse", "HEAD")
+}
+
+func (h *worktreeHost) DeinitSubmodule(ctx context.Context, dir, path string) error {
+	_, err := h.s.gitExec.Exec(ctx, dir, "git", "submodule", "deinit", "-f", "--", path)
+	return err
+}
+
+func (h *worktreeHost) SubmoduleWorktree(ctx context.Context, dir, branch, base, dest string) error {
+	_, err := git.Worktree(ctx, h.s.gitExec, dir, branch, base, dest)
+	return err
+}
+
+func (h *worktreeHost) CommitWorktree(ctx context.Context, dir, msg string) error {
+	repo := git.RepoFromState(h.s.gitExec, dir, "", "", "")
+	_, _, err := repo.CommitIfDirty(ctx, msg)
+	return err
+}
+
+// serverWorktreeRepo — адаптер gitflow.WorktreeRepo поверх *git.Repo (срез H3c):
+// application-слой не импортирует infrastructure/git.
+type serverWorktreeRepo struct{ r *git.Repo }
+
+func (w serverWorktreeRepo) Root() string { return w.r.Root }
+
+func (w serverWorktreeRepo) WorktreeList(ctx context.Context) ([]gitflow.WorktreeEntry, error) {
+	list, err := w.r.WorktreeList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]gitflow.WorktreeEntry, 0, len(list))
+	for _, wt := range list {
+		out = append(out, gitflow.WorktreeEntry{Branch: wt.Branch, Path: wt.Path})
+	}
+	return out, nil
+}
+
+func (w serverWorktreeRepo) RemoveWorktree(ctx context.Context, path string) error {
+	return w.r.RemoveWorktree(ctx, path)
+}
+
+func (w serverWorktreeRepo) Rebase(ctx context.Context, branch, onto string) error {
+	return w.r.Rebase(ctx, branch, onto)
+}
+
+func (w serverWorktreeRepo) Checkout(ctx context.Context, branch string) error {
+	return w.r.Checkout(ctx, branch)
+}
+
+func (w serverWorktreeRepo) AddWorktree(ctx context.Context, path, branch string) (gitflow.WorktreeRepo, error) {
+	wt, err := w.r.AddWorktree(ctx, path, branch)
+	if err != nil {
+		return nil, err
+	}
+	return serverWorktreeRepo{wt}, nil
+}
 
 func (h *worktreeHost) TaskBranch(project, taskID string) (gitflow.BranchRef, error) {
 	ref, err := h.s.reg.TaskBranch(project, taskID)

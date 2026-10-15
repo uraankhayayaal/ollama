@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"ai/infrastructure/git"
 )
 
 // Ограничения выдачи конфликтов модели: слишком большие файлы отдаём зоной
@@ -54,10 +52,7 @@ func NewConflictView(wt string, files []string) *ConflictView {
 	if len(files) > MaxConflictFiles {
 		files = files[:MaxConflictFiles]
 	}
-	pending, err := git.HasConflictMarkers(wt, files)
-	if err != nil {
-		pending = files
-	}
+	pending := pendingConflictFiles(wt, files)
 	v.Files = pending
 	for _, p := range pending {
 		data, err := os.ReadFile(filepath.Join(wt, filepath.FromSlash(p)))
@@ -80,6 +75,46 @@ func NewConflictView(wt string, files []string) *ConflictView {
 		v.Hint = "выбери корректное содержимое и запиши его через action=apply (files: путь → полный текст без маркеров)"
 	}
 	return v
+}
+
+// pendingConflictFiles — пути из paths, где на диске (dir) ещё остались маркеры
+// конфликта git. Локальная копия git.HasConflictMarkers: application-слой не
+// импортирует infrastructure (Этап 8, срез H3c). Отсутствующие файлы
+// пропускаются; небезопасные пути игнорируются.
+func pendingConflictFiles(dir string, paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		rel, err := ConflictSafeRel(p)
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			continue
+		}
+		for _, ln := range strings.Split(string(data), "\n") {
+			if isConflictMarkerLine(ln) {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// isConflictMarkerLine — маркер блока конфликта git (наша/разделитель/чужая
+// сторона) без учёта метки после маркера. Разделитель матчится точным
+// равенством, как в infrastructure/git.
+func isConflictMarkerLine(ln string) bool {
+	switch {
+	case strings.HasPrefix(ln, "<<<<<<< "):
+		return true
+	case ln == "=======":
+		return true
+	case strings.HasPrefix(ln, ">>>>>>> "):
+		return true
+	}
+	return false
 }
 
 // ConflictRegion вырезает строки рядом с маркерами конфликта — для файлов,

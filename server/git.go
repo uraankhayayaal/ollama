@@ -26,10 +26,37 @@ import (
 // реестра сервера (правила — в application/gitflow/open.go).
 func (s *Server) projectOpener() *gitflow.ProjectOpener {
 	return &gitflow.ProjectOpener{
-		Exec:       s.gitExec,
+		Host:       serverGitOpener{s.gitExec},
 		Registry:   s.reg,
 		ProjectDir: projects.ProjectDir,
 	}
+}
+
+// serverGitOpener — адаптер gitflow.GitOpener поверх git-исполнителя
+// (срез H3c): application-слой не импортирует infrastructure/git.
+type serverGitOpener struct{ ex git.Executor }
+
+func (o serverGitOpener) Exec(ctx context.Context, dir string, argv ...string) (string, error) {
+	return o.ex.Exec(ctx, dir, argv...)
+}
+
+func (o serverGitOpener) Clone(ctx context.Context, url, branch, dest string) (gitflow.ClonedRepo, error) {
+	repo, err := git.Clone(ctx, o.ex, url, branch, dest)
+	if err != nil {
+		return gitflow.ClonedRepo{}, err
+	}
+	out := gitflow.ClonedRepo{Root: repo.Root, Remote: repo.Remote, Branch: repo.Branch, Base: repo.Base}
+	for _, sub := range repo.Submodules {
+		out.Submodules = append(out.Submodules, gitflow.ClonedSubmodule{
+			Path: sub.Path, Root: sub.Root, Remote: sub.Remote,
+			Branch: sub.Branch, Base: sub.Base, DefaultBranch: sub.DefaultBranch,
+		})
+	}
+	return out, nil
+}
+
+func (o serverGitOpener) HasCommit(ctx context.Context, dir, ref string) bool {
+	return git.HasCommit(ctx, o.ex, dir, ref)
 }
 
 // handleOpenGitProject клонирует git-репозиторий в temp/<имя> и регистрирует

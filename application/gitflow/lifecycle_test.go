@@ -41,13 +41,71 @@ type fakeWTHost struct {
 }
 
 func (h *fakeWTHost) Info(string) (WorktreeProject, error) { return h.info, h.infoErr }
-func (h *fakeWTHost) Repo(context.Context, string) (*git.Repo, error) {
+func (h *fakeWTHost) Repo(context.Context, string) (WorktreeRepo, error) {
 	if h.repo == nil {
 		return nil, errors.New("нет репозитория")
 	}
-	return h.repo, nil
+	return fakeWTRepo{h.repo}, nil
 }
-func (h *fakeWTHost) Exec() git.Executor { return h.ex }
+func (h *fakeWTHost) EnsureSubmodules(ctx context.Context, dir string) ([]Submodule, error) {
+	subs, err := git.EnsureSubmodules(ctx, h.ex, dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Submodule, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, Submodule{Path: sub.Path, Root: sub.Root})
+	}
+	return out, nil
+}
+func (h *fakeWTHost) SubmoduleBase(ctx context.Context, dir string) (string, error) {
+	return h.ex.Exec(ctx, dir, "git", "rev-parse", "HEAD")
+}
+func (h *fakeWTHost) DeinitSubmodule(ctx context.Context, dir, path string) error {
+	_, err := h.ex.Exec(ctx, dir, "git", "submodule", "deinit", "-f", "--", path)
+	return err
+}
+func (h *fakeWTHost) SubmoduleWorktree(ctx context.Context, dir, branch, base, dest string) error {
+	_, err := git.Worktree(ctx, h.ex, dir, branch, base, dest)
+	return err
+}
+func (h *fakeWTHost) CommitWorktree(ctx context.Context, dir, msg string) error {
+	repo := git.RepoFromState(h.ex, dir, "", "", "")
+	_, _, err := repo.CommitIfDirty(ctx, msg)
+	return err
+}
+
+// fakeWTRepo — адаптер WorktreeRepo поверх *git.Repo (как serverWorktreeRepo).
+type fakeWTRepo struct{ r *git.Repo }
+
+func (w fakeWTRepo) Root() string { return w.r.Root }
+func (w fakeWTRepo) WorktreeList(ctx context.Context) ([]WorktreeEntry, error) {
+	list, err := w.r.WorktreeList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WorktreeEntry, 0, len(list))
+	for _, wt := range list {
+		out = append(out, WorktreeEntry{Branch: wt.Branch, Path: wt.Path})
+	}
+	return out, nil
+}
+func (w fakeWTRepo) RemoveWorktree(ctx context.Context, path string) error {
+	return w.r.RemoveWorktree(ctx, path)
+}
+func (w fakeWTRepo) Rebase(ctx context.Context, branch, onto string) error {
+	return w.r.Rebase(ctx, branch, onto)
+}
+func (w fakeWTRepo) Checkout(ctx context.Context, branch string) error {
+	return w.r.Checkout(ctx, branch)
+}
+func (w fakeWTRepo) AddWorktree(ctx context.Context, path, branch string) (WorktreeRepo, error) {
+	wt, err := w.r.AddWorktree(ctx, path, branch)
+	if err != nil {
+		return nil, err
+	}
+	return fakeWTRepo{wt}, nil
+}
 func (h *fakeWTHost) TaskBranch(string, string) (BranchRef, error) {
 	return h.taskRef, h.taskErr
 }

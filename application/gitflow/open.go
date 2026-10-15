@@ -15,10 +15,39 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai/infrastructure/git"
 	"ai/logging"
 	"ai/workspace"
 )
+
+// ClonedSubmodule — сабмодуль клонированного проекта.
+type ClonedSubmodule struct {
+	Path          string
+	Root          string
+	Remote        string
+	Branch        string
+	Base          string
+	DefaultBranch string
+}
+
+// ClonedRepo — результат клонирования git-проекта.
+type ClonedRepo struct {
+	Root       string
+	Remote     string
+	Branch     string
+	Base       string
+	Submodules []ClonedSubmodule
+}
+
+// GitOpener — git-операции открытия проекта (клон, проверка коммита, вывод
+// команд). Реализуется адаптером поверх infrastructure/git (срез H3c).
+type GitOpener interface {
+	// Exec — вывод git-команды в каталоге dir.
+	Exec(ctx context.Context, dir string, argv ...string) (string, error)
+	// Clone — клонировать url в dest (ветка branch).
+	Clone(ctx context.Context, url, branch, dest string) (ClonedRepo, error)
+	// HasCommit — есть ли коммит на ref.
+	HasCommit(ctx context.Context, dir, ref string) bool
+}
 
 // ErrGitURLName — из git-URL не удалось выделить имя проекта.
 var ErrGitURLName = errors.New("не удалось определить имя проекта из git-URL")
@@ -46,10 +75,10 @@ type OpenedProject struct {
 	Info workspace.Info
 }
 
-// ProjectOpener клонирует и регистрирует git-проект. Exec, Registry и
+// ProjectOpener клонирует и регистрирует git-проект. Host, Registry и
 // ProjectDir обязательны; RemoveAll подменяется в тестах.
 type ProjectOpener struct {
-	Exec       git.Executor
+	Host       GitOpener
 	Registry   OpenRegistry
 	ProjectDir func(name string) string
 	RemoveAll  func(dir string) error
@@ -82,7 +111,7 @@ func (o *ProjectOpener) Open(ctx context.Context, gitURL string) (*OpenedProject
 		}
 	}
 
-	repo, err := git.Clone(ctx, o.Exec, gitURL, branch, dest)
+	repo, err := o.Host.Clone(ctx, gitURL, branch, dest)
 	if err != nil {
 		// Полу-клон оставлять нельзя: следующая попытка упрётся в 409, и
 		// пользователь уже не сможет открыть проект без ручной чистки temp/.
@@ -151,18 +180,18 @@ func (e *DirNotEmptyError) Is(target error) bool { return target == ErrDirNotEmp
 // Всё остальное (чужой клон, наша работа с коммитами, незакоммиченные правки)
 // не трогаем: возвращаем false и вызывающий отдаёт 409.
 func (o *ProjectOpener) discardHalfClone(ctx context.Context, name, dir, gitURL string) bool {
-	out, err := o.Exec.Exec(ctx, dir, "git", "rev-parse", "--git-dir")
+	out, err := o.Host.Exec(ctx, dir, "git", "rev-parse", "--git-dir")
 	if err != nil || strings.TrimSpace(out) != ".git" {
 		return false
 	}
-	origin, err := o.Exec.Exec(ctx, dir, "git", "remote", "get-url", "origin")
+	origin, err := o.Host.Exec(ctx, dir, "git", "remote", "get-url", "origin")
 	if err != nil || !SameGitRemote(strings.TrimSpace(origin), gitURL) {
 		return false
 	}
-	if git.HasCommit(ctx, o.Exec, dir, "HEAD") {
+	if o.Host.HasCommit(ctx, dir, "HEAD") {
 		return false // есть история — это не мусор
 	}
-	if status, err := o.Exec.Exec(ctx, dir, "git", "status", "--porcelain"); err != nil || strings.TrimSpace(status) != "" {
+	if status, err := o.Host.Exec(ctx, dir, "git", "status", "--porcelain"); err != nil || strings.TrimSpace(status) != "" {
 		return false
 	}
 	if err := o.removeAll(dir); err != nil {

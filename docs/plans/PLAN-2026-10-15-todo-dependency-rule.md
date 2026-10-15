@@ -55,7 +55,7 @@ Dependency Rule: внутренние слои импортируют внешн
 | H3 | `gitflow`/`rag`→домен: данные git-слияния и rag-типы→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | разбит на H3a–H3c |
 | H3a | git-данные: `MergeResult`/`MergeFeatureOptions`/`MergeConflictError`/`SanitizeBranchName`/`TaskBranchPrefix`/`RedactSecrets`/`ErrWorkflowScope`→`domain` (+alias в `git`) | ✅ |
 | H3b | `rag`→домен: `Index*`/`SearchParams`/`SearchResult`/`IsIgnoredDir`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | ✅ |
-| H3c | `gitflow` прямые git-операции (`Clone`/`HasCommit`/`RepoFromState`/`Worktree`/`EnsureSubmodules`/`HasConflictMarkers`/`*git.Repo`)→ хост-порты | Ожидает |
+| H3c | `gitflow` прямые git-операции (`Clone`/`HasCommit`/`RepoFromState`/`Worktree`/`EnsureSubmodules`/`HasConflictMarkers`/`*git.Repo`)→ хост-порты | ✅ |
 | H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | Ожидает |
 | H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | Ожидает |
 | H7 | Удалить `repositories/`, импортный гейт, финальная верификация, доки | Ожидает |
@@ -186,6 +186,30 @@ worktree_test.go`); во всех этих файлах портовые сиг�
 
 Остаток: **H3c** (gitflow прямые git-операции: `conflictfiles.go`/
 `lifecycle.go`/`open.go`).
+
+**Выполнено (H3c):** `application/gitflow` больше не импортирует
+`ai/infrastructure/git` (`go list -deps` чист от `ai/infrastructure*`; прямой
+импорт остался только `ai/workspace` — H5). Новый файл
+`application/gitflow/worktreerepo.go` объявляет порты жизненного цикла worktree
+(`WorktreeRepo` с `Root()`/`WorktreeList`/`RemoveWorktree`/`Rebase`/`Checkout`/
+`AddWorktree`+`WorktreeEntry`, тип `Submodule`). `lifecycle.go`:
+`WorktreeHost.Repo` возвращает `WorktreeRepo` (не `*git.Repo`), вместо `Exec()`
+порт получил `EnsureSubmodules`/`SubmoduleBase`/`DeinitSubmodule`/
+`SubmoduleWorktree`/`CommitWorktree`; `git.SanitizeBranchName`→
+`domain.SanitizeBranchName`. `conflictfiles.go`: `git.HasConflictMarkers`
+заменён локальным `pendingConflictFiles`+`isConflictMarkerLine` (точные маркеры
+git без `|||||||`). `open.go`: новые типы `ClonedRepo`/`ClonedSubmodule` и порт
+`GitOpener` (`Exec`/`Clone`/`HasCommit`); `ProjectOpener.Host` вместо
+`Exec git.Executor`. Адаптеры на сервере: `serverWorktreeRepo` (в
+`server/gitflow_auto.go`, обёртка `*git.Repo`; `worktreeHost` реализует новые
+методы через `git.EnsureSubmodules`/`git.Worktree`/`git.RepoFromState`) и
+`serverGitOpener` (в `server/git.go`, поверх `git.Clone`/`git.HasCommit`).
+Тесты `application/gitflow/{lifecycle,open}_test.go` получили локальные
+`fakeWTRepo`/`fakeGitOpener` (делегируют реальным git-функциям над
+`fakeExec`), поведение и проверки сохранены. Верификация: канонический набор
+зелёный (единственное падение — пред-существующий флак
+`TestChatAssistantRejectBranchAfterConfirm`, в изоляции зелёный), `-race` по
+`application/gitflow` чист, `gofmt` по правкам чист.
 
 ### H6: agents→infrastructure
 

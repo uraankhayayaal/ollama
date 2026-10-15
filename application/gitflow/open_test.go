@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"ai/infrastructure/git"
 	"ai/workspace"
 )
 
@@ -34,6 +35,33 @@ func (f *fakeExec) Exec(_ context.Context, dir string, argv ...string) (string, 
 		}
 	}
 	return "", nil
+}
+
+// fakeGitOpener — адаптер GitOpener поверх hermetic-исполнителя (как
+// serverGitOpener): клон/коммит делегируются реальным git-функциям над fakeExec.
+type fakeGitOpener struct{ ex *fakeExec }
+
+func (o fakeGitOpener) Exec(ctx context.Context, dir string, argv ...string) (string, error) {
+	return o.ex.Exec(ctx, dir, argv...)
+}
+
+func (o fakeGitOpener) Clone(ctx context.Context, url, branch, dest string) (ClonedRepo, error) {
+	repo, err := git.Clone(ctx, o.ex, url, branch, dest)
+	if err != nil {
+		return ClonedRepo{}, err
+	}
+	out := ClonedRepo{Root: repo.Root, Remote: repo.Remote, Branch: repo.Branch, Base: repo.Base}
+	for _, sub := range repo.Submodules {
+		out.Submodules = append(out.Submodules, ClonedSubmodule{
+			Path: sub.Path, Root: sub.Root, Remote: sub.Remote,
+			Branch: sub.Branch, Base: sub.Base, DefaultBranch: sub.DefaultBranch,
+		})
+	}
+	return out, nil
+}
+
+func (o fakeGitOpener) HasCommit(ctx context.Context, dir, ref string) bool {
+	return git.HasCommit(ctx, o.ex, dir, ref)
 }
 
 func (f *fakeExec) saw(sub string) bool {
@@ -102,7 +130,7 @@ func TestSameGitRemote(t *testing.T) {
 }
 
 func TestOpenBadURL(t *testing.T) {
-	o := &ProjectOpener{Exec: &fakeExec{}, Registry: &fakeOpenRegistry{}, ProjectDir: func(string) string { return "" }}
+	o := &ProjectOpener{Host: fakeGitOpener{&fakeExec{}}, Registry: &fakeOpenRegistry{}, ProjectDir: func(string) string { return "" }}
 	if _, err := o.Open(context.Background(), "git@host:"); !errors.Is(err, ErrGitURLName) {
 		t.Fatalf("err = %v, want ErrGitURLName", err)
 	}
@@ -113,7 +141,7 @@ func TestOpenExistingIsIdempotent(t *testing.T) {
 		"repo": {Name: "repo", Kind: workspace.KindGit, GitRemote: "git@x:y/repo.git"},
 	}}
 	ex := &fakeExec{}
-	o := &ProjectOpener{Exec: ex, Registry: reg, ProjectDir: func(string) string { return t.TempDir() }}
+	o := &ProjectOpener{Host: fakeGitOpener{ex}, Registry: reg, ProjectDir: func(string) string { return t.TempDir() }}
 	got, err := o.Open(context.Background(), "git@x:y/repo.git")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -139,7 +167,7 @@ func TestOpenForeignDirRejected(t *testing.T) {
 		},
 	}
 	reg := &fakeOpenRegistry{}
-	o := &ProjectOpener{Exec: ex, Registry: reg, ProjectDir: func(string) string { return dir }}
+	o := &ProjectOpener{Host: fakeGitOpener{ex}, Registry: reg, ProjectDir: func(string) string { return dir }}
 	_, err := o.Open(context.Background(), "git@x:y/repo.git")
 	if !errors.Is(err, ErrDirNotEmpty) {
 		t.Fatalf("err = %v, want ErrDirNotEmpty", err)
@@ -171,7 +199,7 @@ func TestOpenDiscardsHalfClone(t *testing.T) {
 	}
 	t.Setenv("GITOPS_SUBMODULES", "0")
 	reg := &fakeOpenRegistry{}
-	o := &ProjectOpener{Exec: ex, Registry: reg, ProjectDir: func(string) string { return dir }}
+	o := &ProjectOpener{Host: fakeGitOpener{ex}, Registry: reg, ProjectDir: func(string) string { return dir }}
 	got, err := o.Open(context.Background(), "git@x:y/repo.git")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -189,7 +217,7 @@ func TestOpenCloneFailureRemovesDest(t *testing.T) {
 	ex := &fakeExec{fails: map[string]string{"git clone": "fatal: could not read from remote"}}
 	t.Setenv("GITOPS_SUBMODULES", "0")
 	reg := &fakeOpenRegistry{}
-	o := &ProjectOpener{Exec: ex, Registry: reg, ProjectDir: func(string) string { return dir }}
+	o := &ProjectOpener{Host: fakeGitOpener{ex}, Registry: reg, ProjectDir: func(string) string { return dir }}
 	_, err := o.Open(context.Background(), "git@x:y/repo.git")
 	if !errors.Is(err, ErrCloneFailed) {
 		t.Fatalf("err = %v, want ErrCloneFailed", err)
@@ -210,7 +238,7 @@ func TestOpenRegisterFailure(t *testing.T) {
 	}}
 	t.Setenv("GITOPS_SUBMODULES", "0")
 	reg := &fakeOpenRegistry{addErr: errors.New("редis недоступен")}
-	o := &ProjectOpener{Exec: ex, Registry: reg, ProjectDir: func(string) string { return dir }}
+	o := &ProjectOpener{Host: fakeGitOpener{ex}, Registry: reg, ProjectDir: func(string) string { return dir }}
 	_, err := o.Open(context.Background(), "git@x:y/repo.git")
 	if !errors.Is(err, ErrRegisterFailed) {
 		t.Fatalf("err = %v, want ErrRegisterFailed", err)
