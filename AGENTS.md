@@ -1,5 +1,21 @@
 # AGENTS.md — правила для агентов (opencode / помощники)
 
+## Состояние последней сессии (Этап 7 «Разбиение крупных файлов», срез G2 — `tools/fileops.go`)
+
+Срез **G2**: `tools/fileops.go` (1707 строк, 63 декларации) разрезан по
+операциям на пять файлов — `tools/fileops.go` (425: `FileOps`, сеттеры,
+политики доступа, `Write`/`AppendTo`/`Remove`/`ReadResult`,
+`ensureParentDirs`/`deepestExistingPath`), `tools/fileops_parse.go` (319: разбор
+аргументов, `WriteFiles`), `tools/fileops_read.go` (397: `ReadFiles`/лимиты/
+`readFileChunk`/`readFileLines`), `tools/fileops_write.go` (138: `DeleteFiles`/
+`AppendFile`/`List`), `tools/fileops_run.go` (465: `Run`/`runCommand*`/
+`runCommandSandbox`/`finishRunResult`/`missingToolHint`/`longRunningHint`).
+Верификация: канонический набор (`go build`/`go vet`/`go test -count=1`)
+зелёный, число деклараций сохранено (63), `gofmt` по правкам чист.
+Документация: план обновлён (G2 ✅). Остаток Этапа 7 — G3
+(`application/planner/executor.go`), G4 (`infrastructure/board/store.go`).
+Коммита нет (спросить пользователя).
+
 ## Состояние последней сессии (Этап 7 «Разбиение крупных файлов», срез G1 — `server/server.go`)
 
 Начат Этап 7 (`docs/plans/PLAN-2026-10-15-todo-split-large-files.md`):

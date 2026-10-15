@@ -51,7 +51,7 @@
 | [PLAN-2026-10-05-todo-kanban-rollback.md](PLAN-2026-10-05-todo-kanban-rollback.md) | Промежуточные коммиты + State Tracking + ручной откат задачи | В работе |
 | [PLAN-2026-10-07-todo-harness-rework.md](PLAN-2026-10-07-todo-harness-rework.md) | Перестройка харнесса: архитектор → лиды (скелетон) → разработчики → тестировщик, статусы «На тестирование»/«Помощь человека», комментарии | В работе |
 | [PLAN-2026-10-12-todo-clean-architecture.md](PLAN-2026-10-12-todo-clean-architecture.md) | Рефакторинг по Clean Architecture: domain/application/interfaces/infrastructure, разрыв циклических зависимостей, устранение дублирования агентов | В работе (этапы 1–2; этап 3: run-типы/tokens в domain, loop.go/policy.go/compress.go в application) |
-| [PLAN-2026-10-15-todo-split-large-files.md](PLAN-2026-10-15-todo-split-large-files.md) | Этап 7: разбиение крупных файлов на логические под-файлы без изменения поведения | В работе (G1: `server/server.go` разбит) |
+| [PLAN-2026-10-15-todo-split-large-files.md](PLAN-2026-10-15-todo-split-large-files.md) | Этап 7: разбиение крупных файлов на логические под-файлы без изменения поведения | В работе (G1–G2: `server/server.go`, `tools/fileops.go`) |
 
 ## Что из планов важно знать
 

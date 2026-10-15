@@ -41,7 +41,20 @@ infrastructure), но внутри пакетов остались слишко�
 Проверено: `go build`/`go vet`/`go test -count=1` по каноническому набору
 зелёный, число функций сохранено (57), `gofmt` по правкам чист.
 
-### G2: `tools/fileops.go` → под-файлы по операциям
+### G2: `tools/fileops.go` → под-файлы по операциям ✅
+
+Было: один файл `tools/fileops.go` (1707 строк, 63 декларации). Стало:
+
+| Файл | Строк | Содержимое |
+|---|---|---|
+| `tools/fileops.go` | 425 | `FileOps`, сеттеры (`SetScope`/`SetWriteAllowlist`/`SetOutputDir`/`SetProjectName`), политики доступа (`allowed`/`dirHasScope`/`writeAllowed`/`testsWriteAllowed`/`writeDenyMsg`/`relPath`/`ResolvePath`), `Write`/`AppendTo`/`Remove`/`ReadResult`, `ensureParentDirs`/`deepestExistingPath` |
+| `tools/fileops_parse.go` | 319 | разбор аргументов: `FileItem`/`BulkParams`, `parseFileItems`/`parseFileMap`/`mapToFileItems`/`parseDecodedFiles`/`parsePathList`, `repairEscapedQuotes`/`findMatchingBrace`/`decodedFieldValue`/`nextKeyBoundary`, `WriteFiles` |
+| `tools/fileops_read.go` | 397 | чтение: `ReadParams`/`FileContentResult`, лимиты, `readFileChunk`/`readFileLines`/`ReadFiles`, `trimPartialRune` |
+| `tools/fileops_write.go` | 138 | `DeleteParams`/`DeleteFiles`, `AppendFile`, `List` |
+| `tools/fileops_run.go` | 465 | `RunParams`/`runTimeout`, `runCommand`/`runCommandWorkspace`/`runCommandSandbox`/`finishRunResult`, `Run`, `missingToolHint`/`longRunningHint`, `runOutputLimit`/`truncateRunOutput` |
+
+Проверено: канонический набор зелёный, число деклараций сохранено (63),
+`gofmt` по правкам чист.
 
 ### G3: `application/planner/executor.go` → под-файлы по фазам
 
