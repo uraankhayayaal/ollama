@@ -4,7 +4,6 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/infrastructure/rag"
 )
 
 // AgentFactory — порт конструирования ролевых агентов оркестратора: лидов
@@ -34,7 +33,7 @@ type AgentFactory interface {
 	ArchitectBugExpert(project, prompt string, store services.BoardStore) agents.Agent
 	// ConfigureArchitect применяет к архитектору RAG и серверные инструменты
 	// (Ф-4/Р-5); не-архитектор возвращается без изменений.
-	ConfigureArchitect(a agents.Agent, rag rag.Searcher, extras ...services.Tool) agents.Agent
+	ConfigureArchitect(a agents.Agent, rag services.Searcher, extras ...services.Tool) agents.Agent
 	// SetArchitectEpicWorkdir задаёт резолвер worktree ветки эпика (4.1).
 	SetArchitectEpicWorkdir(a agents.Agent, fn func() (string, string)) agents.Agent
 }
@@ -58,7 +57,7 @@ func (noopAgentFactory) ArchitectReviewer(string, string, services.BoardStore) a
 func (noopAgentFactory) ArchitectBugExpert(string, string, services.BoardStore) agents.Agent {
 	return nil
 }
-func (noopAgentFactory) ConfigureArchitect(a agents.Agent, _ rag.Searcher, _ ...services.Tool) agents.Agent {
+func (noopAgentFactory) ConfigureArchitect(a agents.Agent, _ services.Searcher, _ ...services.Tool) agents.Agent {
 	return a
 }
 func (noopAgentFactory) SetArchitectEpicWorkdir(a agents.Agent, _ func() (string, string)) agents.Agent {

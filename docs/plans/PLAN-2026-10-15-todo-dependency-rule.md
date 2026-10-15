@@ -54,7 +54,7 @@ Dependency Rule: внутренние слои импортируют внешн
 | H4 | `planner`→конкретные agents: фабрики выносятся в `agents/factory`, подключение через `SetAgentFactory` в `main` | ✅ |
 | H3 | `gitflow`/`rag`→домен: данные git-слияния и rag-типы→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | разбит на H3a–H3c |
 | H3a | git-данные: `MergeResult`/`MergeFeatureOptions`/`MergeConflictError`/`SanitizeBranchName`/`TaskBranchPrefix`/`RedactSecrets`/`ErrWorkflowScope`→`domain` (+alias в `git`) | ✅ |
-| H3b | `rag`→домен: `Index*`/`SearchParams`/`SearchResult`/`IsIgnoredDir`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | Ожидает |
+| H3b | `rag`→домен: `Index*`/`SearchParams`/`SearchResult`/`IsIgnoredDir`→domain, `git.Executor`→порт, `NewClientSafe`→инъекция | ✅ |
 | H3c | `gitflow` прямые git-операции (`Clone`/`HasCommit`/`RepoFromState`/`Worktree`/`EnsureSubmodules`/`HasConflictMarkers`/`*git.Repo`)→ хост-порты | Ожидает |
 | H6 | `agents`→infrastructure: `board.Store`→`services.BoardStore`, rag/git-типы→домен | Ожидает |
 | H5 | Вторичные: `chat.Ask*`→domain, `checkpoint`-порт, `runevents.Reporter`-порт, `workspace`-типы→domain | Ожидает |
@@ -145,6 +145,30 @@ Dependency Rule: внутренние слои импортируют внешн
 4. Порты gitflow с git-типами в сигнатуре становятся доменными —
    вызывающий код (server) почти не меняется.
 
+**Выполнено (H3b):** RAG-типы и политика обхода вынесены в домен. Новые
+`domain/rag.go` (`MainBranch`, `DefaultMaxResults`/`DefaultSearchMaxTotal`,
+`IndexOptions`(+`BranchOrDefault`/`Commit`), `IndexItem`, `IndexResult`,
+`SearchResult`, `SearchParams`, `ProjectInfo`(+`Indexed`), `ScopeForPath`) и
+`domain/ignore.go` (`IsIgnoredDir` — общий список служебных каталогов).
+`domain/services`: добавлен порт `Searcher` (`Ping`/`Search`/`ProjectInfo`) и
+узкий `Executor`. `infrastructure/rag/domain_alias.go` даёт алиасы
+(`rag.IndexItem = domain.IndexItem`, `rag.Searcher = services.Searcher`,
+`rag.ScopeForPath = domain.ScopeForPath` и т.п.), `searcher.go` удалён;
+`forges.IsIgnoredDir` делегирует `domain.IsIgnoredDir`; `git.Executor` стал
+алиасом `services.Executor`. `application/rag` больше не импортирует
+infrastructure: `background`/`index`/`jobs`/`ref`/`sync` переведены на
+`domain`/`services`; `Sync` принимает узкий `SyncRepo` + `SyncProject.Root/
+Checkout`; обходчик проекта инъектируется (`SetProjectWalker`, по умолчанию —
+фабрика из `main.go`, тесты — `TestMain`). `application/planner` переведён на
+`domain`-типы поиска, `rag.Searcher`→`services.Searcher`, `forges.IsIgnoredDir`→
+`domain.IsIgnoredDir`, а конструкция клиента — инъекцией
+(`SetPlannerRAGSearcher` из `main.go`). Wiring: `main.go` ставит
+`planner.SetPlannerRAGSearcher` и `apprag.SetProjectWalker(rag.WalkProject)`,
+`server/testmain_test.go` — обходчик. Верификация: канонический набор +
+`./domain/`/`./infrastructure/` зелёные (флак `TestChatAssistant*` — предсуществующий),
+`-race` по `application/rag`/`domain` чист, `gofmt` по правкам чист,
+`go list -deps ./application/rag/` без `ai/infrastructure*`/`ai/agents`/`ai/forges`.
+
 **Выполнено (H3a):** git-данные вынесены в `domain/gitmerge.go`
 (`MergeResult`, `MergeConflictError`+`Error()`, `MergeFeatureOptions`,
 `TaskBranchPrefix`, `SanitizeBranchName`, `ErrWorkflowScope`, `RedactSecrets`
@@ -160,7 +184,8 @@ worktree_test.go`); во всех этих файлах портовые сиг�
 это H3c. Верификация: канонический набор + `./domain/`/`./infrastructure/git/`
 зелёные, `gofmt` по правкам чист.
 
-Остаток: **H3b** (rag→домен) и **H3c** (gitflow прямые git-операции).
+Остаток: **H3c** (gitflow прямые git-операции: `conflictfiles.go`/
+`lifecycle.go`/`open.go`).
 
 ### H6: agents→infrastructure
 

@@ -4,7 +4,6 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/infrastructure/rag"
 	"ai/logging"
 	"ai/tokens"
 	"context"
@@ -68,7 +67,7 @@ type KanbanRunner struct {
 	// rag — клиент векторной памяти для фаз архитектора (Ф-1/Ф-4): CodeSearch/
 	// RagIndexStatus и блок «релевантный код» в промпте. nil — архитектор
 	// работает без RAG (degrade, как раньше).
-	rag rag.Searcher
+	rag services.Searcher
 	// architectExtras — серверные мосты-инструменты для архитектора (Ф-4/Р-5):
 	// например AskUser для уточняющего вопроса до публикации бэклога.
 	// nil/пустой — автономный режим (консоль), архитектор работает без них.
@@ -220,7 +219,7 @@ func (k *KanbanRunner) SetTokens(t *tokens.Store) *KanbanRunner {
 // CodeSearch/RagIndexStatus и блок «релевантный код» в промпте начинают
 // работать по индексу. nil — архитектор работает без RAG (degrade). Клиент
 // ленивый и nil-safe: недоступный Qdrant/эмбеддинги не роняют фазу.
-func (k *KanbanRunner) SetRAG(r rag.Searcher) *KanbanRunner {
+func (k *KanbanRunner) SetRAG(r services.Searcher) *KanbanRunner {
 	k.rag = r
 	return k
 }

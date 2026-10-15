@@ -11,12 +11,12 @@ package planner
 // управление — RAG_PLANNER_CONTEXT (по умолчанию включено).
 //
 // Scope-связка: scope шага плана (файлы/директории) маппится в фильтр области
-// Qdrant (первый сегмент пути — payload scope, см. rag.ScopeForPath), чтобы
+// Qdrant (первый сегмент пути — payload scope, см. domain.ScopeForPath), чтобы
 // контекст шага выбирался строго из его области — по образцу scopeSourceFiles
 // из lspgate.go.
 
 import (
-	"ai/infrastructure/rag"
+	"ai/domain"
 	"context"
 	"fmt"
 	"os"
@@ -26,10 +26,10 @@ import (
 )
 
 // RAGSearcher — минимальный интерфейс семантического поиска для планировщика.
-// Реализуется *rag.Client; выделен, чтобы hermetic-тесты работали с fake без
-// сети (как RAGSearcher в tools/codesearch.go).
+// Реализуется infrastructure/rag.Client; выделен, чтобы hermetic-тесты работали
+// с fake без сети (как RAGSearcher в tools/codesearch.go).
 type RAGSearcher interface {
-	Search(ctx context.Context, p rag.SearchParams) ([]rag.SearchResult, error)
+	Search(ctx context.Context, p domain.SearchParams) ([]domain.SearchResult, error)
 }
 
 // BuildProjectMapRAG строит карту проекта (BuildProjectMap) и добавляет блок
@@ -58,7 +58,7 @@ func ragProjectBlock(projectName, taskText string, r RAGSearcher) string {
 	ctx, cancel := context.WithTimeout(context.Background(), ragPlannerTimeout())
 	defer cancel()
 
-	results, err := r.Search(ctx, rag.SearchParams{
+	results, err := r.Search(ctx, domain.SearchParams{
 		Project:  projectName,
 		Query:    strings.TrimSpace(taskText),
 		Scope:    "",
@@ -74,7 +74,7 @@ func ragProjectBlock(projectName, taskText string, r RAGSearcher) string {
 // formatRAGBlock форматирует найденные чанки в компактный блок: file:start-end
 // (score) + сниппет. Суммарный объём блока не превышает maxMapChars — хвост
 // отбрасывается с пометкой (лимиты контекста не превышаются).
-func formatRAGBlock(results []rag.SearchResult) string {
+func formatRAGBlock(results []domain.SearchResult) string {
 	var b strings.Builder
 	head := "Релевантный код по задаче (семантический поиск):\n"
 	b.WriteString(head)
@@ -96,7 +96,7 @@ func formatRAGBlock(results []rag.SearchResult) string {
 }
 
 // ragScopeFromScope выводит фильтр области Qdrant из scope шага плана: первый
-// сегмент пути каждого вхождения (по rag.ScopeForPath) — server/frontend/root.
+// сегмент пути каждого вхождения (по domain.ScopeForPath) — server/frontend/root.
 // Пустой scope (весь проект) или разнородные сегменты → "" (поиск по всему
 // проекту): один фильтр их не покрывает.
 //
@@ -112,7 +112,7 @@ func ragScopeFromScope(scope []string) string {
 		if s == "" || s == "." {
 			continue
 		}
-		sc := rag.ScopeForPath(s)
+		sc := domain.ScopeForPath(s)
 		if first == "" {
 			first = sc
 		} else if first != sc {
@@ -140,7 +140,7 @@ func stepRAGContext(ctx context.Context, projectName string, s *Step, r RAGSearc
 	searchCtx, cancel := context.WithTimeout(ctx, ragPlannerTimeout())
 	defer cancel()
 
-	results, err := r.Search(searchCtx, rag.SearchParams{
+	results, err := r.Search(searchCtx, domain.SearchParams{
 		Project:  projectName,
 		Query:    query,
 		Scope:    ragScopeFromScope(s.Scope),
@@ -175,14 +175,14 @@ func ragPlannerTimeout() time.Duration {
 }
 
 // ragStepLimit — лимит чанков в контексте карты/шага (RAG_MAX_RESULTS),
-// по умолчанию rag.DefaultMaxResults.
+// по умолчанию domain.DefaultMaxResults.
 func ragStepLimit() int {
 	if v := strings.TrimSpace(os.Getenv("RAG_MAX_RESULTS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return rag.DefaultMaxResults
+	return domain.DefaultMaxResults
 }
 
 // ragStepMaxTotal — суммарный лимит текста контекста шага (RAG_READ_MAX_TOTAL);

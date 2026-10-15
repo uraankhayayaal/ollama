@@ -14,14 +14,13 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/forges"
-	"ai/infrastructure/git"
-	infrarag "ai/infrastructure/rag"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/logging"
 )
 
-// MaxRefFileBytes — предел размера файла, который читается из ветки (аналог
-// infrarag.maxIndexFileSize: крупные вендоренные блоки в индекс не идут).
+// MaxRefFileBytes — предел размера файла, который читается из ветки (крупные
+// вендоренные блоки в индекс не идут).
 const MaxRefFileBytes = 2_000_000
 
 // RefSnapshot — содержимое ветки/ref, готовое к индексации.
@@ -31,14 +30,14 @@ type RefSnapshot struct {
 	// CommitSHA — коммит, снятый снапшот (версия индексации); пусто — без git.
 	CommitSHA string
 	// Items — файлы ветки для полной индексации.
-	Items []infrarag.IndexItem
+	Items []domain.IndexItem
 }
 
 // Indexer — узкий порт векторной памяти для индексации (реализует
-// *infrarag.Client; выделен для hermetic-тестов без сети).
+// infrastructure/rag.Client; выделен для hermetic-тестов без сети).
 type Indexer interface {
 	EnsureCollection(ctx context.Context) (int, error)
-	IndexProject(ctx context.Context, projectName string, files []infrarag.IndexItem, opts infrarag.IndexOptions) (*infrarag.IndexResult, error)
+	IndexProject(ctx context.Context, projectName string, files []domain.IndexItem, opts domain.IndexOptions) (*domain.IndexResult, error)
 	// BranchIndexed — есть ли активные точки ветки на этом коммите: хуки
 	// поддержания индекса не должны переиндексировать ветку без изменений.
 	BranchIndexed(ctx context.Context, projectName, branch, commit string) (bool, error)
@@ -65,7 +64,7 @@ func BranchIndexUpToDate(ctx context.Context, indexer Indexer, project, branch, 
 // даёт список blob-ов с размерами, содержимое — `git show ref:<путь>`. Рабочая
 // копия не читается и не меняется, поэтому индекс ветки всегда соответствует
 // её содержимому, даже если checkout проекта отстал от main.
-func LoadRefItems(ctx context.Context, ex git.Executor, dir, ref string) (RefSnapshot, error) {
+func LoadRefItems(ctx context.Context, ex services.Executor, dir, ref string) (RefSnapshot, error) {
 	if ex == nil {
 		return RefSnapshot{}, fmt.Errorf("не задан git-исполнитель")
 	}
@@ -98,9 +97,9 @@ func LoadRefItems(ctx context.Context, ex git.Executor, dir, ref string) (RefSna
 		if !IndexableContent(content) {
 			continue
 		}
-		snap.Items = append(snap.Items, infrarag.IndexItem{
+		snap.Items = append(snap.Items, domain.IndexItem{
 			Path:    path,
-			Scope:   infrarag.ScopeForPath(path),
+			Scope:   domain.ScopeForPath(path),
 			Content: content,
 		})
 	}
@@ -148,7 +147,7 @@ func IndexablePath(path string) bool {
 		if seg == "" {
 			return false
 		}
-		if strings.HasPrefix(seg, ".") || forges.IsIgnoredDir(seg) {
+		if strings.HasPrefix(seg, ".") || domain.IsIgnoredDir(seg) {
 			return false
 		}
 	}
@@ -172,7 +171,7 @@ func IndexableContent(content string) bool {
 // содержимое из ref: содержимое рабочей копии не используется (она может
 // отставать), коммит берётся по ref. Основной сценарий — старт задачи: «свои»
 // файлы ветки индексируются под веткой задачи, остальное покрывает индекс main.
-func LoadRefDiff(ctx context.Context, ex git.Executor, dir, ref, base string) (RefSnapshot, error) {
+func LoadRefDiff(ctx context.Context, ex services.Executor, dir, ref, base string) (RefSnapshot, error) {
 	if ex == nil {
 		return RefSnapshot{}, fmt.Errorf("не задан git-исполнитель")
 	}
@@ -195,7 +194,7 @@ func LoadRefDiff(ctx context.Context, ex git.Executor, dir, ref, base string) (R
 		}
 		files = append(files, p)
 	}
-	snap := RefSnapshot{Branch: ref, Items: []infrarag.IndexItem{}}
+	snap := RefSnapshot{Branch: ref, Items: []domain.IndexItem{}}
 	if sha, serr := ex.Exec(ctx, dir, "git", "rev-parse", ref); serr == nil {
 		snap.CommitSHA = strings.TrimSpace(sha)
 	}
@@ -208,9 +207,9 @@ func LoadRefDiff(ctx context.Context, ex git.Executor, dir, ref, base string) (R
 		if !IndexableContent(content) {
 			continue
 		}
-		snap.Items = append(snap.Items, infrarag.IndexItem{
+		snap.Items = append(snap.Items, domain.IndexItem{
 			Path:    p,
-			Scope:   infrarag.ScopeForPath(p),
+			Scope:   domain.ScopeForPath(p),
 			Content: content,
 		})
 	}
@@ -221,7 +220,7 @@ func LoadRefDiff(ctx context.Context, ex git.Executor, dir, ref, base string) (R
 // нужен, чтобы не читать крупные файлы и не заводить одинаковые точки для
 // удалённых/переименованных путей. ok=false — пути в ветке нет (удалён) либо
 // путь не индексируется.
-func RefFileSize(ctx context.Context, ex git.Executor, dir, ref, path string) (int64, bool) {
+func RefFileSize(ctx context.Context, ex services.Executor, dir, ref, path string) (int64, bool) {
 	if !IndexablePath(path) {
 		return 0, false
 	}

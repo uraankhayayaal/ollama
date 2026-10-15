@@ -2,6 +2,14 @@ package services
 
 import "context"
 
+// Executor выполняет команды в рабочем каталоге (реализуется
+// infrastructure/git). Узкий порт для мест, которым нужен прямой запуск
+// git-команд, но не весь API рабочей копии.
+type Executor interface {
+	// Exec запускает argv в каталоге dir и возвращает stdout.
+	Exec(ctx context.Context, dir string, argv ...string) (string, error)
+}
+
 // GitOperations — порт рабочей копии Git, которой пользуется приложение
 // (операции с ветками, коммитами, слияниями и состоянием дерева). Реализуется
 // инфраструктурным `*infrastructure/git.Repo`; application-слой зависит только

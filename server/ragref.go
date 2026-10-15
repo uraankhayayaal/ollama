@@ -145,8 +145,16 @@ func (s *Server) refreshRagTaskBranch(project, taskBranch, main string) {
 // F3s): политика синхронизации рабочей копии с main переехала в
 // application/rag. Сигнатура сохранена для существующих вызовов/тестов.
 func (s *Server) syncAgentBranchWithMain(ctx context.Context, project string, inf workspace.Info, repo *git.Repo) bool {
+	if repo == nil {
+		return false
+	}
 	sy := apprag.WorkingCopySyncer{Exec: s.gitExec, Sink: syncSink{project: project}}
-	return sy.Sync(ctx, apprag.SyncProject{Base: inf.GitBase, Branch: inf.GitBranch}, repo)
+	return sy.Sync(ctx, apprag.SyncProject{
+		Base:     inf.GitBase,
+		Branch:   inf.GitBranch,
+		Root:     repo.Root,
+		Checkout: repo.Branch,
+	}, repo)
 }
 
 // syncSink — адаптер apprag.SyncSink поверх лога проекта.

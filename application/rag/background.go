@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	infrarag "ai/infrastructure/rag"
+	"ai/domain"
 )
 
 // IndexSink — приёмник отчётов фоновой индексации: информационные/тревожные
@@ -34,7 +34,7 @@ type IndexerFactory func() (Indexer, io.Closer, error)
 // IndexRun — конкретный прогон индексации: возвращает результат, фактическую
 // ветку и признак «индекс ветки уже актуален» (skipped — отдельный отчёт, чтобы
 // «актуальный индекс» не выглядел как «обновлено 0 файлов»).
-type IndexRun func(ctx context.Context, indexer Indexer) (*infrarag.IndexResult, string, bool, error)
+type IndexRun func(ctx context.Context, indexer Indexer) (*domain.IndexResult, string, bool, error)
 
 // BackgroundIndexer — single-flight фоновых индексаций RAG одного проекта.
 // Слот — ветка (или путь источника для каталогов вне git): индексации разных
@@ -115,7 +115,7 @@ func (b *BackgroundIndexer) report(ctx context.Context, indexer Indexer, note st
 		return
 	}
 	if res == nil {
-		res = &infrarag.IndexResult{}
+		res = &domain.IndexResult{}
 	}
 	if skipped {
 		b.sink.Info(fmt.Sprintf("rag: фоновая индексация %s (%s): индекс ветки %s актуален", b.project, note, branch))

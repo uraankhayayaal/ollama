@@ -15,7 +15,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ai/infrastructure/git"
+	"ai/domain"
+	"ai/domain/services"
 )
 
 // SyncProject — срез info проекта, нужный синхронизации рабочей копии.
@@ -23,6 +24,17 @@ type SyncProject struct {
 	// Base — главная ветка (обычно main), Branch — ветка рабочей копии.
 	Base   string
 	Branch string
+	// Root — рабочий каталог (для git rev-parse/merge --abort).
+	Root string
+	// Checkout — текущая checkout-ветка репозитория ("" — неизвестно).
+	Checkout string
+}
+
+// SyncRepo — узкий порт рабочей копии, нужный синхронизации (реализуется
+// *infrastructure/git.Repo).
+type SyncRepo interface {
+	Dirty(ctx context.Context) (bool, error)
+	MergeBranch(ctx context.Context, branch, message string) (*domain.MergeResult, error)
 }
 
 // SyncSink — приёмник сообщений синхронизации (привязан к проекту адаптером).
@@ -34,7 +46,7 @@ type SyncSink interface {
 
 // WorkingCopySyncer — политика синхронизации рабочей копии с main.
 type WorkingCopySyncer struct {
-	Exec git.Executor
+	Exec services.Executor
 	Sink SyncSink
 }
 
@@ -42,16 +54,16 @@ type WorkingCopySyncer struct {
 // main в ветку проекта. Пропуск (только лог) при грязном дереве, отсутствии
 // main или занятом checkout; конфликтный merge откатывается. Возвращает true,
 // только если HEAD сдвинулся.
-func (w WorkingCopySyncer) Sync(ctx context.Context, inf SyncProject, repo *git.Repo) bool {
+func (w WorkingCopySyncer) Sync(ctx context.Context, inf SyncProject, repo SyncRepo) bool {
 	main := strings.TrimSpace(inf.Base)
 	agentBranch := strings.TrimSpace(inf.Branch)
 	if repo == nil || main == "" || agentBranch == "" || main == agentBranch {
 		return false
 	}
-	if repo.Branch != "" && repo.Branch != agentBranch {
+	if inf.Checkout != "" && inf.Checkout != agentBranch {
 		// checkout занят другой веткой (например, служебный checkout перед
 		// созданием worktree) — переключение делает вызывающий код.
-		w.Sink.Detail("rag: синхрон рабочей копии с main пропущен — checkout на ветке %s", repo.Branch)
+		w.Sink.Detail("rag: синхрон рабочей копии с main пропущен — checkout на ветке %s", inf.Checkout)
 		return false
 	}
 	dirty, err := repo.Dirty(ctx)
@@ -63,17 +75,17 @@ func (w WorkingCopySyncer) Sync(ctx context.Context, inf SyncProject, repo *git.
 		w.Sink.Detail("rag: синхрон рабочей копии с main пропущен — есть незакоммиченные правки")
 		return false
 	}
-	headBefore := headSHA(ctx, w.Exec, repo.Root)
+	headBefore := headSHA(ctx, w.Exec, inf.Root)
 	if _, err := repo.MergeBranch(ctx, main, fmt.Sprintf("%s: синхрон рабочей копии с %s", agentBranch, main)); err != nil {
 		// Конфликт: возвращаем дерево к состоянию до merge, иначе следующий
 		// агент увидит конфликтные маркеры, а индекс — мусор.
-		if aerr := abortMerge(ctx, w.Exec, repo.Root); aerr != nil {
+		if aerr := abortMerge(ctx, w.Exec, inf.Root); aerr != nil {
 			w.Sink.Detail("rag: git merge --abort: %v", aerr)
 		}
 		w.Sink.Warn("rag: синхрон рабочей копии с %s: %v", main, err)
 		return false
 	}
-	if head := headSHA(ctx, w.Exec, repo.Root); headBefore != "" && head == headBefore {
+	if head := headSHA(ctx, w.Exec, inf.Root); headBefore != "" && head == headBefore {
 		w.Sink.Detail("rag: рабочая копия %s уже актуальна относительно %s", agentBranch, main)
 		return false
 	}
@@ -83,7 +95,7 @@ func (w WorkingCopySyncer) Sync(ctx context.Context, inf SyncProject, repo *git.
 
 // headSHA — текущий коммит рабочей копии (пустая строка, если не git или нет
 // коммитов).
-func headSHA(ctx context.Context, ex git.Executor, dir string) string {
+func headSHA(ctx context.Context, ex services.Executor, dir string) string {
 	if ex == nil || strings.TrimSpace(dir) == "" {
 		return ""
 	}
@@ -96,7 +108,7 @@ func headSHA(ctx context.Context, ex git.Executor, dir string) string {
 
 // abortMerge откатывает неудачный merge в рабочей копии. Ошибка возвращается
 // вызывающему для лога: состояние merge и так лучше, чем паника.
-func abortMerge(ctx context.Context, ex git.Executor, dir string) error {
+func abortMerge(ctx context.Context, ex services.Executor, dir string) error {
 	if ex == nil || strings.TrimSpace(dir) == "" {
 		return nil
 	}

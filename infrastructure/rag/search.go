@@ -26,56 +26,15 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 )
 
-// Лимиты выдачи семантического поиска (настраиваются в инструменте CodeSearch
-// через RAG_MAX_RESULTS/RAG_READ_MAX_TOTAL; здесь — значения по умолчанию).
+// Лимиты выдачи семантического поиска: значения по умолчанию — в domain
+// (DefaultMaxResults/DefaultSearchMaxTotal), здесь — внутренние константы.
 const (
-	// DefaultMaxResults — максимум чанков в выдаче (RAG_MAX_RESULTS).
-	DefaultMaxResults = 3
-	// DefaultSearchMaxTotal — суммарный лимит символов сниппетов
-	// (RAG_READ_MAX_TOTAL): избыток хвоста отбрасывается.
-	DefaultSearchMaxTotal = 150_000
 	// branchOverfetch — во сколько раз запрос к Qdrant шире итоговой выдачи:
 	// часть результатов может отсеяться как перекрытая веткой версия main.
 	branchOverfetch = 3
 	// branchOverfetchMin — минимальный размер запроса при малом limit.
 	branchOverfetchMin = 12
 )
-
-// SearchResult — один найденный чанк кода вместе с версионными маркерами
-// (ветка/коммит/chunk_id): модель видит, откуда взят фрагмент и на какой версии.
-type SearchResult struct {
-	File      string  `json:"file"`
-	StartLine int     `json:"start_line"`
-	EndLine   int     `json:"end_line"`
-	Score     float32 `json:"score"`
-	Snippet   string  `json:"snippet"`
-	// Branch — ветка, в версии которой снят чанк (main по умолчанию).
-	Branch string `json:"branch,omitempty"`
-	// CommitSHA — коммит, на котором проиндексирован чанк.
-	CommitSHA string `json:"commit_sha,omitempty"`
-	// ChunkID — стабильный идентификатор чанка (функции) между коммитами.
-	ChunkID string `json:"chunk_id,omitempty"`
-}
-
-// SearchParams — параметры семантического поиска.
-type SearchParams struct {
-	// Project — имя проекта (фильтр payload project_name). Обязателен:
-	// поиск всегда ограничен кодом одного проекта.
-	Project string
-	// Query — текст запроса («где валидируется токен сессии»).
-	Query string
-	// Scope — опциональный фильтр по области (payload scope, первый сегмент
-	// пути: server/frontend/...). Пусто — по всему проекту.
-	Scope string
-	// Branch — ветка агента (ai/epic/ARCH-01, ai/task/T-01, ...). Пусто —
-	// MainBranch. В выдачу попадают чанки ветки и main без перезаписанных
-	// в ветке версий; чужие ветки не видны.
-	Branch string
-	// Limit — максимум результатов; <=0 — DefaultMaxResults.
-	Limit int
-	// MaxTotal — суммарный лимит символов сниппетов; <=0 — DefaultSearchMaxTotal.
-	MaxTotal int
-}
 
 // Search семантически ищет чанки проекта: эмбеддит запрос через Embedder,
 // опрашивает Qdrant Query с фильтром по project (+scope) и возвращает топ-N

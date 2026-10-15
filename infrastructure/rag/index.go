@@ -19,9 +19,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"path/filepath"
 	"strconv"
-	"strings"
 
 	"ai/logging"
 
@@ -67,43 +65,8 @@ const (
 	scrollMaxPoints = 50_000
 )
 
-// IndexOptions — ветка и версия индексации (PLAN-2026-09-27-done-branch-aware-rag.md,
-// Р-3). Пустые поля трактуются как «ветка по умолчанию без коммита»:
-// branch = MainBranch, commit пуст — точки просто заменяют друг друга
-// (обратная совместимость для проектов без Git, решение №7).
-type IndexOptions struct {
-	// Branch — ветка, чьи точки обновляются (main, ai/epic/ARCH-01, ...).
-	Branch string
-	// CommitSHA — коммит, на котором сняты чанки. Одинаковый коммит делает
-	// повторную индексацию идемпотентной (точки не пересоздаются), а
-	// изменение коммита помечает прежние точки как устаревшие.
-	CommitSHA string
-}
-
-// branchOrMain — ветка из опций; пусто — MainBranch (проекты без Git).
-func (o IndexOptions) branchOrMain() string {
-	if b := strings.TrimSpace(o.Branch); b != "" {
-		return b
-	}
-	return MainBranch
-}
-
-// commit — обрезанный SHA коммита (пусто — версия не задана).
-func (o IndexOptions) commit() string { return strings.TrimSpace(o.CommitSHA) }
-
-// IndexItem — один файл для полной индексации проекта.
-type IndexItem struct {
-	Path    string // относительный slash-путь от корня проекта
-	Scope   string // область проекта (каталог первого уровня, "root" для корня)
-	Content string
-}
-
-// IndexResult — сводка индексации проекта.
-type IndexResult struct {
-	Files  int      // сколько файлов исходно взято в обработку
-	Chunks int      // сколько чанков успешно загружено
-	Errors []string // источники, не загруженные по ошибке
-}
+// IndexOptions/IndexItem/IndexResult — псевдонимы доменных типов
+// (см. domain_alias.go).
 
 // activePoint — сведения об активной (не заменённой) точке чанка в ветке.
 type activePoint struct {
@@ -120,8 +83,8 @@ type activePoint struct {
 // также помечаются устаревшими — «удаление файла» (Р-8). Точки других веток и
 // проектов не трогаются. Повторный прогон с тем же коммитом идемпотентен.
 func (c *Client) IndexProject(ctx context.Context, projectName string, files []IndexItem, opts IndexOptions) (*IndexResult, error) {
-	branch := opts.branchOrMain()
-	commit := opts.commit()
+	branch := opts.BranchOrDefault()
+	commit := opts.Commit()
 
 	// Индекс, собранный до версионирования, не имеет поля branch: для ветки
 	// main такие точки считаются её собственными и чистятся на полном прогоне
@@ -190,7 +153,7 @@ func (c *Client) IndexProject(ctx context.Context, projectName string, files []I
 func (c *Client) IndexFile(ctx context.Context, projectName, relPath, scope, content string, opts IndexOptions) (int, error) {
 	chunks := ChunkFile(relPath, content)
 	if len(chunks) == 0 {
-		if err := c.supersedeFile(ctx, projectName, relPath, opts.branchOrMain(), opts.commit()); err != nil {
+		if err := c.supersedeFile(ctx, projectName, relPath, opts.BranchOrDefault(), opts.Commit()); err != nil {
 			return 0, err
 		}
 		return 0, nil
@@ -206,7 +169,7 @@ func (c *Client) IndexFile(ctx context.Context, projectName, relPath, scope, con
 // версий сохраняется (Р-8). Для полного снятия индексов (IndexProject по main
 // на другом коммите) сверх одной версии используется pruneSuperseded.
 func (c *Client) DeleteFile(ctx context.Context, projectName, relPath string, opts IndexOptions) error {
-	return c.supersedeFile(ctx, projectName, relPath, opts.branchOrMain(), opts.commit())
+	return c.supersedeFile(ctx, projectName, relPath, opts.BranchOrDefault(), opts.Commit())
 }
 
 // upsertChunks эмбеддит чанки и грузит их пакетами (indexBatchSize) с
@@ -218,8 +181,8 @@ func (c *Client) DeleteFile(ctx context.Context, projectName, relPath string, op
 // Возвращает число реально загруженных чанков. Текст на эмбеддинг
 // предваряется служебной шапкой — путь и координаты файла.
 func (c *Client) upsertChunks(ctx context.Context, projectName, relPath, scope string, opts IndexOptions, chunks []Chunk) (int, error) {
-	branch := opts.branchOrMain()
-	commit := opts.commit()
+	branch := opts.BranchOrDefault()
+	commit := opts.Commit()
 
 	prev, err := c.activePoints(ctx, projectName, branch, relPath)
 	if err != nil {
@@ -497,17 +460,4 @@ func contentHash(content string) string {
 	return strconv.FormatUint(h.Sum64(), 16)
 }
 
-// ScopeForPath определяет область файла по первому сегменту пути:
-// "server/internal/auth/token.go" → "server"; файлы в корне → "root".
-// Область используется фильтром поиска по scope шага плана/роли агента.
-func ScopeForPath(relPath string) string {
-	relPath = filepath.Clean(filepath.FromSlash(relPath))
-	relPath = filepath.ToSlash(relPath)
-	if relPath == "." || relPath == "" {
-		return "root"
-	}
-	if i := strings.IndexByte(relPath, '/'); i >= 0 {
-		return relPath[:i]
-	}
-	return "root"
-}
+// ScopeForPath — псевдоним domain.ScopeForPath (см. domain_alias.go).

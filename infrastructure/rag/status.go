@@ -15,18 +15,7 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 )
 
-// ProjectInfo — сводка индексации проекта: сколько чанков лежит в векторной
-// памяти. Используется инструментом RagIndexStatus для принятия решения
-// «индекс построен или нет» (0 чанков — не проиндексирован).
-type ProjectInfo struct {
-	// Project — имя проекта (соответствует payload project_name).
-	Project string
-	// Chunks — число чанков проекта в коллекции (приблизительно).
-	Chunks int
-}
-
-// Indexed верно, если в индексе есть хотя бы один чанк проекта.
-func (p ProjectInfo) Indexed() bool { return p.Chunks > 0 }
+// ProjectInfo — псевдоним domain.ProjectInfo (см. domain_alias.go).
 
 // ProjectInfo считает чанки проекта в векторной памяти (Count API с фильтром
 // по project_name). Коллекция ещё не создана — 0 чанков, без ошибки.

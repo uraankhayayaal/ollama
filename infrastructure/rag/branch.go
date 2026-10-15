@@ -17,9 +17,7 @@ import (
 	"time"
 )
 
-// MainBranch — ветка по умолчанию: проекты без Git и «чистая» линия проекта
-// (ветки эпиков/задач отводятся от неё, см. server/gitflow.go).
-const MainBranch = "main"
+// MainBranch — псевдоним domain.MainBranch (см. domain_alias.go).
 
 // gitTimeout — предел одного git-вызова: определение ветки не должно
 // подвесить шаг агента на сети/блокировке индекса.

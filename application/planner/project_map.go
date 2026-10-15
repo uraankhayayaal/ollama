@@ -1,7 +1,7 @@
 package planner
 
 import (
-	"ai/forges"
+	"ai/domain"
 	"ai/projects"
 	"fmt"
 	"io/fs"
@@ -50,7 +50,7 @@ func BuildProjectMap(projectName string) string {
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") || forges.IsIgnoredDir(d.Name()) {
+			if strings.HasPrefix(d.Name(), ".") || domain.IsIgnoredDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

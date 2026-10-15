@@ -26,12 +26,7 @@ import (
 	"strings"
 )
 
-// Executor выполняет команды в рабочем каталоге.
-type Executor interface {
-	// Exec запускает argv в каталоге dir и возвращает stdout.
-	// Для git-операций argv начинается с "git".
-	Exec(ctx context.Context, dir string, argv ...string) (string, error)
-}
+// Executor — псевдоним services.Executor (см. domain_alias.go).
 
 // ExecutorFunc — функциональная реализация Executor (для подстановки в тестах
 // и композиций, когда одним исполнителем нельзя описать все вызовы).

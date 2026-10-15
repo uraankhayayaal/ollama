@@ -4,17 +4,24 @@ import (
 	"ai/agents"
 	"ai/domain"
 	"ai/domain/services"
-	"ai/infrastructure/rag"
 	"ai/projects"
 	"fmt"
 )
 
 var (
 	plannerToolBuilder services.ToolSetBuilder
+	plannerRAGSearcher func() RAGSearcher
 )
 
 func SetPlannerToolBuilder(b services.ToolSetBuilder) {
 	plannerToolBuilder = b
+}
+
+// SetPlannerRAGSearcher подключает фабрику семантического поиска для карты
+// проекта (пустой — карта строится без RAG-блока). Задаётся в composition root
+// (main.go): application-слой не импортирует infrastructure/rag (Этап 8, H3b).
+func SetPlannerRAGSearcher(f func() RAGSearcher) {
+	plannerRAGSearcher = f
 }
 
 type Planner struct {
@@ -26,11 +33,14 @@ type Planner struct {
 
 func NewPlanner(projectName, prompt string) *Planner {
 	dir := projects.ProjectDir(projectName)
-	ragClient := rag.NewClientSafe(rag.Config{})
+	var searcher RAGSearcher
+	if plannerRAGSearcher != nil {
+		searcher = plannerRAGSearcher()
+	}
 	p := &Planner{
 		Prompt:      prompt,
 		ProjectName: projectName,
-		ProjectMap:  BuildProjectMapRAG(projectName, prompt, ragClient),
+		ProjectMap:  BuildProjectMapRAG(projectName, prompt, searcher),
 	}
 	if plannerToolBuilder != nil {
 		p.Tools = plannerToolBuilder(dir)

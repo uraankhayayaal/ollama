@@ -13,6 +13,7 @@ import (
 	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/application/planner"
+	apprag "ai/application/rag"
 	"ai/application/usecases"
 
 	"ai/checkpoint"
@@ -58,6 +59,10 @@ func main() {
 	planner.SetSnapshotFactory(tools.SnapshotAdapterFactory{})
 	planner.SetPublicAPIAuditor(tools.PublicAPIAuditorAdapter{})
 	planner.SetAgentFactory(factory.New())
+	// RAG-инъекции application-слою: планировщику — фабрика семантического
+	// поиска, фоновому индексатору — обходчик рабочей копии (Этап 8, срез H3b).
+	planner.SetPlannerRAGSearcher(func() planner.RAGSearcher { return rag.NewClientSafe(rag.Config{}) })
+	apprag.SetProjectWalker(rag.WalkProject)
 
 	// Сервис мониторинга новых MR — не требует провайдера модели.
 	if len(os.Args) > 1 && os.Args[1] == "listen" {

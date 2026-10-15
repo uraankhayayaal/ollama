@@ -69,18 +69,24 @@ func newSyncRepo(ex *syncExec) *git.Repo {
 	return git.RepoFromState(ex, "/tmp/repo", "origin", "ai/proj", "main")
 }
 
+// syncInf собирает SyncProject из репозитория-заглушки (Root/Checkout — из его
+// полей), сохраняя прежнюю логику «занятого checkout».
+func syncInf(base, branch string, repo *git.Repo) SyncProject {
+	return SyncProject{Base: base, Branch: branch, Root: repo.Root, Checkout: repo.Branch}
+}
+
 func TestSyncSkipsInvalidInput(t *testing.T) {
 	ex := &syncExec{}
 	sink := &syncSinkRec{}
 	w := WorkingCopySyncer{Exec: ex, Sink: sink}
 
-	if w.Sync(context.Background(), SyncProject{Base: "", Branch: "ai/proj"}, newSyncRepo(ex)) {
+	if w.Sync(context.Background(), syncInf("", "ai/proj", newSyncRepo(ex)), newSyncRepo(ex)) {
 		t.Fatal("пустая база — false")
 	}
-	if w.Sync(context.Background(), SyncProject{Base: "main", Branch: ""}, newSyncRepo(ex)) {
+	if w.Sync(context.Background(), syncInf("main", "", newSyncRepo(ex)), newSyncRepo(ex)) {
 		t.Fatal("пустая ветка — false")
 	}
-	if w.Sync(context.Background(), SyncProject{Base: "main", Branch: "main"}, newSyncRepo(ex)) {
+	if w.Sync(context.Background(), syncInf("main", "main", newSyncRepo(ex)), newSyncRepo(ex)) {
 		t.Fatal("ветка == база — false")
 	}
 	if w.Sync(context.Background(), SyncProject{Base: "main", Branch: "ai/proj"}, nil) {
@@ -95,7 +101,7 @@ func TestSyncSkipsOccupiedCheckout(t *testing.T) {
 	ex := &syncExec{}
 	w := WorkingCopySyncer{Exec: ex, Sink: &syncSinkRec{}}
 	repo := git.RepoFromState(ex, "/tmp/repo", "origin", "ai/other", "main")
-	if w.Sync(context.Background(), SyncProject{Base: "main", Branch: "ai/proj"}, repo) {
+	if w.Sync(context.Background(), syncInf("main", "ai/proj", repo), repo) {
 		t.Fatal("занятый checkout — false")
 	}
 	if ex.saw("merge --no-ff") {
@@ -106,7 +112,7 @@ func TestSyncSkipsOccupiedCheckout(t *testing.T) {
 func TestSyncSkipsDirtyTree(t *testing.T) {
 	ex := &syncExec{status: " M server/api.go\n"}
 	w := WorkingCopySyncer{Exec: ex, Sink: &syncSinkRec{}}
-	if w.Sync(context.Background(), SyncProject{Base: "main", Branch: "ai/proj"}, newSyncRepo(ex)) {
+	if w.Sync(context.Background(), syncInf("main", "ai/proj", newSyncRepo(ex)), newSyncRepo(ex)) {
 		t.Fatal("грязное дерево — false")
 	}
 	if ex.saw("merge --no-ff") {
@@ -118,7 +124,7 @@ func TestSyncAbortsOnMergeConflict(t *testing.T) {
 	ex := &syncExec{mergeErr: errors.New("conflict")}
 	sink := &syncSinkRec{}
 	w := WorkingCopySyncer{Exec: ex, Sink: sink}
-	if w.Sync(context.Background(), SyncProject{Base: "main", Branch: "ai/proj"}, newSyncRepo(ex)) {
+	if w.Sync(context.Background(), syncInf("main", "ai/proj", newSyncRepo(ex)), newSyncRepo(ex)) {
 		t.Fatal("конфликт — false")
 	}
 	if ex.aborts != 1 {
@@ -133,7 +139,7 @@ func TestSyncHeadShiftReturnsTrue(t *testing.T) {
 	ex := &syncExec{headSeq: []string{"h1", "h2"}}
 	sink := &syncSinkRec{}
 	w := WorkingCopySyncer{Exec: ex, Sink: sink}
-	if !w.Sync(context.Background(), SyncProject{Base: "main", Branch: "ai/proj"}, newSyncRepo(ex)) {
+	if !w.Sync(context.Background(), syncInf("main", "ai/proj", newSyncRepo(ex)), newSyncRepo(ex)) {
 		t.Fatal("сдвиг HEAD — true")
 	}
 	if !ex.saw("git merge --no-ff -m ai/proj: синхрон рабочей копии с main main") {
@@ -148,7 +154,7 @@ func TestSyncHeadUnchangedReturnsFalse(t *testing.T) {
 	ex := &syncExec{headSeq: []string{"h1", "h1"}}
 	sink := &syncSinkRec{}
 	w := WorkingCopySyncer{Exec: ex, Sink: sink}
-	if w.Sync(context.Background(), SyncProject{Base: "main", Branch: "ai/proj"}, newSyncRepo(ex)) {
+	if w.Sync(context.Background(), syncInf("main", "ai/proj", newSyncRepo(ex)), newSyncRepo(ex)) {
 		t.Fatal("HEAD не сдвинулся — false")
 	}
 	if len(sink.infos) != 0 {
