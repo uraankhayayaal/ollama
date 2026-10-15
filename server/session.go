@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"ai/agents/architect"
 	appask "ai/application/ask"
 	appboard "ai/application/board"
 	"ai/application/hitl"
@@ -118,7 +117,7 @@ type Session struct {
 
 // newSession создаёт сессию проекта (без запуска runner'а).
 func (s *Server) newSession(project string) (*Session, error) {
-	boardStore, err := board.NewStore(context.Background(), architect.LoadConfig().StoreConfig(project))
+	boardStore, err := board.NewStore(context.Background(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		return nil, err
 	}
@@ -127,9 +126,9 @@ func (s *Server) newSession(project string) (*Session, error) {
 	// задач при создании, мёрдж done→релиз, worktree задачи, синхрон с main).
 	s.attachGitHooks(project, boardStore)
 	chatStore, err := chat.NewStore(context.Background(), chat.StoreConfig{
-		Addr:     architect.LoadConfig().RedisAddr,
-		Password: architect.LoadConfig().RedisPassword,
-		DB:       architect.LoadConfig().RedisDB,
+		Addr:     board.LoadConfig().RedisAddr,
+		Password: board.LoadConfig().RedisPassword,
+		DB:       board.LoadConfig().RedisDB,
 		Project:  project,
 	})
 	if err != nil {
@@ -137,9 +136,9 @@ func (s *Server) newSession(project string) (*Session, error) {
 		return nil, err
 	}
 	tokStore, err := tokens.NewStore(context.Background(), tokens.StoreConfig{
-		Addr:     architect.LoadConfig().RedisAddr,
-		Password: architect.LoadConfig().RedisPassword,
-		DB:       architect.LoadConfig().RedisDB,
+		Addr:     board.LoadConfig().RedisAddr,
+		Password: board.LoadConfig().RedisPassword,
+		DB:       board.LoadConfig().RedisDB,
 		Project:  project,
 	})
 	if err != nil {

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai/agents/architect"
 	"ai/infrastructure/board"
 
 	"github.com/alicebob/miniredis/v2"
@@ -321,7 +320,7 @@ func taskFromBoard(t *testing.T, h http.Handler, project, taskID string) board.T
 func createInjTask(t *testing.T, project, taskID string) error {
 	t.Helper()
 	ctx := context.Background()
-	store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		return err
 	}

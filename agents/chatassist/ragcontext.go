@@ -12,7 +12,7 @@ package chatassist
 // как раньше (degrade, как в планировщике).
 
 import (
-	"ai/infrastructure/rag"
+	"ai/domain"
 	"context"
 	"fmt"
 	"os"
@@ -25,7 +25,7 @@ import (
 // Реализуется *rag.Client; выделен, чтобы hermetic-тесты работали с fake без
 // сети (как RAGSearcher в tools/codesearch.go).
 type RAGSearcher interface {
-	Search(ctx context.Context, p rag.SearchParams) ([]rag.SearchResult, error)
+	Search(ctx context.Context, p domain.SearchParams) ([]domain.SearchResult, error)
 }
 
 // assistantRAGBlockChars — лимит текста блока «релевантный код» (как maxMapChars
@@ -42,7 +42,7 @@ func assistantRAGBlock(projectName, query string, r RAGSearcher) string {
 	ctx, cancel := context.WithTimeout(context.Background(), ragAssistantTimeout())
 	defer cancel()
 
-	results, err := r.Search(ctx, rag.SearchParams{
+	results, err := r.Search(ctx, domain.SearchParams{
 		Project:  strings.TrimSpace(projectName),
 		Query:    strings.TrimSpace(query),
 		Scope:    "",
@@ -59,7 +59,7 @@ func assistantRAGBlock(projectName, query string, r RAGSearcher) string {
 // file:start-end (score) + сниппет. Суммарный объём блока не превышает
 // assistantRAGBlockChars — хвост отбрасывается с пометкой (лимиты контекста
 // не превышаются).
-func formatAssistantRAGBlock(results []rag.SearchResult) string {
+func formatAssistantRAGBlock(results []domain.SearchResult) string {
 	var b strings.Builder
 	head := "Релевантный код по вопросу (семантический поиск):\n"
 	b.WriteString(head)
@@ -102,14 +102,14 @@ func ragAssistantTimeout() time.Duration {
 }
 
 // ragAssistantLimit — лимит чанков в контексте ассистента (RAG_MAX_RESULTS),
-// по умолчанию rag.DefaultMaxResults.
+// по умолчанию domain.DefaultMaxResults.
 func ragAssistantLimit() int {
 	if v := strings.TrimSpace(os.Getenv("RAG_MAX_RESULTS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return rag.DefaultMaxResults
+	return domain.DefaultMaxResults
 }
 
 // ragAssistantMaxTotal — суммарный лимит текста блока (RAG_READ_MAX_TOTAL);

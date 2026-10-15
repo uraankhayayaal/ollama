@@ -14,9 +14,8 @@ package architect
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/domain/services"
-	"ai/infrastructure/board"
-	"ai/infrastructure/rag"
 	"ai/projects"
 	"ai/tools"
 	"context"
@@ -56,14 +55,13 @@ type Architect struct {
 	// *tools.FileOps — контекст файловых инструментов (OutputDir и пр.).
 	*tools.FileOps
 	Prompt string
-	Config Config
 	// Tools — выбранные инструменты изучения проекта из общего реестра.
 	Tools *tools.Set
 	// Store — общая Kanban-доска проекта (Redis), куда публикуются эпики.
 	Store services.BoardStore
 	// RAG — клиент векторной памяти (CodeSearch + блок «релевантный код» в
 	// промпте). Опционален: nil — инструменты деградируют в skipped, блока нет.
-	RAG rag.Searcher
+	RAG services.Searcher
 	// ReviewMode — режим экспертизы багрепортов (фаза phaseBugs оркестратора):
 	// обязательный первый раунд submit_architecture_backlog отключается,
 	// системный промпт меняется на экспертную оценку багов.
@@ -81,17 +79,6 @@ type Architect struct {
 	epicWorkdir func() (string, string)
 }
 
-// NewArchitect создаёт архитектора для проекта: подключает хранилище доски по
-// настройкам окружения (BOARD_REDIS_*) и проверяет доступность Redis.
-func NewArchitect(projectName, prompt string) (*Architect, error) {
-	cfg := LoadConfig()
-	store, err := board.NewStore(context.Background(), cfg.StoreConfig(projectName))
-	if err != nil {
-		return nil, err
-	}
-	return NewArchitectWithStore(projectName, prompt, board.NewDomainStore(store)), nil
-}
-
 // NewArchitectWithStore создаёт архитектора с уже сконфигурированным
 // хранилищем доски (используется оркестратором Kanban). Клиент RAG
 // подключается позже через SetRAG: на этапе создания он ещё может не
@@ -106,7 +93,6 @@ func NewArchitectWithStore(projectName, prompt string, store services.BoardStore
 	return &Architect{
 		FileOps: ops,
 		Prompt:  prompt,
-		Config:  LoadConfig(),
 		Tools:   tools.Select(toolNames, tools.Deps{FileOps: ops, Board: store}),
 		Store:   store,
 	}
@@ -115,7 +101,7 @@ func NewArchitectWithStore(projectName, prompt string, store services.BoardStore
 // SetRAG подключает клиент векторной памяти и пересобирает набор инструментов
 // с ним (CodeSearch/RagIndexStatus начинают искать по индексу). Повторный вызов
 // безопасен: типизации инструментов восстанавливаются из реестра.
-func (a *Architect) SetRAG(r rag.Searcher) *Architect {
+func (a *Architect) SetRAG(r services.Searcher) *Architect {
 	a.RAG = r
 	if a.Store != nil {
 		a.Tools = tools.Select(toolNames, tools.Deps{FileOps: a.FileOps, Board: a.Store, RAG: r})
@@ -475,7 +461,7 @@ func (a *Architect) submitBacklog(args map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("submit_architecture_backlog: сериализация аргументов: %w", err)
 	}
-	backlog, err := board.UnmarshalBacklog(string(raw))
+	backlog, err := domain.UnmarshalBacklog(string(raw))
 	if err != nil {
 		return json.Marshal(map[string]string{
 			"status":  "error",
@@ -502,13 +488,13 @@ func (a *Architect) submitBacklog(args map[string]any) ([]byte, error) {
 	var created []string
 	var skipped []string
 	for _, ts := range backlog.Tasks {
-		epic := &board.Epic{
+		epic := &domain.Epic{
 			TaskSpec: ts,
 			Summary:  summary,
 		}
 		epic.RequiresReview = false // Ф-8: собственный бэклог архитектора ревизии не требует.
 		if err := a.Store.CreateEpic(ctx, epic); err != nil {
-			if errors.Is(err, board.ErrExists) {
+			if errors.Is(err, domain.ErrExists) {
 				skipped = append(skipped, ts.TaskID)
 				continue
 			}
@@ -570,11 +556,11 @@ func (a *Architect) resolveEpicWorkdir() (dir, branch string) {
 // возвращает валидные (непустые target_role и suggestion) и число/список
 // отбракованных. Запись без обязательных полей деградирует в «пропущено»
 // (skipped), а не валит весь бэклог.
-func validOpportunities(opps []board.Opportunity) ([]board.Opportunity, int) {
+func validOpportunities(opps []domain.Opportunity) ([]domain.Opportunity, int) {
 	if len(opps) == 0 {
 		return nil, 0
 	}
-	valid := make([]board.Opportunity, 0, len(opps))
+	valid := make([]domain.Opportunity, 0, len(opps))
 	skipped := 0
 	for _, o := range opps {
 		if strings.TrimSpace(o.TargetRole) == "" || strings.TrimSpace(o.Suggestion) == "" {

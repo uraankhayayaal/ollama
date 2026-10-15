@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"ai/agents/architect"
 	"ai/chat"
 	"ai/infrastructure/board"
 	"ai/logging"
@@ -47,7 +46,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Фолбек: открываем store на лету.
-	store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "доска недоступна: "+err.Error())
 		return
@@ -76,7 +75,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -183,7 +182,7 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	taskID := r.PathValue("tid")
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -344,7 +343,7 @@ func (s *Server) handleDeleteEpic(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	epicID := r.PathValue("eid")
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -377,7 +376,7 @@ func (s *Server) handleDeleteEpic(w http.ResponseWriter, r *http.Request) {
 // handleListBugs возвращает список багрепортов проекта.
 func (s *Server) handleListBugs(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return

@@ -10,8 +10,8 @@ package chatassist
 
 import (
 	"ai/agents"
+	"ai/domain"
 	"ai/domain/services"
-	"ai/infrastructure/board"
 	"ai/projects"
 	"ai/tools"
 	"encoding/json"
@@ -107,7 +107,7 @@ type Assistant struct {
 	// для деактивации ChatRAG (напрямую добавляя инструкцию в системное
 	// сообщение ассистента), ограничения무리ов или других прикладных нужд.
 	// При пустом списке не влияют на работу (fast-path в ApplyInjections).
-	Injections []board.Injection
+	Injections []domain.Injection
 	// Correction — разовая корректирующая инструкция в конец системного
 	// промпта на один вызов (не персистентная, в отличие от Injections).
 	// Сервер ставит её в редком случае «фантомного действия»: модель
@@ -223,7 +223,7 @@ func (a *Assistant) GetTools() []tools.ToolDefinition {
 }
 
 // GetInjections возвращает инъекции уровня Assistant (пусто — fast-path).
-func (a *Assistant) GetInjections() []board.Injection {
+func (a *Assistant) GetInjections() []domain.Injection {
 	return a.Injections
 }
 

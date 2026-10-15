@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"sort"
 
-	"ai/agents/architect"
+	"ai/infrastructure/board"
 	"ai/runmetrics"
 	"ai/tokens"
 )
@@ -106,7 +106,7 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 // поднимать доску/чат только ради чтения одного счётчика. Недоступный Redis —
 // не ошибка: показаны метрики текущего запуска без накопленных итогов.
 func totalTokens(r *http.Request, project string) (in, out int64) {
-	cfg := architect.LoadConfig()
+	cfg := board.LoadConfig()
 	store, err := tokens.NewStore(r.Context(), tokens.StoreConfig{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,

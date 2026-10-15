@@ -1,7 +1,7 @@
 package architect
 
 // Подмешивание контекста RAG в системный промпт архитектора (Ф-1): семантическая
-// выборка по тексту задачи из векторной памяти (rag.Search) с фильтром по
+// выборка по тексту задачи из векторной памяти (RAGSearcher.Search) с фильтром по
 // проекту — блок «Релевантный код по задаче» (по образцу agents/chatassist/
 // ragcontext.go, assistantRAGBlock). Архитектор должен знать релевантный код
 // не только через инструмент CodeSearch, но и из контекста первого ответа.
@@ -10,7 +10,7 @@ package architect
 // Qdrant/эмбеддингах — блока нет, архитектор работает как раньше (degrade).
 
 import (
-	"ai/infrastructure/rag"
+	"ai/domain"
 	"context"
 	"fmt"
 	"os"
@@ -24,7 +24,7 @@ import (
 // Реализуется *rag.Client (совместим с tools.RAGSearcher); выделен, чтобы
 // hermetic-тесты работали с fake без сети (как RAGSearcher в tools/codesearch.go).
 type RAGSearcher interface {
-	Search(ctx context.Context, p rag.SearchParams) ([]rag.SearchResult, error)
+	Search(ctx context.Context, p domain.SearchParams) ([]domain.SearchResult, error)
 }
 
 // projectNameFromOutputDir выводит имя проекта из пути OutputDir (базовое имя):
@@ -52,7 +52,7 @@ func architectRAGBlock(projectName, query string, r RAGSearcher) string {
 	ctx, cancel := context.WithTimeout(context.Background(), ragArchitectTimeout())
 	defer cancel()
 
-	results, err := r.Search(ctx, rag.SearchParams{
+	results, err := r.Search(ctx, domain.SearchParams{
 		Project:  strings.TrimSpace(projectName),
 		Query:    strings.TrimSpace(query),
 		Scope:    "",
@@ -69,7 +69,7 @@ func architectRAGBlock(projectName, query string, r RAGSearcher) string {
 // file:start-end (score) + сниппет. Суммарный объём блока не превышает
 // architectRAGBlockChars — хвост отбрасывается с пометкой (лимиты контекста
 // не превышаются).
-func formatArchitectRAGBlock(results []rag.SearchResult) string {
+func formatArchitectRAGBlock(results []domain.SearchResult) string {
 	var b strings.Builder
 	head := "Релевантный код по задаче (семантический поиск):\n"
 	b.WriteString(head)
@@ -112,18 +112,18 @@ func ragArchitectTimeout() time.Duration {
 }
 
 // ragArchitectLimit — лимит чанков в контексте архитектора (RAG_MAX_RESULTS),
-// по умолчанию rag.DefaultMaxResults.
+// по умолчанию domain.DefaultMaxResults.
 func ragArchitectLimit() int {
 	if v := strings.TrimSpace(os.Getenv("RAG_MAX_RESULTS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return rag.DefaultMaxResults
+	return domain.DefaultMaxResults
 }
 
 // ragArchitectMaxTotal — суммарный лимит текста блока (RAG_READ_MAX_TOTAL);
-// <=0 — значение по умолчанию берёт сам rag.Search, а formatArchitectRAGBlock
+// <=0 — значение по умолчанию берёт сам domain.Search, а formatArchitectRAGBlock
 // всё равно упирается в architectRAGBlockChars.
 func ragArchitectMaxTotal() int {
 	if v := strings.TrimSpace(os.Getenv("RAG_READ_MAX_TOTAL")); v != "" {

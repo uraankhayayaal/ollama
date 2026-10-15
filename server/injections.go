@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"ai/agents/architect"
 	"ai/infrastructure/board"
 	"ai/logging"
 )
@@ -103,7 +102,7 @@ func (s *Server) handleAddTaskInjection(w http.ResponseWriter, r *http.Request) 
 		inj.ID = randomID()
 	}
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -132,7 +131,7 @@ func (s *Server) handleRemoveTaskInjection(w http.ResponseWriter, r *http.Reques
 	taskID := r.PathValue("tid")
 	injID := r.PathValue("injID")
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -158,7 +157,7 @@ func (s *Server) handleListTaskComments(w http.ResponseWriter, r *http.Request) 
 	project := r.PathValue("id")
 	taskID := r.PathValue("tid")
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -186,7 +185,7 @@ func (s *Server) handleAddTaskComment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "некорректный JSON: "+err.Error())
 		return
 	}
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -217,7 +216,7 @@ func (s *Server) handleUpdateTaskComment(w http.ResponseWriter, r *http.Request)
 	cm.TaskID = taskID
 	cm.Normalize()
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -239,7 +238,7 @@ func (s *Server) handleRemoveTaskComment(w http.ResponseWriter, r *http.Request)
 	taskID := r.PathValue("tid")
 	cmID := r.PathValue("cmID")
 
-	store, err := board.NewStore(r.Context(), architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(r.Context(), board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 		return

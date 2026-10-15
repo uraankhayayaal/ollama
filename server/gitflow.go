@@ -8,7 +8,6 @@
 package server
 
 import (
-	"ai/agents/architect"
 	"ai/application/gitflow"
 	"ai/chat"
 	"ai/domain"
@@ -80,7 +79,7 @@ func (s *Server) brancher(project string, store *board.Store, repo *git.Repo, ba
 // git-workflow (Ф-1..Ф-4): создание веток, мёрдж done→релиз, worktree задачи,
 // синхрон релизной ветки с main.
 func (s *Server) boardStore(ctx context.Context, project string) (*board.Store, error) {
-	store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		return nil, err
 	}

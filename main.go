@@ -3,7 +3,6 @@ package main
 import (
 	"ai/acceptor"
 	"ai/agents"
-	"ai/agents/architect"
 	"ai/agents/backendlead"
 	"ai/agents/codereviewer"
 	"ai/agents/developer"
@@ -242,7 +241,7 @@ func main() {
 		}
 		kanbanProject := agentArgs[0]
 		kanbanPrompt := strings.Join(agentArgs[1:], " ")
-		store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(kanbanProject))
+		store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(kanbanProject))
 		if err != nil {
 			logging.Fatalf("Ошибка доски проекта %s: %v", kanbanProject, err)
 		}

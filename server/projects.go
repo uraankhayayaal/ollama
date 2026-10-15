@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"ai/agents/architect"
 	"ai/infrastructure/board"
 	"ai/workspace"
 )
@@ -19,7 +18,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	for _, inf := range s.reg.List() {
 		// Пытаемся прочитать мета доски (если Redis доступен).
 		meta, _ := func() (*board.Meta, error) {
-			store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(inf.Name))
+			store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(inf.Name))
 			if err != nil {
 				return nil, err
 			}
@@ -126,7 +125,7 @@ func (s *Server) writeProjectMeta(w http.ResponseWriter, r *http.Request, name s
 func (s *Server) writeProjectMetaFromInfo(w http.ResponseWriter, inf workspace.Info) {
 	// Пытаемся прочитать meta доски.
 	meta, _ := func() (*board.Meta, error) {
-		store, err := board.NewStore(context.Background(), architect.LoadConfig().StoreConfig(inf.Name))
+		store, err := board.NewStore(context.Background(), board.LoadConfig().StoreConfig(inf.Name))
 		if err != nil {
 			return nil, err
 		}

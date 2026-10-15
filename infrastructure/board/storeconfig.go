@@ -1,16 +1,15 @@
-package architect
+package board
 
 import (
-	"ai/infrastructure/board"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Config — настройки Системного архитектора: параметры подключения к Redis.
-// Redis хранит общую Kanban-доску проекта (board.Store), куда архитектор
-// публикует эпики через вызов submit_architecture_backlog.
+// Config — параметры подключения к Redis, где живёт общая Kanban-доска
+// проекта. Перенесён из agents/architect (срез H6a Этапа 8): конфигурация
+// хранилища относится к infrastructure/board, а не к агенту.
 type Config struct {
 	RedisAddr     string
 	RedisPassword string
@@ -18,7 +17,8 @@ type Config struct {
 	RedisTTL      time.Duration
 }
 
-// LoadConfig читает настройки архитектора из переменных окружения.
+// LoadConfig читает настройки хранилища доски из переменных окружения
+// (BOARD_REDIS_ADDR/BOARD_REDIS_PASSWORD/BOARD_REDIS_DB/BOARD_TTL).
 func LoadConfig() Config {
 	return Config{
 		RedisAddr:     envString("BOARD_REDIS_ADDR", "localhost:56379"),
@@ -29,8 +29,8 @@ func LoadConfig() Config {
 }
 
 // StoreConfig собирает конфигурацию хранилища доски для проекта.
-func (c Config) StoreConfig(project string) board.StoreConfig {
-	return board.StoreConfig{
+func (c Config) StoreConfig(project string) StoreConfig {
+	return StoreConfig{
 		Addr:     c.RedisAddr,
 		Password: c.RedisPassword,
 		DB:       c.RedisDB,

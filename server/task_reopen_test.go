@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"ai/agents/architect"
 	"ai/infrastructure/board"
 )
 
@@ -14,7 +13,7 @@ import (
 func driveTaskDone(t *testing.T, project, taskID string) {
 	t.Helper()
 	ctx := context.Background()
-	store, err := board.NewStore(ctx, architect.LoadConfig().StoreConfig(project))
+	store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(project))
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
