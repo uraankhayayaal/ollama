@@ -1,0 +1,44 @@
+# Инфраструктура TODO-приложения: PostgreSQL для локального запуска и приёмки.
+# Продукт (main.go) подключается к БД по DATABASE_URL.
+#
+# Поднять только БД:            docker compose up -d db
+# Узнать опубликованный порт:   docker compose port db 5432
+# Остановить и убрать данные:   docker compose down -v
+#
+# Это артефакт, который на живом прогоне пишет DevOps-инженер; e2e-харнес
+# поднимает БД именно по этому файлу (см. server/e2e_todo_test.go).
+name: todoapp
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-todoapp}
+    ports:
+      # Публикуем на 127.0.0.1 со СЛУЧАЙНЫМ хост-портом: уже занятый 5432 и
+      # параллельные прогоны не мешают друг другу. Точный порт узнаётся через
+      # `docker compose port db 5432`.
+      - "127.0.0.1::5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-todoapp}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: todoapp:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-todoapp}?sslmode=disable
+      ADDR: 0.0.0.0:8080
+    ports:
+      - "127.0.0.1:8080:8080"

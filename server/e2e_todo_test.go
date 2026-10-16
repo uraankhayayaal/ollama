@@ -5,26 +5,32 @@ package server
 // Живой E2E полного цикла: от сообщения пользователя до рабочего продукта.
 //
 // Тест задействует всё ПО: оркестратор Kanban (архитектор → лид → специалист),
-// доска на miniredis, PostgreSQL (docker или TEST_DATABASE_URL), Web UI через
-// виртуальный браузер (chromedp): выбор проекта, дашборд, статусы задач.
+// доска на miniredis, PostgreSQL, Web UI через виртуальный браузер (chromedp):
+// выбор проекта, дашборд, статусы задач.
 //
 // Провайдер LLM — детерминированный scripted (без сети): архитектор публикует
-// бэклог, лид декомпозирует эпик, разработчик пишет файлы продукта (фикстура),
-// QA переводит задачи в done.
+// бэклог (инфраструктурный эпик DevOps + прикладной эпик), лиды декомпозируют
+// эпики, DevOps-инженер пишет инфраструктуру продукта (compose.yaml+Dockerfile),
+// разработчик — код продукта (фикстура), QA переводит задачи в done. Харнес
+// поднимает PostgreSQL по compose.yaml, написанному DevOps-инженером.
 //
 // Запуск:
 //
 //	E2E_FULL=1 go test -tags e2e -run TestE2ETodoAppFullFlow ./server/ -timeout 30m
 //
-// Нужны: Google Chrome, docker (или TEST_DATABASE_URL). Без них тест скипается.
+// Нужны: Google Chrome, docker. Без них тест скипается.
 
 import (
 	"ai/agents/architect"
 	"ai/agents/chatassist"
+	"ai/agents/devops"
+	"ai/agents/devopslead"
 	"ai/agents/qaengineer"
+	"ai/domain"
 	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/runner"
+	"ai/shared/logging"
 	"ai/shared/projects"
 	"context"
 	"encoding/json"
@@ -35,6 +41,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,23 +52,54 @@ import (
 
 const todoE2EProjectName = "todoapp-e2e"
 
-// todoE2EArchitectArgs — бэклог архитектора для todo-приложения
+// todoE2EArchitectArgs — бэклог архитектора для todo-приложения: два эпика —
+// инфраструктурный (DevOps Lead, публикуется первым) и прикладной (Backend
+// Lead). Порядок «инфраструктура → приложение» задан sequence_order и очередью
+// лидов; прикладной эпик в декомпозиции зависит от инфраструктурного.
 var todoE2EArchitectArgs = map[string]any{
-	"architecture_summary": "Веб-приложение TODO с REST API на Go, хранение в PostgreSQL, веб-интерфейс.",
+	"architecture_summary": "Веб-приложение TODO с REST API на Go, хранение в PostgreSQL, веб-интерфейс. Локальная инфраструктура — PostgreSQL через Docker Compose.",
 	"tasks": []map[string]any{
 		{
 			"task_id":          "ARCH-01",
-			"title":            "TODO веб-приложение (Go + PostgreSQL + веб)",
-			"description":      "Создать полноценное веб-приложение TODO: сервер на Go с REST API, подключение к PostgreSQL, веб-интерфейс с формой добавления, списком задач, переключением статуса выполнения и удалением.",
-			"assigned_role":    "Backend Lead",
+			"title":            "Инфраструктура: PostgreSQL (Docker Compose) и Dockerfile",
+			"description":      "Подготовить локальную инфраструктуру продукта: сервис PostgreSQL в compose.yaml (образ postgres:16-alpine, DATABASE_URL, healthcheck) и многостадийный Dockerfile для сборки приложения. Инфраструктуру пишет DevOps-инженер.",
+			"assigned_role":    "DevOps Lead",
 			"sequence_order":   1,
+			"can_run_parallel": true,
+			"dependencies":     []string{},
+		},
+		{
+			"task_id":          "ARCH-02",
+			"title":            "TODO веб-приложение (Go + PostgreSQL + веб)",
+			"description":      "Создать полноценное веб-приложение TODO: сервер на Go с REST API, подключение к PostgreSQL через DATABASE_URL, веб-интерфейс с формой добавления, списком задач, переключением статуса выполнения и удалением.",
+			"assigned_role":    "Backend Lead",
+			"sequence_order":   2,
 			"can_run_parallel": true,
 			"dependencies":     []string{},
 		},
 	},
 }
 
-// todoE2ELeadJSON — декомпозиция эпика лидом: две задачи (разработка + тестирование)
+// todoE2EInfraLeadJSON — декомпозиция инфраструктурного эпика DevOps-лидом:
+// одна задача DevOps-инженеру на compose.yaml + Dockerfile.
+const todoE2EInfraLeadJSON = `{
+  "lead_summary": "Инфраструктура TODO: PostgreSQL через Docker Compose и многостадийный Dockerfile",
+  "tasks": [
+    {
+      "task_id": "INFRA-01",
+      "title": "Подготовить PostgreSQL через Docker Compose",
+      "description": "Создать compose.yaml с сервисом db (postgres:16-alpine, публикация на 127.0.0.1 со случайным портом, healthcheck pg_isready) и многостадийный Dockerfile для продукта. Приложение получает строку подключения через DATABASE_URL.",
+      "assigned_role": "DevOps Engineer",
+      "sequence_order": 1,
+      "can_run_parallel": true,
+      "dependencies": []
+    }
+  ]
+}`
+
+// todoE2ELeadJSON — декомпозиция прикладного эпика Backend-лидом: две задачи
+// (разработка + тестирование). Разработка ждёт готовности инфраструктурного
+// эпика ARCH-01.
 const todoE2ELeadJSON = `{
   "lead_summary": "Разбивка TODO-приложения на задачи разработки",
   "tasks": [
@@ -71,7 +110,7 @@ const todoE2ELeadJSON = `{
       "assigned_role": "Go Developer",
       "sequence_order": 1,
       "can_run_parallel": true,
-      "dependencies": []
+      "dependencies": ["ARCH-01"]
     },
     {
       "task_id": "T-02",
@@ -85,10 +124,23 @@ const todoE2ELeadJSON = `{
   ]
 }`
 
+// Режимы поведения scripted-провайдера. Пусто — штатный happy-path (см.
+// TestE2ETodoAppFullFlow). Остальные включают намеренную «поломку» модели,
+// чтобы e2e проверял защиту оркестратора: зацикливание, зависшее тестирование,
+// галлюцинацию (текстовый ответ вместо инструментов).
+const (
+	todoEModeHappy       = ""         // штатное поведение
+	todoEModeDevLoop     = "dev-loop" // разработчик «зацикливается» (Looped)
+	todoEModeQAStuck     = "qa-stuck" // QA не завершает задачу (остаётся testing)
+	todoEModeDevTextOnly = "dev-text" // разработчик отвечает текстом без инструментов
+)
+
 // todoE2EProvider — детерминированный провайдер для e2e-теста.
 // Имитирует модель на всех этапах оркестрации без сети.
 type todoE2EProvider struct {
-	t *testing.T
+	t          *testing.T
+	mode       string
+	projectDir string
 }
 
 func (p *todoE2EProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
@@ -113,21 +165,61 @@ func (p *todoE2EProvider) Generate(ctx context.Context, agent services.Agent) (*
 
 	switch {
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
-		// Лид: возвращаем JSON-декомпозицию (fallback-путь оркестратора)
+		// Лид направления: инфраструктурный эпик декомпозирует DevOps-лид,
+		// прикладной — Backend-лид. Различаем по типу агента (JSON-fallback путь
+		// оркестратора: лид не создаёт задачи инструментами доски).
+		if _, ok := agent.(*devopslead.DevopsLead); ok {
+			return &runner.AgentResponse{Content: todoE2EInfraLeadJSON}, nil
+		}
 		return &runner.AgentResponse{Content: todoE2ELeadJSON}, nil
 
 	case strings.HasPrefix(umsg, "Ты — специалист"):
 		taskID := todoETaskIDFromPrompt(umsg)
-		if _, ok := agent.(*qaengineer.QAEngineer); ok {
+		switch a := agent.(type) {
+		case *qaengineer.QAEngineer:
+			// Режим «QA завис»: тестировщик отвечает текстом и НЕ меняет статус —
+			// задача остаётся в testing. Оркестратор обязан заметить это и
+			// эскалировать «работа не сделана» (вплоть до human_help).
+			if p.mode == todoEModeQAStuck {
+				return &runner.AgentResponse{Content: "Похоже, всё в порядке."}, nil
+			}
 			// QA: переводит задачу в done
-			_, _ = agent.CallFunction("BoardSetTaskStatus", map[string]any{"task_id": taskID, "status": "done"})
+			_, _ = a.CallFunction("BoardSetTaskStatus", map[string]any{"task_id": taskID, "status": "done"})
 			return &runner.AgentResponse{Content: "Тестирование пройдено."}, nil
+		case *devops.Devops:
+			// DevOps-инженер: пишет инфраструктуру продукта (compose.yaml +
+			// Dockerfile) инструментом WriteFiles, задачу → testing (продукт
+			// приёмки поднимет БД по этому compose).
+			if err := todoEWriteInfraFiles(a); err != nil {
+				return nil, err
+			}
+			_, _ = a.CallFunction("BoardSetTaskStatus", map[string]any{"task_id": taskID, "status": "testing"})
+			return &runner.AgentResponse{Content: "Инфраструктура подготовлена."}, nil
+		default:
+			// Режим «разработчик зациклился»: оркестратор должен прервать петлю
+			// (escalateLoop → «зациклилась») и при исчерпании бюджета отдать
+			// задачу человеку, а не крутиться вечно.
+			if p.mode == todoEModeDevLoop {
+				return &runner.AgentResponse{
+					Looped:     true,
+					LoopReason: "повторный вызов BoardSetTaskStatus с теми же аргументами",
+				}, nil
+			}
+			// Режим «галлюцинация»: разработчик утверждает, что всё готово, но
+			// НЕ пишет файлы и НЕ меняет статус. Оркестратор не должен верить
+			// тексту — он обязан направить задачу на верификацию (testing).
+			if p.mode == todoEModeDevTextOnly {
+				return &runner.AgentResponse{Content: "Готово, задача реализована и проверена."}, nil
+			}
+			// Разработчик: пишет файлы продукта из фикстуры, задачу → testing
+			productDir := p.projectDir
+			if productDir == "" {
+				productDir = projects.ProjectDir(todoE2EProjectName)
+			}
+			_ = todoEWriteFixtureFiles(productDir)
+			_, _ = agent.CallFunction("BoardSetTaskStatus", map[string]any{"task_id": taskID, "status": "testing"})
+			return &runner.AgentResponse{Content: "Задача выполнена."}, nil
 		}
-		// Разработчик: пишет файлы продукта из фикстуры, задачу → testing
-		productDir := projects.ProjectDir(todoE2EProjectName)
-		_ = todoEWriteFixtureFiles(productDir)
-		_, _ = agent.CallFunction("BoardSetTaskStatus", map[string]any{"task_id": taskID, "status": "testing"})
-		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
 
 	case strings.HasPrefix(umsg, "Проведи ревизию"):
 		// Ревьюер эпиков-черновиков: в нашем сценарии черновиков нет
@@ -174,6 +266,27 @@ func todoEWriteFixtureFiles(productDir string) error {
 	return nil
 }
 
+// todoEWriteInfraFiles заставляет DevOps-инженера записать инфраструктуру
+// продукта (compose.yaml + Dockerfile) инструментом WriteFiles. Содержимое
+// берётся из фикстур testdata/todoapp — scripted-провайдер играет роль модели,
+// которая «сгенерировала» эти файлы. Агент пишет в свой OutputDir (каталог
+// продукта), поэтому харнес затем поднимает БД ровно по этому compose.yaml.
+func todoEWriteInfraFiles(d *devops.Devops) error {
+	fixtureDir := filepath.Join("testdata", "todoapp")
+	files := make([]map[string]string, 0, 2)
+	for _, name := range []string{"compose.yaml", "Dockerfile"} {
+		data, err := os.ReadFile(filepath.Join(fixtureDir, name))
+		if err != nil {
+			return err
+		}
+		files = append(files, map[string]string{"filename": name, "content": string(data)})
+	}
+	if _, err := d.CallFunction("WriteFiles", map[string]any{"files": files}); err != nil {
+		return err
+	}
+	return nil
+}
+
 // todoEApproveGates непрерывно одобряет HITL-затворы (epics, tasks)
 func todoEApproveGates(ctx context.Context, sess *Session) {
 	for {
@@ -190,68 +303,312 @@ func todoEApproveGates(ctx context.Context, sess *Session) {
 	}
 }
 
-// todoEWaitForBoardDone ждёт, пока доска станет done (все эпики и задачи выполнены)
+// Параметры детектора застоя. Опрос раз в todoEPollInterval, застой — когда
+// снимок доски не меняется todoEStallRounds подряд И нет активных задач
+// (~20 с). Это на порядок быстрее «глухого» дедлайна в 10 минут: залипшая
+// (зациклившаяся/остановившаяся) оркестрация падает с диагнозом, а не молча
+// выжигает бюджет.
+const (
+	todoEPollInterval = 500 * time.Millisecond
+	todoEStallRounds  = 40
+)
+
+// todoEWaitForBoardDone ждёт, пока доска станет done, и падает быстро, если
+// оркестрация застопорилась. В сообщении об ошибке — снимок доски с причинами.
 func todoEWaitForBoardDone(t *testing.T, sess *Session, within time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		done, err := sess.board.AllDone(context.Background())
-		if err == nil && done {
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	t.Fatalf("доска не стала done за %v", within)
+	todoEWaitFor(t, sess, within, "доска полностью done", func(s *Session) bool {
+		done, err := s.board.AllDone(context.Background())
+		return err == nil && done
+	})
 }
 
-// startPostgres запускает контейнер postgres:15-alpine или использует TEST_DATABASE_URL.
-// Возвращает DSN для подключения.
-func startPostgres(t *testing.T) string {
+// todoEWaitFor ждёт, пока pred не станет истиной, и падает быстро при застое
+// (снимок доски не меняется todoEStallRounds подряд и нет активных задач) или
+// по истечении within. Оба отказа печатают диагноз (pause_reason/last_error/
+// эскалации), чтобы причина была видна на упавшем тесте.
+func todoEWaitFor(t *testing.T, sess *Session, within time.Duration, desc string, pred func(*Session) bool) {
 	t.Helper()
-	if v := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL")); v != "" {
-		return v
+	if ok, diag := todoEPollUntil(sess, within, todoEStallRounds, pred); !ok {
+		t.Fatalf("не дождались %q: %s", desc, diag)
 	}
+}
 
-	containerName := fmt.Sprintf("todoapp-e2e-pg-%d", time.Now().Unix())
-	cmd := exec.Command("docker", "run", "-d", "--rm",
-		"--name", containerName,
-		"-e", "POSTGRES_USER=postgres",
-		"-e", "POSTGRES_PASSWORD=postgres",
-		"-e", "POSTGRES_DB=todoapp",
-		"-p", "127.0.0.1:0:5432",
-		"postgres:15-alpine")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("не удалось запустить postgres: %v, out=%s", err, out)
-	}
-	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "-f", containerName).Run()
-	})
-
-	// Получаем порт
-	portCmd := exec.Command("docker", "port", containerName, "5432")
-	portOut, err := portCmd.CombinedOutput()
-	if err != nil {
-		t.Skipf("docker port: %v", err)
-	}
-	portStr := strings.TrimSpace(string(portOut))
-	parts := strings.Split(portStr, ":")
-	port := parts[len(parts)-1]
-	if port == "" {
-		t.Skip("не удалось получить порт postgres")
-	}
-
-	dsn := fmt.Sprintf("postgres://postgres:postgres@127.0.0.1:%s/todoapp?sslmode=disable", port)
-
-	// Ждём готовности
-	for i := 0; i < 30; i++ {
-		check := exec.Command("pg_isready", "-h", "127.0.0.1", "-p", port, "-U", "postgres")
-		if check.Run() == nil {
-			return dsn
+// todoEPollUntil опрашивает доску, пока pred не станет истиной. Возвращает
+// ok=true, когда pred выполнен. Иначе — ok=false и диагноз: «застой» (снимок
+// доски не меняется stallRounds подряд И нет активных задач) либо «таймаут»
+// (within истёк). Вынесено из todoEWaitFor, чтобы поведение детектора можно
+// было проверить тестом, не роняя тестовый процесс через t.Fatalf.
+func todoEPollUntil(sess *Session, within time.Duration, stallRounds int, pred func(*Session) bool) (bool, string) {
+	deadline := time.Now().Add(within)
+	lastFP := ""
+	frozen := 0
+	for time.Now().Before(deadline) {
+		if pred(sess) {
+			return true, ""
 		}
-		time.Sleep(1 * time.Second)
+		fp := todoEBoardFingerprint(sess)
+		if fp == lastFP && !todoEAnyActive(sess) {
+			frozen++
+		} else {
+			frozen = 0
+		}
+		lastFP = fp
+		if frozen >= stallRounds {
+			return false, fmt.Sprintf("застой: доска не менялась %v и нет активных задач —\n%s",
+				time.Duration(frozen)*todoEPollInterval, todoEStallReason(sess))
+		}
+		time.Sleep(todoEPollInterval)
 	}
-	t.Skip("postgres не готов")
-	return dsn
+	return false, fmt.Sprintf("доска не изменилась за %v —\n%s", within, todoEStallReason(sess))
+}
+
+// todoEBoardFingerprint — стабильный снимок состояния доски: статусы эпиков и
+// (статус, попытки, эскалации) задач. Любой прогресс меняет снимок.
+func todoEBoardFingerprint(sess *Session) string {
+	ctx := context.Background()
+	epics, _ := sess.board.ListEpics(ctx)
+	tasks, _ := sess.board.ListTasks(ctx)
+	sort.Slice(epics, func(i, j int) bool { return epics[i].TaskID < epics[j].TaskID })
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].TaskID < tasks[j].TaskID })
+	var b strings.Builder
+	for _, e := range epics {
+		fmt.Fprintf(&b, "E:%s=%s;", e.TaskID, e.Status)
+	}
+	for _, tk := range tasks {
+		fmt.Fprintf(&b, "T:%s=%s/a%d/e%d;", tk.TaskID, tk.Status, tk.Attempts, tk.Escalations)
+	}
+	return b.String()
+}
+
+// todoEAnyActive — есть ли на доске задача, над которой прямо сейчас идёт
+// работа (анализ архитектора / исполнение / тестирование). Пока такая задача
+// есть, застой не объявляем: оркестратор занят.
+func todoEAnyActive(sess *Session) bool {
+	tasks, _ := sess.board.ListTasks(context.Background())
+	for _, tk := range tasks {
+		switch tk.Status {
+		case board.StatusAnalysis, board.StatusInProgress, board.StatusTesting:
+			return true
+		}
+	}
+	return false
+}
+
+// todoEStallReason — человекочитаемый диагноз остановки: строки задач с
+// попытками/эскалациями/причинами, с отдельным акцентом на human_help.
+func todoEStallReason(sess *Session) string {
+	tasks, _ := sess.board.ListTasks(context.Background())
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].TaskID < tasks[j].TaskID })
+	var b strings.Builder
+	var human []string
+	for _, tk := range tasks {
+		fmt.Fprintf(&b, "  %-10s %-12s attempts=%d escalations=%d", tk.TaskID, tk.Status, tk.Attempts, tk.Escalations)
+		if tk.PauseReason != "" {
+			fmt.Fprintf(&b, " pause=%q", todoEClip(tk.PauseReason, 200))
+			if tk.Status == board.StatusHumanHelp {
+				human = append(human, tk.TaskID+": "+tk.PauseReason)
+			}
+		}
+		if tk.LastError != "" {
+			fmt.Fprintf(&b, " err=%q", todoEClip(tk.LastError, 200))
+		}
+		b.WriteString("\n")
+	}
+	if len(human) > 0 {
+		return "нужен человек (" + strings.Join(human, "; ") + "):\n" + b.String()
+	}
+	return b.String()
+}
+
+// todoEClip обрезает строку до n рун и схлопывает переводы строк (для логов).
+func todoEClip(s string, n int) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ⏎ ")
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// todoEDumpBoard печатает полный post-mortem доски и хвост лога проекта. Зовётся
+// из t.Cleanup при провалившемся тесте, чтобы причина была видна даже когда
+// падение случилось не в ожидании доски.
+func todoEDumpBoard(t *testing.T, sess *Session, logPath string) {
+	t.Helper()
+	ctx := context.Background()
+	epics, _ := sess.board.ListEpics(ctx)
+	tasks, _ := sess.board.ListTasks(ctx)
+	sort.Slice(epics, func(i, j int) bool { return epics[i].TaskID < epics[j].TaskID })
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].TaskID < tasks[j].TaskID })
+	t.Logf("=== POST-MORTEM доски: %d эпиков, %d задач ===", len(epics), len(tasks))
+	for _, e := range epics {
+		t.Logf("  эпик  %-10s %-12s %s", e.TaskID, e.Status, todoEClip(e.Title, 48))
+	}
+	for _, tk := range tasks {
+		t.Logf("  задача %-10s %-12s assignee=%-12s attempts=%d escalations=%d",
+			tk.TaskID, tk.Status, tk.Assignee, tk.Attempts, tk.Escalations)
+		if tk.PauseReason != "" {
+			t.Logf("        pause_reason: %s", todoEClip(tk.PauseReason, 300))
+		}
+		if tk.LastError != "" {
+			t.Logf("        last_error: %s", todoEClip(tk.LastError, 300))
+		}
+		for _, c := range tk.Comments {
+			if c.Type == domain.CommentTypeSystem || c.Type == domain.CommentTypeQA {
+				t.Logf("        [%s/%s] %s", c.Author, c.Type, todoEClip(c.Body, 200))
+			}
+		}
+	}
+	todoEDumpLogTail(t, logPath)
+}
+
+// todoEDumpLogTail печатает последние строки лога проекта (если он есть).
+func todoEDumpLogTail(t *testing.T, logPath string) {
+	t.Helper()
+	if logPath == "" {
+		return
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Logf("--- лог проекта недоступен: %v ---", err)
+		return
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	const tail = 60
+	start := 0
+	if len(lines) > tail {
+		start = len(lines) - tail
+	}
+	t.Logf("--- хвост лога проекта (%d строк, показываю %d) ---", len(lines), len(lines)-start)
+	for _, ln := range lines[start:] {
+		t.Logf("  %s", ln)
+	}
+}
+
+// --- PostgreSQL harness -----------------------------------------------------
+// Работает по паттерну miniredis.RunT(t): owned DSN, t.Cleanup снимает стек.
+// БД поднимается по compose.yaml, который на прогоне написал DevOps-инженер
+// (инфраструктура продукта), а не хардкодом теста.
+
+const (
+	// todoE2EComposeProject — имя compose-проекта (изолирует контейнеры прогона
+	// от других стеков на машине).
+	todoE2EComposeProject = "todoapp-e2e"
+	// todoE2EComposeService — имя сервиса БД в compose.yaml продукта.
+	todoE2EComposeService = "db"
+	// todoE2EComposePort — внутренний порт postgres внутри контейнера.
+	todoE2EComposePort = "5432"
+
+	pgPostgresUser     = "postgres"
+	pgPostgresPassword = "postgres"
+	pgPostgresDatabase = "todoapp"
+)
+
+// postgresHarness — PostgreSQL, поднятый `docker compose up -d` по инфраструктуре
+// продукта. DSN указывает на опубликованный compose-порт на 127.0.0.1.
+type postgresHarness struct {
+	dsn         string
+	composeFile string
+	projectName string
+}
+
+// newPostgres поднимает БД по compose.yaml продукта и возвращает харнес с DSN.
+// Cleanup через t.Cleanup останавливает стек (`compose down -v`).
+func newPostgres(t *testing.T, productDir string) *postgresHarness {
+	t.Helper()
+
+	composeFile := filepath.Join(productDir, "compose.yaml")
+	if _, err := os.Stat(composeFile); err != nil {
+		t.Fatalf("DevOps-инженер не создал инфраструктуру (%s): %v", composeFile, err)
+	}
+	if !dockerAvailable() {
+		t.Skip("docker недоступен — приёмка продукта с реальным PostgreSQL пропущена")
+	}
+
+	pg := &postgresHarness{composeFile: composeFile, projectName: todoE2EComposeProject}
+	t.Cleanup(func() { pg.close(t) })
+
+	// Поднимаем только сервис БД: web-сервис продукта собирается и запускается
+	// на хосте (см. todoEVerifyProduct), compose-образ ему не нужен.
+	if out, err := pg.compose(t, "up", "-d", todoE2EComposeService); err != nil {
+		t.Fatalf("docker compose up %s: %v\n%s", todoE2EComposeService, err, out)
+	}
+
+	port := pg.waitPort(t)
+	pg.waitReady(t)
+
+	pg.dsn = fmt.Sprintf("postgres://%s:%s@127.0.0.1:%d/%s?sslmode=disable",
+		pgPostgresUser, pgPostgresPassword, port, pgPostgresDatabase)
+	return pg
+}
+
+// waitPort опрашивает `compose port`, пока контейнер не опубликует порт БД.
+// Порт публикуется случайным (см. compose.yaml) — уже занятый 5432 не мешает.
+func (pg *postgresHarness) waitPort(t *testing.T) int {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if out, err := pg.compose(t, "port", todoE2EComposeService, todoE2EComposePort); err == nil {
+			if p := parseComposePort(string(out)); p > 0 {
+				return p
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("не удалось определить опубликованный порт postgres за 60 с")
+	return 0
+}
+
+// waitReady ждёт готовности postgres через pg_isready ВНУТРИ контейнера — это не
+// требует pg_isready на хосте.
+func (pg *postgresHarness) waitReady(t *testing.T) {
+	t.Helper()
+	for i := 0; i < 60; i++ {
+		if _, err := pg.compose(t, "exec", "-T", todoE2EComposeService,
+			"pg_isready", "-U", pgPostgresUser, "-d", pgPostgresDatabase); err == nil {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("postgres не стал готов за 60 с")
+}
+
+// DSN возвращает connection string поднятой БД.
+func (pg *postgresHarness) DSN() string { return pg.dsn }
+
+// close останавливает и удаляет стек БД (teardown: ошибки игнорируются).
+func (pg *postgresHarness) close(t *testing.T) {
+	_, _ = pg.compose(t, "down", "-v", "--remove-orphans")
+}
+
+// compose запускает `docker compose` для файла продукта в изолированном проекте.
+func (pg *postgresHarness) compose(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	base := []string{"compose", "-f", pg.composeFile, "-p", pg.projectName}
+	out, err := exec.Command("docker", append(base, args...)...).CombinedOutput()
+	return string(out), err
+}
+
+// parseComposePort достаёт номер порта из вывода `docker compose port` (строки
+// вида "127.0.0.1:54321", "0.0.0.0:54321", "[::]:54321").
+func parseComposePort(out string) int {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		i := strings.LastIndex(line, ":")
+		if i < 0 {
+			continue
+		}
+		if p, err := strconv.Atoi(strings.TrimSpace(line[i+1:])); err == nil && p > 0 {
+			return p
+		}
+	}
+	return 0
+}
+
+// dockerAvailable сообщает, отвечает ли docker-демон.
+func dockerAvailable() bool {
+	return exec.Command("docker", "info").Run() == nil
 }
 
 // todoEStartBrowser создаёт headless Chrome через chromedp и возвращает контекст.
@@ -395,7 +752,7 @@ func todoEVerifyProduct(t *testing.T, ctx context.Context, productDir, dsn strin
 	t.Run("ProductGoTest", func(t *testing.T) {
 		cmd := exec.Command("go", "test", "./...")
 		cmd.Dir = productDir
-		cmd.Env = append(os.Environ(), "TEST_DATABASE_URL="+dsn)
+		cmd.Env = append(os.Environ(), "DATABASE_URL="+dsn)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Errorf("go test ./... в продукте: %v\n%s", err, out)
 		}
@@ -484,6 +841,119 @@ func todoEVerifyProduct(t *testing.T, ctx context.Context, productDir, dsn strin
 	}
 }
 
+// todoEOrch — запущенная оркестрация на тестовом сервере со scripted-провайдером.
+type todoEOrch struct {
+	sess        *Session
+	ts          *httptest.Server
+	projectName string
+	projectDir  string
+	logDir      string
+	projectLog  string
+}
+
+// todoEStartOrchestration поднимает тестовый сервер со scripted-провайдером,
+// регистрирует проект и запускает оркестрацию через чат-ассистента. Одобрение
+// HITL-затворов, post-mortem доски и очистка каталога продукта — на t.Cleanup.
+// Вызывающий ДО этого должен выставить детерминизм окружения (логи, бюджеты,
+// гейты) через t.Setenv.
+func todoEStartOrchestration(t *testing.T, prov *todoE2EProvider, projectName string) *todoEOrch {
+	t.Helper()
+	logDir := t.TempDir()
+	t.Setenv("LOG_DIR", logDir)
+	logging.Setup("server")
+	t.Cleanup(logging.Close)
+
+	productDir := projects.ProjectDir(projectName)
+	if err := os.RemoveAll(productDir); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(productDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(productDir) })
+	prov.projectDir = productDir
+
+	srv, handler, _ := newTestServer(t)
+	srv.prov = stubProviderResolve(prov)
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	code, raw := e2eJSON(t, "POST", ts.URL+"/api/projects",
+		map[string]any{"path_or_git": productDir}, 30*time.Second)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/projects: %d %s", code, raw)
+	}
+	var opened struct {
+		ProjectName string `json:"project_name"`
+	}
+	if err := json.Unmarshal(raw, &opened); err != nil || opened.ProjectName == "" {
+		t.Fatalf("открытие проекта: %s (%v)", raw, err)
+	}
+
+	sess, _, err := srv.getOrCreate(opened.ProjectName)
+	if err != nil {
+		t.Fatalf("сессия проекта: %v", err)
+	}
+
+	o := &todoEOrch{
+		sess:        sess,
+		ts:          ts,
+		projectName: opened.ProjectName,
+		projectDir:  productDir,
+		logDir:      logDir,
+		projectLog:  filepath.Join(logDir, logging.ProjectLogName(opened.ProjectName)+".log"),
+	}
+
+	// Post-mortem: если тест упадёт на любой стадии, печатаем состояние доски
+	// (статусы, попытки, эскалации, pause_reason/last_error) и хвост лога —
+	// чтобы упавший тест сам показывал причину (зацикливание/застой/галлюцинацию).
+	t.Cleanup(func() {
+		if t.Failed() {
+			todoEDumpBoard(t, sess, o.projectLog)
+		}
+	})
+
+	// Запускаем оркестрацию через чат-ассистента
+	code, raw = e2eJSON(t, "POST", ts.URL+"/api/projects/"+o.projectName+"/chat",
+		map[string]any{"message": "Создай и реализуй todo-приложение с веб-интерфейсом и PostgreSQL. Оно должно работать как полноценный продукт."}, 30*time.Second)
+	if code != http.StatusOK {
+		t.Fatalf("POST chat: %d %s", code, raw)
+	}
+
+	// Фоновое одобрение HITL-затворов (эпики/задачи)
+	gateCtx, gateCancel := context.WithCancel(context.Background())
+	t.Cleanup(gateCancel)
+	go todoEApproveGates(gateCtx, sess)
+
+	return o
+}
+
+// todoETask находит задачу по ID на доске (nil — не найдена).
+func todoETask(o *todoEOrch, id string) *domain.Task {
+	tasks, _ := o.sess.board.ListTasks(context.Background())
+	for _, tk := range tasks {
+		if tk.TaskID == id {
+			return tk
+		}
+	}
+	return nil
+}
+
+// todoEHasTaskComment — есть ли у задачи комментарий (автор/тип), содержащий фрагмент.
+func todoEHasTaskComment(o *todoEOrch, id, substr string) bool {
+	tk := todoETask(o, id)
+	if tk == nil {
+		return false
+	}
+	for _, c := range tk.Comments {
+		if strings.Contains(c.Body, substr) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestE2ETodoAppFullFlow(t *testing.T) {
 	// Гейт: запуск только с E2E_FULL=1
 	if os.Getenv("E2E_FULL") == "" {
@@ -496,61 +966,11 @@ func TestE2ETodoAppFullFlow(t *testing.T) {
 	t.Setenv("KANBAN_DONE_REQUIRES_COMMIT", "0")
 	t.Setenv("CODEGEN_RUN_TIMEOUT", "180s")
 
-	// PostgreSQL
-	dsn := startPostgres(t)
-	t.Setenv("TEST_DATABASE_URL", dsn)
-
-	// Очищаем и создаём productDir
-	productDir := projects.ProjectDir(todoE2EProjectName)
-	if err := os.RemoveAll(productDir); err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(productDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(productDir) })
-
-	// Тестовый сервер
-	srv, handler, _ := newTestServer(t)
-
-	// Инжектим scripted провайдер
-	prov := &todoE2EProvider{t: t}
-	srv.prov = stubProviderResolve(prov)
-
-	ts := httptest.NewServer(handler)
-	t.Cleanup(ts.Close)
-
-	// Регистрируем проект через REST API (как в e2e_model_selection_test)
-	code, raw := e2eJSON(t, "POST", ts.URL+"/api/projects",
-		map[string]any{"path_or_git": productDir}, 30*time.Second)
-	if code != http.StatusOK {
-		t.Fatalf("POST /api/projects: %d %s", code, raw)
-	}
-	var opened struct {
-		ProjectName string `json:"project_name"`
-	}
-	if err := json.Unmarshal(raw, &opened); err != nil || opened.ProjectName == "" {
-		t.Fatalf("открытие проекта: %s (%v)", raw, err)
-	}
-	projectName := opened.ProjectName
-
-	// Получаем сессию
-	sess, _, err := srv.getOrCreate(projectName)
-	if err != nil {
-		t.Fatalf("сессия проекта: %v", err)
-	}
-
-	// Запускаем оркестрацию через чат-ассистента
-	code, raw = e2eJSON(t, "POST", ts.URL+"/api/projects/"+projectName+"/chat",
-		map[string]any{"message": "Создай и реализуй todo-приложение с веб-интерфейсом и PostgreSQL. Оно должно работать как полноценный продукт."}, 30*time.Second)
-	if code != http.StatusOK {
-		t.Fatalf("POST chat: %d %s", code, raw)
-	}
-
-	// Запускаем фоновое одобрение затворов
-	gateCtx, gateCancel := context.WithCancel(context.Background())
-	defer gateCancel()
-	go todoEApproveGates(gateCtx, sess)
+	// Логи, бюджеты и гейты оркестрации выставляются в bootstrap
+	// (t.Setenv) внутри todoEStartOrchestration: там же включается файловый
+	// логгер, чтобы панель «Логи» в Web UI не осталась пустой.
+	o := todoEStartOrchestration(t, &todoE2EProvider{t: t, mode: todoEModeHappy}, todoE2EProjectName)
+	sess, ts, projectName, productDir, projectLog := o.sess, o.ts, o.projectName, o.projectDir, o.projectLog
 
 	// Ждём завершения оркестрации
 	t.Log("оркестрация запущена, ждём завершения...")
@@ -573,6 +993,31 @@ func TestE2ETodoAppFullFlow(t *testing.T) {
 		e2eCheck(t, fmt.Sprintf("задача %s done", task.TaskID), task.Status == board.StatusDone, string(task.Status))
 	}
 
+	// --- Логи работы оркестрации (панель «Логи») ---
+	// logging.Setup выше направляет logging.For(project) в logs/<проект>.log;
+	// здесь проверяем, что файл действительно заполнен работой харнеса, иначе
+	// панель логов в Web UI осталась бы пустой.
+	t.Run("OrchestrationLogs", func(t *testing.T) {
+		data, err := os.ReadFile(projectLog)
+		if err != nil {
+			t.Fatalf("лог-файл проекта не создан: %v", err)
+		}
+		content := string(data)
+		e2eCheck(t, "лог-файл не пуст", len(content) > 0, fmt.Sprintf("%d bytes", len(content)))
+		for _, marker := range []string{"доска", "эпик"} {
+			if !strings.Contains(content, marker) {
+				t.Errorf("в логе нет оркестрационной строки %q", marker)
+			}
+		}
+		t.Logf("лог проекта (%d байт) содержит работу оркестрации", len(content))
+	})
+
+	// --- PostgreSQL: поднимаем по инфраструктуре, которую написал DevOps ---
+	// Инфраструктурный эпик завершён на предыдущем шаге, значит compose.yaml
+	// продукта уже создан. Харнес поднимает БД строго по нему.
+	pg := newPostgres(t, productDir)
+	dsn := pg.DSN()
+
 	// --- Проверка через виртуальный браузер ---
 	browserCtx := todoEStartBrowser(t)
 	todoEVerifyDashboard(t, browserCtx, ts, projectName, productDir)
@@ -581,4 +1026,149 @@ func TestE2ETodoAppFullFlow(t *testing.T) {
 	todoEVerifyProduct(t, browserCtx, productDir, dsn)
 
 	t.Log("E2E полный цикл завершён успешно")
+}
+
+// TestE2EOrchestrationGuards проверяет, что оркестратор переживает «нездоровую»
+// модель и останавливает работу с понятной причиной, а не зацикливается или
+// не замирает. Каждый сценарий поднимает оркестрацию на отдельном проекте с
+// низким бюджетом автономии (KANBAN_MAX_ESCALATIONS), чтобы защита срабатывала
+// за секунды, и ассертирует вердикт доски. При застое любой сценарий падает
+// быстро с диагнозом (todoEWaitFor + post-mortem), а не ждёт глобальный таймаут.
+//
+// Режимы провайдера (см. todoEMode*): dev-loop — разработчик зациклился;
+// qa-stuck — QA не завершает задачу; dev-text — разработчик отвечает текстом
+// без инструментов (галлюцинация), оркестратор не должен верить тексту.
+func TestE2EOrchestrationGuards(t *testing.T) {
+	if os.Getenv("E2E_FULL") == "" {
+		t.Skip("E2E_FULL=1 не установлен")
+	}
+	budget := 1
+
+	setEnv := func(t *testing.T) {
+		t.Setenv("CODEGEN_SANDBOX", "host")
+		t.Setenv("KANBAN_STALE_TASK_MIN", "0")
+		t.Setenv("KANBAN_DONE_REQUIRES_COMMIT", "0")
+		t.Setenv("CODEGEN_RUN_TIMEOUT", "60s")
+		t.Setenv("KANBAN_MAX_ESCALATIONS", strconv.Itoa(budget))
+	}
+
+	scenarios := []struct {
+		name       string
+		dir        string
+		mode       string
+		waitWithin time.Duration
+		waitDesc   string
+		waitPred   func(*Session) bool
+		assert     func(t *testing.T, o *todoEOrch)
+	}{
+		{
+			name:       "Зацикливание разработчика",
+			dir:        "todoapp-guard-loop",
+			mode:       todoEModeDevLoop,
+			waitWithin: 3 * time.Minute,
+			waitDesc:   "задача T-01 ушла в human_help (зациклилась)",
+			waitPred: func(s *Session) bool {
+				return todoEStatus(s, "T-01") == board.StatusHumanHelp
+			},
+			assert: func(t *testing.T, o *todoEOrch) {
+				tk := todoETask(o, "T-01")
+				if tk == nil {
+					t.Fatalf("задача T-01 не найдена")
+				}
+				e2eCheck(t, "T-01 human_help", tk.Status == board.StatusHumanHelp, string(tk.Status))
+				e2eCheck(t, "T-01 причина «зациклилась»", strings.Contains(tk.PauseReason, "зациклилась"), tk.PauseReason)
+				e2eCheck(t, "T-01 эскалации исчерпаны", tk.Escalations >= budget, fmt.Sprintf("%d", tk.Escalations))
+				e2eCheck(t, "T-01 системный комментарий «Форсмажор»", todoEHasTaskComment(o, "T-01", "Форсмажор"), "")
+			},
+		},
+		{
+			name:       "QA завис на тестировании",
+			dir:        "todoapp-guard-qa",
+			mode:       todoEModeQAStuck,
+			waitWithin: 3 * time.Minute,
+			waitDesc:   "задача INFRA-01 ушла в human_help (работа не сделана)",
+			waitPred: func(s *Session) bool {
+				return todoEStatus(s, "INFRA-01") == board.StatusHumanHelp
+			},
+			assert: func(t *testing.T, o *todoEOrch) {
+				tk := todoETask(o, "INFRA-01")
+				if tk == nil {
+					t.Fatalf("задача INFRA-01 не найдена")
+				}
+				e2eCheck(t, "INFRA-01 human_help", tk.Status == board.StatusHumanHelp, string(tk.Status))
+				e2eCheck(t, "INFRA-01 причина «работа не сделана»", strings.Contains(tk.PauseReason, "работа не сделана"), tk.PauseReason)
+				e2eCheck(t, "INFRA-01 эскалации исчерпаны", tk.Escalations >= budget, fmt.Sprintf("%d", tk.Escalations))
+			},
+		},
+		{
+			name:       "Разработчик галлюцинирует (текст без инструментов)",
+			dir:        "todoapp-guard-text",
+			mode:       todoEModeDevTextOnly,
+			waitWithin: 3 * time.Minute,
+			waitDesc:   "доска дошла до done (оркестратор не поверил тексту, провёл верификацию)",
+			waitPred: func(s *Session) bool {
+				done, err := s.board.AllDone(context.Background())
+				return err == nil && done
+			},
+			assert: func(t *testing.T, o *todoEOrch) {
+				// Разработчик лишь «заявил» готовность текстом, не вызвав
+				// инструментов и не сменив статус. Оркестратор обязан не
+				// поверить тексту и довести задачу через верификацию (testing →
+				// QA) до done. Если бы фолбэк убрали, T-01 завис бы в работе и
+				// сценарий провалился бы на waitPred со стойким застоем.
+				done, err := o.sess.board.AllDone(context.Background())
+				e2eCheck(t, "доска all done", err == nil && done, fmt.Sprintf("err=%v", err))
+				tk := todoETask(o, "T-01")
+				if tk == nil {
+					t.Fatalf("задача T-01 не найдена")
+				}
+				e2eCheck(t, "T-01 done (через верификацию, не по тексту)", tk.Status == board.StatusDone, string(tk.Status))
+			},
+		},
+	}
+
+	for _, sc := range scenarios {
+		sc := sc
+		t.Run(sc.name, func(t *testing.T) {
+			setEnv(t)
+			o := todoEStartOrchestration(t, &todoE2EProvider{t: t, mode: sc.mode}, sc.dir)
+			todoEWaitFor(t, o.sess, sc.waitWithin, sc.waitDesc, sc.waitPred)
+			sc.assert(t, o)
+		})
+	}
+
+	// Явная проверка самого детектора застоя: доводим доску до замороженного
+	// состояния (зацикливание → human_help, активных задач нет) и ждём заведомо
+	// недостижимое условие с малым бюджетом застоя. Детектор обязан вернуть
+	// причину «застой» быстро, а не выжигать полный таймаут.
+	t.Run("Детектор застоя срабатывает на замороженной доске", func(t *testing.T) {
+		setEnv(t)
+		o := todoEStartOrchestration(t, &todoE2EProvider{t: t, mode: todoEModeDevLoop}, "todoapp-guard-stall")
+		todoEWaitFor(t, o.sess, 2*time.Minute, "доска заморожена (T-01 human_help)", func(s *Session) bool {
+			return todoEStatus(s, "T-01") == board.StatusHumanHelp
+		})
+
+		start := time.Now()
+		ok, diag := todoEPollUntil(o.sess, 30*time.Second, 4, func(s *Session) bool {
+			done, err := s.board.AllDone(context.Background())
+			return err == nil && done
+		})
+		elapsed := time.Since(start)
+
+		e2eCheck(t, "детектор не дождался недостижимого done", !ok, "")
+		e2eCheck(t, "диагноз содержит «застой»", strings.Contains(diag, "застой"), diag)
+		e2eCheck(t, "детектор сработал раньше таймаута 30s", elapsed < 30*time.Second, elapsed.String())
+		t.Logf("детектор застоя сработал за %v: %s", elapsed, strings.SplitN(diag, "\n", 2)[0])
+	})
+}
+
+// todoEStatus — статус задачи по ID (пусто, если задача не найдена).
+func todoEStatus(s *Session, id string) board.Status {
+	tasks, _ := s.board.ListTasks(context.Background())
+	for _, tk := range tasks {
+		if tk.TaskID == id {
+			return tk.Status
+		}
+	}
+	return ""
 }

@@ -21,6 +21,7 @@ import (
 	"ai/infrastructure/chat"
 	"ai/shared/logging"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -60,15 +61,20 @@ func e2eJSON(t *testing.T, method, url string, body any, timeout time.Duration) 
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, url, reader)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, url, reader)
 	if err != nil {
 		t.Fatalf("новый запрос: %v", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req.WithContext(t.Context()))
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			t.Fatalf("%s %s: таймаут %v: %v", method, url, timeout, ctx.Err())
+		}
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
 	defer resp.Body.Close()

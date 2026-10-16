@@ -88,6 +88,11 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 
 	out := logsResponse{Dir: strings.Join(dirs, " · ")}
 	out.Files, out.Truncated = collectProjectLogs(dirs, globalDir, own)
+	// Фронт ожидает массив: nil-слайс маршалится в null и роняет Logboard
+	// (logs.files.length). Без логов отдаём пустой массив.
+	if out.Files == nil {
+		out.Files = []logFileEntry{}
+	}
 
 	// Выделяем файл проекта: logs/<проект>.log, иначе самый свежий.
 	if out.Selected == "" {

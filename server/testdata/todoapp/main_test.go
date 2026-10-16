@@ -1,7 +1,7 @@
-// Интеграционные тесты todo-приложения: реальный PostgreSQL через TEST_DATABASE_URL.
+// Интеграционные тесты todo-приложения: реальный PostgreSQL через DATABASE_URL.
 //
-// Без TEST_DATABASE_URL тесты пропускаются (t.Skip), поэтому файл безопасен в
-// окружении без БД. В e2e-прогоне тест задаёт TEST_DATABASE_URL на контейнер
+// Без DATABASE_URL тесты пропускаются (t.Skip), поэтому файл безопасен в
+// окружении без БД. В e2e-прогоне тест задаёт DATABASE_URL на контейнер
 // PostgreSQL — и эти тесты (плюс сборка) обязаны пройти зелёными.
 package main
 
@@ -20,9 +20,9 @@ import (
 // testDB открывает БД, применяет схему и очищает таблицу перед каждым тестом.
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL не задан — интеграционный тест с БД пропущен")
+		t.Skip("DATABASE_URL не задан — интеграционный тест с БД пропущен")
 	}
 	db, err := openDB(dsn)
 	if err != nil {
