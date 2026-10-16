@@ -109,20 +109,12 @@ func TestKanbanHumanHelpDoesNotBlockOtherEpics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Конвейер считается свободным: остановленная задача не блокирует
-	// очередь лидов.
-	if idle, err := kr.pipelineIdle(ctx); err != nil {
-		t.Fatal(err)
-	} else if !idle {
-		t.Fatal("остановка эпика не должна блокировать очередь лидов")
-	}
-
 	// Следующий эпик для лида — E-2 (остановленный E-1 пропускается).
 	epics, err := store.ListEpics(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	epic, needDecompose, _, err := kr.nextLeadEpic(epics)
+	epic, needDecompose, _, err := kr.nextLeadEpic(ctx, epics)
 	if err != nil {
 		t.Fatal(err)
 	}

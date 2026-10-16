@@ -6,6 +6,7 @@ import (
 	"ai/shared/logging"
 	"ai/shared/tokens"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -143,50 +144,39 @@ func (k *KanbanRunner) epicReviewPrompt(project string, drafts []*domain.Epic) s
 }
 
 // phaseLeads: декомпозиция и ревизия эпиков лидами направлений. Работа идёт
-// по очереди (сериализация): лид декомпозирует следующий эпик только после
-// завершения текущей волны задач — лиды не проектируют всё подряд на пустой
-// проект. Порядок очереди: инфраструктура (DevOps) -> приложение
-// (backend/frontend) -> тестирование (QA Last); внутри фазы — sequence_order,
-// затем task_id. Лид работает инструментами доски (BoardCreateTask и др.);
-// при недоступности доски — JSON-декомпозицией (fallback). После ревизии
-// LeadSyncedRev синхронизируется с ревизией эпика (пересмотр задач при
-// изменении контрактов архитектором, Revision > LeadSyncedRev).
+// по цепочке зависимостей: эпик разбирается, как только выполнены все его
+// зависимости, — параллельно с исполнением задач остальных эпиков, не дожидаясь
+// завершения всей работы на доске. Порядок очереди: инфраструктура (DevOps)
+// -> приложение (backend/frontend) -> тестирование (QA Last); внутри фазы —
+// sequence_order, затем task_id. Лид работает инструментами доски
+// (BoardCreateTask и др.); при недоступности доски — JSON-декомпозицией
+// (fallback). После ревизии LeadSyncedRev синхронизируется с ревизией эпика
+// (пересмотр задач при изменении контрактов архитектором, Revision >
+// LeadSyncedRev).
 func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 	epics, err := k.store.ListEpics(ctx)
 	if err != nil {
 		return false, err
 	}
 
-	// Пока на доске есть незавершённые задачи (новая / в анализе / готова к
-	// работе / в работе), следующий эпик лиду не выдаётся: сначала должен
-	// выполниться уже запланированный объём работы. Исключение — взаимная
-	// блокировка: задача ждёт готовности ЭПИКА-зависимости, а этот эпик ещё не
-	// разобран. Без исключения цикл вставал: DOL-01 ждал `done` эпика ARCH-01,
-	// а разобрать ARCH-01 нельзя, пока DOL-01 не выполнена → «Kanban-цикл N: нет
-	// прогресса». В этом случае лиду выдаётся именно эпик-зависимость
-	// (см. blockingDependencyEpic), порядок «по одному эпику за раз» сохраняется.
-	idle, err := k.pipelineIdle(ctx)
+	// Приоритет вне очереди — эпик, блокирующий незавершённые задачи: иначе
+	// задача и эпик блокируют друг друга (DOL-01 ждал `done` эпика ARCH-01,
+	// а разобрать ARCH-01 было нельзя, пока DOL-01 не выполнена).
+	var epic *domain.Epic
+	var needDecompose, needResync bool
+	epic, err = k.blockingDependencyEpic(ctx, epics)
 	if err != nil {
 		return false, err
 	}
-
-	var epic *domain.Epic
-	var needDecompose, needResync bool
-	if idle {
-		// Следующий эпик очереди лидов, которому нужна декомпозиция/ревизия.
-		epic, needDecompose, needResync, err = k.nextLeadEpic(epics)
-		if err != nil {
-			return false, err
-		}
+	if epic != nil {
+		needDecompose, needResync = true, false
+		k.log.Infof("[Kanban] на доске есть незавершённые задачи, но они ждут эпик %s "+
+			"(зависимость ещё не разобрана) — разбираю его, чтобы снять блокировку", epic.TaskID)
 	} else {
-		epic, err = k.blockingDependencyEpic(ctx, epics)
+		// Следующий эпик очереди лидов с выполненными зависимостями.
+		epic, needDecompose, needResync, err = k.nextLeadEpic(ctx, epics)
 		if err != nil {
 			return false, err
-		}
-		if epic != nil {
-			needDecompose, needResync = true, false
-			k.log.Infof("[Kanban] на доске есть незавершённые задачи, но они ждут эпик %s "+
-				"(зависимость ещё не разобрана) — разбираю его, чтобы снять блокировку", epic.TaskID)
 		}
 	}
 	if epic == nil {
@@ -331,7 +321,7 @@ func printLeadTasks(log *logging.Logger, epic *domain.Epic, tasks []*domain.Task
 // задачи: у незавершённой задачи в dependencies стоит ID эпика, который ещё не
 // декомпозирован лидом (len(epic.Tasks)==0), не ждёт ревизии архитектора
 // (RequiresReview=false) и не терминален/не остановлен. Такой эпик разбирается
-// вне очереди `pipelineIdle` — иначе задача и эпик блокируют друг друга.
+// вне очереди зависимостей — иначе задача и эпик блокируют друг друга.
 //
 // Возвращает nil, если блокирующих эпиков нет: тогда поведение phaseLeads
 // прежнее (следующий эпик выдаётся только на «пустой» доске).
@@ -366,11 +356,36 @@ func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*doma
 	return best, nil
 }
 
+// epicDepsDone проверяет, что все зависимости эпика (ID эпиков доски)
+// выполнены. Несуществующая зависимость считается выполненной: ждать
+// удалённый эпик нельзя — иначе декомпозиция зависимых эпиков была бы
+// заблокирована навсегда.
+func (k *KanbanRunner) epicDepsDone(ctx context.Context, deps []string) (bool, error) {
+	for _, dep := range deps {
+		if dep == "" {
+			continue
+		}
+		e, err := k.store.GetEpic(ctx, dep)
+		if err != nil {
+			if errors.Is(err, services.ErrNotFound) {
+				continue
+			}
+			return false, err
+		}
+		if e.Status != domain.StatusDone {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // nextLeadEpic выбирает следующий эпик для декомпозиции/ревизии лидом по
 // приоритету очереди: инфраструктура -> приложение -> тестирование (QA Last),
-// внутри фазы — sequence_order, затем task_id. Возвращает (nil, false, false),
-// если ни одному эпику декомпозиция/ревизия не требуется.
-func (k *KanbanRunner) nextLeadEpic(epics []*domain.Epic) (*domain.Epic, bool, bool, error) {
+// внутри фазы — sequence_order, затем task_id. Эпик берётся в разбор только
+// когда выполнены все его зависимости — оркестратор следует по цепочке
+// зависимостей эпиков, а не по общей занятости доски. Возвращает
+// (nil, false, false), если ни одному эпику декомпозиция/ревизия не требуется.
+func (k *KanbanRunner) nextLeadEpic(ctx context.Context, epics []*domain.Epic) (*domain.Epic, bool, bool, error) {
 	var best *domain.Epic
 	bestDecompose := false
 	for _, epic := range epics {
@@ -390,6 +405,15 @@ func (k *KanbanRunner) nextLeadEpic(epics []*domain.Epic) (*domain.Epic, bool, b
 		needDecompose := len(epic.Tasks) == 0
 		needResync := !needDecompose && epic.Revision > epic.LeadSyncedRev
 		if !needDecompose && !needResync {
+			continue
+		}
+		// Зависимости эпика должны быть выполнены: следуем по цепочке
+		// зависимостей, а не по занятости доски.
+		depsDone, err := k.epicDepsDone(ctx, epic.Dependencies)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if !depsDone {
 			continue
 		}
 		if best == nil || domain.EpicLess(epic, best) {

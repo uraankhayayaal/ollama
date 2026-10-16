@@ -119,7 +119,7 @@ func TestArchitectReviewRunsInBoardOnlyAndNormal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			next, needDecompose, _, err := kr.nextLeadEpic(epics)
+			next, needDecompose, _, err := kr.nextLeadEpic(ctx, epics)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -250,7 +250,7 @@ func TestChatEpicRequiresReviewDefersDecomposition(t *testing.T) {
 
 	// До ревизии черновик пропускается: лид не видит E-2 (очередь пуста для
 	// декомпозиции — E-1 уже сработан).
-	epic, needDecompose, _, err := kr.nextLeadEpic(epics)
+	epic, needDecompose, _, err := kr.nextLeadEpic(ctx, epics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestChatEpicRequiresReviewDefersDecomposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	epic, needDecompose, _, err = kr.nextLeadEpic(epics)
+	epic, needDecompose, _, err = kr.nextLeadEpic(ctx, epics)
 	if err != nil {
 		t.Fatal(err)
 	}

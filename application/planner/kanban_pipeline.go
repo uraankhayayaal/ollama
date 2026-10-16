@@ -353,28 +353,6 @@ func (k *KanbanRunner) touchMeta(ctx context.Context) error {
 	return nil
 }
 
-// pipelineIdle сообщает, что на доске нет незавершённых задач (все предыдущие
-// декомпозиции выполнены, отменены или остановлены). Только в этом состоянии
-// лиду выдаётся следующая декомпозиция: сначала выполняется уже запланированный
-// объём работы. Задачи на «помощи человека» (эпик остановлен) не блокируют
-// очередь — остановка эпика не должна замораживать декомпозицию остальных
-// эпиков. «На тестирование» — активная работа: конвейер лидов пока не свободен.
-func (k *KanbanRunner) pipelineIdle(ctx context.Context) (bool, error) {
-	tasks, err := k.store.ListTasks(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, t := range tasks {
-		switch t.Status {
-		case domain.StatusDone, domain.StatusCancelled, domain.StatusHumanHelp:
-			continue
-		default:
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
 // staleTaskMinDefault — сколько ждать пульса задачи, прежде чем считать прогон
 // брошенным. Heartbeat обновляет агент каждый раунд (Ф-6, этап 2), поэтому
 // порог — «заметно дольше одного раунда», а не точное время. Перекрывается
