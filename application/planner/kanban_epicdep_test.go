@@ -86,15 +86,8 @@ func TestPhaseLeadsUnblocksEpicDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Доска не «пустая»: DOL-01 новая — обычная очередь лидов закрыта.
-	idle, err := (&KanbanRunner{store: board.NewDomainStore(store)}).pipelineIdle(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if idle {
-		t.Fatal("доска должна быть непустой (DOL-01 новая)")
-	}
-
+	// Доска не «пустая»: DOL-01 новая — но очередь лидов это не блокирует:
+	// блокирующую зависимость ARCH-01 лид разбирает вне очереди.
 	kr := newEpicDepRunner(t, store)
 	progress, err := kr.phaseLeads(ctx)
 	if err != nil {

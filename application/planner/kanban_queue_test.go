@@ -10,6 +10,7 @@ import (
 	"ai/shared/projects"
 	"ai/tools"
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -17,10 +18,41 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-// TestKanbanLeadQueueWaitsUntilTasksDone: декомпозиция идёт по очереди. Пока у
-// декомпозированного эпика есть незавершённые задачи, следующий эпик лиду не
-// выдаётся; после их завершения — следующий эпик берётся в работу.
-func TestKanbanLeadQueueWaitsUntilTasksDone(t *testing.T) {
+// depsQueueProvider — провайдер для проверки очереди лидов по зависимостям:
+// JSON-декомпозиция с task_id, уникальным для каждого эпика.
+type depsQueueProvider struct{}
+
+func (p *depsQueueProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
+	var umsg string
+	if us := agent.GetUserMessages(); len(us) > 0 {
+		umsg = us[0].Message
+	}
+	switch {
+	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
+		epicID := "EPIC"
+		for _, id := range []string{"INDEP-1", "WAIT-1"} {
+			if strings.Contains(umsg, id) {
+				epicID = id
+				break
+			}
+		}
+		content := fmt.Sprintf(`{"lead_summary":"x","tasks":[{"task_id":%q,"title":"Задача","description":"x","assigned_role":"Go Developer","sequence_order":1,"can_run_parallel":true,"dependencies":[]}]}`, "T-"+epicID)
+		return &runner.AgentResponse{Content: content}, nil
+	case strings.HasPrefix(umsg, "Ты — специалист"):
+		return &runner.AgentResponse{Content: "Задача выполнена."}, nil
+	}
+	return &runner.AgentResponse{Content: ""}, nil
+}
+
+func (p *depsQueueProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
+	return &runner.ModelReply{}, nil
+}
+
+// TestKanbanLeadQueueFollowsDependencies: декомпозиция следует по цепочке
+// зависимостей эпиков, а не по занятости доски: эпик с выполненными
+// зависимостями разбирается даже пока задачи другого эпика в работе; эпик
+// с незавершённой зависимостью ждёт её выполнения.
+func TestKanbanLeadQueueFollowsDependencies(t *testing.T) {
 	ctx := context.Background()
 	srv := miniredis.RunT(t)
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-queue"})
@@ -50,31 +82,43 @@ func TestKanbanLeadQueueWaitsUntilTasksDone(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Ожидающий эпик QA Lead: должен декомпозироваться только после B-01.
+	// Эпик без зависимостей: разбирается параллельно с работающей волной.
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "QA-01", Title: "QA-план", Description: "x",
-			AssignedRole: "QA Lead", SequenceOrder: 1},
+		TaskSpec: board.TaskSpec{TaskID: "INDEP-1", Title: "Независимый", Description: "x",
+			AssignedRole: "Backend Lead", SequenceOrder: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Эпик с зависимостью от BE-01: ждёт его выполнения.
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "WAIT-1", Title: "Ждёт BE-01", Description: "x",
+			AssignedRole: "Backend Lead", SequenceOrder: 3, Dependencies: []string{"BE-01"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	kr := NewKanbanRunner(&kanbanProvider{}, board.NewDomainStore(store))
+	kr := NewKanbanRunner(&depsQueueProvider{}, board.NewDomainStore(store))
 
-	// Пока B-01 в работе — следующий эпик лиду не выдаётся.
+	// Пока BE-01 в работе: WAIT-1 не разбирается (зависимость не выполнена),
+	// но INDEP-1 разбирается — его зависимости пусты.
 	progress, err := kr.phaseLeads(ctx)
 	if err != nil {
 		t.Fatalf("phaseLeads: %v", err)
 	}
-	if progress {
-		t.Fatal("phaseLeads не должен выдавать декомпозицию, пока есть незавершённые задачи")
+	if !progress {
+		t.Fatal("phaseLeads должен разобрать независимый эпик, несмотря на работающую волну")
 	}
-	qa, _ := store.GetEpic(ctx, "QA-01")
-	if len(qa.Tasks) != 0 {
-		t.Fatalf("QA-эпик декомпозирован раньше времени: %v", qa.Tasks)
+	indep, _ := store.GetEpic(ctx, "INDEP-1")
+	if len(indep.Tasks) == 0 {
+		t.Fatal("независимый эпик не декомпозирован")
+	}
+	wait, _ := store.GetEpic(ctx, "WAIT-1")
+	if len(wait.Tasks) != 0 {
+		t.Fatalf("эпик с невыполненной зависимостью разобран раньше времени: %v", wait.Tasks)
 	}
 
-	// Задача выполнена — волна завершена, следующая декомпозиция разрешена.
-	if err := store.SetTaskStatus(ctx, "B-01", board.StatusDone); err != nil {
+	// BE-01 выполнен — WAIT-1 снова в очереди лидов.
+	if err := store.SetEpicStatus(ctx, "BE-01", board.StatusDone); err != nil {
 		t.Fatal(err)
 	}
 	progress, err = kr.phaseLeads(ctx)
@@ -82,11 +126,11 @@ func TestKanbanLeadQueueWaitsUntilTasksDone(t *testing.T) {
 		t.Fatalf("phaseLeads: %v", err)
 	}
 	if !progress {
-		t.Fatal("phaseLeads должен декомпозировать QA-эпик после завершения волны задач")
+		t.Fatal("phaseLeads должен разобрать WAIT-1 после выполнения BE-01")
 	}
-	qa, _ = store.GetEpic(ctx, "QA-01")
-	if len(qa.Tasks) == 0 {
-		t.Fatal("QA-эпик не декомпозирован после завершения предыдущей волны")
+	wait, _ = store.GetEpic(ctx, "WAIT-1")
+	if len(wait.Tasks) == 0 {
+		t.Fatal("WAIT-1 не декомпозирован после выполнения зависимости")
 	}
 }
 
@@ -260,7 +304,7 @@ func TestNextLeadEpicPriorityWithinPhase(t *testing.T) {
 
 	var got []string
 	for range epics {
-		e, _, _, err := kr.nextLeadEpic(epics)
+		e, _, _, err := kr.nextLeadEpic(ctx, epics)
 		if err != nil {
 			t.Fatal(err)
 		}
