@@ -31,7 +31,7 @@
 | [Kanban-доска](kanban-board.md) | Эпики, задачи, багрепорты, статусы, переходы, хуки | `BOARD_REDIS_*`, `BOARD_TTL` |
 | [Архитектор](architect.md) | Публикация эпиков, ревизия черновиков, эксперт по багам, cross-functional opportunities | `RAG_ARCHITECT_CONTEXT` |
 | [Web UI](web-ui.md) | Доска + чат + дифф + логи, REST/WS, авторизация | `AI_WEB_ADDR`, `AI_WEB_PASSWORD`, `AI_WORKSPACES`, `LOG_DIR` |
-| [Чат-ассистент](chat-assistant.md) | Намерения по смыслу, AskUser, создание эпиков и задач из чата | `RAG_ASSISTANT_CONTEXT` |
+| [Чат-ассистент](chat-assistant.md) | Бизнес-аналитик: выявление требований, AskUser, создание эпиков из чата | `RAG_ASSISTANT_CONTEXT` |
 | [Токены и метрики](tokens-and-metrics.md) | Учёт расхода по скоупам, предсказание, оценка стоимости, Prometheus | `LLM_PRICE_IN`, `LLM_PRICE_OUT`, `LLM_CURRENCY` |
 
 ### Git и ревью

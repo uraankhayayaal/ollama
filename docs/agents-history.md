@@ -3,6 +3,20 @@
 Подробные заметки «Состояние последней сессии», перенесённые из AGENTS.md при уплотнении.
 Детали также зафиксированы в docs/plans/PLAN-*-done-*.md.
 
+## Состояние последней сессии (чат-ассистент → бизнес-аналитик)
+
+Чат-ассистент (`agents/chatassist/`) переведён в роль бизнес-аналитика: расширен
+`assistantSystemPrompt` (`agent.go`) — добавлены раздел BABOK (Planning/
+Elicitation/Lifecycle/Analysis/Design), блок «Уточнение и обогащение» (одна пачка
+`AskUser` на расплывчатый запрос, иначе сразу эпик), «Шаблон BA-артефакта» для
+`description` эпика (бизнес-цель, AS-IS/TO-BE, GAP, стейкхолдеры, критерии
+приёмки, риски, допущения) и «Ограничения роли» (решение за человеком,
+валидация, безопасность данных). Существующие анти-loop/подтверждение/запрет
+правки файлов сохранены; набор инструментов и серверная обвязка не менялись.
+Тесты: `agents/chatassist/agent_test.go` — новые
+`TestAssistantPromptHasBusinessAnalystRole/HasBATemplate/ElicitsButNotLoops`;
+доки — `20-features/chat-assistant.md`, `20-features/agents-and-roles.md`.
+
 ## Состояние последней сессии (runctx → internal/)
 
 `runctx/` → `internal/runctx/` (обвязка сжатия истории: собирает

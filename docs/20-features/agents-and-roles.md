@@ -17,7 +17,7 @@
 | DevOps-инженер | `agents/devops/` | `devops` | Docker Compose, K8s, CI/CD |
 | QA-инженер | `agents/qaengineer/` | `qa` | Автотесты, баг-репорты |
 | Код-ревьюер | `agents/codereviewer/` | `review` | Ревью Merge Request |
-| Чат-ассистент | `agents/chatassist/` | только через `serve` | Обслуживание чата |
+| Чат-ассистент | `agents/chatassist/` | только через `serve` | Чат как бизнес-аналитик: выявление требований, эпики |
 | Приёмка | `agents/acceptor/` | `accept` + финальный шаг плана | Сборка/запуск/проверки без LLM |
 | Планировщик | `application/planner/` | `plan`, `kanban` | Декомпозиция и исполнение |
 

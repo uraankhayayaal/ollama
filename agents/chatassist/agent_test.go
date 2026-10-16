@@ -380,6 +380,75 @@ func TestAssistantPromptHasConflictResolveFlow(t *testing.T) {
 	}
 }
 
+// TestAssistantPromptHasBusinessAnalystRole — ассистент заявлен бизнес-аналитиком
+// и знает методологию BABOK: пять фаз, выявление требований, AS-IS/TO-BE и
+// GAP-анализ. Без явной роли модель отвечает как обычный чат-бот.
+func TestAssistantPromptHasBusinessAnalystRole(t *testing.T) {
+	a := newTestAssistant(t, "хочу канбан на рефакторинг")
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"бизнес-аналитик",
+		"BABOK",
+		"Планирование (Planning)",
+		"Выявление (Elicitation)",
+		"Жизненный цикл (Lifecycle)",
+		"Анализ (Analysis)",
+		"Проектирование (Design)",
+		"AS-IS",
+		"TO-BE",
+		"GAP",
+		"СКРЫТЫЕ требования",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q", want)
+		}
+	}
+}
+
+// TestAssistantPromptHasBATemplate — описание эпика из чата собирается по
+// шаблону BA-артефакта: бизнес-цель, проблема, желаемое состояние, разрыв,
+// стейкхолдеры, критерии приёмки, риски. Догадка помечается как допущение, а не
+// выдаётся за факт.
+func TestAssistantPromptHasBATemplate(t *testing.T) {
+	a := newTestAssistant(t, "заведи эпик")
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"ШАБЛОН BA-АРТЕФАКТА",
+		"Бизнес-цель",
+		"Проблема (AS-IS)",
+		"Желаемое состояние (TO-BE)",
+		"Разрыв (GAP)",
+		"Стейкхолдеры",
+		"Критерии приёмки",
+		"Ограничения и риски",
+		"допущение",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q", want)
+		}
+	}
+}
+
+// TestAssistantPromptElicitsButNotLoops — баланс выявления и антизацикливания:
+// расплывчатый запрос — одна пачка AskUser, но не лестница переспросов; после
+// ответа — действие. Роль BA не должна превращаться в бесконечное уточнение.
+func TestAssistantPromptElicitsButNotLoops(t *testing.T) {
+	a := newTestAssistant(t, "хочу что-то улучшить")
+	p := a.GetSystemMessages(nil)[0].Message
+	for _, want := range []string{
+		"УТОЧНЕНИЕ И ОБОГАЩЕНИЕ",
+		"ОДНУ пачку структурированных вопросов через AskUser",
+		"не второй раз подряд",
+		"ОГРАНИЧЕНИЯ РОЛИ",
+		"Финальное решение и ответственность — на человеке",
+		"галлюцинации",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("промпт не содержит %q", want)
+		}
+	}
+}
+
 // TestAssistantRAGBlockSearchParams — блок ищет по проекту, scope пуст (весь
 // проект); ошибка поиска деградирует в пустую строку.
 func TestAssistantRAGBlockSearchParams(t *testing.T) {
