@@ -217,6 +217,9 @@ func (s *Server) routes() http.Handler {
 	// наибольший приоритет; если оркестрация идёт, она рестартуется.
 	mux.HandleFunc("POST /api/projects/{id}/epics/reorder", s.handleReorderEpics)
 	mux.HandleFunc("GET /api/projects/{id}/bugs", s.handleListBugs)
+	// Ручная правка багрепорта оператором: смена статуса (любого, кроме выхода
+	// из заблокированного slop) и приоритета на доске.
+	mux.HandleFunc("PATCH /api/projects/{id}/bugs/{bid}", s.handleUpdateBug)
 
 	// Инъекции (Ф-8): управление сессионными промпт-инъекциями — add, remove, list.
 	mux.HandleFunc("POST /api/projects/{id}/injections", s.handleAddInjection)

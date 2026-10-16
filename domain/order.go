@@ -77,3 +77,28 @@ func SortEpics(epics []*Epic) {
 		return EpicLess(epics[i], epics[j])
 	})
 }
+
+// BugLess — порядок багрепортов на доске:
+//
+//  1. заблокированные (нейрослоп) — всегда вниз: они не берутся в работу и не
+//     должны забивать верх списка;
+//  2. приоритет Priority по убыванию (чем выше — тем раньше баг в работе);
+//  3. bug_id — тайбрейкер для детерминизма.
+func BugLess(a, b *BugReport) bool {
+	ab, bb := a.Status.Blocked(), b.Status.Blocked()
+	if ab != bb {
+		return !ab
+	}
+	if a.Priority != b.Priority {
+		return a.Priority > b.Priority
+	}
+	return a.BugID < b.BugID
+}
+
+// SortBugReports сортирует багрепорты в порядке BugLess. Используется снимком
+// доски, чтобы строки багов шли от важных к заблокированным.
+func SortBugReports(bugs []*BugReport) {
+	sort.SliceStable(bugs, func(i, j int) bool {
+		return BugLess(bugs[i], bugs[j])
+	})
+}

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 
+	"ai/domain"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -85,7 +87,8 @@ func (s *Store) SaveBugReport(ctx context.Context, r *BugReport) error {
 	return s.client.SAdd(ctx, s.bugsID(), r.BugID).Err()
 }
 
-// ListBugReports возвращает все багрепорты доски, отсортированные по BugID.
+// ListBugReports возвращает все багрепорты доски в порядке domain.SortBugReports
+// (приоритет по убыванию, заблокированные — вниз, затем BugID).
 func (s *Store) ListBugReports(ctx context.Context) ([]*BugReport, error) {
 	ids, err := s.client.SMembers(ctx, s.bugsID()).Result()
 	if err != nil {
@@ -103,10 +106,12 @@ func (s *Store) ListBugReports(ctx context.Context) ([]*BugReport, error) {
 		}
 		out = append(out, r)
 	}
+	domain.SortBugReports(out)
 	return out, nil
 }
 
-// SetBugStatus переводит багрепорт в новый статус (с проверкой перехода).
+// SetBugStatus переводит багрепорт в новый статус (с проверкой перехода
+// жёсткой цепочки ревью — для агентов).
 func (s *Store) SetBugStatus(ctx context.Context, id string, st BugStatus) error {
 	r, err := s.GetBugReport(ctx, id)
 	if err != nil {
@@ -116,6 +121,32 @@ func (s *Store) SetBugStatus(ctx context.Context, id string, st BugStatus) error
 		return err
 	}
 	r.Status = st
+	return s.SaveBugReport(ctx, r)
+}
+
+// SetBugStatusManual переводит багрепорт в новый статус ручным решением
+// оператора (REST/UI/чат): цепочка ревью не навязывается
+// (ValidateBugTransitionManual), но блокировка сохраняется — из статуса slop
+// выйти нельзя.
+func (s *Store) SetBugStatusManual(ctx context.Context, id string, st BugStatus) error {
+	r, err := s.GetBugReport(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := ValidateBugTransitionManual(r.Status, st); err != nil {
+		return err
+	}
+	r.Status = st
+	return s.SaveBugReport(ctx, r)
+}
+
+// SetBugPriority задаёт приоритет багрепорта на доске (больше — важнее).
+func (s *Store) SetBugPriority(ctx context.Context, id string, priority int) error {
+	r, err := s.GetBugReport(ctx, id)
+	if err != nil {
+		return err
+	}
+	r.Priority = priority
 	return s.SaveBugReport(ctx, r)
 }
 
