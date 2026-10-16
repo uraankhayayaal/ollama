@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	appchatassist "ai/application/chatassist"
+	"ai/infrastructure/board"
 	"ai/infrastructure/chat"
 	"ai/infrastructure/git"
 	"ai/tools"
@@ -34,6 +35,7 @@ const (
 	actionEpicRelease     = "EpicRelease"
 	actionBranchReject    = "BranchReject"
 	actionIndexBackground = "IndexBackground"
+	actionSetBugStatus    = "SetBugStatusManual"
 )
 
 // ActionsBackend — серверные действия, к которым мосты-инструменты обращаются
@@ -62,6 +64,9 @@ type ActionsBackend interface {
 	// должна сразу. branch — необязательная ветка индексации (пусто — текущая
 	// ветка каталога проекта, см. PLAN-2026-09-27-done-branch-aware-rag.md).
 	IndexBackground(ctx context.Context, branch string) error
+	// SetBugStatusManual меняет статус и/или приоритет багрепорта вручную
+	// (оператор/ассистент). Из заблокированного slop выйти нельзя.
+	SetBugStatusManual(ctx context.Context, bugID string, status string, priority *int) (string, error)
 	// ConflictResolve — безопасная часть резолва конфликта main ↔ релизная
 	// ветка эпика (Ф-4b, actions_resolve.go): status/start — состояние и
 	// открытие процесса резолва, apply — запись выбранного содержимого в
@@ -227,12 +232,44 @@ func newIndexBackgroundTool(b ActionsBackend) *actionTool {
 	}
 }
 
+// newSetBugStatusManualTool — ручная смена статуса и/или приоритета багрепорта.
+func newSetBugStatusManualTool(b ActionsBackend) *actionTool {
+	return &actionTool{
+		name: actionSetBugStatus, b: b,
+		description: "Ручная смена статуса и/или приоритета багрепорта на доске (оператор/ассистент). Разрешает любой статус назначения, но не позволяет выйти из заблокированного (нейрослоп): баг в slop нельзя перевести ни в какой другой статус.",
+		args: map[string]any{
+			"bug_id":   map[string]any{"type": "string", "description": "ID багрепорта (BUG-1, BUG-123)"},
+			"status":   map[string]any{"type": "string", "description": "Статус: new, confirmed, slop, fix, feature, wont_fix, fixed"},
+			"priority": map[string]any{"type": "integer", "description": "Опционально: приоритет на доске (больше — важнее), сортировка по priority desc"},
+		},
+		required: []string{"bug_id", "status"},
+		run: func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			var prio *int
+			if _, ok := args["priority"]; ok {
+				v := actionArgInt(args, "priority")
+				prio = &v
+			}
+			msg, err := b.SetBugStatusManual(ctx, actionArg(args, "bug_id"), actionArg(args, "status"), prio)
+			if err != nil {
+				return nil, err
+			}
+			if msg == "" {
+				msg = "Статус и/или приоритет багрепорта обновлены"
+			}
+			return map[string]any{"message": msg}, nil
+		},
+	}
+}
+
 // serverActionTools возвращает мосты-инструменты server-действий, которые
 // runChatAssistant добавляет в набор ассистента (Ф-3): см. actionTools.
 // AskUser (Ф-1 «спроси пользователя») добавляется рядом, поверх AskBackend.
 func (sess *Session) serverActionTools() []tools.Tool {
 	ts := actionTools(sess)
 	ts = append(ts, &askTool{b: sess})
+	// Ручная смена статуса/приоритета багрепорта: ассистент как оператор
+	// доски (цепочка ревью не навязывается, блокировка slop сохраняется).
+	ts = append(ts, newSetBugStatusManualTool(sess))
 	// Ф-4b: резолв конфликтов эпика — мосты поверх REST-ядра rebase/resolve
 	// (файловые инструменты ассистента привязаны к каталогу проекта, а
 	// конфликтный worktree лежит вне его).
@@ -282,6 +319,41 @@ func (sess *Session) KanbanStart(ctx context.Context, task string) error {
 		}
 	}
 	return sess.start(ctx, taskText, prov, task == "")
+}
+
+// SetBugStatusManual меняет статус и/или приоритет багрепорта на доске от имени
+// оператора/ассистента. Цепочка ревью не навязывается (ValidateBugTransitionManual),
+// но блокировка сохраняется: из slop выйти нельзя. Возвращает человекочитаемый
+// итог для ответа модели.
+func (sess *Session) SetBugStatusManual(ctx context.Context, bugID, status string, priority *int) (string, error) {
+	store, err := sess.srv.boardStore(ctx, sess.project)
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	if _, err := store.GetBugReport(ctx, bugID); err != nil {
+		return "", fmt.Errorf("багрепорт %s не найден", bugID)
+	}
+	st := board.BugStatus(strings.TrimSpace(status))
+	if !st.Valid() {
+		return "", fmt.Errorf("неизвестный статус багрепорта %q", status)
+	}
+	if err := store.SetBugStatusManual(ctx, bugID, st); err != nil {
+		return "", err
+	}
+	if priority != nil {
+		if err := store.SetBugPriority(ctx, bugID, *priority); err != nil {
+			return "", err
+		}
+	}
+	sess.append(chat.RoleStatus,
+		fmt.Sprintf("Багрепорт %s: статус %s", bugID, st.Label()), "", "", nil)
+	sess.emitBoard("ассистент: багрепорт обновлён")
+	msg := fmt.Sprintf("Багрепорт %s переведён в статус «%s»", bugID, st.Label())
+	if priority != nil {
+		msg += fmt.Sprintf(", приоритет %d", *priority)
+	}
+	return msg, nil
 }
 
 // TaskMerge вливает ветку задачи в релизную ветку её эпика. Возвращает

@@ -76,6 +76,13 @@ func (s BugStatus) Terminal() bool {
 	return false
 }
 
+// Blocked сообщает, что багрепорт в статусе, который блокирует дальнейшую
+// работу: помеченный как нейрослоп (slop) баг не берётся в работу, не меняет
+// статус и не должен декорироваться как активный. Единственный блокирующий
+// статус — slop; остальные терминальные (feature/wont_fix/fixed) — завершённые,
+// но не «заблокированные».
+func (s BugStatus) Blocked() bool { return s == BugStatusSlop }
+
 func (s BugStatus) Valid() bool {
 	switch s {
 	case BugStatusNew, BugStatusConfirmed, BugStatusSlop,
@@ -117,6 +124,25 @@ func ValidateBugTransition(from, to BugStatus) error {
 	return &BugStatusError{From: from, To: to, Reason: "переход не разрешён цепочкой ревью багрепорта"}
 }
 
+// ValidateBugTransitionManual проверяет ручную смену статуса багрепорта
+// (оператором из Web UI, REST или чата). В отличие от ValidateBugTransition
+// (жёсткая цепочка ревью для агентов) ручной переход разрешает ЛЮБОЙ статус
+// назначения — человек вправе переоткрыть или переклассифицировать баг, — но
+// сохраняет семантику блокировки: из заблокированного статуса (нейрослоп) выйти
+// нельзя, и статус назначения обязан быть известным.
+func ValidateBugTransitionManual(from, to BugStatus) error {
+	if from == to {
+		return nil
+	}
+	if !to.Valid() {
+		return &BugStatusError{From: from, To: to, Reason: "неизвестный статус багрепорта"}
+	}
+	if from.Blocked() {
+		return &BugStatusError{From: from, To: to, Reason: "багрепорт заблокирован (нейрослоп) — смена статуса недоступна"}
+	}
+	return nil
+}
+
 // BugStatusError — ошибка некорректного перехода статуса багрепорта.
 type BugStatusError struct {
 	From   BugStatus
@@ -137,10 +163,14 @@ type BugReport struct {
 	TaskID       string    `json:"task_id"`
 	EpicID       string    `json:"epic_id"`
 	Status       BugStatus `json:"status"`
-	Verdict      string    `json:"verdict"`
-	FixEpicID    string    `json:"fix_epic_id"`
-	CreatedAt    string    `json:"created_at"`
-	UpdatedAt    string    `json:"updated_at"`
+	// Priority — приоритет бага на доске: чем больше, тем выше строка и раньше
+	// баг попадает в работу. 0 — обычный приоритет. Сортировку задаёт
+	// domain.SortBugReports (приоритет по убыванию, заблокированные — вниз).
+	Priority  int    `json:"priority,omitempty"`
+	Verdict   string `json:"verdict"`
+	FixEpicID string `json:"fix_epic_id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type Meta struct {

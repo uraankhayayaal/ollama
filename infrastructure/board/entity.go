@@ -120,6 +120,12 @@ func ValidateBugTransition(from, to BugStatus) error {
 	return domain.ValidateBugTransition(from, to)
 }
 
+// ValidateBugTransitionManual — алиас domain.ValidateBugTransitionManual
+// (допустимость ручной смены статуса багрепорта оператором).
+func ValidateBugTransitionManual(from, to BugStatus) error {
+	return domain.ValidateBugTransitionManual(from, to)
+}
+
 // BugStatusError — ошибка некорректного перехода статуса багрепорта.
 // Тип принадлежит домену (domain.BugStatusError), здесь — алиас.
 type BugStatusError = domain.BugStatusError

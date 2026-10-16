@@ -177,6 +177,14 @@ func (d *DomainStore) SetBugStatus(ctx context.Context, id string, status domain
 	return d.Store.SetBugStatus(ctx, id, boardBugStatusFromDomain(status))
 }
 
+func (d *DomainStore) SetBugStatusManual(ctx context.Context, id string, status domain.BugStatus) error {
+	return d.Store.SetBugStatusManual(ctx, id, boardBugStatusFromDomain(status))
+}
+
+func (d *DomainStore) SetBugPriority(ctx context.Context, id string, priority int) error {
+	return d.Store.SetBugPriority(ctx, id, priority)
+}
+
 func (d *DomainStore) ReferenceExists(ctx context.Context, id string) error {
 	return d.Store.ReferenceExists(ctx, id)
 }

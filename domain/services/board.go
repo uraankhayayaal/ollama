@@ -31,6 +31,8 @@ type BoardStore interface {
 	SaveBugReport(ctx context.Context, bug *domain.BugReport) error
 	ListBugReports(ctx context.Context) ([]*domain.BugReport, error)
 	SetBugStatus(ctx context.Context, id string, status domain.BugStatus) error
+	SetBugStatusManual(ctx context.Context, id string, status domain.BugStatus) error
+	SetBugPriority(ctx context.Context, id string, priority int) error
 	ReferenceExists(ctx context.Context, id string) error
 	GetMeta(ctx context.Context) (*domain.Meta, error)
 	SaveMeta(ctx context.Context, m *domain.Meta) error
