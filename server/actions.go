@@ -281,7 +281,7 @@ func (sess *Session) KanbanStart(ctx context.Context, task string) error {
 			return err
 		}
 	}
-	return sess.start(ctx, taskText, prov, task != "")
+	return sess.start(ctx, taskText, prov, task == "")
 }
 
 // TaskMerge вливает ветку задачи в релизную ветку её эпика. Возвращает

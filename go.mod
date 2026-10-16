@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0
+	github.com/chromedp/chromedp v0.21.0
 	github.com/joho/godotenv v1.5.1
 	github.com/ollama/ollama v0.32.15
 	github.com/openai/openai-go v1.12.0
@@ -16,6 +17,7 @@ require (
 )
 
 require (
+	github.com/chromedp/cdproto v0.157.8 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.83.2 // indirect
