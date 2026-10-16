@@ -508,24 +508,36 @@ func (s *Server) reconcileMRs(ctx context.Context, project string) (bool, error)
 	if target == "" {
 		target = inf.GitBase
 	}
-	if inf.GitBranch != "" && target != "" && reconcileOne(project, prov, inf.GitBranch, target, project,
-		func(_ string, mr workspace.MRRef) error { return s.reg.SetProjectMR(project, mr) },
-		func(_ string) (workspace.MRRef, error) { return s.reg.ProjectMR(project) }) {
-		changed = true
+	if inf.GitBranch != "" && target != "" {
+		set, err := reconcileOne(project, prov, inf.GitBranch, target, project,
+			func(_ string, mr workspace.MRRef) error { return s.reg.SetProjectMR(project, mr) },
+			func(_ string) (workspace.MRRef, error) { return s.reg.ProjectMR(project) })
+		if err != nil {
+			return changed, err
+		}
+		if set {
+			changed = true
+		}
 	}
 	if inf.GitBranches != nil {
 		for epicID, ref := range inf.GitBranches.Epics {
-			set := reconcileOne(project, prov, ref.Branch, ref.Base, epicID,
+			set, err := reconcileOne(project, prov, ref.Branch, ref.Base, epicID,
 				func(id string, mr workspace.MRRef) error { return s.reg.SetEpicMR(project, id, mr) },
 				func(id string) (workspace.MRRef, error) { return s.reg.EpicMR(project, id) })
+			if err != nil {
+				return changed, err
+			}
 			if set {
 				changed = true
 			}
 		}
 		for taskID, ref := range inf.GitBranches.Tasks {
-			set := reconcileOne(project, prov, ref.Branch, ref.Base, taskID,
+			set, err := reconcileOne(project, prov, ref.Branch, ref.Base, taskID,
 				func(id string, mr workspace.MRRef) error { return s.reg.SetTaskMR(project, id, mr) },
 				func(id string) (workspace.MRRef, error) { return s.reg.TaskMR(project, id) })
+			if err != nil {
+				return changed, err
+			}
 			if set {
 				changed = true
 			}
@@ -549,30 +561,34 @@ func (s *Server) reconcileMRs(ctx context.Context, project string) (bool, error)
 // reconcileOne сверяет один элемент (эпик/задачу): опрашивает фордж и
 // записывает MR, если по ветке он есть, а в реестре его ещё нет или состояние
 // изменилось. Возвращает true, если реестр обновлён. Ошибки сети и «нет MR»
-// реестр не трогают (локальный статус остаётся источником).
+// реестр не трогают (локальный статус остаётся источником); ErrRateLimited
+// прерывает весь проход сверки — дальше по веткам всё равно будут 403.
 func reconcileOne(
 	project string, prov forges.MRStatusProvider,
 	source, target, id string,
 	setMR func(id string, mr workspace.MRRef) error,
 	getMR func(id string) (workspace.MRRef, error),
-) bool {
+) (bool, error) {
 	info, err := prov.FindMergeRequest(source, target)
 	if err != nil {
+		if errors.Is(err, forges.ErrRateLimited) {
+			return false, err
+		}
 		if err != forges.ErrNoMergeRequest {
 			logging.For(project).Detailf("gitflow: сверка MR %s: %v", id, err)
 		}
-		return false
+		return false, nil
 	}
 	if existing, gerr := getMR(id); gerr == nil && existing.URL == info.URL && existing.State == info.State {
-		return false // уже актуально
+		return false, nil // уже актуально
 	}
 	if err := setMR(id, workspace.MRRef{
 		URL: info.URL, Source: source, Target: target, State: info.State,
 	}); err != nil {
 		logging.For(project).Warnf("gitflow: запись MR %s: %v", id, err)
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // reconcileMRsAsync запускает фоновую сверку MR с форджем (гибрид: быстрый
@@ -584,7 +600,11 @@ func (s *Server) reconcileMRsAsync(project string) {
 		defer cancel()
 		changed, err := s.reconcileMRs(ctx, project)
 		if err != nil {
-			logging.For(project).Detailf("gitflow: фоновая сверка MR: %v", err)
+			if errors.Is(err, forges.ErrRateLimited) {
+				logging.For(project).Infof("gitflow: сверка MR: %v — сверка приостановлена до сброса квоты", err)
+			} else {
+				logging.For(project).Detailf("gitflow: фоновая сверка MR: %v", err)
+			}
 			return
 		}
 		if changed {

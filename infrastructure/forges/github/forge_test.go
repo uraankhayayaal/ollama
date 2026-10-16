@@ -2,10 +2,12 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"ai/infrastructure/forges"
 )
@@ -94,8 +96,9 @@ func TestCreateMergeRequest(t *testing.T) {
 	}
 }
 
-// TestFindMergeRequest проверяет поиск PR по ветке: два запроса (open, all),
-// фильтр по head=owner:<branch>&base, статус открытого/слитого PR.
+// TestFindMergeRequest проверяет поиск PR по ветке: один запрос
+// state=all (открытые PR входят в выборку), фильтр по head=owner:<branch>&base,
+// предпочтение открытому PR, затем слитому.
 func TestFindMergeRequest(t *testing.T) {
 	var hits []string
 	prev := http.DefaultClient
@@ -109,13 +112,6 @@ func TestFindMergeRequest(t *testing.T) {
 			 "state": "closed", "merged_at": "2026-01-02T00:00:00Z",
 			 "head": {"ref": "ai/epic/e1"}}
 		]`
-		if strings.Contains(r.URL.String(), "state=all") {
-			body = `[
-				{"html_url": "https://github.com/owner/repo/pull/9",
-				 "state": "closed", "merged_at": "2026-01-02T00:00:00Z",
-				 "head": {"ref": "ai/epic/e1"}}
-			]`
-		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
@@ -138,27 +134,22 @@ func TestFindMergeRequest(t *testing.T) {
 	if info.URL != "https://github.com/owner/repo/pull/7" || info.State != "open" {
 		t.Errorf("неверный открытый PR: %+v", info)
 	}
-	if len(hits) < 1 || !strings.Contains(hits[0], "state=open") ||
+	if len(hits) != 1 || !strings.Contains(hits[0], "state=all") ||
 		!strings.Contains(hits[0], "head=owner%3Aai%2Fepic%2Fe1") {
-		t.Errorf("неверный первый запрос search: %v", hits)
+		t.Errorf("ожидался один запрос state=all: %v", hits)
 	}
 }
 
 // TestFindMergeRequestOpenThenMerged проверяет ветку без открытого PR:
-// второй запрос (all) находит слитый PR и нормализует state в merged.
+// слитый PR находится в одном запросе state=all и нормализуется в merged.
 func TestFindMergeRequestOpenThenMerged(t *testing.T) {
 	prev := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		var body string
-		if strings.Contains(r.URL.String(), "state=all") {
-			body = `[
-				{"html_url": "https://github.com/owner/repo/pull/5",
-				 "state": "closed", "merged_at": "2026-01-02T00:00:00Z",
-				 "head": {"ref": "ai/task/t-1"}}
-			]`
-		} else {
-			body = `[]`
-		}
+		body := `[
+			{"html_url": "https://github.com/owner/repo/pull/5",
+			 "state": "closed", "merged_at": "2026-01-02T00:00:00Z",
+			 "head": {"ref": "ai/task/t-1"}}
+		]`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
@@ -204,5 +195,69 @@ func TestFindMergeRequestNone(t *testing.T) {
 
 	if _, err := f.FindMergeRequest("ai/epic/nope", "main"); err != forges.ErrNoMergeRequest {
 		t.Errorf("ожидали ErrNoMergeRequest, получили: %v", err)
+	}
+}
+
+// TestFindMergeRequestRateLimited проверяет исчерпание квоты GitHub: 403 с
+// сообщением о rate limit превращается в forges.ErrRateLimited (с временем
+// сброса из X-RateLimit-Reset), а обычный 403 остаётся ошибкой статуса.
+func TestFindMergeRequestRateLimited(t *testing.T) {
+	prev := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"X-Ratelimit-Reset": {"4102444800"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"message":"API rate limit exceeded for user ID 13504758."}`)),
+		}, nil
+	})}
+	defer func() { http.DefaultClient = prev }()
+
+	f := &Forge{cfg: &config{
+		BaseURL: "https://api.github.com",
+		Token:   "tok",
+		Owner:   "owner",
+		Repo:    "repo",
+	}}
+
+	_, err := f.FindMergeRequest("ai/task/t-9", "main")
+	if !errors.Is(err, forges.ErrRateLimited) {
+		t.Fatalf("ожидали ErrRateLimited, получили: %v", err)
+	}
+	var rle *forges.RateLimitedError
+	if !errors.As(err, &rle) {
+		t.Fatalf("ожидали *RateLimitedError, получили: %T", err)
+	}
+	if !rle.ResetAt.Equal(time.Unix(4102444800, 0)) {
+		t.Errorf("неверное время сброса квоты: %v", rle.ResetAt)
+	}
+}
+
+// TestFindMergeRequestForbidden — обычный 403 без сообщения о rate limit
+// остаётся ошибкой статуса, а не ErrRateLimited.
+func TestFindMergeRequestForbidden(t *testing.T) {
+	prev := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"message":"Forbidden"}`)),
+		}, nil
+	})}
+	defer func() { http.DefaultClient = prev }()
+
+	f := &Forge{cfg: &config{
+		BaseURL: "https://api.github.com",
+		Token:   "tok",
+		Owner:   "owner",
+		Repo:    "repo",
+	}}
+
+	_, err := f.FindMergeRequest("ai/task/t-9", "main")
+	if err == nil {
+		t.Fatal("ожидали ошибку статуса")
+	}
+	if errors.Is(err, forges.ErrRateLimited) {
+		t.Fatalf("обычный 403 не должен быть ErrRateLimited: %v", err)
 	}
 }

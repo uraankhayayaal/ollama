@@ -17,6 +17,7 @@ import (
 	"ai/domain"
 	"ai/infrastructure/board"
 	"ai/infrastructure/chat"
+	"ai/infrastructure/forges"
 	"ai/infrastructure/rag"
 	"ai/infrastructure/runevents"
 	"ai/infrastructure/runmetrics"
@@ -679,14 +680,16 @@ func (sess *Session) emit(ev ProjectEvent) {
 }
 
 // boardFlusher раз в 500 мс публикует снимок доски, если был событийный тик
-// (EventBoardChanged). Параллельно, раз в минуту (Ф-5, гибрид), фоном сверяет
-// MR с форджем, чтобы состояние MR-кнопок обновлялось и при активной
-// оркестрации без перезахода на дашборд.
+// (EventBoardChanged). Параллельно, раз в mrReconcileInterval (Ф-5, гибрид),
+// фоном сверяет MR с форджем, чтобы состояние MR-кнопок обновлялось и при
+// активной оркестрации без перезахода на дашборд.
+const mrReconcileInterval = 5 * time.Minute
+
 func (sess *Session) boardFlusher(ctx context.Context) {
 	defer sess.wg.Done()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	mrTicker := time.NewTicker(60 * time.Second)
+	mrTicker := time.NewTicker(mrReconcileInterval)
 	defer mrTicker.Stop()
 	for {
 		select {
@@ -708,6 +711,11 @@ func (sess *Session) boardFlusher(ctx context.Context) {
 		case <-mrTicker.C:
 			changed, err := sess.srv.reconcileMRs(ctx, sess.project)
 			if err != nil {
+				if errors.Is(err, forges.ErrRateLimited) {
+					// Квота исчерпана: один INFO-лог, следующая сверка — по тикеру,
+					// без повторного спама на каждую ветку.
+					sess.log.Infof("gitflow: сверка MR: %v", err)
+				}
 				continue
 			}
 			if changed {

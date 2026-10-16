@@ -2,10 +2,13 @@ package forges
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ReviewComment — замечание к строке кода в Pull/Merge Request.
@@ -76,6 +79,55 @@ type MergeRequestInfo struct {
 
 // ErrNoMergeRequest — у ветки с заданными source/target нет открытого MR.
 var ErrNoMergeRequest = errors.New("merge request по ветке не найден")
+
+// ErrRateLimited — маркер для errors.Is: хостинг исчерпал квоту API (403/429
+// с сообщением о rate limit). Вызывающий должен прекратить опрос и подождать
+// сброса квоты, а не повторять запросы — иначе квота сгорает быстрее.
+var ErrRateLimited = errors.New("rate limit API хостинга")
+
+// RateLimitedError — квота хостинга исчерпана. ResetAt — время сброса
+// квоты (из заголовков X-RateLimit-Reset / Retry-After), нулевой, если
+// хостинг его не сообщил.
+type RateLimitedError struct {
+	ResetAt time.Time
+	Status  int
+}
+
+func (e *RateLimitedError) Error() string {
+	if e.ResetAt.IsZero() {
+		return fmt.Sprintf("rate limit API хостинга: квота исчерпана (HTTP %d)", e.Status)
+	}
+	return fmt.Sprintf("rate limit API хостинга: квота исчерпана (HTTP %d), сброс в %s",
+		e.Status, e.ResetAt.Local().Format("15:04:05"))
+}
+
+func (e *RateLimitedError) Unwrap() error { return ErrRateLimited }
+
+// NewRateLimitedError собирает RateLimitedError, если ответ хостинга — исчерпание
+// квоты (GitHub: 403 с "API rate limit exceeded" в теле; GitLab: 429), иначе
+// nil. Время сберы берётся из X-RateLimit-Reset (unix-секунды) или Retry-After.
+func NewRateLimitedError(status int, header http.Header, body []byte) *RateLimitedError {
+	if status != 429 && status != 403 {
+		return nil
+	}
+	if status == 403 && !strings.Contains(strings.ToLower(string(body)), "rate limit") {
+		return nil
+	}
+	e := &RateLimitedError{Status: status}
+	if v := header.Get("X-RateLimit-Reset"); v != "" {
+		if sec, err := strconv.ParseInt(v, 10, 64); err == nil {
+			e.ResetAt = time.Unix(sec, 0)
+		}
+	}
+	if e.ResetAt.IsZero() {
+		if v := header.Get("Retry-After"); v != "" {
+			if sec, err := strconv.Atoi(v); err == nil {
+				e.ResetAt = time.Now().Add(time.Duration(sec) * time.Second)
+			}
+		}
+	}
+	return e
+}
 
 // MRStatusProvider — опциональный интерфейс форджа: поиск MR по паре
 // веток source/target. Не входит в базовый Forge, чтобы не ломать моки и

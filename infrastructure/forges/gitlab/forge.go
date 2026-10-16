@@ -87,6 +87,9 @@ func (f *Forge) do(method, path string, body any) ([]byte, int, error) {
 	defer resp.Body.Close()
 
 	data, _ := io.ReadAll(resp.Body)
+	if rle := forges.NewRateLimitedError(resp.StatusCode, resp.Header, data); rle != nil {
+		return nil, resp.StatusCode, rle
+	}
 	return data, resp.StatusCode, nil
 }
 
