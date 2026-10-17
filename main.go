@@ -21,6 +21,7 @@ import (
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
 	_ "ai/infrastructure/forges/all"
+	"ai/infrastructure/kafkarelay"
 	"ai/infrastructure/llm"
 	"ai/infrastructure/mrlistener"
 	"ai/infrastructure/rag"
@@ -108,6 +109,9 @@ func main() {
 		srv, err := server.NewServer(server.Config{
 			Addr:     addr,
 			Password: os.Getenv("AI_WEB_PASSWORD"),
+			// Наблюдаемость агентного цикла (agent-harness-metrics): без
+			// KAFKA_BROKERS рлей выключен (nil) и ничего не публикуется.
+			Relay: kafkarelay.FromEnv(),
 		})
 		if err != nil {
 			logging.Fatalf("server: %v", err)

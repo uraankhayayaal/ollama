@@ -18,6 +18,7 @@ import (
 	"ai/infrastructure/board"
 	"ai/infrastructure/chat"
 	"ai/infrastructure/forges"
+	"ai/infrastructure/kafkarelay"
 	"ai/infrastructure/rag"
 	"ai/infrastructure/runevents"
 	"ai/infrastructure/runmetrics"
@@ -114,6 +115,14 @@ type Session struct {
 	// сессии через API и применяются к следующему вызову модели. Набор под
 	// mutex (наблюдается в wg/stop, персистентность пока не требуется).
 	sessionInjections *domain.InjectionSet
+
+	// relaySink — публикация шагов оркестрации в Kafka (kafkarelay, топик
+	// agent-harness-metrics). Nil, если рлей выключен. Подключается к
+	// sess.router, поэтому видит только события оркестрации, а не ассистента.
+	relaySink runevents.Sink
+	// assistantSink — то же для чат-ассистента: его отдельный параллельный
+	// стабильный run_id (от сессии к сессии), а не ран эпика оркестрации.
+	assistantSink runevents.Sink
 }
 
 // newSession создаёт сессию проекта (без запуска runner'а).
@@ -159,7 +168,30 @@ func (s *Server) newSession(project string) (*Session, error) {
 		events:  make(chan ProjectEvent, 64),
 		log:     logging.For(project),
 	}
-	sess.router = runevents.NewRouter(sess.routeRunEvent)
+	// Kafka-рлей наблюдаемости (агент-харнес): шаги агентного цикла идут в
+	// топик agent-harness-metrics. Скоупы оркестрации (epic/task) резолвятся
+	// в run_id через доску: задача привязывается к своему эпику, чтобы шаги
+	// разных сессий одного эпика складывались в один ран.
+	if s.relay != nil {
+		epicOf := func(ctx context.Context, taskID string) (string, error) {
+			task, err := boardStore.GetTask(ctx, taskID)
+			if err != nil {
+				return "", err
+			}
+			return task.EpicID, nil
+		}
+		sess.relaySink = s.relay.SessionSink(project, kafkarelay.ModeOrchestration, epicOf)
+		sess.assistantSink = s.relay.SessionSink(project, kafkarelay.ModeAssistant, epicOf)
+	}
+	// Фан-out: событие сначала уходит в Kafka-рлей (быстрый non-blocking
+	// enqueue с drop при переполнении), затем — в обычную маршрутизацию.
+	// Ассистент НЕ ходит через этот роутер — у него свой чат-репортёр.
+	sess.router = runevents.NewRouter(func(ev runevents.Event) {
+		if sess.relaySink != nil {
+			sess.relaySink(ev)
+		}
+		sess.routeRunEvent(ev)
+	})
 	// HITL-затвор: политика в application/hitl, эффекты — адаптер сессии.
 	sess.gate = hitl.NewGate(sess)
 	// Реестр метрик — общий на проект и живущий дольше сессии (server.metricsFor).
