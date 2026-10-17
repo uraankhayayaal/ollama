@@ -5,13 +5,13 @@
 // ValidateTransition.
 import type { Status } from "@/Types";
 
-// Порядок колонок на доске: цепочка Р-6 (ready -> human_help -> in_progress
+// Порядок колонок на доске: цепочка Р-6 (human_help -> ready -> in_progress
 // -> testing -> done) + терминальные cancelled.
 export const STATUS_ORDER: Status[] = [
   "new",
   "analysis",
-  "ready",
   "human_help",
+  "ready",
   "in_progress",
   "testing",
   "done",
@@ -37,9 +37,9 @@ export const STATUS_LABEL: Record<Status, string> = {
 // Порядок в списках — chain-first: основной сосед цепочки первым.
 export const MOVES: Record<Status, { prev: Status[]; next: Status[] }> = {
   new: { prev: [], next: ["analysis", "human_help"] },
-  analysis: { prev: [], next: ["ready", "human_help"] },
-  ready: { prev: [], next: ["in_progress", "human_help"] },
-  human_help: { prev: ["ready"], next: ["in_progress"] },
+  analysis: { prev: [], next: ["human_help", "ready"] },
+  human_help: { prev: ["analysis"], next: ["ready", "in_progress"] },
+  ready: { prev: ["human_help"], next: ["in_progress"] },
   in_progress: { prev: ["ready", "human_help"], next: ["testing", "done"] },
   testing: { prev: ["in_progress", "human_help"], next: ["done"] },
   done: { prev: [], next: [] },

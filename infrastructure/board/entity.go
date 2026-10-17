@@ -24,7 +24,7 @@ import (
 // переходов принадлежат домену (domain.Status / domain.ValidateTransition);
 // здесь — алиасы для совместимости кода доски.
 //
-// Порядок колонок доски: new → analysis → ready → human_help → in_progress →
+// Порядок колонок доски: new → analysis → human_help → ready → in_progress →
 // testing → done → cancelled.
 type Status = domain.Status
 

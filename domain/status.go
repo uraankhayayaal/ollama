@@ -3,7 +3,7 @@ package domain
 import "fmt"
 
 // Status — статус эпика или задачи на Kanban-доске. Порядок колонок:
-// new → analysis → ready → human_help → in_progress → testing → done →
+// new → analysis → human_help → ready → in_progress → testing → done →
 // cancelled. Конечный автомат переходов — ValidateTransition.
 type Status string
 

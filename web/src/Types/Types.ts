@@ -1,8 +1,8 @@
 // Типы контракта REST/SSE Web UI. Зеркалят server/session.go и board/entity.go.
 
 // Статусы зеркалят board/entity.go: единая цепочка для эпиков и задач
-// (new -> analysis -> ready -> in_progress -> testing -> done; human_help —
-// боковая «помощь человека», cancelled — терминальный).
+// (new -> analysis -> human_help -> ready -> in_progress -> testing -> done;
+// human_help — боковая «помощь человека», cancelled — терминальный).
 // Важно: сервер валидирует переходы (ValidateTransition), поэтому в UI
 // переводы между колонками ограничены соседними статусами.
 export type Status =
