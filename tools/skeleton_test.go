@@ -297,6 +297,69 @@ func TestReadFilesLines(t *testing.T) {
 	}
 }
 
+// TestReadFilesLinesOutOfBounds — окно строк за пределами файла. Раньше
+// инструмент отвечал сухим отказом «выходит за пределы файла (N строк)», и
+// модель повторяла тот же вызов до срабатывания детектора петли (см. лог с
+// ReadFiles lines 438-480 ×3). Теперь отказ обязан содержать инструкцию, что
+// сделать вместо повтора.
+func TestReadFilesLinesOutOfBounds(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "f.txt"), []byte("1\n2\n3\n4\n5\n"), 0644)
+
+	ops := &FileOps{OutputDir: dir}
+	result, err := ops.ReadFiles(map[string]any{
+		"filenames": []any{"f.txt"},
+		"lines":     "20-30",
+	})
+	if err != nil {
+		t.Fatalf("ReadFiles: %v", err)
+	}
+	var items []FileContentResult
+	if err := json.Unmarshal(result, &items); err != nil {
+		t.Fatalf("ReadFiles JSON: %v", err)
+	}
+	if len(items) != 1 || items[0].Status != "error" {
+		t.Fatalf("ReadFiles за пределами файла должен вернуть error: %#v", items)
+	}
+	msg := items[0].Message
+	for _, want := range []string{"НЕ повторяй", "содержит 5 строк", "без 'lines'"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("отказ должен содержать %q: %q", want, msg)
+		}
+	}
+}
+
+// TestReadFilesLinesBeyondTruncated — окно за пределами прочитанной части:
+// файл больше лимита чтения, так что строка 20 «не дочитана», а не отсутствует.
+// Отказ обязан отличать эти случаи (иначе модель решила бы, что файл короче).
+func TestReadFilesLinesBeyondTruncated(t *testing.T) {
+	t.Setenv("CODEGEN_READ_MAX_FILE", "12") // "1\n2\n3\n4\n5\n" — ровно 10 байт на 5 строк
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "f.txt"), []byte("1\n2\n3\n4\n5\n6\n7\n8\n"), 0644)
+
+	ops := &FileOps{OutputDir: dir}
+	result, err := ops.ReadFiles(map[string]any{
+		"filenames": []any{"f.txt"},
+		"lines":     "20-30",
+	})
+	if err != nil {
+		t.Fatalf("ReadFiles: %v", err)
+	}
+	var items []FileContentResult
+	if err := json.Unmarshal(result, &items); err != nil {
+		t.Fatalf("ReadFiles JSON: %v", err)
+	}
+	if len(items) != 1 || items[0].Status != "error" {
+		t.Fatalf("ReadFiles за пределами прочитанной части должен вернуть error: %#v", items)
+	}
+	msg := items[0].Message
+	for _, want := range []string{"НЕ повторяй", "за пределами прочитанной части", "дочитать его целиком"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("отказ должен содержать %q: %q", want, msg)
+		}
+	}
+}
+
 // Кеш карт кода: повторное построение карты того же файла обходит разбор
 // (второй вызов возвращает тот же результат без записи в кеш повторно),
 // изменение файла (новый mtime/размер) корректно инвалидирует запись.
