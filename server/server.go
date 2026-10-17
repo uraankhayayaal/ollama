@@ -13,6 +13,7 @@ import (
 
 	"ai/infrastructure/forges"
 	"ai/infrastructure/git"
+	"ai/infrastructure/kafkarelay"
 	"ai/infrastructure/runmetrics"
 	"ai/infrastructure/workspace"
 	"ai/shared/logging"
@@ -36,6 +37,11 @@ type Config struct {
 	// ForgeFactory создаёт провайдера форджа по git-remote (по умолчанию —
 	// forges.NewByRemote). Переопределяется в тестах стабом без сети.
 	ForgeFactory func(remoteURL, token string) (forges.Forge, error)
+
+	// Relay — публикация шагов агентного цикла в Kafka-топик наблюдаемости
+	// (kafkarelay, топик agent-harness-metrics). nil/выключен — шаги не
+	// публикуются. Создаётся в main через kafkarelay.FromEnv().
+	Relay *kafkarelay.Relay
 }
 
 // Server — HTTP+WS сервер Web UI. Хранит реестр проектов, WebSocket-хаб
@@ -51,6 +57,10 @@ type Server struct {
 
 	// auth — аутентификация Web UI (nil/отключена, если пароль не задан).
 	auth *authManager
+
+	// relay — Kafka-рлей шагов агентного цикла (nil, если выключен). Сессии
+	// берут из него SessionSink; Close дренирует очередь при завершении.
+	relay *kafkarelay.Relay
 	// Лимитеры (Ф-3): общий API, строгий на вход, отдельный на чат.
 	apiLim   *rateLimiter
 	loginLim *rateLimiter
@@ -99,6 +109,7 @@ func NewServer(cfg Config) (*Server, error) {
 		cfg:       cfg,
 		reg:       reg,
 		hub:       h,
+		relay:     cfg.Relay,
 		sessions:  make(map[string]*Session),
 		metrics:   make(map[string]*runmetrics.Registry),
 		baselines: make(map[string]*tools.Snap),
@@ -160,6 +171,10 @@ func (s *Server) Run(ctx context.Context) error {
 	log.Println("server: завершение...")
 	_ = httpSrv.Shutdown(context.Background())
 	s.hub.CloseAll()
+	// Дренаж Kafka-рлея: очередь шагов дописывается в топик (если включён).
+	if s.relay != nil {
+		s.relay.Close()
+	}
 	// Закрываем лог-файлы процесса и всех проектов, чтобы хвосты не потерялись.
 	logging.Close()
 	return nil

@@ -99,6 +99,11 @@ func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider useca
 			// токенов транслируются в живую шину (type=chat_delta/chat,
 			// type=tokens), иначе счётчик токенов чата остаётся на нулях.
 			chatReporter := runevents.NewRouter(func(ev runevents.Event) {
+				// Наблюдаемость (kafkarelay): у ассистента свой параллельный
+				// стабильный run_id, отдельный от рана оркестрации эпика.
+				if sess.assistantSink != nil {
+					sess.assistantSink(ev)
+				}
 				switch ev.Type {
 				case runevents.TypeToolResult:
 					// Успешный вызов write-инструмента доски — доказательство
