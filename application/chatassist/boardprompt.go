@@ -71,7 +71,7 @@ func BoardSummary(v BoardView) string {
 		b.WriteString("\nЗадач нет.\n")
 	} else {
 		b.WriteString("\nЗадачи по статусам:\n")
-		for _, st := range []domain.Status{domain.StatusNew, domain.StatusAnalysis, domain.StatusReady, domain.StatusHumanHelp, domain.StatusInProgress, domain.StatusTesting, domain.StatusDone, domain.StatusCancelled} {
+		for _, st := range []domain.Status{domain.StatusNew, domain.StatusAnalysis, domain.StatusHumanHelp, domain.StatusReady, domain.StatusInProgress, domain.StatusTesting, domain.StatusDone, domain.StatusCancelled} {
 			if n := taskByStatus[st]; n > 0 {
 				fmt.Fprintf(&b, "- %s: %d\n", st.Label(), n)
 			}

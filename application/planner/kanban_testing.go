@@ -181,6 +181,11 @@ func (k *KanbanRunner) noteEpicProgress(ctx context.Context, epicID string) {
 // phaseTesting доводит задачи в статусе "на тестирование" (StatusTesting)
 // до "выполнено". QA (или назначенный специалист) берёт задачу из testing,
 // доводит до done, либо возвращает замечаниями в работу/human_help.
+//
+// Фаза обрабатывает остаток очереди приёмки (задачи, оставшиеся в testing с
+// прошлого цикла). Свежезавершённые разработчиком задачи тестируются сразу в
+// phaseExecute — это не копит их в «На тестировании» и не пускает зависимые
+// задачи в работу до влития предыдущей в эпик.
 func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
@@ -196,154 +201,155 @@ func (k *KanbanRunner) phaseTesting(ctx context.Context) (bool, error) {
 			continue
 		}
 		busy[t.Assignee] = true
-		// Задача остаётся в testing на время работы тестировщика: переход в
-		// in_progress означал бы «зависла» для recoverStuckTasks, и при пустом
-		// ответе тестировщика задача вернулась бы в ready — цикл вместо
-		// приёмки. Статус меняет сам тестировщик (done/in_progress/human_help).
-		k.noteEpicProgress(ctx, t.EpicID)
-		// Тестировщик перехватывает задачу после разработчика (Этап 7):
-		// назначаем QA-инженера независимо от Assignee задачи.
-		var specialist services.Agent = agentFactory().Specialist(k.store.Project(), "qa", k.taskPrompt(t))
-		if sb, ok := specialist.(interface {
-			SetBoardStore(services.BoardStore)
-		}); ok {
-			sb.SetBoardStore(k.store)
-		}
-		if k.outputDir != nil {
-			if dir := k.outputDir(k.store.Project(), t.TaskID); dir != "" {
-				if so, ok := specialist.(interface{ SetOutputDir(string) }); ok {
-					so.SetOutputDir(dir)
-				}
-			}
-		}
-		if k.store != nil {
-			if sn, ok := specialist.(interface{ SetProjectName(string) }); ok {
-				sn.SetProjectName(k.store.Project())
-			}
-			if ti, ok := specialist.(interface{ SetTaskID(string) }); ok {
-				ti.SetTaskID(t.TaskID)
-			}
-		}
-		taskCtx := domain.NewInjectionContext(ctx, t.Injections)
-		taskCtx = domain.NewCommentContext(taskCtx, t.Comments)
-		if k.store != nil {
-			taskCtx = domain.WithInjectionSource(taskCtx, func(ctx context.Context) ([]domain.Injection, error) {
-				fresh, err := k.store.GetTask(ctx, t.TaskID)
-				if err != nil {
-					return nil, err
-				}
-				if fresh == nil {
-					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
-				}
-				return fresh.Injections, nil
-			})
-			taskCtx = domain.WithCommentSource(taskCtx, func(ctx context.Context) (domain.Comments, error) {
-				fresh, err := k.store.GetTask(ctx, t.TaskID)
-				if err != nil {
-					return nil, err
-				}
-				if fresh == nil {
-					return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
-				}
-				return fresh.Comments, nil
-			})
-		}
-		taskCtx = domain.WithInjectionScope(taskCtx, domain.InjectionScope{Project: k.store.Project(), TaskID: t.TaskID, Role: t.Assignee})
-		if t.ModelTier == domain.ModelTierLarge {
-			taskCtx = domain.WithHeavyModel(taskCtx)
-		}
-		k.markActive(t.TaskID)
-		resp, genErr := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
-		k.unmarkActive(t.TaskID)
-		if genErr != nil {
-			return false, fmt.Errorf("задача %s: %w", t.TaskID, genErr)
-		}
-		if resp != nil && resp.Looped {
-			done, err := k.escalateLoop(ctx, t, resp.LoopReason)
-			if err != nil {
-				return false, err
-			}
-			progress = progress || done
-			continue
-		}
-		if resp != nil && resp.Truncated {
-			return false, fmt.Errorf("задача %s: цикл остановлен по лимиту раундов", t.TaskID)
-		}
-		current, err := k.store.GetTask(ctx, t.TaskID)
+		done, err := k.testTask(ctx, t)
 		if err != nil {
-			return false, fmt.Errorf("задача %s: чтение статуса после работы: %w", t.TaskID, err)
+			return false, err
 		}
-		switch current.Status {
-		case domain.StatusDone:
-			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
-				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
-			}
-			progress = true
-			continue
-		case domain.StatusHumanHelp, domain.StatusCancelled:
-			progress = true
-			continue
-		case domain.StatusTesting:
-			// Тестировщик не завершил работу: статус остался «на тестирование»
-			// (гард отклонил done «phantom done» — в ветке нет коммитов, прогон
-			// оборвался, модель ответила текстом). Раньше раунд считался
-			// «прогрессом» и петля QA↔testing крутилась до 100 раундов, сжигая
-			// токены без результата (инцидент FEL-04). Теперь это «работа не
-			// сделана»: эскалация в рамках бюджета автономии, при исчерпании —
-			// human_help с причиной (см. usecases.Escalate).
-			done, err := k.escalate(ctx, current, escalationDiag{
-				Event:  "работа не сделана",
-				Detail: "тестирование не подтвердило результат: задача осталась в «на тестирование» после прогона тестировщика",
-				Action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
-			})
-			if err != nil {
-				return false, fmt.Errorf("задача %s: эскалация незавершённого тестирования: %w", t.TaskID, err)
-			}
-			progress = progress || done
-			continue
-		case domain.StatusInProgress:
-			// Проверим, не происходит ли цикл testing → in_progress
-			if !k.checkTestingLoop(ctx, t) {
-				// Если цикл обнаружен, останавливаем задачу
-				k.setStopReason("Обнаружен цикл между разработчиком и тестировщиком")
-				if _, err := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
-					Author: "system",
-					Type:   domain.CommentTypeSystem,
-					Body:   "Задача остановлена из-за циклического возврата между разработчиком и тестировщиком. Повторяющиеся замечания не привели к результату. Требуется ручное вмешательство.",
-				}); err != nil {
-					k.log.Warnf("[доска] цикл задачи %s: комментарий: %v", t.TaskID, err)
-				}
-				if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusHumanHelp); err != nil {
-					k.log.Warnf("[доска] цикл задачи %s: статус human_help: %v", t.TaskID, err)
-				}
-				progress = true
-				continue
-			}
-			// Если возврат в работу был, то добавим комментарий
-			if _, err := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
-				Author: "qa",
-				Type:   domain.CommentTypeQA,
-				Body:   "Тестирование показало необходимость доработки. Задача возвращена разработчику для исправления.",
-			}); err != nil {
-				k.log.Warnf("[доска] тестирование задачи %s: комментарий: %v", t.TaskID, err)
-			}
-			progress = true
-			continue
-		default:
-			// Если тестировщик оставил задачу с другим статусом (например, в работе)
-			// добавим комментарий
-			if _, err := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
-				Author: "qa",
-				Type:   domain.CommentTypeQA,
-				Body:   "Проведено тестирование. Результаты переданы разработчику для доработки.",
-			}); err != nil {
-				k.log.Warnf("[доска] тестирование задачи %s: комментарий: %v", t.TaskID, err)
-			}
-			progress = true
-			continue
-		}
+		progress = progress || done
 	}
 	return progress, nil
+}
+
+// testTask доводит одну задачу в статусе "на тестирование" (StatusTesting) до
+// "выполнено": QA (или назначенный специалист) берёт задачу из testing, доводит
+// до done, либо возвращает замечаниями в работу/human_help. Возвращает true,
+// если работа продвинулась.
+func (k *KanbanRunner) testTask(ctx context.Context, t *domain.Task) (bool, error) {
+	// Задача остаётся в testing на время работы тестировщика: переход в
+	// in_progress означал бы «зависла» для recoverStuckTasks, и при пустом
+	// ответе тестировщика задача вернулась бы в ready — цикл вместо
+	// приёмки. Статус меняет сам тестировщик (done/in_progress/human_help).
+	k.noteEpicProgress(ctx, t.EpicID)
+	// Тестировщик перехватывает задачу после разработчика (Этап 7):
+	// назначаем QA-инженера независимо от Assignee задачи.
+	var specialist services.Agent = agentFactory().Specialist(k.store.Project(), "qa", k.taskPrompt(t))
+	if sb, ok := specialist.(interface {
+		SetBoardStore(services.BoardStore)
+	}); ok {
+		sb.SetBoardStore(k.store)
+	}
+	if k.outputDir != nil {
+		if dir := k.outputDir(k.store.Project(), t.TaskID); dir != "" {
+			if so, ok := specialist.(interface{ SetOutputDir(string) }); ok {
+				so.SetOutputDir(dir)
+			}
+		}
+	}
+	if k.store != nil {
+		if sn, ok := specialist.(interface{ SetProjectName(string) }); ok {
+			sn.SetProjectName(k.store.Project())
+		}
+		if ti, ok := specialist.(interface{ SetTaskID(string) }); ok {
+			ti.SetTaskID(t.TaskID)
+		}
+	}
+	taskCtx := domain.NewInjectionContext(ctx, t.Injections)
+	taskCtx = domain.NewCommentContext(taskCtx, t.Comments)
+	if k.store != nil {
+		taskCtx = domain.WithInjectionSource(taskCtx, func(ctx context.Context) ([]domain.Injection, error) {
+			fresh, err := k.store.GetTask(ctx, t.TaskID)
+			if err != nil {
+				return nil, err
+			}
+			if fresh == nil {
+				return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
+			}
+			return fresh.Injections, nil
+		})
+		taskCtx = domain.WithCommentSource(taskCtx, func(ctx context.Context) (domain.Comments, error) {
+			fresh, err := k.store.GetTask(ctx, t.TaskID)
+			if err != nil {
+				return nil, err
+			}
+			if fresh == nil {
+				return nil, fmt.Errorf("задача %s не найдена", t.TaskID)
+			}
+			return fresh.Comments, nil
+		})
+	}
+	taskCtx = domain.WithInjectionScope(taskCtx, domain.InjectionScope{Project: k.store.Project(), TaskID: t.TaskID, Role: t.Assignee})
+	if t.ModelTier == domain.ModelTierLarge {
+		taskCtx = domain.WithHeavyModel(taskCtx)
+	}
+	k.markActive(t.TaskID)
+	resp, genErr := k.generate(taskCtx, tokens.ScopeTask(t.TaskID), specialist)
+	k.unmarkActive(t.TaskID)
+	if genErr != nil {
+		return false, fmt.Errorf("задача %s: %w", t.TaskID, genErr)
+	}
+	if resp != nil && resp.Looped {
+		return k.escalateLoop(ctx, t, resp.LoopReason)
+	}
+	if resp != nil && resp.Truncated {
+		return false, fmt.Errorf("задача %s: цикл остановлен по лимиту раундов", t.TaskID)
+	}
+	current, err := k.store.GetTask(ctx, t.TaskID)
+	if err != nil {
+		return false, fmt.Errorf("задача %s: чтение статуса после работы: %w", t.TaskID, err)
+	}
+	switch current.Status {
+	case domain.StatusDone:
+		if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
+			k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
+		}
+		return true, nil
+	case domain.StatusHumanHelp, domain.StatusCancelled:
+		return true, nil
+	case domain.StatusTesting:
+		// Тестировщик не завершил работу: статус остался «на тестирование»
+		// (гард отклонил done «phantom done» — в ветке нет коммитов, прогон
+		// оборвался, модель ответила текстом). Раньше раунд считался
+		// «прогрессом» и петля QA↔testing крутилась до 100 раундов, сжигая
+		// токены без результата (инцидент FEL-04). Теперь это «работа не
+		// сделана»: эскалация в рамках бюджета автономии, при исчерпании —
+		// human_help с причиной (см. usecases.Escalate).
+		done, err := k.escalate(ctx, current, escalationDiag{
+			Event:  "работа не сделана",
+			Detail: "тестирование не подтвердило результат: задача осталась в «на тестирование» после прогона тестировщика",
+			Action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
+		})
+		if err != nil {
+			return false, fmt.Errorf("задача %s: эскалация незавершённого тестирования: %w", t.TaskID, err)
+		}
+		return done, nil
+	case domain.StatusInProgress:
+		// Проверим, не происходит ли цикл testing → in_progress
+		if !k.checkTestingLoop(ctx, t) {
+			// Если цикл обнаружен, останавливаем задачу
+			k.setStopReason("Обнаружен цикл между разработчиком и тестировщиком")
+			if _, err := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
+				Author: "system",
+				Type:   domain.CommentTypeSystem,
+				Body:   "Задача остановлена из-за циклического возврата между разработчиком и тестировщиком. Повторяющиеся замечания не привели к результату. Требуется ручное вмешательство.",
+			}); err != nil {
+				k.log.Warnf("[доска] цикл задачи %s: комментарий: %v", t.TaskID, err)
+			}
+			if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusHumanHelp); err != nil {
+				k.log.Warnf("[доска] цикл задачи %s: статус human_help: %v", t.TaskID, err)
+			}
+			return true, nil
+		}
+		// Если возврат в работу был, то добавим комментарий
+		if _, err := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
+			Author: "qa",
+			Type:   domain.CommentTypeQA,
+			Body:   "Тестирование показало необходимость доработки. Задача возвращена разработчику для исправления.",
+		}); err != nil {
+			k.log.Warnf("[доска] тестирование задачи %s: комментарий: %v", t.TaskID, err)
+		}
+		return true, nil
+	default:
+		// Если тестировщик оставил задачу с другим статусом (например, в работе)
+		// добавим комментарий
+		if _, err := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
+			Author: "qa",
+			Type:   domain.CommentTypeQA,
+			Body:   "Проведено тестирование. Результаты переданы разработчику для доработки.",
+		}); err != nil {
+			k.log.Warnf("[доска] тестирование задачи %s: комментарий: %v", t.TaskID, err)
+		}
+		return true, nil
+	}
 }
 
 // checkTestingLoop проверяет, не происходит ли цикл testing → in_progress

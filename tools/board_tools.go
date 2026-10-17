@@ -547,12 +547,12 @@ func (t *boardSetEpicStatusTool) Name() string { return BoardSetEpicStatus }
 func (t *boardSetEpicStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetEpicStatus,
-		Description: "Перевести эпик в новый статус: new, analysis, ready, human_help, in_progress, testing, done, cancelled. Переходы валидируются конечным автоматом доски.",
+		Description: "Перевести эпик в новый статус: new, analysis, human_help, ready, in_progress, testing, done, cancelled. Переходы валидируются конечным автоматом доски.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"epic_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | human_help | in_progress | testing | done | cancelled"},
+				"status":  map[string]any{"type": "string", "description": "new | analysis | human_help | ready | in_progress | testing | done | cancelled"},
 			},
 			"required":             []string{"epic_id", "status"},
 			"additionalProperties": false,
@@ -867,12 +867,12 @@ func (t *boardSetTaskStatusTool) Name() string { return BoardSetTaskStatus }
 func (t *boardSetTaskStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetTaskStatus,
-		Description: "Перевести задачу в новый статус: new, analysis, ready, human_help, in_progress, testing, done, cancelled. Специалисты отмечают done по завершении работы; human_help (с обязательной причиной reason) — если задачу невозможно выполнить: нет исходного кода/зависимостей, есть блокер, зациклилась работа; это останавливает задачу и передаёт её человеку вместо повторов без результата. Лиды используют инструмент для перепланирования.",
+		Description: "Перевести задачу в новый статус: new, analysis, human_help, ready, in_progress, testing, done, cancelled. Специалист, завершив работу (сборка и проверки зелёные), переводит задачу в testing («На тестирование»); приёмку выполняет тестировщик — только он ставит done или возвращает задачу в in_progress с замечаниями, поэтому done разработчику ставить не нужно. human_help (с обязательной причиной reason) — если задачу невозможно выполнить: нет исходного кода/зависимостей, есть блокер, зациклилась работа; это останавливает задачу и передаёт её человеку вместо повторов без результата. Лиды используют инструмент для перепланирования.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "new | analysis | ready | human_help | in_progress | testing | done | cancelled"},
+				"status":  map[string]any{"type": "string", "description": "new | analysis | human_help | ready | in_progress | testing | done | cancelled"},
 				"reason":  map[string]any{"type": "string", "description": "Причина: обязателен для human_help (что именно блокирует выполнение — человек должен понять, зачем задача встала), для остальных статусов необязателен."},
 			},
 			"required":             []string{"task_id", "status"},

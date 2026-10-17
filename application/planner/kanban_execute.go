@@ -178,6 +178,13 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
 			}
 			progress = true
+			// Приёмка сразу после разработчика: не копим задачи в «На
+			// тестировании» — зависимые задачи ждут именно done предыдущей.
+			tested, terr := k.testTask(ctx, current)
+			if terr != nil {
+				return false, terr
+			}
+			progress = progress || tested
 			continue
 		}
 		// Специалист сам вывел задачу из работы: human_help (задача
@@ -229,6 +236,13 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 			k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
 		}
 		progress = true
+		// Приёмка сразу после разработчика: не копим задачи в «На
+		// тестировании» — зависимые задачи ждут именно done предыдущей.
+		tested, terr := k.testTask(ctx, current)
+		if terr != nil {
+			return false, terr
+		}
+		progress = progress || tested
 	}
 	return progress, nil
 }
