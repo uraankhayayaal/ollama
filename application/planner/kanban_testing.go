@@ -296,17 +296,37 @@ func (k *KanbanRunner) testTask(ctx context.Context, t *domain.Task) (bool, erro
 	case domain.StatusHumanHelp, domain.StatusCancelled:
 		return true, nil
 	case domain.StatusTesting:
-		// Тестировщик не завершил работу: статус остался «на тестирование»
+		// Тестировщик не завершил ра운д: статус остался «на тестирование»
 		// (гард отклонил done «phantom done» — в ветке нет коммитов, прогон
 		// оборвался, модель ответила текстом). Раньше раунд считался
-		// «прогрессом» и петля QA↔testing крутилась до 100 раундов, сжигая
+		// «прогрессом» 和 петля QA↔testing крутилась до 100 раундов, сжигая
 		// токены без результата (инцидент FEL-04). Теперь это «работа не
 		// сделана»: эскалация в рамках бюджета автономии, при исчерпании —
 		// human_help с причиной (см. usecases.Escalate).
+		//
+		// Особый случай: если задача осталась в testing после того, как
+		// тестировщик попытался её проверить, но не смог перевести в done
+		// (например, из-за отсутствия golangci-lint или других ограничений
+		// окружения), — это не повод для бесконечной эскалации. Переводим
+		// задачу в human_help с причиной.
+		if current.Attempts > 3 {
+			k.setStopReason("Задача зависла в testing: QA-агент не смог завершить приёмку")
+			if _, err := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
+				Author: "system",
+				Type:   domain.CommentTypeSystem,
+				Body:   "Задача остановлена: QA-агент несколько раз не смог перевести её в done. Возможно, из-за ограничений окружения (golangci-lint недоступен, Docker не запущен) или из-за того, что проверки не пройдены. Требуется ручное вмешательство.",
+			}); err != nil {
+				k.log.Warnf("[доска] задача %s: комментарий: %v", t.TaskID, err)
+			}
+			if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusHumanHelp); err != nil {
+				k.log.Warnf("[доска] задача %s: статус human_help: %v", t.TaskID, err)
+			}
+			return true, nil
+		}
 		done, err := k.escalate(ctx, current, escalationDiag{
 			Event:  "работа не сделана",
 			Detail: "тестирование не подтвердило результат: задача осталась в «на тестирование» после прогона тестировщика",
-			Action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
+			Action: "Сделай раунд по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммутом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
 		})
 		if err != nil {
 			return false, fmt.Errorf("задача %s: эскалация незавершённого тестирования: %w", t.TaskID, err)
