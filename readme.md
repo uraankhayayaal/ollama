@@ -121,6 +121,28 @@ npm --prefix web run build
   --reasoning-preserve
 ```
 
+
+Сценарий В (Nvidia NVFP4)
+```
+./build/bin/llama-server \
+  --hf-repo williamliao/Qwen3.8-27B-NVFP4-GGUF:NVFP4 \
+  --hf-file Qwen3.8-27B-NVFP4-GGUF.gguf \
+  -ngl all \
+  --split-mode tensor \
+  -c 131072 \
+  -fa on \
+  --cache-type-k q4_0 \
+  --cache-type-v q4_0 \
+  -b 2048 \
+  -ub 1024 \
+  -t 8 \
+  -tb 8 \
+  --port 8080 \
+  --jinja \
+  --image-min-tokens 1024 \
+  --reasoning-preserve
+```
+
 ### Шаг 3. Контроль работы и логирование
 
 Теперь ваш ИИ-сервер работает незаметно в фоновом режиме как системный демон.
