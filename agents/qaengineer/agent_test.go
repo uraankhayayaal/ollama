@@ -2,6 +2,7 @@ package qaengineer
 
 import (
 	"ai/agents/promptcheck"
+	"ai/infrastructure/sandbox"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,12 @@ func newTestQA(t *testing.T) *QAEngineer {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	return newQAEngineer(dir, "", Config{})
+	q := newQAEngineer(dir, "", Config{})
+	// Детерминированный промпт: без внедрения q.caps() пошёл бы в
+	// sandbox.ResolveCapabilities (проба Docker/портов) — тест зависел бы от
+	// окружения. Тесты возможностей переопределяют q.capabilities сами.
+	q.capabilities = func() sandbox.Capabilities { return sandbox.Capabilities{} }
+	return q
 }
 
 func TestQAResolvePathRejectsTraversal(t *testing.T) {
@@ -190,14 +196,19 @@ func TestQAPromptTestPortfolio(t *testing.T) {
 	}
 }
 
-// TestQAPromptReportsSandboxCapabilities — п.3.1 A7-04: объявленные DevOps
-// возможности (SANDBOX_HAS_*) попадают в промпт, чтобы интеграционные
-// проверки классифицировались как INFRA_DEGRADED, а не дефект кода.
+// TestQAPromptReportsSandboxCapabilities — п.3.1 A7-04: возможности песочницы
+// попадают в промпт, чтобы интеграционные проверки классифицировались как
+// INFRA_DEGRADED, а не дефект кода.
 func TestQAPromptReportsSandboxCapabilities(t *testing.T) {
-	t.Setenv("SANDBOX_HAS_DOCKER", "1")
-	t.Setenv("SANDBOX_HAS_POSTGRES", "1")
-	t.Setenv("SANDBOX_HAS_MINIO", "1")
-	p := newTestQA(t).GetSystemMessages(nil)[0].Message
+	q := newTestQA(t)
+	q.capabilities = func() sandbox.Capabilities {
+		return sandbox.Capabilities{
+			Docker:   sandbox.StateAvailable,
+			Postgres: sandbox.StateAvailable,
+			MinIO:    sandbox.StateAvailable,
+		}
+	}
+	p := q.GetSystemMessages(nil)[0].Message
 	if !strings.Contains(p, "ОКРУЖЕНИЕ (возможности песочницы)") {
 		t.Fatalf("промпт не содержит блок окружения:\n%s", p)
 	}
@@ -206,18 +217,28 @@ func TestQAPromptReportsSandboxCapabilities(t *testing.T) {
 	}
 }
 
-// TestQAPromptUndeclaredCapabilitiesDetectByFact — без SANDBOX_HAS_* промпт
-// НЕ должен утверждать, что проверки недоступны: на чистом dev/CI это
-// ошибочно запретило бы интеграционные тесты.
+// TestQAPromptDegradedCapabilities — явно недоступное окружение (SANDBOX_HAS_*=0)
+// помечается как INFRA_DEGRADED.
+func TestQAPromptDegradedCapabilities(t *testing.T) {
+	q := newTestQA(t)
+	q.capabilities = func() sandbox.Capabilities {
+		return sandbox.Capabilities{Docker: sandbox.StateUnavailable}
+	}
+	p := q.GetSystemMessages(nil)[0].Message
+	if !strings.Contains(p, "INFRA_DEGRADED") || !strings.Contains(p, "Docker") {
+		t.Errorf("явно недоступное окружение не отражено как INFRA_DEGRADED:\n%s", p)
+	}
+}
+
+// TestQAPromptUndeclaredCapabilitiesDetectByFact — неизвестные возможности
+// промпт НЕ должен объявлять недоступными: на чистом dev/CI это ошибочно
+// запретило бы интеграционные тесты.
 func TestQAPromptUndeclaredCapabilitiesDetectByFact(t *testing.T) {
-	t.Setenv("SANDBOX_HAS_DOCKER", "")
-	t.Setenv("SANDBOX_HAS_POSTGRES", "")
-	t.Setenv("SANDBOX_HAS_MINIO", "")
 	p := newTestQA(t).GetSystemMessages(nil)[0].Message
 	if !strings.Contains(p, "не объявлены") || !strings.Contains(p, "по факту") {
-		t.Fatalf("при необъявленном окружении промпт должен просить определить по факту:\n%s", p)
+		t.Fatalf("при неизвестном окружении промпт должен просить определить по факту:\n%s", p)
 	}
 	if strings.Contains(p, "невозможны") {
-		t.Errorf("необъявленное окружение не должно объявлять проверки невозможными:\n%s", p)
+		t.Errorf("неизвестное окружение не должно объявлять проверки невозможными:\n%s", p)
 	}
 }

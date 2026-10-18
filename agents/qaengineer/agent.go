@@ -52,6 +52,18 @@ type QAEngineer struct {
 	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
 	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
 	Store services.BoardStore
+	// capabilities — источник возможностей окружения для промпта. nil —
+	// sandbox.ResolveCapabilities() (объявление DevOps + проба). Поле —
+	// точка внедрения для детерминированных тестов.
+	capabilities func() sandbox.Capabilities
+}
+
+// caps — возможности окружения для сводки в промпте.
+func (q *QAEngineer) caps() sandbox.Capabilities {
+	if q.capabilities != nil {
+		return q.capabilities()
+	}
+	return sandbox.ResolveCapabilities()
 }
 
 // SetBoardStore подключает QA-инженера к общей Kanban-доске проекта: добавляет
@@ -251,7 +263,7 @@ func (q *QAEngineer) GetSystemMessages(_ []agents.Message) []agents.Message {
 // и помечает их degrade окружения, а не дефектом кода. Без объявленных
 // возможностей правило просит определить доступность по факту запуска.
 func (q *QAEngineer) envRule() string {
-	return "ОКРУЖЕНИЕ (возможности песочницы): " + sandbox.ReadCapabilities().Summary() + ".\n\n"
+	return "ОКРУЖЕНИЕ (возможности песочницы): " + q.caps().Summary() + ".\n\n"
 }
 
 // defectRule — что делать QA при найденном дефекте продукта. С доской (Kanban)

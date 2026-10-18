@@ -71,5 +71,11 @@ services:
       GIT_COMMITTER_NAME: "AI Sandbox"
       GIT_COMMITTER_EMAIL: "sandbox@localhost"
       CI: "true"
+      # Возможности окружения (п.3.1 A7-04): по умолчанию недоступны —
+      # в песочнице нет docker-сокета и стека БД. Значения прокидываются из
+      # окружения хоста (DevOps/CI), если заданы.
+      SANDBOX_HAS_DOCKER: "${SANDBOX_HAS_DOCKER:-0}"
+      SANDBOX_HAS_POSTGRES: "${SANDBOX_HAS_POSTGRES:-0}"
+      SANDBOX_HAS_MINIO: "${SANDBOX_HAS_MINIO:-0}"
     # Никакого command/entrypoint: иначе аргументы после `run` подставлялись бы
     # внутрь и вторая обёртка shell ломала бы команды вида `make && npm test`.

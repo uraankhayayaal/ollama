@@ -90,8 +90,40 @@ func TestFirstEnvAndTmpAndHostUser(t *testing.T) {
 	if env["HOME"] != Tmp || env["GOCACHE"] == "" {
 		t.Errorf("BaseEnv неполон: %v", env)
 	}
+	// Возможности окружения (п.3.1 A7-04): по умолчанию «0», host-override
+	// прокидывается внутрь контейнера.
+	for _, k := range []string{"SANDBOX_HAS_DOCKER", "SANDBOX_HAS_POSTGRES", "SANDBOX_HAS_MINIO"} {
+		if _, ok := env[k]; !ok {
+			t.Errorf("BaseEnv не содержит %s: %v", k, env)
+		}
+	}
 	if u := HostUser(); u != "" && (u[0] < '0' || u[0] > '9') {
 		t.Errorf("HostUser = %q, ожидался uid:gid", u)
+	}
+}
+
+// TestCapabilityEnvPassthrough — SANDBOX_HAS_* из окружения харнесса
+// попадают в env песочницы; по умолчанию «0»; compose-файл только при задании.
+func TestCapabilityEnvPassthrough(t *testing.T) {
+	t.Setenv("SANDBOX_HAS_DOCKER", "")
+	t.Setenv("SANDBOX_HAS_POSTGRES", "1")
+	t.Setenv("SANDBOX_HAS_MINIO", "")
+	t.Setenv("SANDBOX_COMPOSE_FILE", "")
+
+	env := CapabilityEnv()
+	if env["SANDBOX_HAS_DOCKER"] != "0" {
+		t.Errorf("SANDBOX_HAS_DOCKER = %q, по умолчанию ожидалось 0", env["SANDBOX_HAS_DOCKER"])
+	}
+	if env["SANDBOX_HAS_POSTGRES"] != "1" {
+		t.Errorf("SANDBOX_HAS_POSTGRES = %q, host-override не прокинут", env["SANDBOX_HAS_POSTGRES"])
+	}
+	if _, ok := env["SANDBOX_COMPOSE_FILE"]; ok {
+		t.Errorf("пустой SANDBOX_COMPOSE_FILE не должен попадать в env: %v", env)
+	}
+
+	t.Setenv("SANDBOX_COMPOSE_FILE", "compose.yaml")
+	if env := CapabilityEnv(); env["SANDBOX_COMPOSE_FILE"] != "compose.yaml" {
+		t.Errorf("SANDBOX_COMPOSE_FILE не прокинут: %v", env)
 	}
 }
 

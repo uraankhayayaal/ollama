@@ -214,7 +214,7 @@ const Tmp = "/tmp"
 // infrastructure/sandbox/Dockerfile и infrastructure/sandbox/compose.yaml: HOME и все кэши в /tmp, чтобы
 // рабочий каталог был единственным местом записи.
 func BaseEnv() map[string]string {
-	return map[string]string{
+	env := map[string]string{
 		"HOME":                     Tmp,
 		"XDG_CACHE_HOME":           Tmp + "/.cache",
 		"GOCACHE":                  Tmp + "/.cache/go-build",
@@ -233,6 +233,37 @@ func BaseEnv() map[string]string {
 		"GIT_COMMITTER_NAME":  "AI Sandbox",
 		"GIT_COMMITTER_EMAIL": "sandbox@localhost",
 	}
+	// Возможности окружения (п.3.1 A7-04) прокидываются внутрь контейнера,
+	// чтобы команды приёмки и QA видели те же SANDBOX_HAS_*, что и харнесс.
+	for k, v := range CapabilityEnv() {
+		env[k] = v
+	}
+	return env
+}
+
+// CapabilityEnv — объявленные возможности песочницы (SANDBOX_HAS_*).
+// Значения берутся из окружения харнесса (их задаёт DevOps/CI); по умолчанию
+// «0» — в контейнере песочницы нет docker-сокета и стека БД, поэтому
+// интеграционные проверки там недоступны по умолчанию. SANDBOX_COMPOSE_FILE
+// прокидывается только когда задан.
+func CapabilityEnv() map[string]string {
+	env := map[string]string{
+		"SANDBOX_HAS_DOCKER":   capabilityValue("SANDBOX_HAS_DOCKER"),
+		"SANDBOX_HAS_POSTGRES": capabilityValue("SANDBOX_HAS_POSTGRES"),
+		"SANDBOX_HAS_MINIO":    capabilityValue("SANDBOX_HAS_MINIO"),
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_COMPOSE_FILE")); v != "" {
+		env["SANDBOX_COMPOSE_FILE"] = v
+	}
+	return env
+}
+
+// capabilityValue — значение SANDBOX_HAS_* из окружения харнесса, иначе «0».
+func capabilityValue(name string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return "0"
 }
 
 // HostUser — идентификаторы текущего пользователя хоста в формате uid:gid

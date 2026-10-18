@@ -25,14 +25,19 @@ Docker или не поднят стек (Postgres/MinIO), интеграцио�
 песочницы. Оркестратор/QA читают их и помечают отчёт `infra_degraded`, если
 требуемой возможности нет.
 
-> **Текущее состояние.** Потребитель реализован: `sandbox.ReadCapabilities()`
-> (`infrastructure/sandbox/capabilities.go`) читает `SANDBOX_HAS_*`, а QA-агент
-> добавляет сводку в системный промпт (`agents/qaengineer/agent.go`, `envRule`).
+> **Текущее состояние.** Потребитель реализован:
+> `infrastructure/sandbox/capabilities.go` — tri-state (`Unknown/Available/
+> Unavailable`): `ReadCapabilities` (env), `DetectCapabilities` (авто-детект:
+> docker ping, `dialPort` 5432/9000), `ResolveCapabilities` (env приоритетнее
+> факта; при отсутствии env — детект) и `Summary()`. QA-агент добавляет сводку
+> в системный промпт (`agents/qaengineer/agent.go`, `capabilities`/`envRule`).
 > Если переменные **не объявлены**, промпт не утверждает, что проверки
 > недоступны, а просит определить доступность по факту запуска — чтобы на
 > чистом dev/CI интеграционные тесты не пропускались ошибочно.
+> `SANDBOX_HAS_*` пробрасываются в контейнер: `sandbox.CapabilityEnv()` входит
+> в `BaseEnv()`, объявлены в `Dockerfile` и `compose.yaml`.
 > Открытая часть п. 3.1 — фактическая преднастройка Docker-стека в CI-песочнице
-> силами DevOps.
+> силами DevOps (`docs/plans/PLAN-2026-10-18-todo-devops-sandbox-provisioning.md`).
 
 | Переменная | Значения | Смысл |
 |---|---|---|
@@ -41,8 +46,9 @@ Docker или не поднят стек (Postgres/MinIO), интеграцио�
 | `SANDBOX_HAS_MINIO` | `1`/`0` | MinIO (S3) поднят и отвечает |
 | `SANDBOX_COMPOSE_FILE` | путь | compose-файл стека (если есть) |
 
-Отсутствие переменных трактуется как `0` (возможности нет) — fail-safe:
-неизвестное окружение не считается «полным».
+Отсутствие переменных — не «0», а «неизвестно»: `ResolveCapabilities`
+дополняет их авто-детектом (docker ping, порт 5432/9000). Явно проставленный
+`0` означает «проверено — недоступно» и не переопределяется детектом.
 
 Уже существующие в коде пробы (переиспользовать, не дублировать):
 

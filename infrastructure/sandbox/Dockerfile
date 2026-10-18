@@ -42,7 +42,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     GIT_AUTHOR_EMAIL="sandbox@localhost" \
     GIT_COMMITTER_NAME="AI Sandbox" \
     GIT_COMMITTER_EMAIL="sandbox@localhost" \
-    CI=true
+    CI=true \
+    SANDBOX_HAS_DOCKER=0 \
+    SANDBOX_HAS_POSTGRES=0 \
+    SANDBOX_HAS_MINIO=0
 
 # Один слой apt-get: apt сам не умеет чистить в том же слое при удалении.
 RUN set -eux; \

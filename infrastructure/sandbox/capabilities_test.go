@@ -13,56 +13,78 @@ func TestCapabilitiesFromReadsEnv(t *testing.T) {
 		"SANDBOX_COMPOSE_FILE": " compose.yaml ",
 	}
 	got := capabilitiesFrom(func(k string) string { return env[k] })
-	want := Capabilities{Docker: true, Postgres: true, MinIO: true, ComposeFile: "compose.yaml", Declared: true}
+	want := Capabilities{
+		Docker:      StateAvailable,
+		Postgres:    StateAvailable,
+		MinIO:       StateAvailable,
+		ComposeFile: "compose.yaml",
+	}
 	if got != want {
 		t.Fatalf("capabilitiesFrom = %+v, want %+v", got, want)
 	}
 }
 
-func TestCapabilitiesUndeclaredIsNotDegraded(t *testing.T) {
-	empty := capabilitiesFrom(func(string) string { return "" })
-	if empty.Declared {
-		t.Fatal("без SANDBOX_HAS_* окружение не должно считаться объявленным")
+func TestStateFromEnvUnknownVsDeclared(t *testing.T) {
+	if got := stateFromEnv(""); got != StateUnknown {
+		t.Fatalf("пустая переменная = %v, ожидалось StateUnknown", got)
 	}
-	// Ключевое: на чистом dev/CI промпт не должен утверждать, что проверки
-	// недоступны, — только просить определить по факту.
-	s := empty.Summary()
-	if !strings.Contains(s, "не объявлены") || !strings.Contains(s, "по факту") {
-		t.Fatalf("Summary необъявленного окружения=%q, ожидалось «не объявлены … по факту»", s)
+	if got := stateFromEnv("0"); got != StateUnavailable {
+		t.Fatalf("явный 0 = %v, ожидалось StateUnavailable", got)
 	}
-	if strings.Contains(s, "невозможны") {
-		t.Fatalf("Summary не должен утверждать невозможность без объявления: %q", s)
+	if got := stateFromEnv("1"); got != StateAvailable {
+		t.Fatalf("1 = %v, ожидалось StateAvailable", got)
 	}
 }
 
-func TestCapabilitiesMissingAndSummary(t *testing.T) {
-	declaredEmpty := capabilitiesFrom(func(k string) string {
-		if k == "SANDBOX_HAS_DOCKER" {
-			return "0"
-		}
-		return ""
-	})
-	if !declaredEmpty.Declared {
-		t.Fatal("явная установка SANDBOX_HAS_DOCKER=0 должна помечать окружение объявленным")
+func TestResolveCapabilitiesEnvWinsDetectionFillsUnknown(t *testing.T) {
+	env := func(k string) string { return map[string]string{"SANDBOX_HAS_DOCKER": "0"}[k] }
+	detect := func() Capabilities {
+		return Capabilities{Docker: StateAvailable, Postgres: StateAvailable, MinIO: StateUnknown}
 	}
-	if got := declaredEmpty.Missing(); len(got) != 3 || got[0] != "Docker" || got[1] != "Postgres" || got[2] != "MinIO" {
-		t.Fatalf("Missing = %v, want [Docker Postgres MinIO]", got)
+	got := resolveCapabilities(env, detect)
+	// Явное 0 от DevOps важнее пробы.
+	if got.Docker != StateUnavailable {
+		t.Errorf("Docker = %v, явное объявление 0 должно победить пробу", got.Docker)
 	}
-	if s := declaredEmpty.Summary(); !strings.Contains(s, "degrade окружения") || !strings.Contains(s, "Docker") {
-		t.Fatalf("Summary деградированного окружения=%q, ожидалось упоминание degrade и Docker", s)
+	// Неизвестные уточняются пробой.
+	if got.Postgres != StateAvailable {
+		t.Errorf("Postgres = %v, ожидалось StateAvailable из пробы", got.Postgres)
+	}
+	if got.MinIO != StateUnknown {
+		t.Errorf("MinIO = %v, проба не подтвердила — должно остаться StateUnknown", got.MinIO)
+	}
+}
+
+func TestSummaryStates(t *testing.T) {
+	allUnknown := Capabilities{}
+	if s := allUnknown.Summary(); !strings.Contains(s, "не объявлены") || strings.Contains(s, "невозможны") {
+		t.Fatalf("пустое окружение Summary=%q: ожидалось «не объявлены» без «невозможны»", s)
 	}
 
-	full := Capabilities{Docker: true, Postgres: true, MinIO: true, Declared: true}
-	if !full.Complete() {
-		t.Fatal("полный набор должен быть Complete")
+	unavail := Capabilities{Docker: StateUnavailable, Postgres: StateUnknown, MinIO: StateUnknown}
+	if s := unavail.Summary(); !strings.Contains(s, "INFRA_DEGRADED") || !strings.Contains(s, "Docker") {
+		t.Fatalf("явно недоступное Summary=%q, ожидалось упоминание INFRA_DEGRADED/Docker", s)
 	}
+
+	full := Capabilities{Docker: StateAvailable, Postgres: StateAvailable, MinIO: StateAvailable}
 	if s := full.Summary(); !strings.Contains(s, "выполнимы") {
-		t.Fatalf("Summary полного окружения=%q, ожидалось «выполнимы»", s)
+		t.Fatalf("полное окружение Summary=%q, ожидалось «выполнимы»", s)
 	}
 
-	partial := Capabilities{Docker: true}
-	if got := partial.Missing(); len(got) != 2 || got[0] != "Postgres" || got[1] != "MinIO" {
-		t.Fatalf("Missing частичного окружения = %v, want [Postgres MinIO]", got)
+	partial := Capabilities{Docker: StateAvailable, Postgres: StateUnknown, MinIO: StateUnknown}
+	s := partial.Summary()
+	if !strings.Contains(s, "доступно: Docker") || !strings.Contains(s, "не объявлено") || !strings.Contains(s, "по факту") {
+		t.Fatalf("частичное окружение Summary=%q, ожидалось «доступно: Docker» + «не объявлено … по факту»", s)
+	}
+}
+
+func TestCapabilitiesAvailableUnavailable(t *testing.T) {
+	c := Capabilities{Docker: StateAvailable, Postgres: StateUnavailable, MinIO: StateUnknown}
+	if got := c.Available(); len(got) != 1 || got[0] != "Docker" {
+		t.Fatalf("Available = %v, want [Docker]", got)
+	}
+	if got := c.Unavailable(); len(got) != 1 || got[0] != "Postgres" {
+		t.Fatalf("Unavailable = %v, want [Postgres]", got)
 	}
 }
 
