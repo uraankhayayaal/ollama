@@ -64,3 +64,44 @@ go test  . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runn
 **Запрещено:** `cat`/`head`/`tail` (аналог `ReadFiles`), `grep -r` без `--exclude-dir`, полные сценарии сборки без `-v`/`-q`.
 
 Внутренние агенты (`agents/*`) имеют только `Run`/`ReadFiles`/`Write` — правила сокращения те же.
+
+## Системные гейты доски (QA / оркестратор / песочница)
+
+Основание: `docs/plans/PLAN-2026-10-18-A7-04-system-fix.md` (инцидент A7-04 — ping-pong `testing ↔ in_progress` без дефекта).
+
+### Классификация ошибок: CODE vs INFRA
+- **`CODE_FAIL`** — реальный дефект кода: несоответствие контрактам, падение unit-тестов, баги логики. Требует **конкретного замечания** (`файл:строка`, команда воспроизведения или шаги).
+- **`CODE_OK | LINT_DEGRADED`** — `golangci-lint` отсутствует в песочнице → **не блокер**, не дефект.
+- **`INFRA_DEGRADED`** — `migrate: connection refused` (нет Postgres), `docker: not found`/`DOCKER_UNAVAILABLE`, `make infra.up` не поднимает стек. **Не блокер** unit/contract-проверок → эскалация в **DevOps**, **не** возврат разработчику.
+- **`INFRA_BLOCKED`** — явная невозможность интеграционных проверок; фиксируется с причиной, **не смешивается** с `CODE_FAIL`.
+
+### Handoff Gate «Ready for QA»
+Разработчик переводит задачу в `testing` (или агент отвечает текстом) **только** когда:
+1. `git status --short` — пусто (или только разрешённые артефакты); изменения **закоммичены**.
+2. `go build ./...` — exit 0.
+3. `go test -race -count=1 ./...` (или `make backend-test`) — exit 0.
+4. `gofmt -l .` — пусто.
+5. `go vet ./...` — exit 0.
+
+- **Post-write build-gate:** сразу после серии `WriteFiles`/`SearchReplace` — `go build ./...`; при ошибке **остановиться**, починить атомарно, не запускать тесты.
+- В комментарии при переводе в `testing` фиксировать SHA коммита (HEAD).
+- **Запрещено** передавать в QA код с нерабочей сборкой.
+
+### Anti-ping-pong
+- Возврат `testing → in_progress` возможен **только** с конкретным `reason` (файл:строка / команда воспроизведения / шаги). Общее «нужна доработка» **отклоняется** инструментом `BoardSetTaskStatus` (`tools/board_defect.go`), QA-комментарий с дефектом сохраняется в задаче.
+- Fallback/`pulse expired` **не** является основанием для реверса `testing → in_progress`.
+- `testing → quiet revert` без дефекта = инцидент; фиксируется `loop_prevented`.
+
+### Shell / Workdir / Encoding safety
+- **Shell:** не использовать `${PIPESTATUS[...]}` и прочие bashisms под `/bin/sh`; при необходимости — `bash -lc` или разбить команды.
+- **Workdir:** запрещены жёсткие пути (`/home/user/project`, `/var/task`) вне `workdir` задачи (`temp/.wt-task-*`); `cd` заменять параметром `workdir`.
+- **Encoding:** записи в UTF-8 без BOM; не использовать невалидный UTF-8/mojibake в `search` — брать бóльший уникальный контекст.
+- **Patches:** `search` уникален в файле; избегать коротких дрейфующих фрагментов.
+
+### Re-entry guard («старая версия ПО»)
+- На входе в задачу: `git log -n 1 --oneline`, `git status --short`, `git diff --name-only`. Противоречивый WIP — сначала довести до **build green**, затем править.
+- Контракты (`internal/service/interfaces.go`, `internal/repo/interfaces.go`, `internal/api/handlers/handlers.go`) — **источник истины**; при расхождении тестов с контрактом править реализацию под контракт, не наоборот.
+
+### Правила приёма QA
+- Приёмка только готового артефакта (build/vet/race+cover unit-тесты зелёные).
+- `CODE_FAIL` → возврат с **конкретным** дефектом; `INFRA_*` → DevOps; `CODE` зелёные + только INFRA degrade → **done**.

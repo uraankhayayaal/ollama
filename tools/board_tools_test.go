@@ -467,3 +467,62 @@ func TestBoardSetTaskStatusHumanHelpReason(t *testing.T) {
 		t.Fatalf("причина паузы должна очиститься при выходе из паузы: %q", got.PauseReason)
 	}
 }
+
+// BoardSetTaskStatus(testing → in_progress) — откат работы разработчику требует
+// конкретного дефекта (инцидент A7-04: ping-pong testing ↔ in_progress без
+// замечаний). Общая формулировка отклоняется, конкретная — принимается и
+// оседает QA-комментарием, чтобы разработчик видел, что исправлять.
+func TestBoardSetTaskStatusQaRevertRequiresConcreteDefect(t *testing.T) {
+	set, store := newBoardToolSet(t)
+	ctx := context.Background()
+
+	mustExec(t, set, BoardCreateEpic, map[string]any{
+		"task_id": "EPIC-QA", "title": "Приёмка", "description": "тесты", "assigned_role": "QA Lead",
+		"sequence_order": 1,
+	})
+	mustExec(t, set, BoardCreateTask, map[string]any{
+		"epic_id": "EPIC-QA", "task_id": "QA-01", "title": "Фото CRUD",
+		"description": "photos", "assigned_role": "Middle Go Developer", "sequence_order": 1,
+	})
+	for _, st := range []string{"analysis", "ready", "in_progress", "testing"} {
+		mustExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "QA-01", "status": st})
+	}
+
+	// Без reason — отказ, статус не меняется.
+	msg := errExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "QA-01", "status": "in_progress"})
+	if !strings.Contains(msg, "reason") {
+		t.Fatalf("возврат без причины должен отказывать с упоминанием reason, got %q", msg)
+	}
+	// Общая формулировка — тоже отказ.
+	msg = errExec(t, set, BoardSetTaskStatus, map[string]any{
+		"task_id": "QA-01", "status": "in_progress", "reason": "нужна доработка",
+	})
+	if !strings.Contains(msg, "конкрет") {
+		t.Fatalf("общая причина должна отказывать с упоминанием конкретики, got %q", msg)
+	}
+	if got, _ := store.GetTask(ctx, "QA-01"); got.Status != board.StatusTesting {
+		t.Fatalf("отказ не должен менять статус: %s", got.Status)
+	}
+
+	// Конкретный дефект (файл:строка) — принимается, комментарий QA сохранён.
+	mustExec(t, set, BoardSetTaskStatus, map[string]any{
+		"task_id": "QA-01", "status": "in_progress",
+		"reason": "internal/storage/s3_storage.go:49 — синтаксическая ошибка, go build падает",
+	})
+	got, err := store.GetTask(ctx, "QA-01")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Status != board.StatusInProgress {
+		t.Fatalf("конкретный дефект должен вернуть задачу в работу: %s", got.Status)
+	}
+	found := false
+	for _, c := range got.Comments {
+		if c.Type == board.CommentTypeQA && strings.Contains(c.Body, "s3_storage.go:49") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("QA-комментарий с дефектом не сохранён: %+v", got.Comments)
+	}
+}
