@@ -189,3 +189,35 @@ func TestQAPromptTestPortfolio(t *testing.T) {
 		}
 	}
 }
+
+// TestQAPromptReportsSandboxCapabilities — п.3.1 A7-04: объявленные DevOps
+// возможности (SANDBOX_HAS_*) попадают в промпт, чтобы интеграционные
+// проверки классифицировались как INFRA_DEGRADED, а не дефект кода.
+func TestQAPromptReportsSandboxCapabilities(t *testing.T) {
+	t.Setenv("SANDBOX_HAS_DOCKER", "1")
+	t.Setenv("SANDBOX_HAS_POSTGRES", "1")
+	t.Setenv("SANDBOX_HAS_MINIO", "1")
+	p := newTestQA(t).GetSystemMessages(nil)[0].Message
+	if !strings.Contains(p, "ОКРУЖЕНИЕ (возможности песочницы)") {
+		t.Fatalf("промпт не содержит блок окружения:\n%s", p)
+	}
+	if !strings.Contains(p, "интеграционные проверки выполнимы") {
+		t.Errorf("объявленные возможности не отражены в промпте:\n%s", p)
+	}
+}
+
+// TestQAPromptUndeclaredCapabilitiesDetectByFact — без SANDBOX_HAS_* промпт
+// НЕ должен утверждать, что проверки недоступны: на чистом dev/CI это
+// ошибочно запретило бы интеграционные тесты.
+func TestQAPromptUndeclaredCapabilitiesDetectByFact(t *testing.T) {
+	t.Setenv("SANDBOX_HAS_DOCKER", "")
+	t.Setenv("SANDBOX_HAS_POSTGRES", "")
+	t.Setenv("SANDBOX_HAS_MINIO", "")
+	p := newTestQA(t).GetSystemMessages(nil)[0].Message
+	if !strings.Contains(p, "не объявлены") || !strings.Contains(p, "по факту") {
+		t.Fatalf("при необъявленном окружении промпт должен просить определить по факту:\n%s", p)
+	}
+	if strings.Contains(p, "невозможны") {
+		t.Errorf("необъявленное окружение не должно объявлять проверки невозможными:\n%s", p)
+	}
+}
