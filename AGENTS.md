@@ -72,7 +72,7 @@ go test  . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runn
 ### Классификация ошибок: CODE vs INFRA
 - **`CODE_FAIL`** — реальный дефект кода: несоответствие контрактам, падение unit-тестов, баги логики. Требует **конкретного замечания** (`файл:строка`, команда воспроизведения или шаги).
 - **`CODE_OK | LINT_DEGRADED`** — `golangci-lint` отсутствует в песочнице → **не блокер**, не дефект.
-- **`INFRA_DEGRADED`** — `migrate: connection refused` (нет Postgres), `docker: not found`/`DOCKER_UNAVAILABLE`, `make infra.up` не поднимает стек. **Не блокер** unit/contract-проверок → эскалация в **DevOps**, **не** возврат разработчику.
+- **`INFRA_DEGRADED`** — `migrate: connection refused` (нет Postgres), `docker: not found`/`DOCKER_UNAVAILABLE`, `make infra.up` не поднимает стек. **Не блокер** unit/contract-проверок → эскалация в **DevOps**, **не** возврат разработчику. Контракт capabilities и чеклист преднастройки песочницы — `docs/40-operations/sandbox-readiness.md`.
 - **`INFRA_BLOCKED`** — явная невозможность интеграционных проверок; фиксируется с причиной, **не смешивается** с `CODE_FAIL`.
 
 ### Handoff Gate «Ready for QA»

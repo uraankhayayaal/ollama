@@ -31,7 +31,7 @@
 - [x] Зафиксировать границу: `CODE_FAIL` → разработчик/QA по дефекту; `INFRA_*` → DevOps. Документировано в `AGENTS.md` («Классификация ошибок»).
 - [x] Если Docker/БД не настроены — `INFRA_DEGRADED`, E2E/migrate/`bin/server` без БД — **degrade-only**, **не fail** unit-проверок. Уже реализовано в промпте QA (`agents/qaengineer/agent.go`) и в `AppLogs` (skip при недоступности docker/compose). Документировано в `AGENTS.md`.
 - [ ] **DevOps-owned (внешняя инфраструктура):** преднастроить песочницу Docker-рантаймом и, при необходимости, поднимать стек Postgres/MinIO (`SANDBOX_HAS_DOCKER/POSTGRES/MINIO`, либо `infra.capabilities`). Проверка `EngineAvailable()` (`infrastructure/sandbox/engine.go`) уже есть для auto-режима; `haveTool("docker")` — для AppLogs. Требуется решение DevOps о capabilities CI/sandbox; агенты не могут выполнить это правкой кода.
-  - Чеклист DevOps: (1) Docker daemon доступен в песочнице авто-проверки; (2) `docker compose up -d` поднимает Postgres+MinIO; (3) миграции `make migrate` проходят; (4) при недоступности — окружение явно помечается `INFRA_DEGRADED`.
+  - Чеклист и контракт capabilities вынесены в `docs/40-operations/sandbox-readiness.md`: (1) Docker daemon доступен в песочнице авто-проверки; (2) `docker compose up -d` поднимает Postgres+MinIO; (3) миграции `make migrate` проходят; (4) при недоступности — окружение явно помечается `INFRA_DEGRADED`; (5) `SANDBOX_HAS_DOCKER/POSTGRES/MINIO` отражают факт.
 
 ### 3.2 Оркестратор/Board — Anti-ping-pong
 - [x] **Запретить** автоматический откат `testing → in_progress` без QA-замечания. Fallback `pulse expired`/`agent did not change status` **не** меняет статус. Альтернатива: `stale_in_testing` + системный коммент без реверса.
