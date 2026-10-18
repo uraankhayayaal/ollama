@@ -207,7 +207,7 @@ func newTool(name string, deps Deps) Tool {
 	case BoardDeleteTask:
 		return &boardDeleteTaskTool{b: deps.Board}
 	case BoardSetTaskStatus:
-		return &boardSetTaskStatusTool{b: deps.Board}
+		return &boardSetTaskStatusTool{b: deps.Board, ops: deps.FileOps}
 	case BoardCreateBug:
 		return &boardCreateBugReportTool{b: deps.Board}
 	case BoardSetBugStatus:

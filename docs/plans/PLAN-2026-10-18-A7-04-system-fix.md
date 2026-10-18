@@ -1,7 +1,7 @@
 # PLAN-2026-10-18-A7-04-system-fix — Системное решение для A7-04 (QA/оркестратор/песочница)
 
 Дата: 2026-10-18
-Статус: draft
+Статус: done (код-часть); открыт трек DevOps — см. `PLAN-2026-10-18-todo-devops-sandbox-provisioning.md`
 Автор: opencode
 Контекст: A7-04 возвращался из `testing` в `in_progress` без конкретного дефекта, при повторном входе агент правил WIP (S3Storage) → сборка периодически ломалась (mojibake/posix-shell), круговорот `testing ↔ in_progress`.
 
@@ -30,8 +30,9 @@
 ### 3.1 DevOps — Sandbox Readiness (контракт окружения)
 - [x] Зафиксировать границу: `CODE_FAIL` → разработчик/QA по дефекту; `INFRA_*` → DevOps. Документировано в `AGENTS.md` («Классификация ошибок»).
 - [x] Если Docker/БД не настроены — `INFRA_DEGRADED`, E2E/migrate/`bin/server` без БД — **degrade-only**, **не fail** unit-проверок. Уже реализовано в промпте QA (`agents/qaengineer/agent.go`) и в `AppLogs` (skip при недоступности docker/compose). Документировано в `AGENTS.md`.
-- [x] **Контракт capabilities реализован в коде:** `sandbox.ReadCapabilities()` (`infrastructure/sandbox/capabilities.go`) читает `SANDBOX_HAS_DOCKER/POSTGRES/MINIO` (+`SANDBOX_COMPOSE_FILE`); `Missing()/Complete()/Summary()` дают сводку; `Declared` отличает «не задано» от «недоступно». QA-агент вставляет сводку в системный промпт (`agents/qaengineer/agent.go`, `envRule`). Тесты: `capabilities_test.go`, `TestQAPromptReportsSandboxCapabilities` / `TestQAPromptUndeclaredCapabilitiesDetectByFact`.
-- [ ] **DevOps-owned (внешняя инфраструктура):** фактически преднастроить песочницу авто-проверки Docker-рантаймом и стеком Postgres/MinIO; проставить `SANDBOX_HAS_*`. Правкой кода не закрывается (нужен DevOps/CI).
+- [x] **Контракт capabilities реализован в коде:** `infrastructure/sandbox/capabilities.go` — tri-state `State` (`Unknown/Available/Unavailable`): `ReadCapabilities` (env `SANDBOX_HAS_*`), `DetectCapabilities` (docker ping, `dialPort` 5432/9000), `ResolveCapabilities` (env приоритетнее факта; при отсутствии env — авто-детект) и `Summary()`. QA-агент вставляет сводку через `capabilities func() sandbox.Capabilities` + `envRule` (`agents/qaengineer/agent.go`). Тесты: `capabilities_test.go`, `TestQAPromptReportsSandboxCapabilities` / `TestQAPromptDegradedCapabilities` / `TestQAPromptUndeclaredCapabilitiesDetectByFact`.
+- [x] **Проброс `SANDBOX_HAS_*` в контейнер:** `sandbox.CapabilityEnv()` включается в `BaseEnv()` (`workspace.go`); `Dockerfile` объявляет `ENV SANDBOX_HAS_DOCKER/POSTGRES/MINIO=0`; `compose.yaml` прокидывает `${SANDBOX_HAS_*:-0}`. Тесты: `TestCapabilityEnvPassthrough`, проверка ключей `BaseEnv`, триада `tools/sandbox_test.go`.
+- [ ] **DevOps-owned (внешняя инфраструктура):** фактически преднастроить песочницу авто-проверки Docker-рантаймом и стеком Postgres/MinIO; проставить `SANDBOX_HAS_*`. Правкой кода не закрывается (нужен DevOps/CI). Вынесено отдельной задачей: `docs/plans/PLAN-2026-10-18-todo-devops-sandbox-provisioning.md`.
   - Чеклист и контракт capabilities: `docs/40-operations/sandbox-readiness.md`: (1) Docker daemon доступен в песочнице авто-проверки; (2) `docker compose up -d` поднимает Postgres+MinIO; (3) миграции `make migrate` проходят; (4) при недоступности — окружение явно помечается `INFRA_DEGRADED`; (5) `SANDBOX_HAS_DOCKER/POSTGRES/MINIO` отражают факт.
 
 ### 3.2 Оркестратор/Board — Anti-ping-pong
@@ -41,12 +42,13 @@
 - [x] Не использовать истечение пульса как основание для реверса статуса.
 
 ### 3.3 Handoff Gate «Ready for QA»
-- [ ] Обязательные условия выхода `in_progress → testing`:
-  1. `git status --short` пуст **или** только разрешённые артефакты (например `TEST_REPORT.md` при аккуратном handoff). **Предпочтительно** все изменения закоммичены.
-  2. `go build ./...` == 0
-  3. `go test -race -count=1 ./...` == 0 (или `make backend-test`)
-  4. `gofmt -l .` пуст
-  5. `go vet ./...` == 0
+- [x] Обязательные условия выхода `in_progress → testing` (**код-гейт** `tools/board_handoff.go`, вызывается из `BoardSetTaskStatus` при `in_progress → testing`; `ops *FileOps` из `tools/registry.go`):
+  1. `git status --short --untracked-files=no` пуст (нет незакоммиченных правок **отслеживаемых** файлов; untracked-артефакты вроде отчёта не блокируют).
+  2. Сборка проекта по маркерам (`go build ./...` для `go.mod`, `npm run build --if-present`, `python -m compileall`) переопределяется `CODEGEN_HANDOFF_CMD`.
+  3. `go test -race -count=1` / vet / gofmt — выполняются QA при приёме (гейт ловит класс A7-04 «сломанная сборка» до приёмки).
+  4. `gofmt -l .` пуст — проверка QA.
+  5. `go vet ./...` == 0 — проверка QA.
+- [x] Инфра-деград (песочница/тулчейн/git недоступны) **не блокирует** гейт; аварийное выключение — `CODEGEN_HANDOFF_GATE=off`. Тесты: `tools/board_handoff_test.go`.
 - [x] **Пост-запись build-gate**: зафиксировано в `AGENTS.md` (быстрая проверка `go build ./...` после `WriteFiles`/`SearchReplace`; при ошибке — стоп, атомарный фикс).
 - [x] Перед переводом в `testing` фиксировать `HEAD` в комментарии (обязательное правило).
 - [x] Запрет передачи в QA кода с нерабочей сборкой.
@@ -90,14 +92,16 @@
 
 ## 5. План внедрения (по слоям)
 
-1. **DevOps** (3.1) — классификация зафиксирована; **преднастройка песочницы (Docker/стек) — открытый пункт за DevOps**.
+1. **DevOps** (3.1) — классификация зафиксирована + контракт capabilities реализован (tri-state + авто-детект + проброс `SANDBOX_HAS_*` в контейнер); **преднастройка песочницы (Docker/стек) — открытый пункт за DevOps** (`PLAN-2026-10-18-todo-devops-sandbox-provisioning.md`).
 2. **Orchestrator/Board** (3.2) — ✅ гард `testing → in_progress` без конкретного дефекта (`tools/board_defect.go` + `tools/board_tools.go`, тест `TestBoardSetTaskStatusQaRevertRequiresConcreteDefect`).
-3. **Agent workflow** (3.3–3.5) — ✅ handoff gate, post-write build-gate, re-entry guard, shell/workdir/encoding safety (в `AGENTS.md`).
+3. **Agent workflow** (3.3–3.5) — ✅ handoff gate (код-гейт `tools/board_handoff.go` + правило в `AGENTS.md`), post-write build-gate, re-entry guard, shell/workdir/encoding safety (в `AGENTS.md`).
 4. **QA-agent** (3.6) — ✅ классификация CODE/INFRA + правило приёма (в `AGENTS.md`).
 5. **Hotfix A7-04** (3.7) — ✅ стабилизация, коммит `32a1239`, все проверки зелёные.
 
 **Примечание:** правки системные, **аккуратные**. Не переписывать задачу заново. Фокус — правила передачи/приёма и границы ответственности (Infra vs Code).
 
 ### Текущий статус
-- Код-фиксы и правила внедрены; unit-тесты `tools`/`server`/`application` — зелёные.
-- Единственный открытый пункт — **3.1 (DevOps)**: преднастройка Docker-песочницы. Требует участия DevOps, агентом не закрывается.
+- Код-фиксы и правила внедрены; unit-тесты `tools`/`server`/`application` — зелёные; `make depgate` — зелёный.
+- Handoff Gate реализован как код-гейт (`tools/board_handoff.go`): чистота дерева + сборка перед `in_progress → testing`; инфра-деграды не блокируют (`CODEGEN_HANDOFF_GATE=off` — аварийный обход).
+- Capabilities: tri-state + авто-детект + проброс `SANDBOX_HAS_*` в контейнер (`BaseEnv`/`Dockerfile`/`compose.yaml`).
+- Единственный открытый пункт — **3.1 (DevOps)**: преднастройка Docker-песочницы. Требует участия DevOps, агентом не закрывается → `PLAN-2026-10-18-todo-devops-sandbox-provisioning.md`.

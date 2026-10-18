@@ -861,7 +861,13 @@ func (t *boardDeleteTaskTool) Execute(args map[string]any) ([]byte, error) {
 	return boardOK(map[string]any{"deleted": id})
 }
 
-type boardSetTaskStatusTool struct{ b services.BoardStore }
+type boardSetTaskStatusTool struct {
+	b services.BoardStore
+	// ops — файловый контекст специалиста (рабочая директория задачи). Нужен
+	// для Handoff Gate (п.3.3 A7-04): проверки чистоты/сборки перед testing.
+	// nil (standalone/тесты) — гейт пропускается.
+	ops *FileOps
+}
 
 func (t *boardSetTaskStatusTool) Name() string { return BoardSetTaskStatus }
 func (t *boardSetTaskStatusTool) Definition() ToolDefinition {
@@ -897,6 +903,13 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 	tk, err := t.b.GetTask(ctx, id)
 	if err != nil {
 		return boardErrStore(BoardSetTaskStatus, t.b, err)
+	}
+	// Handoff Gate (п.3.3 A7-04): передача из работы в приёмку — только с
+	// чистым деревом и зелёной сборкой. Инфра-деграды не блокируют.
+	if tk.Status == domain.StatusInProgress && st == domain.StatusTesting {
+		if gerr := handoffGate(t.ops); gerr != nil {
+			return boardErr(BoardSetTaskStatus, gerr)
+		}
 	}
 	// Возврат из приёмки в работу (testing → in_progress) — откат задачи
 	// разработчику. Без конкретного дефекта это ping-pong testing ↔ in_progress

@@ -86,6 +86,7 @@ go test  . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runn
 - **Post-write build-gate:** сразу после серии `WriteFiles`/`SearchReplace` — `go build ./...`; при ошибке **остановиться**, починить атомарно, не запускать тесты.
 - В комментарии при переводе в `testing` фиксировать SHA коммита (HEAD).
 - **Запрещено** передавать в QA код с нерабочей сборкой.
+- **Код-гейт:** `BoardSetTaskStatus` при `in_progress → testing` сам проверяет чистоту дерева (`git status --short --untracked-files=no`) и сборку (`go build ./...` по маркерам проекта; override — `CODEGEN_HANDOFF_CMD`, выключение — `CODEGEN_HANDOFF_GATE=off`) — `tools/board_handoff.go`. Инфра-деграды (нет песочницы/тулчейна/git) не блокируют.
 
 ### Anti-ping-pong
 - Возврат `testing → in_progress` возможен **только** с конкретным `reason` (файл:строка / команда воспроизведения / шаги). Общее «нужна доработка» **отклоняется** инструментом `BoardSetTaskStatus` (`tools/board_defect.go`), QA-комментарий с дефектом сохраняется в задаче.
