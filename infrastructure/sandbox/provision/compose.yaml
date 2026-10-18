@@ -1,0 +1,59 @@
+# Стек Postgres + MinIO для песочницы авто-проверки (п.3.1 A7-04).
+#
+# Назначение: дать интеграционным проверкам (migrate/e2e) доступный
+# Postgres/MinIO и сделать SANDBOX_HAS_* достоверными. Стек публикует на хосте
+# типовые порты, которые пробует sandbox.DetectCapabilities:
+#   127.0.0.1:5432 (Postgres), 127.0.0.1:9000 (MinIO S3 API).
+#
+# Подъём/снятие и вывод SANDBOX_HAS_* — `cmd/sandbox-provision`:
+#   go run ./cmd/sandbox-provision up
+#   eval "$(go run ./cmd/sandbox-provision env)"
+#   go run ./cmd/sandbox-provision down          # сохраняет данные
+#   go run ./cmd/sandbox-provision down -v       # вместе с томами
+#
+# Доступ из контейнера-песочницы: сам стек лишь публикует порты на хосте.
+# Адрес подключения задаётся в проекте (DATABASE_URL / S3_ENDPOINT): на Linux —
+# IP шлюза bridge-сети, на Docker Desktop — host.docker.internal.
+#
+# Учётные данные и БД по умолчанию — демо-значения; для реальной песочницы
+# задайте SANDBOX_PG_*/SANDBOX_MINIO_* в окружении.
+
+name: ai-sandbox-provision
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: ai-sandbox-postgres
+    environment:
+      POSTGRES_USER: ${SANDBOX_PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${SANDBOX_PG_PASSWORD:-postgres}
+      POSTGRES_DB: ${SANDBOX_PG_DB:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: ai-sandbox-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${SANDBOX_MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${SANDBOX_MINIO_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # консоль
+    volumes:
+      - miniodata:/data
+    restart: unless-stopped
+
+volumes:
+  pgdata: {}
+  miniodata: {}

@@ -20,15 +20,29 @@
 Настроить песочницу авто-проверки так, чтобы контракт capabilities отражал факт,
 а интеграционные проверки были воспроизводимы.
 
-### Acceptance criteria
+### Репозиторные артефакты (готово)
 
-- [ ] Docker daemon доступен в песочнице: `docker info` — exit 0.
+Воспроизводимый стек и команда управления добавлены в репозиторий:
+
+- [x] `infrastructure/sandbox/provision/compose.yaml` — Postgres + MinIO, публикует
+      типовые порты на хосте (`5432`, `9000`, консоль `9001`) — те же, что пробует
+      `sandbox.DetectCapabilities()`. Проходит `docker compose config`.
+- [x] `cmd/sandbox-provision` — `up` (`docker compose up -d --wait` + ожидание
+      доступности портов), `down`, `status`, `env` (экспорт
+      `SANDBOX_HAS_*`/`SANDBOX_COMPOSE_FILE` по факту). Тесты —
+      `cmd/sandbox-provision/main_test.go`.
+- [x] Чеклист и команды обновлены в `docs/40-operations/sandbox-readiness.md`.
+
+### Acceptance criteria (rollout — за DevOps/CI)
+
+- [ ] Docker daemon доступен в песочнице авто-проверки: `docker info` — exit 0.
 - [ ] `docker compose` доступен: `docker compose version` — exit 0.
-- [ ] Стек поднимается: `docker compose up -d` — Postgres и MinIO `running`/`healthy`.
+- [ ] Стек поднимается: `go run ./cmd/sandbox-provision up` — Postgres `healthy`,
+      порт `9000` отвечает.
 - [ ] Миграции проходят: `make migrate` — exit 0.
 - [ ] Интеграционный прогон возможен: `make e2e` — exit 0.
 - [ ] Проставлены `SANDBOX_HAS_DOCKER=1`, `SANDBOX_HAS_POSTGRES=1`, `SANDBOX_HAS_MINIO=1`
-      (и `SANDBOX_COMPOSE_FILE`, если есть) по **фактическому** состоянию.
+      (`eval "$(go run ./cmd/sandbox-provision env)"`) по **фактическому** состоянию.
 - [ ] При недоступности инфры окружение явно помечается `INFRA_DEGRADED`
       (переменные `=0`), а не молчаливый пропуск.
 
@@ -37,7 +51,8 @@
 ```bash
 docker info >/dev/null 2>&1 && echo "docker: ok" || echo "docker: INFRA_DEGRADED"
 docker compose version >/dev/null 2>&1 && echo "compose: ok" || echo "compose: LINT_DEGRADED"
-docker compose up -d && docker compose ps
+go run ./cmd/sandbox-provision up && go run ./cmd/sandbox-provision status
+eval "$(go run ./cmd/sandbox-provision env)"
 make migrate && make e2e
 ```
 
@@ -45,6 +60,15 @@ make migrate && make e2e
 
 ## Границы
 
-- Правкой кода **не** закрывается: нужен доступ к CI/инфраструктуре песочницы.
+- Репозиторные артефакты готовы; **фактический rollout** (Docker-демон в
+  CI-песочнице, проставление `SANDBOX_HAS_*`) — за DevOps/CI: нужен доступ к
+  инфраструктуре песочницы.
 - Агент не устанавливает инфраструктуру — она должна быть готова **до** запуска задач.
 - Инфра-деграды остаются **не блокерами** unit/contract-проверок (см. `AGENTS.md`).
+
+## Статус
+
+- Код-side (контракт capabilities, авто-детект, проброс `SANDBOX_HAS_*`) — готово, см.
+  `PLAN-2026-10-18-A7-04-system-fix.md`.
+- Репозиторные артефакты провижининга — готово (этот документ).
+- CI-rollout — открыт за DevOps.

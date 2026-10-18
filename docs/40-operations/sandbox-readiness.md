@@ -63,19 +63,44 @@ Docker или не поднят стек (Postgres/MinIO), интеграцио�
 
 - [ ] Docker daemon доступен в песочнице: `docker info` — exit 0.
 - [ ] `docker compose` доступен: `docker compose version` — exit 0.
-- [ ] Стек поднимается: `docker compose up -d` — Postgres и MinIO в статусе `running`/`healthy`.
+- [ ] Стек поднимается: `go run ./cmd/sandbox-provision up` — Postgres `healthy`, порт `9000` отвечает.
 - [ ] Миграции проходят: `make migrate` (или эквивалент) — exit 0.
 - [ ] Интеграционный прогон возможен: `make e2e` — exit 0.
-- [ ] Проставлены `SANDBOX_HAS_DOCKER/POSTGRES/MINIO` по фактическому состоянию.
+- [ ] Проставлены `SANDBOX_HAS_DOCKER/POSTGRES/MINIO` (`eval "$(go run ./cmd/sandbox-provision env)"`).
 - [ ] При недоступности инфры окружение явно помечается `INFRA_DEGRADED`
       (не молчаливый пропуск).
+
+## Провижининг стека (репозиторные артефакты)
+
+Чтобы песочница авто-проверки имела доступный Postgres/MinIO и `SANDBOX_HAS_*`
+были достоверны, в репозитории есть воспроизводимый стек и команда управления:
+
+- `infrastructure/sandbox/provision/compose.yaml` — Postgres + MinIO, публикует
+  типовые порты на хосте (`5432`, `9000`, консоль `9001`) — те же, что пробует
+  `sandbox.DetectCapabilities()`.
+- `cmd/sandbox-provision` — подъём/снятие и вывод возможностей:
+
+```bash
+go run ./cmd/sandbox-provision up        # docker compose up -d --wait + ожидание портов
+eval "$(go run ./cmd/sandbox-provision env)"   # экспорт SANDBOX_HAS_*/SANDBOX_COMPOSE_FILE
+go run ./cmd/sandbox-provision status    # состояние Docker/Postgres/MinIO
+go run ./cmd/sandbox-provision down      # снять (down -v — вместе с томами)
+```
+
+Переопределения: `SANDBOX_PROVISION_COMPOSE` (путь к compose),
+`SANDBOX_PROVISION_TIMEOUT` (сек ожидания готовности, дефолт 90),
+`SANDBOX_PG_*` / `SANDBOX_MINIO_*` (учётные данные).
+
+Стек публикует порты на **хосте** оркестратора; адрес для проекта внутри
+контейнера-песочницы задаётся в самом проекте (`DATABASE_URL`/`S3_ENDPOINT`):
+на Linux — IP шлюза bridge-сети, на Docker Desktop — `host.docker.internal`.
 
 ## Команды проверки
 
 ```bash
 docker info >/dev/null 2>&1 && echo "docker: ok" || echo "docker: INFRA_DEGRADED"
 docker compose version >/dev/null 2>&1 && echo "compose: ok" || echo "compose: LINT_DEGRADED"
-docker compose up -d && docker compose ps
+go run ./cmd/sandbox-provision up && go run ./cmd/sandbox-provision status
 ```
 
 ## Проверка классификации (в отчёте QA)
