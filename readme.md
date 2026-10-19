@@ -124,11 +124,11 @@ npm --prefix web run build
 
 Сценарий В (Nvidia NVFP4)
 ```
-./build/bin/llama-server \
-  --hf-repo williamliao/Qwen3.8-27B-NVFP4-GGUF:NVFP4 \
-  --hf-file Qwen3.8-27B-NVFP4-GGUF.gguf \
+/build/bin/llama-server \
+  -hf williamliao/Qwen3.8-27B-NVFP4-GGUF:NVFP4 \
   -ngl all \
   --split-mode tensor \
+  --tensor-split 1,1 \
   -c 131072 \
   -fa on \
   --cache-type-k q4_0 \
