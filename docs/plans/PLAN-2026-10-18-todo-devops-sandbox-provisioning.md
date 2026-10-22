@@ -41,6 +41,10 @@
       `sandbox-readiness`/`backend-test` в корневом `makefile`.
 - [x] CI-джоб `.github/workflows/sandbox-readiness.yml` — rollout acceptance
       criteria в CI.
+- [x] CI-джоб `.github/workflows/autotest.yml` — автотесты репозитория
+      (Handoff Gate: сборка, ветер, гейт зависимостей, `go test -race`, gofmt
+      по изменённым файлам). Отдельный джоб: интеграционные проверки не
+      маскируют падение юнит-тестов.
 
 ### Acceptance criteria (rollout — за DevOps/CI)
 
