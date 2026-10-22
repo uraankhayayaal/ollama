@@ -85,6 +85,16 @@ jobs:
           make --version 2>/dev/null | head -1 || true
           gcc --version 2>/dev/null | head -1 || true
 
+      # Тесты, создающие коммиты (worktree, submodule, приёмка), требуют git
+      # identity: на раннере она не задана, и git падает с «Author identity
+      # unknown». Это настройка окружения, а не дефект кода — задаём явно.
+      - name: Git identity для тестов
+        if: steps.envcheck.outputs.skip != 'true'
+        run: |
+          git config --global user.email "ci@opencode.local"
+          git config --global user.name "CI Autotest"
+          git config --global --list | grep -E "user\.(email|name)"
+
       - name: Сборка
         if: steps.envcheck.outputs.skip != 'true'
         run: make ci-build
