@@ -32,7 +32,10 @@ concurrency:
 jobs:
   readiness:
     name: Готовность песочницы авто-проверки
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, а не ubuntu-latest: джобу нужны Docker-демон и Chrome, а
+    # метка ubuntu-latest мигрирует на Ubuntu 26 — версия ОС в джобе должна
+    # быть явной, иначе результат прогона «плывёт» вместе с образом раннера.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       # Порты стека песочницы на хосте CI-раннера (переопределяются
@@ -43,16 +46,16 @@ jobs:
       SANDBOX_E2E_TIMEOUT: "30m"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -104,7 +107,7 @@ jobs:
 
       - name: Отчёт о готовности (артефакт)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sandbox-readiness-report
           path: readiness-report.md
