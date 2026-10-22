@@ -82,12 +82,24 @@ go test  . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runn
 
 `make sandbox-readiness` — исполняемый чеклист acceptance criteria (AC1–AC7) с вердиктом: `0` READY, `2` INFRA_DEGRADED (деграйд инфры, **не** дефект кода), `1` FAIL. Тот же чеклист крутит CI-джоб `.github/workflows/sandbox-readiness.yml` (`FAIL` роняет джоб, `INFRA_DEGRADED` — warning). Подробности — `docs/40-operations/sandbox-readiness.md`.
 
+### Автотесты в CI
+
+Джоб `.github/workflows/autotest.yml` (push в `main`, pull request, ручной запуск) исполняет Handoff Gate на раннере `ubuntu-24.04`:
+
+1. `make ci-build` — сборка канонического набора пакетов (без `temp/`);
+2. `make ci-vet` — `go vet` того же набора;
+3. `make depgate` — гейт Dependency Rule;
+4. `make backend-test` — `go test -race -count=1` того же набора;
+5. `gofmt` — **только по изменённым файлам** (в репозитории есть предсуществующие отклонения форматирования — они не гейт).
+
+Единый источник пакета — `GO_PACKAGES` в `makefile`: локально и в CI зовутся одни и те же цели. Набор **герметичен** — Docker, Ollama и внешняя сеть не нужны; интеграционные проверки живут в `sandbox-readiness.yml`. Классификация падений: упала сборка/ветер/тест → `CODE_FAIL` (джоб красный); нет инструмента раннера → `::warning::INFRA_DEGRADED` и пропуск гейтов (джоб жёлтый, не красный).
+
 ### Handoff Gate «Ready for QA»
 Разработчик переводит задачу в `testing` (или агент отвечает текстом) **только** когда:
 1. `git status --short` — пусто (или только разрешённые артефакты); изменения **закоммичены**.
 2. `go build ./...` — exit 0.
 3. `go test -race -count=1 ./...` (или `make backend-test`) — exit 0.
-4. `gofmt -l .` — пусто.
+4. `gofmt -l` по своим изменённым файлам — пусто (в репозитории есть предсуществующие отклонения форматирования — они не гейт; общий `gofmt -l .` краснел бы не за свои изменения).
 5. `go vet ./...` — exit 0.
 
 - **Post-write build-gate:** сразу после серии `WriteFiles`/`SearchReplace` — `go build ./...`; при ошибке **остановиться**, починить атомарно, не запускать тесты.

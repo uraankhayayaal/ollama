@@ -1,0 +1,157 @@
+name: autotest
+
+# Автотесты репозитория — исполнение Handoff Gate «Ready for QA» (AGENTS.md):
+# сборка → vet → go test -race → gofmt по изменённым файлам.
+#
+# Набор тестов герметичен: Docker, Ollama и внешняя сеть не нужны
+# (проверено прогоном с недоступным Ollama). Интеграционные проверки
+# (стек песочницы, миграции, e2e) живут в отдельном джобе
+# .github/workflows/sandbox-readiness.yml — здесь их нет намеренно.
+#
+# Классификация падений (AGENTS.md, CODE vs INFRA):
+#   CODE_FAIL      — упала сборка/ветер/тест: дефект кода, джоб красный;
+#   INFRA_DEGRADED — в раннере нет нужного инструмента: джоб жёлтый
+#                    (warning), не красный — это не дефект кода.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autotest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Автотесты (unit/contract)
+    # ubuntu-24.04, а не ubuntu-latest: результат гейтов не должен «плыть»
+    # вместе с образом раннера (см. sandbox-readiness.yml).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Полная история нужна для сравнения с базой (gofmt по изменённым
+          # файлам) — при shallow checkout базового коммита может не быть.
+          fetch-depth: 0
+
+      - name: Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # web/dist входит в go:embed (web/webui.go) — без него не компилируется
+      # пакет web, а с ним и весь ./server/ из набора тестов.
+      - name: Сборка веб-интерфейса
+        run: |
+          npm ci --prefix ./web
+          npm run build --prefix ./web
+
+      # Отсутствие инструмента раннера — INFRA_DEGRADED, а не дефект кода:
+      # джоб завершается жёлтым (warning), а не красным.
+      - name: Проверка инструментов окружения
+        id: envcheck
+        run: |
+          missing=""
+          for tool in go make gcc git; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing="$missing $tool"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::INFRA_DEGRADED: в раннере нет инструментов:$missing — гейты невыполнимы, это не дефект кода"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "инструменты на месте: go, make, gcc, git"
+          fi
+          # Версии в лог: от версии make зависит маркер недоступного
+          # инструмента в рецепте (GNU Make 4.x печатает «Error 127»,
+          # 3.81 — «Error 1»), см. agents/acceptor/accept.go.
+          go version || true
+          make --version 2>/dev/null | head -1 || true
+          gcc --version 2>/dev/null | head -1 || true
+
+      - name: Сборка
+        if: steps.envcheck.outputs.skip != 'true'
+        run: make ci-build
+
+      - name: Ветер
+        if: steps.envcheck.outputs.skip != 'true'
+        run: make ci-vet
+
+      # Гейт Dependency Rule (application не импортирует ничего вне
+      # ai/{domain,application,shared}) — отдельным шагом, чтобы падение
+      # читалось как нарушение архитектуры, а не как «тесты красные».
+      - name: Гейт зависимостей
+        if: steps.envcheck.outputs.skip != 'true'
+        run: make depgate
+
+      - name: Тесты (-race)
+        if: steps.envcheck.outputs.skip != 'true'
+        run: make backend-test
+
+      # Форматирование — только по изменённым файлам: в репозитории есть
+      # предсуществующие отклонения форматирования (не гейт, см. AGENTS.md),
+      # и общий gofmt-гейт краснел бы не за свои изменения.
+      - name: Форматирование изменённых файлов
+        if: steps.envcheck.outputs.skip != 'true'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          BASE_SHA=""
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE" ]; then
+            BASE_SHA="$PR_BASE"
+          else
+            BASE_SHA="$(git rev-parse HEAD~1 2>/dev/null || true)"
+          fi
+          # База обязана быть коммитом в этой же репозитории. Без проверки
+          # git diff падал бы с "bad revision", и гейт молча рапортовал бы
+          # «отформатированы» — то есть проверка не выполнялась вовсе.
+          if [ -n "$BASE_SHA" ] && ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "::warning::база $BASE_SHA недоступна — сравнение с ней невозможно"
+            BASE_SHA=""
+          fi
+          if [ -z "$BASE_SHA" ]; then
+            echo "нет базы для сравнения — проверка форматирования пропущена"
+            exit 0
+          fi
+          files=$(git diff --name-only "${BASE_SHA}...HEAD" -- '*.go') || {
+            echo "::error::не удалось получить diff против $BASE_SHA"
+            exit 1
+          }
+          files=$(printf '%s\n' "$files" | grep -v '^temp/' || true)
+          unformatted=""
+          while IFS= read -r f; do
+            if [ -n "$f" ] && [ -f "$f" ]; then
+              if [ -n "$(gofmt -l "$f")" ]; then
+                unformatted="$unformatted $f"
+              fi
+            fi
+          done <<EOF
+          $files
+          EOF
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt: изменённые файлы не отформатированы:$unformatted"
+            exit 1
+          fi
+          echo "gofmt: изменённые .go отформатированы"
+
+      - name: Итог
+        if: always()
+        run: |
+          echo "гейты CI: сборка, ветер, гейт зависимостей, тесты (-race), gofmt по изменённым файлам"

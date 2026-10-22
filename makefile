@@ -67,6 +67,16 @@ e2e: $(SANDBOX_READINESS_BIN)
 sandbox-readiness: $(SANDBOX_READINESS_BIN)
 	$(SANDBOX_READINESS_BIN) check $(SANDBOX_READINESS_ARGS)
 
-# Канонический набор тестов без temp/ (AGENTS.md, Handoff Gate).
+# --- Гейты CI (autotest.yml) ------------------------------------------------
+# Канонический набор пакетов без temp/ (AGENTS.md, Handoff Gate). Единственный
+# источник истины: и локальный запуск, и CI-джоб зовут одни и те же цели.
+GO_PACKAGES := . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/... ./domain/...
+
+ci-build:
+	go build $(GO_PACKAGES)
+
+ci-vet:
+	go vet $(GO_PACKAGES)
+
 backend-test:
-	go test -race -count=1 . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runner/ ./infrastructure/... ./domain/...
+	go test -race -count=1 $(GO_PACKAGES)
