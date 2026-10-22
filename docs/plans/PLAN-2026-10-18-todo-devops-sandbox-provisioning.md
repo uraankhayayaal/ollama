@@ -35,8 +35,9 @@
       `SANDBOX_HAS_*`/`SANDBOX_COMPOSE_FILE` по факту), `migrate` (DDL
       песочничного Postgres). Тесты — `cmd/sandbox-provision/main_test.go`.
 - [x] Чеклист и команды обновлены в `docs/40-operations/sandbox-readiness.md`.
-- [x] `cmd/sandbox-readiness` — исполняемый чеклист AC1–AC7 с вердиктом и
-      кодами возврата (`0` READY / `2` INFRA_DEGRADED / `1` FAIL); make-цели
+- [x] `cmd/sandbox-readiness` — исполняемый чек-лист готовности окружения
+      (AC1–AC4, AC6, AC7) с вердиктом и кодами возврата (`0` READY /
+      `2` INFRA_DEGRADED / `1` FAIL); make-цели
       `infra.up`/`infra.down`/`infra.ps`/`infra.logs`/`migrate`/`e2e`/
       `sandbox-readiness`/`backend-test` в корневом `makefile`.
 - [x] CI-джоб `.github/workflows/sandbox-readiness.yml` — rollout acceptance
@@ -45,15 +46,21 @@
       (Handoff Gate: сборка, ветер, гейт зависимостей, `go test -race`, gofmt
       по изменённым файлам). Отдельный джоб: интеграционные проверки не
       маскируют падение юнит-тестов.
+- [x] CI-джоб `.github/workflows/e2e.yml` — интеграционный прогон (AC5)
+      отдельным джобом: «песочница не готова» (деграйд инфры) и «упал e2e»
+      (дефект кода) — разные вердикты разных required checks. Лог прогона —
+      артефактом `e2e.log`.
 
 ### Acceptance criteria (rollout — за DevOps/CI)
 
-Каждый пункт проверяется **исполняемым** чеклистом `make sandbox-readiness`
-(`cmd/sandbox-readiness`): AC1–AC7 проверяются по факту окружения, вердикт
-печатается, код возврата — `0` READY / `2` INFRA_DEGRADED / `1` FAIL.
+Каждый пункт проверяется **исполняемым** чек-листом `make sandbox-readiness`
+(`cmd/sandbox-readiness`): AC1–AC4, AC6, AC7 проверяются по факту окружения,
+вердикт печатается, код возврата — `0` READY / `2` INFRA_DEGRADED / `1` FAIL.
 В CI джоб `.github/workflows/sandbox-readiness.yml` вызывает те же make-цели
 и различает вердикты: `FAIL` роняет джоб, `INFRA_DEGRADED` — warning (деграйд
-инфраструктуры **не** дефект кода).
+инфраструктуры **не** дефект кода). AC5 (интеграционный прогон) вынесен в
+отдельный джоб `.github/workflows/e2e.yml` — там те же make-цели и та же
+классификация вердиктов.
 
 - [x] Docker daemon доступен в песочнице авто-проверки: `docker info` — exit 0
       (AC1, проверяет `make sandbox-readiness`).
@@ -63,7 +70,8 @@
       (`SANDBOX_PG_HOST_PORT`/`SANDBOX_S3_HOST_PORT`), образ S3 — `SANDBOX_MINIO_IMAGE`.
 - [x] Миграции проходят: `make migrate` — exit 0 (AC4).
 - [x] Интеграционный прогон возможен: `make e2e` — exit 0 (AC5); пропуск тестов
-      (нет Chrome/Docker) = `INFRA_DEGRADED`, а не «зелёный» прогон.
+      (нет Chrome/Docker) = `INFRA_DEGRADED`, а не «зелёный» прогон. В CI —
+      джоб `.github/workflows/e2e.yml`.
 - [x] Проставлены `SANDBOX_HAS_DOCKER=1`, `SANDBOX_HAS_POSTGRES=1`, `SANDBOX_HAS_MINIO=1`
       (`eval "$(bin/sandbox-provision env)"`) по **фактическому** состоянию; CI
       экспортирует их в `$GITHUB_ENV` (AC6).
@@ -76,7 +84,7 @@
 make infra.up                     # стек Postgres + S3 (или bin/sandbox-provision up)
 eval "$(bin/sandbox-provision env)"
 make migrate && make e2e
-make sandbox-readiness            # полный чеклист AC1–AC7 + вердикт
+make sandbox-readiness            # чек-лист готовности окружения + вердикт
 ```
 
 Полный чеклист и таблица переменных — `docs/40-operations/sandbox-readiness.md`.
@@ -95,7 +103,9 @@ make sandbox-readiness            # полный чеклист AC1–AC7 + ве
   `PLAN-2026-10-18-A7-04-system-fix.md`.
 - Репозиторные артефакты провижининга — готово (этот документ).
 - CI-rollout — **готово**: джоб `.github/workflows/sandbox-readiness.yml`
-  (подъём стека, экспорт `SANDBOX_HAS_*` по факту, исполняемый чеклист,
-  артефакт-отчёт, различение `READY`/`INFRA_DEGRADED`/`FAIL`).
+  (подъём стека, экспорт `SANDBOX_HAS_*` по факту, исполняемый чек-лист,
+  артефакт-отчёт, различение `READY`/`INFRA_DEGRADED`/`FAIL`) и джоб
+  `.github/workflows/e2e.yml` (интеграционный прогон AC5 отдельным джобом,
+  артефакт `e2e.log`).
   Открытым остаётся только фактический прогон джоба на инфраструктуре
   CI-песочницы (доступ к Docker-демону выдаёт DevOps).

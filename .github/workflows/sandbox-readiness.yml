@@ -7,12 +7,16 @@ name: sandbox-readiness
 # docs/40-operations/sandbox-readiness.md.
 #
 # Джоб не дублирует команды песочницы руками: он вызывает те же make-цели
-# (make infra.up / make migrate / make e2e / make sandbox-readiness), что и
-# локальная проверка, — единый источник истины.
+# (make infra.up / make migrate / make sandbox-readiness), что и локальная
+# проверка, — единый источник истины.
+#
+# Джоб проверяет ГОТОВНОСТЬ ОКРУЖЕНИЯ (AC1–AC4, AC6, AC7). Интеграционный
+# прогон (AC5) живёт в отдельном workflow .github/workflows/e2e.yml: «песочница
+# не готова» и «упал e2e» — разные сигналы разных required checks.
 #
 # Различение вердиктов:
-#   READY           — песочница готова, интеграционные проверки выполнены;
-#   INFRA_DEGRADED  — инфраструктура недоступна (нет Docker/стека/Chrome):
+#   READY           — песочница готова;
+#   INFRA_DEGRADED  — инфраструктура недоступна (нет Docker/стека):
 #                     это деграйд окружения, а НЕ дефект кода — джоб не роняет;
 #   FAIL            — пункт acceptance criteria не выполнен: джоб падает.
 

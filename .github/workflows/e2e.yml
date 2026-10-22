@@ -1,0 +1,162 @@
+name: e2e
+
+# Интеграционный прогон e2e-тестов (AC5 плана rollout) — отдельным workflow.
+#
+# Основание: docs/plans/PLAN-2026-10-18-todo-devops-sandbox-provisioning.md
+# (AC5 «Интеграционный прогон возможен») и docs/40-operations/sandbox-readiness.md.
+#
+# Разделение джобов — у каждого один сигнал:
+#   autotest.yml          — юнит/контрактные тесты (герметично, без Docker);
+#   sandbox-readiness.yml — готовность ОКРУЖЕНИЯ песочницы (AC1–AC4, AC6, AC7);
+#   e2e.yml               — сам интеграционный прогон (AC5).
+# «Песочница не готова» (деграйд инфры) и «упал e2e» (дефект кода) — разные
+# required checks, разные красные/жёлтые сигналы.
+#
+# Классификация падений (AGENTS.md, CODE vs INFRA):
+#   CODE_FAIL      — e2e-тесты упали: джоб красный, это дефект кода;
+#   INFRA_DEGRADED — в раннере нет Docker/Chrome/стека: джоб жёлтый
+#                    (warning), не красный — это не дефект кода;
+#   PASS           — прогон состоялся, тесты прошли.
+#
+# Команды — те же make-цели, что и локально (единый источник истины):
+# make e2e → стек песочницы → make migrate → go test -tags e2e -v ./server/ →
+# стек снимается.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Интеграционные e2e-тесты
+    # ubuntu-24.04, а не ubuntu-latest: джобу нужны Docker-демон и Chrome, а
+    # метка ubuntu-latest мигрирует на Ubuntu 26 — версия ОС в джобе должна
+    # быть явной, иначе результат прогона «плывёт» вместе с образом раннера.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Порты стека песочницы на хосте CI-раннера (переопределяются
+      # compose-схемой и пробой возможностей — infrastructure/sandbox/capabilities.go).
+      SANDBOX_PG_HOST_PORT: "5432"
+      SANDBOX_S3_HOST_PORT: "9000"
+      SANDBOX_S3_CONSOLE_PORT: "9001"
+      SANDBOX_E2E_TIMEOUT: "30m"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Полная история: e2e-прогон работает с проектами-продуктами (git),
+          # shallow checkout рвёт контекст репозитория.
+          fetch-depth: 0
+
+      - name: Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # web/dist входит в go:embed (web/webui.go) — без сборки пакета web
+      # не компилируется, а с ним и весь ./server/ (e2e-прогон).
+      - name: Сборка веб-интерфейса
+        run: |
+          npm ci --prefix ./web
+          npm run build --prefix ./web
+
+      # Тесты создают коммиты (проект-продукт, приёмка) — на раннере git
+      # identity не задана, и git падает с «Author identity unknown».
+      # Это настройка окружения, а не дефект кода — задаём явно.
+      - name: Git identity для тестов
+        run: |
+          git config --global user.email "ci@opencode.local"
+          git config --global user.name "CI E2E"
+          git config --global --list | grep -E "user\.(email|name)"
+
+      # Отсутствие инструмента раннера — INFRA_DEGRADED, а не дефект кода:
+      # джоб завершается жёлтым (warning), а не красным.
+      - name: Проверка инструментов окружения
+        id: envcheck
+        run: |
+          missing=""
+          for tool in docker make go git npm; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing="$missing $tool"
+            fi
+          done
+          # Chrome нужен для headless-прогона UI (chromedp). Без него тесты
+          # были бы пропущены — а пропуск это INFRA_DEGRADED, не «зелёный».
+          if ! command -v google-chrome >/dev/null 2>&1 &&
+             ! command -v google-chrome-stable >/dev/null 2>&1 &&
+             ! command -v chromium >/dev/null 2>&1 &&
+             ! command -v chromium-browser >/dev/null 2>&1; then
+            missing="$missing chrome"
+          fi
+          if [ -n "$missing" ]; then
+            echo "::warning::INFRA_DEGRADED: в раннере нет инструментов:$missing — интеграционный прогон невозможен, это деграйд окружения, а не дефект кода"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "инструменты на месте: docker, chrome, go, make, npm"
+          fi
+
+      # continue-on-error: вердикт разбирает следующий шаг — падать должен
+      # только FAIL, а не деграйд инфраструктуры. set +e обязателен: при
+      # pipefail падение make прервало бы шаг до разбора кода.
+      - name: Интеграционный прогон (make e2e)
+        id: e2e
+        if: steps.envcheck.outputs.skip != 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          make e2e 2>&1 | tee e2e.log
+          code=${PIPESTATUS[0]}
+          set -e
+          # Имя вывода отличается от exit_code инструмента: инструмент уже
+          # пишет свой exit_code в GITHUB_OUTPUT, а два значения одного
+          # ключа в одном шаге путают разбор вердикта.
+          echo "make_exit_code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Итог интеграционного прогона
+        if: always() && steps.envcheck.outputs.skip != 'true'
+        env:
+          VERDICT: ${{ steps.e2e.outputs.verdict }}
+          EXIT_CODE: ${{ steps.e2e.outputs.make_exit_code }}
+        run: |
+          verdict="${VERDICT:-}"
+          echo "вердикт интеграционного прогона: ${verdict:-none} (код ${EXIT_CODE:-none})"
+          case "$verdict" in
+            READY)
+              echo "интеграционный прогон выполнен, e2e-тесты прошли"
+              ;;
+            INFRA_DEGRADED)
+              echo "::warning::интеграционный прогон деградирован (INFRA_DEGRADED): песочница не готова — это деграйд окружения, а не дефект кода"
+              ;;
+            *)
+              echo "::error::интеграционный прогон не пройден: вердикт ${verdict:-нет вердикта}, код ${EXIT_CODE:-нет кода}"
+              exit 1
+              ;;
+          esac
+
+      - name: Лог интеграционного прогона (артефакт)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-log
+          path: e2e.log
+          if-no-files-found: ignore

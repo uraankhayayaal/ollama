@@ -113,9 +113,13 @@ func parseOptions(args []string) options {
 	return opts
 }
 
-// runCheck — чеклист acceptance criteria. Каждый пункт оценивается по факту
-// окружения; недоступная инфраструктура даёт INFRA_DEGRADED, а не молчаливый
-// пропуск.
+// runCheck — чеклист готовности ОКРУЖЕНИЯ (AC1–AC4, AC6, AC7). Каждый пункт
+// оценивается по факту; недоступная инфраструктура даёт INFRA_DEGRADED, а не
+// молчаливый пропуск.
+//
+// AC5 (интеграционный прогон) в чеклисте НЕТ: прогон e2e — отдельный джоб
+// .github/workflows/e2e.yml, чтобы «песочница не готова» и «упал e2e» были
+// разными сигналами разных required checks.
 func runCheck(opts options) int {
 	dir, ok := makeDir(".")
 	if !ok {
@@ -127,15 +131,13 @@ func runCheck(opts options) int {
 		checkCompose(),
 		checkStack(dir),
 	}
-	// Снимок состояния песочницы снимается, пока стек поднят: `make e2e`
-	// снимает его по завершении, и замер после teardown противоречил бы
-	// объявленным SANDBOX_HAS_*=1 — ложный AC6/AC7.
+	// Снимок состояния песочницы снимается, пока стек поднят: замер после
+	// teardown противоречил бы объявленным SANDBOX_HAS_*=1 — ложный AC6/AC7.
 	fact := detectFact()
 	env, envErr := provisionEnv(dir)
 	if !opts.skipIntegration {
 		items = append(items,
 			checkMake(dir, "migrate", "AC4", "Миграции проходят (make migrate — exit 0)"),
-			checkMake(dir, "e2e", "AC5", "Интеграционный прогон возможен (make e2e — exit 0)"),
 		)
 	}
 	declared := readDeclared()
@@ -155,15 +157,18 @@ func runCheck(opts options) int {
 // runE2E — самозавершающийся интеграционный прогон: стек поднимается,
 // миграции применяются, e2e-тесты выполняются, стек снимается. Пропуск
 // тестов (нет Chrome/Docker) — INFRA_DEGRADED, а не «прогон зелёный».
+//
+// Вердикт прогона пишется в GitHub-выводы: CI различает «упал e2e» (FAIL)
+// и «песочница не готова» (INFRA_DEGRADED) без разбора текста лога.
 func runE2E(opts options) int {
 	dir, ok := makeDir(".")
 	if !ok {
 		fmt.Fprintln(os.Stderr, "sandbox-readiness: корневой makefile не найден")
-		return exitFail
+		return finishE2E(exitFail)
 	}
 	if out, err := runMake(dir, "infra.up"); err != nil {
 		fmt.Fprintln(os.Stderr, "INFRA_DEGRADED: стек песочницы не поднят:", tail(out))
-		return exitInfra
+		return finishE2E(exitInfra)
 	}
 	defer func() {
 		if out, err := runMake(dir, "infra.down"); err != nil {
@@ -173,12 +178,31 @@ func runE2E(opts options) int {
 	if out, err := runMake(dir, "migrate"); err != nil {
 		if exitCode(err) == exitInfra {
 			fmt.Fprintln(os.Stderr, "INFRA_DEGRADED: миграции не выполнены:", tail(out))
-			return exitInfra
+			return finishE2E(exitInfra)
 		}
 		fmt.Fprintln(os.Stderr, "ошибка миграций:", tail(out))
-		return exitFail
+		return finishE2E(exitFail)
 	}
-	return runE2ETests(dir)
+	return finishE2E(runE2ETests(dir))
+}
+
+// finishE2E — код возврата прогона + GitHub-выводы (verdict/exit_code).
+func finishE2E(code int) int {
+	writeGitHubOutputs(report{Verdict: e2eVerdict(code), Exit: code})
+	return code
+}
+
+// e2eVerdict — вердикт прогона по коду возврата: тесты прошли — READY,
+// окружение недоступно — INFRA_DEGRADED, тесты упали — FAIL.
+func e2eVerdict(code int) string {
+	switch code {
+	case exitOK:
+		return "READY"
+	case exitInfra:
+		return "INFRA_DEGRADED"
+	default:
+		return "FAIL"
+	}
 }
 
 // runE2ETests выполняет живые e2e-тесты репозитория (тег e2e, гейт

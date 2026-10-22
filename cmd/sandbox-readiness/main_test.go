@@ -243,6 +243,69 @@ func TestCIWorkflowRunsSameTargets(t *testing.T) {
 	}
 }
 
+// TestE2EWorkflowRunsSameTargets — интеграционный прогон в CI обязан звать
+// ту же make-цель, что и локальная проверка, и различать вердикты:
+// «упал e2e» (FAIL) и «песочница не готова» (INFRA_DEGRADED).
+func TestE2EWorkflowRunsSameTargets(t *testing.T) {
+	dir, ok := makeDir(".")
+	if !ok {
+		t.Fatal("корневой makefile не найден")
+	}
+	path := filepath.Join(dir, ".github", "workflows", "e2e.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("CI-джоб интеграционного прогона не найден (%s): %v", path, err)
+	}
+	workflow := string(data)
+	for _, want := range []string{
+		"make e2e",
+		"INFRA_DEGRADED",
+		"::error::",
+		"upload-artifact",
+		"shell: bash",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("CI-джоб интеграционного прогона не содержит %q", want)
+		}
+	}
+}
+
+// TestReadinessChecklistDoesNotRunE2E — AC5 (интеграционный прогон) живёт в
+// отдельном джобе e2e.yml. Если он вернётся в чеклист готовности, снова
+// смешаются два разных сигнала: «песочница не готова» и «упал e2e».
+func TestReadinessChecklistDoesNotRunE2E(t *testing.T) {
+	dir, ok := makeDir(".")
+	if !ok {
+		t.Fatal("корневой makefile не найден")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "cmd", "sandbox-readiness", "main.go"))
+	if err != nil {
+		t.Fatalf("чтение cmd/sandbox-readiness/main.go: %v", err)
+	}
+	if strings.Contains(string(data), `checkMake(dir, "e2e"`) {
+		t.Fatal("чеклист готовности снова запускает e2e — AC5 должен проверяться джобом e2e.yml")
+	}
+}
+
+// TestE2EVerdictByExitCode — вердикт интеграционного прогона выводится из
+// кода возврата: тесты прошли — READY, окружение недоступно —
+// INFRA_DEGRADED, тесты упали — FAIL.
+func TestE2EVerdictByExitCode(t *testing.T) {
+	cases := []struct {
+		code int
+		want string
+	}{
+		{exitOK, "READY"},
+		{exitInfra, "INFRA_DEGRADED"},
+		{exitFail, "FAIL"},
+	}
+	for _, c := range cases {
+		if got := e2eVerdict(c.code); got != c.want {
+			t.Fatalf("e2eVerdict(%d) = %q, ожидалось %q", c.code, got, c.want)
+		}
+	}
+}
+
 // TestMakefileHasRolloutTargets — acceptance criteria ссылаются на команды
 // корневого makefile: если цели исчезнут, критерий станет непроверяемым.
 func TestMakefileHasRolloutTargets(t *testing.T) {
