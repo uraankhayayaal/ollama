@@ -6,6 +6,9 @@ providers.json
 ai
 /services/mrListener/mrListener
 
+# Собранные бинари make-целей песочницы (make infra.up/migrate/e2e/sandbox-readiness)
+bin/
+
 # Бинари `go test -c` (случайно попадали в индекс — injections.test на 5 МБ)
 *.test
 

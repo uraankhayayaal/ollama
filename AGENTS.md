@@ -75,6 +75,13 @@ go test  . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runn
 - **`INFRA_DEGRADED`** — `migrate: connection refused` (нет Postgres), `docker: not found`/`DOCKER_UNAVAILABLE`, `make infra.up` не поднимает стек. **Не блокер** unit/contract-проверок → эскалация в **DevOps**, **не** возврат разработчику. Контракт capabilities и чеклист преднастройки песочницы — `docs/40-operations/sandbox-readiness.md`.
 - **`INFRA_BLOCKED`** — явная невозможность интеграционных проверок; фиксируется с причиной, **не смешивается** с `CODE_FAIL`.
 
+### Проверка готовности песочницы (rollout, п.3.1 A7-04)
+
+Команды песочницы — **единый источник истины** (локально и в CI):
+`make infra.up` / `make migrate` / `make e2e` / `make sandbox-readiness`.
+
+`make sandbox-readiness` — исполняемый чеклист acceptance criteria (AC1–AC7) с вердиктом: `0` READY, `2` INFRA_DEGRADED (деграйд инфры, **не** дефект кода), `1` FAIL. Тот же чеклист крутит CI-джоб `.github/workflows/sandbox-readiness.yml` (`FAIL` роняет джоб, `INFRA_DEGRADED` — warning). Подробности — `docs/40-operations/sandbox-readiness.md`.
+
 ### Handoff Gate «Ready for QA»
 Разработчик переводит задачу в `testing` (или агент отвечает текстом) **только** когда:
 1. `git status --short` — пусто (или только разрешённые артефакты); изменения **закоммичены**.

@@ -68,9 +68,37 @@ func capabilitiesFrom(getenv func(string) string) Capabilities {
 func DetectCapabilities() Capabilities {
 	return Capabilities{
 		Docker:   detectState(dockerPing()),
-		Postgres: detectState(dialPort("127.0.0.1:5432")),
-		MinIO:    detectState(dialPort("127.0.0.1:9000")),
+		Postgres: detectState(dialPort(postgresAddr())),
+		MinIO:    detectState(dialPort(minioAddr())),
 	}
+}
+
+// Порты песочничного стека на хосте по умолчанию. Переопределяются
+// переменными SANDBOX_PG_HOST_PORT / SANDBOX_S3_HOST_PORT: на машине, где
+// 5432/9000 уже заняты другим стеком, песочница поднимается на свободных
+// портах — иначе подъём падал бы «port is already allocated», что выглядело
+// бы как дефект кода.
+const (
+	defaultPostgresPort = "5432"
+	defaultMinioPort    = "9000"
+)
+
+// postgresAddr — адрес Postgres песочницы на хосте.
+func postgresAddr() string {
+	return "127.0.0.1:" + portEnv("SANDBOX_PG_HOST_PORT", defaultPostgresPort)
+}
+
+// minioAddr — адрес S3-хранилища песочницы на хосте.
+func minioAddr() string {
+	return "127.0.0.1:" + portEnv("SANDBOX_S3_HOST_PORT", defaultMinioPort)
+}
+
+// portEnv — порт из окружения или значение по умолчанию.
+func portEnv(name, def string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return def
 }
 
 // ResolveCapabilities — итоговые возможности для промпта: приоритет у явного

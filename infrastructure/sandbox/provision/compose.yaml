@@ -29,7 +29,10 @@ services:
       POSTGRES_PASSWORD: ${SANDBOX_PG_PASSWORD:-postgres}
       POSTGRES_DB: ${SANDBOX_PG_DB:-postgres}
     ports:
-      - "5432:5432"
+      # Хостовые порты переопределяются: на машине, где 5432 занят другим
+      # стеком, песочница поднимается на свободном порту (проба возможностей
+      # читает те же переменные — infrastructure/sandbox/capabilities.go).
+      - "${SANDBOX_PG_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -41,17 +44,32 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    # S3-совместимое хранилище песочницы: API на 9000, консоль на 9001.
+    #
+    # Образ minio/minio удалён из Docker Hub (репозиторий больше не существует),
+    # поэтому по умолчанию RustFS: тот же S3 API, те же health-endpoint
+    # (/minio/health/live) и та же раскладка портов. Переопределение образа —
+    # SANDBOX_MINIO_IMAGE (например, на настоящий MinIO из quay.io).
+    image: ${SANDBOX_MINIO_IMAGE:-rustfs/rustfs:1.0.3}
     container_name: ai-sandbox-minio
-    command: ["server", "/data", "--console-address", ":9001"]
     environment:
+      RUSTFS_ACCESS_KEY: ${SANDBOX_MINIO_USER:-minioadmin}
+      RUSTFS_SECRET_KEY: ${SANDBOX_MINIO_PASSWORD:-minioadmin}
+      RUSTFS_VOLUMES: /data
+      # Совместимость с настоящим MinIO (если образ переопределён).
       MINIO_ROOT_USER: ${SANDBOX_MINIO_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${SANDBOX_MINIO_PASSWORD:-minioadmin}
     ports:
-      - "9000:9000" # S3 API
-      - "9001:9001" # консоль
+      - "${SANDBOX_S3_HOST_PORT:-9000}:9000" # S3 API
+      - "${SANDBOX_S3_CONSOLE_PORT:-9001}:9001" # консоль
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
 
 volumes:
