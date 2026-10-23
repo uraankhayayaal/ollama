@@ -806,7 +806,10 @@ func (sess *Session) broadcastSnapshot() {
 		sess.srv.hub.publish(sess.project, "board", v)
 	}
 	if in, out, err := sess.tok.Get(ctx); err == nil {
-		sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: in, Output: out})
+		sess.mu.Lock()
+		rate := sess.rate
+		sess.mu.Unlock()
+		sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: in, Output: out, TPS: rate})
 	}
 }
 
