@@ -1,0 +1,118 @@
+name: sandbox-readiness
+
+# Готовность песочницы авто-проверки (rollout за DevOps/CI).
+#
+# Основание: docs/plans/PLAN-2026-10-18-todo-devops-sandbox-provisioning.md
+# (п. «Acceptance criteria (rollout — за DevOps/CI)») и
+# docs/40-operations/sandbox-readiness.md.
+#
+# Джоб не дублирует команды песочницы руками: он вызывает те же make-цели
+# (make infra.up / make migrate / make sandbox-readiness), что и локальная
+# проверка, — единый источник истины.
+#
+# Джоб проверяет ГОТОВНОСТЬ ОКРУЖЕНИЯ (AC1–AC4, AC6, AC7). Интеграционный
+# прогон (AC5) живёт в отдельном workflow .github/workflows/e2e.yml: «песочница
+# не готова» и «упал e2e» — разные сигналы разных required checks.
+#
+# Различение вердиктов:
+#   READY           — песочница готова;
+#   INFRA_DEGRADED  — инфраструктура недоступна (нет Docker/стека):
+#                     это деграйд окружения, а НЕ дефект кода — джоб не роняет;
+#   FAIL            — пункт acceptance criteria не выполнен: джоб падает.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-readiness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  readiness:
+    name: Готовность песочницы авто-проверки
+    # ubuntu-24.04, а не ubuntu-latest: джобу нужны Docker-демон и Chrome, а
+    # метка ubuntu-latest мигрирует на Ubuntu 26 — версия ОС в джобе должна
+    # быть явной, иначе результат прогона «плывёт» вместе с образом раннера.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Порты стека песочницы на хосте CI-раннера (переопределяются
+      # compose-схемой и пробой возможностей — infrastructure/sandbox/capabilities.go).
+      SANDBOX_PG_HOST_PORT: "5432"
+      SANDBOX_S3_HOST_PORT: "9000"
+      SANDBOX_S3_CONSOLE_PORT: "9001"
+      SANDBOX_E2E_TIMEOUT: "30m"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # web/dist входит в go:embed (web/webui.go) — без сборки пакет web
+      # не компилируется, а с ним и весь ./server/ (e2e-прогон).
+      - name: Сборка веб-интерфейса
+        run: |
+          npm ci --prefix ./web
+          npm run build --prefix ./web
+
+      - name: Подъём стека песочницы (Postgres + S3)
+        run: make infra.up
+
+      # SANDBOX_HAS_* — по ФАКТУ (cmd/sandbox-provision env опрашивает демон и
+      # порты). Экспорт в GITHUB_ENV делает их доступными следующим шагам и
+      # джобам: окружение получает честный контракт возможностей.
+      - name: Экспорт SANDBOX_HAS_* по факту
+        run: |
+          bin/sandbox-provision status
+          bin/sandbox-provision env | sed 's/^export //' >> "$GITHUB_ENV"
+
+      # continue-on-error: вердикт разбирает следующий шаг — падать должен
+      # только FAIL, а не деграйд инфраструктуры.
+      - name: Чеклист acceptance criteria
+        id: readiness
+        continue-on-error: true
+        run: make sandbox-readiness SANDBOX_READINESS_ARGS=--report=readiness-report.md
+
+      - name: Итог чеклиста
+        env:
+          VERDICT: ${{ steps.readiness.outputs.verdict }}
+        run: |
+          verdict="$VERDICT"
+          echo "вердикт готовности песочницы: ${verdict:-none}"
+          case "$verdict" in
+            READY)
+              echo "песочница авто-проверки готова"
+              ;;
+            INFRA_DEGRADED)
+              echo "::warning::песочница авто-проверки деградирована (INFRA_DEGRADED): интеграционные проверки невозможны — это деграйд окружения, а не дефект кода"
+              ;;
+            *)
+              echo "::error::чеклист готовности песочницы не пройден: ${verdict:-нет вердикта}"
+              exit 1
+              ;;
+          esac
+
+      - name: Отчёт о готовности (артефакт)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sandbox-readiness-report
+          path: readiness-report.md
+          if-no-files-found: ignore

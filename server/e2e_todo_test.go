@@ -611,13 +611,33 @@ func dockerAvailable() bool {
 	return exec.Command("docker", "info").Run() == nil
 }
 
+// chromePath — путь к Chrome для chromedp: явный CHROME_PATH → бинарь в PATH
+// (google-chrome/chromium — так в CI на Linux) → macOS-путь. Без Chrome
+// интеграционный прогон не состоялся: это деграйд окружения, поэтому
+// пропуск должен быть виден (make e2e помечает его INFRA_DEGRADED).
+func chromePath() string {
+	if p := strings.TrimSpace(os.Getenv("CHROME_PATH")); p != "" {
+		return p
+	}
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	const darwinPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	if _, err := os.Stat(darwinPath); err == nil {
+		return darwinPath
+	}
+	return ""
+}
+
 // todoEStartBrowser создаёт headless Chrome через chromedp и возвращает контекст.
 // Браузер живёт до конца теста (cleanup через t.Cleanup).
 func todoEStartBrowser(t *testing.T) context.Context {
 	t.Helper()
-	chromePath := "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-	if _, err := os.Stat(chromePath); os.IsNotExist(err) {
-		t.Skipf("Chrome не найден: %s", chromePath)
+	chromePath := chromePath()
+	if chromePath == "" {
+		t.Skip("Chrome не найден (CHROME_PATH, google-chrome в PATH или macOS-путь) — интеграционный прогон пропущен")
 	}
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],

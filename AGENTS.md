@@ -75,12 +75,39 @@ go test  . ./agents/... ./application/... ./tools/... ./cmd/... ./server/ ./runn
 - **`INFRA_DEGRADED`** — `migrate: connection refused` (нет Postgres), `docker: not found`/`DOCKER_UNAVAILABLE`, `make infra.up` не поднимает стек. **Не блокер** unit/contract-проверок → эскалация в **DevOps**, **не** возврат разработчику. Контракт capabilities и чеклист преднастройки песочницы — `docs/40-operations/sandbox-readiness.md`.
 - **`INFRA_BLOCKED`** — явная невозможность интеграционных проверок; фиксируется с причиной, **не смешивается** с `CODE_FAIL`.
 
+### Проверка готовности песочницы (rollout, п.3.1 A7-04)
+
+Команды песочницы — **единый источник истины** (локально и в CI):
+`make infra.up` / `make migrate` / `make e2e` / `make sandbox-readiness`.
+
+`make sandbox-readiness` — исполняемый чек-лист готовности **окружения** (AC1–AC4, AC6, AC7) с вердиктом: `0` READY, `2` INFRA_DEGRADED (деграйд инфры, **не** дефект кода), `1` FAIL. Тот же чек-лист крутит CI-джоб `.github/workflows/sandbox-readiness.yml` (`FAIL` роняет джоб, `INFRA_DEGRADED` — warning). Подробности — `docs/40-operations/sandbox-readiness.md`.
+
+### Интеграционный прогон e2e в CI
+
+Джоб `.github/workflows/e2e.yml` (push в `main`, pull request, ручной запуск) исполняет `make e2e` на раннере `ubuntu-24.04` (Docker + Chrome): стек песочницы → `make migrate` → `go test -tags e2e -v ./server/` → стек снимается. Лог — артефактом `e2e.log`.
+
+AC5 (интеграционный прогон) вынесен из чек-листа `make sandbox-readiness` намеренно: «песочница не готова» (деграйд инфры) и «упал e2e» (дефект кода) — разные вердикты разных required checks. Вердикт прогона публикуется в `$GITHUB_OUTPUT`: `READY` — зелёный, `INFRA_DEGRADED` — warning (джоб не падает), `FAIL` — ошибка джоба. Нет Docker/Chrome в раннере — `INFRA_DEGRADED`, не «зелёный».
+
+### Автотесты в CI
+
+Джоб `.github/workflows/autotest.yml` (push в `main`, pull request, ручной запуск) исполняет Handoff Gate на раннере `ubuntu-24.04`:
+
+1. `make ci-build` — сборка канонического набора пакетов (без `temp/`);
+2. `make ci-vet` — `go vet` того же набора;
+3. `make depgate` — гейт Dependency Rule;
+4. `make backend-test` — `go test -race -count=1` того же набора;
+5. `gofmt` — **только по изменённым файлам** (в репозитории есть предсуществующие отклонения форматирования — они не гейт).
+
+Единый источник пакета — `GO_PACKAGES` в `makefile`: локально и в CI зовутся одни и те же цели. Набор **герметичен** — Docker, Ollama и внешняя сеть не нужны; интеграционные проверки живут в `sandbox-readiness.yml` (готовность окружения) и `e2e.yml` (прогон e2e). Классификация падений: упала сборка/ветер/тест → `CODE_FAIL` (джоб красный); нет инструмента раннера → `::warning::INFRA_DEGRADED` и пропуск гейтов (джоб жёлтый, не красный).
+
+Требования к раннеру (задаются в самом джобе): **git identity** (`user.email`/`user.name`) — тесты создают коммиты (worktree, submodule, приёмка), без неё git падает с «Author identity unknown».
+
 ### Handoff Gate «Ready for QA»
 Разработчик переводит задачу в `testing` (или агент отвечает текстом) **только** когда:
 1. `git status --short` — пусто (или только разрешённые артефакты); изменения **закоммичены**.
 2. `go build ./...` — exit 0.
 3. `go test -race -count=1 ./...` (или `make backend-test`) — exit 0.
-4. `gofmt -l .` — пусто.
+4. `gofmt -l` по своим изменённым файлам — пусто (в репозитории есть предсуществующие отклонения форматирования — они не гейт; общий `gofmt -l .` краснел бы не за свои изменения).
 5. `go vet ./...` — exit 0.
 
 - **Post-write build-gate:** сразу после серии `WriteFiles`/`SearchReplace` — `go build ./...`; при ошибке **остановиться**, починить атомарно, не запускать тесты.

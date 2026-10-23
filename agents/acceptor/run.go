@@ -4,12 +4,40 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
 	"ai/infrastructure/sandbox"
 )
+
+// makeServiceLineRE — служебные сообщения самого make: «Entering directory»,
+// «Leaving directory», «Nothing to be done for …», «… is up to date».
+//
+// GNU Make печатает их, когда запускается как под-make (MAKELEVEL>0 — например,
+// когда тесты запущены через «make backend-test»): GNU Make 4.x делает это
+// всегда, 3.81 — нет. Это шум оболочки, а не результат команды: без фильтрации
+// приёмка считала бы его нарушением форматирования (непустой вывод) или
+// ошибкой анализатора (каждая нераспознанная строка становится находкой).
+var makeServiceLineRE = regexp.MustCompile(`^make(\[[0-9]+\])?: (Entering|Leaving) directory\b|^make(\[[0-9]+\])?: Nothing to be done for\b|^make(\[[0-9]+\])?: .* is up to date\.$`)
+
+// stripMakeServiceLines убирает служебные сообщения make из вывода команды.
+// Остальной вывод не трогается: находки инструментов и ошибки сборки важны.
+func stripMakeServiceLines(out string) string {
+	if !strings.Contains(out, "make") {
+		return out
+	}
+	lines := strings.Split(out, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if makeServiceLineRE.MatchString(strings.TrimSpace(line)) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
 
 // runCommand запускает команду через sh -c в указанной директории и собирает
 // объединённый stdout+stderr, код выхода и признак превышения таймаута.
@@ -36,17 +64,17 @@ func runCommand(dir, command string, timeout time.Duration) (output string, exit
 	if ws := sandbox.Lookup("", dir); ws != nil {
 		res, runErr := ws.Run(ctx, dir, command)
 		if runErr != nil {
-			return res.Stdout, -1, false, runErr
+			return stripMakeServiceLines(res.Stdout), -1, false, runErr
 		}
 		if res.TimedOut {
 			// Таймаут контейнера может сработать чуть раньше клиентского
 			// дедлайна — ошибка таймаута обязана быть непустой в обоих случаях.
 			if ctx.Err() != nil {
-				return res.Stdout, -1, true, ctx.Err()
+				return stripMakeServiceLines(res.Stdout), -1, true, ctx.Err()
 			}
-			return res.Stdout, -1, true, context.DeadlineExceeded
+			return stripMakeServiceLines(res.Stdout), -1, true, context.DeadlineExceeded
 		}
-		return res.Stdout + res.Stderr, res.ExitCode, false, res.ExitErr
+		return stripMakeServiceLines(res.Stdout + res.Stderr), res.ExitCode, false, res.ExitErr
 	}
 
 	cmd := exec.Command("sh", "-c", command)
@@ -58,7 +86,7 @@ func runCommand(dir, command string, timeout time.Duration) (output string, exit
 	cmd.Stderr = &buf
 
 	if serr := cmd.Start(); serr != nil {
-		return buf.String(), -1, false, serr
+		return stripMakeServiceLines(buf.String()), -1, false, serr
 	}
 
 	done := make(chan error, 1)
@@ -71,7 +99,7 @@ func runCommand(dir, command string, timeout time.Duration) (output string, exit
 		// каналы вывода и cmd.Wait() не завис навсегда.
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
-		return buf.String(), -1, true, ctx.Err()
+		return stripMakeServiceLines(buf.String()), -1, true, ctx.Err()
 	case werr := <-done:
 		code := 0
 		if werr != nil {
@@ -81,7 +109,7 @@ func runCommand(dir, command string, timeout time.Duration) (output string, exit
 				code = -1
 			}
 		}
-		return buf.String(), code, false, werr
+		return stripMakeServiceLines(buf.String()), code, false, werr
 	}
 }
 

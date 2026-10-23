@@ -100,3 +100,22 @@ func TestEnvOn(t *testing.T) {
 		}
 	}
 }
+
+// TestProbePortsFromEnv — порты проб задаются окружением: стек может
+// подниматься на свободных портах, и проба должна смотреть туда же.
+func TestProbePortsFromEnv(t *testing.T) {
+	if got := postgresAddr(); got != "127.0.0.1:5432" {
+		t.Fatalf("postgresAddr по умолчанию = %q", got)
+	}
+	if got := minioAddr(); got != "127.0.0.1:9000" {
+		t.Fatalf("minioAddr по умолчанию = %q", got)
+	}
+	t.Setenv("SANDBOX_PG_HOST_PORT", "25432")
+	t.Setenv("SANDBOX_S3_HOST_PORT", "29000")
+	if got := postgresAddr(); got != "127.0.0.1:25432" {
+		t.Fatalf("postgresAddr из окружения = %q", got)
+	}
+	if got := minioAddr(); got != "127.0.0.1:29000" {
+		t.Fatalf("minioAddr из окружения = %q", got)
+	}
+}
