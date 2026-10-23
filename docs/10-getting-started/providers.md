@@ -92,14 +92,141 @@ REST-контракт — [rest-api.md](../30-reference/rest-api.md#модель
 
 ## Сравнение провайдеров
 
-| | Ollama | YandexGPT | Trim | Reg Cloud |
+| | Ollama | vLLM | YandexGPT | Trim | Reg Cloud |
+|---|---|---|---|---|---|
+| Где работает | Локально (в т.ч. в Docker) | Локально (GPU) | Облако Yandex Cloud | Облако Trim | Облако Reg Cloud |
+| Ключ | Не нужен | Не нужен | `api_key` + `folder_id` | `api_key` | `api_key` |
+| Выход по умолчанию | 16384 | 16384 | 8000 (16000 на первом `WriteFiles`) | 4000 | 32768 |
+| Входной контекст | `settings.input_tokens` | `--max-model-len` | `settings.input_tokens` | `settings.input_tokens` | `settings.input_tokens` (262144) |
+| Reasoning | `settings.think_tokens` → `think` | → `reasoning_effort` | → `reasoning_effort` | → `reasoning_effort` | → `reasoning_effort` |
+| API | Ollama API | OpenAI-compatible | OpenAI-compatible | OpenAI-compatible | OpenAI-compatible |
+| Производительность | ~10-30 tok/s (CPU/GPU) | ~50-800 tok/s (GPU cluster) | — | — | — |
+| GPU | Опционально | Обязательно | — | — | — |
+| Нюанс | Нужен запуск `ollama serve` | Нужен `pip install vllm` + GPU | — | Дифф ревью идёт целиком (`noChunk`) | Совместим с OpenAI |
+
+## vLLM — локальный inference-движок
+
+Альтернатива Ollama для систем с мощными GPU. vLLM работает как OpenAI-compatible
+API-сервер, поэтому подключается к системе через `OpenAIProvider` без правок кода.
+
+### Установка
+
+```bash
+pip install vllm
+```
+
+Требования: NVIDIA GPU с поддержкой FP8 (Hopper/Ada, RTX 50-серия), минимум
+24 ГБ VRAM на GPU.
+
+### Запуск
+
+Базовая команда (2× RTX 5070 Ti):
+
+```bash
+python3 -m vllm.entrypoints.openai.api_server \
+  --model unsloth/Qwen3.6-27B-NVFP4 \
+  --tensor-parallel-size 2 \
+  --max-model-len 65536 \
+  --kv-cache-dtype fp8 \
+  --gpu-memory-utilization 0.93 \
+  --max-num-seqs 4 \
+  --enable-chunked-prefill \
+  --limit-mm-per-prompt '{"image":0,"video":0}' \
+  --trust-remote-code \
+  --port 8000 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+### Параметры запуска
+
+| Флаг | Смысл | Рекомендации |
+|---|---|---|
+| `--model` | Модель с Hugging Face | `unsloth/Qwen3.6-27B-NVFP4` — FP8-версия, меньше VRAM |
+| `--tensor-parallel-size` | Число GPU для распределения модели | Кол-во доступных GPU (2 для RTX 5070 Ti x2) |
+| `--max-model-len` | Максимальная длина контекста | 65536 — покрывает nudge-циклы без `exceeded_context_size` |
+| `--kv-cache-dtype` | Точность KV-кэша | `fp8` — экономия VRAM при высокой производительности |
+| `--gpu-memory-utilization` | Доля VRAM для inference | 0.93 — оставить ~7% для ОС и фоновых процессов |
+| `--max-num-seqs` | Максимум параллельных запросов | 4 — достаточно для оркестрации (не более 2-3 агентов параллельно) |
+| `--enable-chunked-prefill` | Chunked prefill | Включить — ускоряет обработку длинных промптов |
+| `--limit-mm-per-prompt` | Лимит мультимодальных данных | `{"image":0,"video":0}` — отключить (не нужно для кодогенерации) |
+| `--trust-remote-code` | Разрешить код модели | Требуется для Qwen3 |
+| `--port` | Порт API | `8000` — дефолт vLLM |
+| `--enable-auto-tool-choice` | Auto tool choice API | Включить — нужен для tool-calling |
+| `--tool-call-parser` | Парсер вызовов инструментов | `qwen3_coder` — оптимизирован для Qwen-моделей |
+
+### Производительность (2× RTX 5070 Ti)
+
+Замеренные показатели для `unsloth/Qwen3.6-27B-NVFP4`:
+
+| Метрика | Значение |
+|---|---|
+| Prompt throughput (первый запрос) | ~815 tok/s |
+| Generation throughput (стабильный) | ~52 tok/s |
+| GPU KV cache usage | ~14% (типичный запрос) |
+| Prefix cache hit rate | ~75% |
+
+Сравнение с Ollama: **vLLM в 2-5 раз быстрее** на generation-этапе (52 vs 10-30 tok/s).
+
+### Подключение к системе
+
+Добавить провайдер в `providers.json`:
+
+```json
+{
+  "providers": {
+    "vllm": {
+      "base_url": "http://localhost:8000/v1",
+      "api_key": "",
+      "models": ["unsloth/Qwen3.6-27B-NVFP4"],
+      "default_model": "unsloth/Qwen3.6-27B-NVFP4",
+      "large_model": "",
+      "settings": {
+        "think_tokens": 0,
+        "input_tokens": 65536,
+        "output_tokens": 16384
+      }
+    }
+  }
+}
+```
+
+> **Важно:** `base_url` указывает на `/v1`-эндпоинт vLLM (`/v1/chat/completions`).
+
+Или через переменные окружения:
+
+```bash
+LLM_PROVIDER=vllm
+MODEL=unsloth/Qwen3.6-27B-NVFP4
+```
+
+### Tuning по оборудованию
+
+| Оборудование | `tensor-parallel-size` | `gpu-memory-utilization` | `max-num-seqs` | Модель |
 |---|---|---|---|---|
-| Где работает | Локально (в т.ч. в Docker) | Облако Yandex Cloud | Облако Trim | Облако Reg Cloud |
-| Ключ | Не нужен | `api_key` + `folder_id` | `api_key` | `api_key` |
-| Выход по умолчанию | 16384 | 8000 (16000 на первом `WriteFiles`) | 4000 | 32768 |
-| Входной контекст | `settings.input_tokens` | `settings.input_tokens` | `settings.input_tokens` | `settings.input_tokens` (262144) |
-| Reasoning | `settings.think_tokens` → `think` | → `reasoning_effort` | → `reasoning_effort` | → `reasoning_effort` |
-| Нюанс | Нужен запуск `ollama serve` | — | Дифф ревью идёт целиком (`noChunk`) | Совместим с OpenAI |
+| 1× RTX 3090/4090 (24 ГБ) | 1 | 0.85 | 2 | 7B-14B |
+| 1× RTX 5070 Ti (16 ГБ) | 1 | 0.80 | 2 | 7B-14B |
+| 2× RTX 5070 Ti (32 ГБ) | 2 | 0.93 | 4 | 27B-32B |
+| 2× A100 (80 ГБ) | 2 | 0.95 | 8 | 70B+ |
+| 4× A100/H100 | 4 | 0.95 | 8 | 70B+ |
+
+### Отладка vLLM
+
+Сервер логирует метрики каждые 10 секунд. Ключевые индикаторы:
+
+- **GPU KV cache usage** > 80% — снизить `max-num-seqs` или `gpu-memory-utilization`
+- **Prefix cache hit rate** < 50% — проверить, не перегружен ли cache; при низком — поднять `max-num-seqs`
+- **Avg generation throughput** падает при `Running: 2+ reqs` — снизить `max-num-seqs`
+
+```bash
+# Проверка, что сервер отвечает
+curl -s http://localhost:8000/v1/models | python3 -m json.tool
+
+# Быстрый тест генерации
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"unsloth/Qwen3.6-27B-NVFP4","messages":[{"role":"user","content":"Hello"}],"max_tokens":100}'
+```
 
 ## Двухуровневая маршрутизация (Ollama)
 

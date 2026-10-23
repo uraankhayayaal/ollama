@@ -16,6 +16,21 @@
         "output_tokens": 16384
       }
     },
+    "vllm": {
+      "base_url": "http://localhost:8000/v1",
+      "api_key": "",
+      "models": [
+        "unsloth/Qwen3.6-27B-NVFP4",
+        "Qwen/Qwen3-Coder-30B-A3B"
+      ],
+      "default_model": "unsloth/Qwen3.6-27B-NVFP4",
+      "large_model": "",
+      "settings": {
+        "think_tokens": 0,
+        "input_tokens": 65536,
+        "output_tokens": 16384
+      }
+    },
     "yandex": {
       "base_url": "https://ai.api.cloud.yandex.net/v1",
       "api_key": "your-yandex-api-key",

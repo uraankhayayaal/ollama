@@ -143,6 +143,31 @@ npm --prefix web run build
   --reasoning-preserve
 ```
 
+
+Сценарий C (vLLM)
+```
+pip install --upgrade pip
+pip install vllm
+source vllm_env/bin/activate
+```
+```
+huggingface-cli download unsloth/Qwen3.6-27B-NVFP4 --local-dir ./qwen3.6-27b-nvfp4
+```
+```
+vllm serve unsloth/Qwen3.6-27B-NVFP4 --tensor-parallel-size 2 --max-model-len 32768 --kv-cache-dtype fp8 --gpu-memory-utilization 0.95 --trust-remote-code --port 8000
+
+or
+
+python3 -m vllm.entrypoints.openai.api_server \
+    --model unsloth/Qwen3.6-27B-NVFP4 \
+    --tensor-parallel-size 2 \
+    --max-model-len 32768 \
+    --kv-cache-dtype fp8 \
+    --gpu-memory-utilization 0.95 \
+    --trust-remote-code \
+    --port 8000
+```
+
 ### Шаг 3. Контроль работы и логирование
 
 Теперь ваш ИИ-сервер работает незаметно в фоновом режиме как системный демон.
