@@ -154,18 +154,19 @@ source vllm_env/bin/activate
 huggingface-cli download unsloth/Qwen3.6-27B-NVFP4 --local-dir ./qwen3.6-27b-nvfp4
 ```
 ```
-vllm serve unsloth/Qwen3.6-27B-NVFP4 --tensor-parallel-size 2 --max-model-len 32768 --kv-cache-dtype fp8 --gpu-memory-utilization 0.95 --trust-remote-code --port 8000
-
-or
-
 python3 -m vllm.entrypoints.openai.api_server \
     --model unsloth/Qwen3.6-27B-NVFP4 \
     --tensor-parallel-size 2 \
-    --max-model-len 32768 \
+    --max-model-len 98304 \
     --kv-cache-dtype fp8 \
-    --gpu-memory-utilization 0.95 \
+    --gpu-memory-utilization 0.93 \
+    --max-num-seqs 4 \
+    --enable-chunked-prefill \
+    --limit-mm-per-prompt '{"image":0,"video":0}' \
     --trust-remote-code \
-    --port 8000
+    --port 8000 \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_coder
 ```
 
 ### Шаг 3. Контроль работы и логирование

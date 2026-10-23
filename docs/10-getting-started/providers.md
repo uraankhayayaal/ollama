@@ -126,7 +126,7 @@ pip install vllm
 python3 -m vllm.entrypoints.openai.api_server \
   --model unsloth/Qwen3.6-27B-NVFP4 \
   --tensor-parallel-size 2 \
-  --max-model-len 65536 \
+  --max-model-len 98304 \
   --kv-cache-dtype fp8 \
   --gpu-memory-utilization 0.93 \
   --max-num-seqs 4 \
@@ -144,7 +144,7 @@ python3 -m vllm.entrypoints.openai.api_server \
 |---|---|---|
 | `--model` | Модель с Hugging Face | `unsloth/Qwen3.6-27B-NVFP4` — FP8-версия, меньше VRAM |
 | `--tensor-parallel-size` | Число GPU для распределения модели | Кол-во доступных GPU (2 для RTX 5070 Ti x2) |
-| `--max-model-len` | Максимальная длина контекста | 65536 — покрывает nudge-циклы без `exceeded_context_size` |
+| `--max-model-len` | Максимальная длина контекста | 98304 — максимальный контекст модели |
 | `--kv-cache-dtype` | Точность KV-кэша | `fp8` — экономия VRAM при высокой производительности |
 | `--gpu-memory-utilization` | Доля VRAM для inference | 0.93 — оставить ~7% для ОС и фоновых процессов |
 | `--max-num-seqs` | Максимум параллельных запросов | 4 — достаточно для оркестрации (не более 2-3 агентов параллельно) |
