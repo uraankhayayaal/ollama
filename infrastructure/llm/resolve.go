@@ -16,6 +16,7 @@ const (
 	ProviderTrim     ProviderName = "trim"
 	ProviderReg      ProviderName = "reg"
 	ProviderLlamaCpp ProviderName = "llama.cpp"
+	ProviderVLLM     ProviderName = "vllm"
 )
 
 // Selection — выбор провайдера и моделей. Пустые поля означают «взять из
@@ -143,6 +144,21 @@ func ResolveSelection(sel Selection) (*Resolved, error) {
 			out.LargeModel = largeModel
 		}
 
+	case ProviderVLLM:
+		p, perr := NewOpenAIProvider(sel.Provider, model, providerCfg)
+		if perr != nil {
+			return out, perr
+		}
+		out.Small = p
+		if largeModel != "" && largeModel != model {
+			large, lerr := NewOpenAIProvider(sel.Provider, largeModel, providerCfg)
+			if lerr != nil {
+				return out, lerr
+			}
+			out.Large = large
+			out.LargeModel = largeModel
+		}
+
 	case ProviderAlisa, ProviderTrim, ProviderReg, ProviderLlamaCpp:
 		p, perr := NewOpenAIProvider(sel.Provider, model, providerCfg)
 		if perr != nil {
@@ -151,7 +167,7 @@ func ResolveSelection(sel Selection) (*Resolved, error) {
 		out.Small = p
 
 	default:
-		return nil, fmt.Errorf("unknown provider: %s. Use 'ollama', 'yandex', 'trim', 'reg' or 'llama.cpp'", sel.Provider)
+		return nil, fmt.Errorf("unknown provider: %s. Use 'ollama', 'yandex', 'trim', 'reg', 'llama.cpp' or 'vllm'", sel.Provider)
 	}
 
 	return out, nil

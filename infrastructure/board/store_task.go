@@ -427,6 +427,12 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 	if err := s.SaveTask(ctx, t); err != nil {
 		return err
 	}
+	// Общий хук смены статуса — публикует снимок доски, чтобы прямые вызовы
+	// оркестратора (human_help, детект зацикливания) виделись в Web UI без
+	// перезагрузки страницы. nil — хука нет (консольный режим).
+	if s.TaskStatusChangedHook != nil {
+		s.TaskStatusChangedHook(ctx, t, from, st)
+	}
 	// Ф-2: авто-действия при достижении done (gitflow: ветка задачи → релизная
 	// ветка эпика). Хук внедряется сервером; ошибки хука не ломают сам переход.
 	if st == StatusInProgress && s.TaskInProgressHook != nil {

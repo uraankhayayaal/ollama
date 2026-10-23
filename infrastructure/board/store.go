@@ -102,6 +102,14 @@ type Store struct {
 	// публикует обновлённый снимок доски, иначе «чем занят агент» было бы
 	// видно только после смены статуса. nil — хука нет.
 	TaskStateHook func(ctx context.Context, t *Task)
+
+	// TaskStatusChangedHook — опциональный обратный вызов при ЛЮБОЙ смене
+	// статуса задачи (не только done/in_progress). Вызывается из SetTaskStatus
+	// после успешного сохранения, до TaskDoneHook/TaskInProgressHook.
+	// Назначение: сервер публикует обновлённый снимок доски — иначе прямые
+	// вызовы оркестратора (эскалация human_help, детект зацикливания) не
+	// увидит Web UI без перезагрузки страницы. nil — хука нет.
+	TaskStatusChangedHook func(ctx context.Context, t *Task, from, to Status)
 }
 
 // key возвращает полный ключ Redis для относительного имени.

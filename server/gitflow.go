@@ -522,6 +522,14 @@ func (s *Server) attachGitHooks(project string, store *board.Store) {
 		s.srvEmitBoard(project, "состояние задачи: "+task.TaskID)
 	}
 
+	// ЛЮБАЯ смена статуса задачи (human_help, testing, done и т.д.) — обновить
+	// снимок доски в Web UI. Без этого прямые вызовы оркестратора
+	// (эскалация human_help, детект зацикливания) не появлялись бы без
+	// перезагрузки страницы.
+	store.TaskStatusChangedHook = func(_ context.Context, task *board.Task, from, to board.Status) {
+		s.srvEmitBoard(project, fmt.Sprintf("статус задачи %s: %s → %s", task.TaskID, from, to))
+	}
+
 	// Ф-4: эпик переведён в done — авто-синхрон релизной ветки с main.
 	store.EpicDoneHook = func(ctx context.Context, epic *board.Epic, _ board.Status) {
 		s.syncEpicWithMain(ctx, project, epic)
