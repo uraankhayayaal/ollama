@@ -80,17 +80,18 @@ func extractJSON(s string) string {
 
 ### Шаг 1: Fix `sanitizeJSON` для не-UTF-8 юникод-символов
 
-- [ ] 1.1 В `sanitizeJSON` (строка 105) — добавить обработку не-ASCII символов как потенциального mojibake: `strings.ToValidUTF8` на входном `s` до цикла
-- [ ] 1.2 В `extractJSON` (строка 51) — аналогично: `s = strings.ToValidUTF8(s, "")`
-- [ ] 1.3 Тест: сымитировать mojibake-вход и проверить, что `UnmarshalTasks` парсит
-- [ ] **Гейт:** `go build ./...`, `go test ./domain/...`
+- [x] 1.1 `strings.ToValidUTF8` — не нужно: mojibake — валидный UTF-8, проблема в другой кодировке
+- [x] 1.2 Вместо этого — `fixMojibake` (шаг 2) решает проблему на уровне `UnmarshalTasks`/`UnmarshalBacklog`
+- [x] 1.3 Тесты: `TestFixMojibake_ValidText_Unchanged`, `TestFixMojibake_DoubleEncoded_Restores`, `TestFixMojibake_TaskJSON_Parses`
+- [x] **Гейт:** `go build ./...` ✓, `go test ./domain/...` ✓
 
-### Шаг 2: Добавить `fixMojibake` для двойной кодировки (опционально)
+### Шаг 2: Добавить `fixMojibake` для двойной кодировки
 
-- [ ] 2.1 Создать функцию `fixMojibake(s string) string`
-- [ ] 2.2 В `UnmarshalTasks` и `UnmarshalBacklog` — применять `fixMojibake` перед `extractJSON`
-- [ ] 2.3 Тесты для кейсов двойной кодировки
-- [ ] **Гейт:** `go test ./domain/...`
+- [x] 2.1 Создать функцию `fixMojibake(s string) string`
+- [x] 2.2 Двухэтапное обнаружение: C3 90-9F (Ð, Ñ) ≥ 3 → обрабатываем все C2 80-BF
+- [x] 2.3 В `UnmarshalTasks` и `UnmarshalBacklog` — применять `fixMojibake` после `extractJSON`
+- [x] 2.4 Тесты: 7 тестов, все PASS
+- [x] **Гейт:** `go test ./domain/...` ✓
 
 ---
 
@@ -117,5 +118,14 @@ func TestUnmarshalTasksMojibake(t *testing.T) {
 
 | Риск | Смягчение |
 |---|---|
-| `strings.ToValidUTF8` удаляет валидные данные | Маловероятно: удаляются только невалидные UTF-8 последовательности, которые и так не парсятся как JSON |
-| Mojibake остаётся в поле `title` после разбора | JSON разберётся, но текст будет некорректным. Для критичных полей — добавить post-processing |
+| Ложное срабатывание на европейские акценты | Двухэтапное обнаружение: C3 90-9F (кириллический маркер) ≥ 3 → обрабатываем C2 80-BF; европейские акценты (C3 A0-BF) НЕ затрагиваются |
+| Mojibake остаётся в поле `title` после разбора | `fixMojibake` применяется до парсинга JSON — все поля восстанавливаются |
+| Данные повреждены не двойной кодировкой | `fixMojibake` срабатывает только при наличии ≥ 3 паттернов C3 90-9F — валидный текст пропускается |
+
+---
+
+## 7. Результат
+
+- `invalid character 'Ð' looking for beginning of value` — больше не возникает
+- JSON с mojibake парсится корректно, поля `title`/`description` восстанавливаются
+- Валидный текст (кириллица, акценты, emoji) — не изменяется

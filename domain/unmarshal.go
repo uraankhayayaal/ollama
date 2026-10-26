@@ -3,13 +3,15 @@ package domain
 import (
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 )
 
 // UnmarshalBacklog разбирает JSON-ответ/аргументы Системного архитектора
-// (backlog с полем tasks) в Backlog. Устойчив к markdown-обёрткам и типовому
-// мусору модели (экранирование строк внутри текста).
+// (backlog с полем tasks) в Backlog. Устойчив к markdown-обёрткам, типовому
+// мусору модели и mojibake (двойная кодировка UTF-8).
 func UnmarshalBacklog(data string) (*Backlog, error) {
 	data = extractJSON(data)
+	data = fixMojibake(data)
 	var b Backlog
 	if err := json.Unmarshal([]byte(sanitizeJSON(data)), &b); err != nil {
 		return nil, err
@@ -20,8 +22,9 @@ func UnmarshalBacklog(data string) (*Backlog, error) {
 // UnmarshalTasks разбирает JSON-ответ лида направления (декомпозиция с полем
 // tasks) в список задач. Лиды используют разные корневые ключи
 // (frontend_lead_summary, backend_lead_summary и т.п.), поэтому разбираем их
-// толерантно, извлекая только массив tasks.
+// толерантно, извлекая только массив tasks. Устойчив к mojibake.
 func UnmarshalTasks(data string) ([]TaskSpec, error) {
+	data = fixMojibake(data)
 	root := struct {
 		Tasks []TaskSpec `json:"tasks"`
 	}{}
@@ -147,4 +150,52 @@ func writeUnicodeEscape(b *strings.Builder, r rune) {
 	for shift := 12; shift >= 0; shift -= 4 {
 		b.WriteByte(hex[(r>>shift)&0xf])
 	}
+}
+
+// fixMojibake восстанавливает doubly-encoded UTF-8 кириллицы:
+// UTF-8 байты → неверная интерпретация как latin-1 → обратно в UTF-8.
+// Пример: "Экспорт" → байты D0 95 ... → latin-1 символы 'Ð' '' ... → UTF-8 байты C3 90 C2 95 ...
+// Восстановление: декодируем C3 90 → rune U+00D0 → байт 0xD0 → UTF-8 декодирование → "Э"
+//
+// Двухэтапное обнаружение:
+// 1. Сначала ищем паттерны C3 90-9F (Ð, Ñ) — признак кириллической кодировки.
+// 2. Если найдено ≥ 3 — обрабатываем все C2 80-BF как mojibake.
+func fixMojibake(s string) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "")
+	}
+
+	b := []byte(s)
+	cyrillicCount := 0
+	for i := 0; i < len(b); i++ {
+		if b[i] == 0xC3 && i+1 < len(b) && b[i+1] >= 0x90 && b[i+1] <= 0x9F {
+			cyrillicCount++
+		}
+	}
+
+	// Меньше 3 паттернов — не обрабатываем (может быть совпадением)
+	if cyrillicCount < 3 {
+		return s
+	}
+
+	var result strings.Builder
+	result.Grow(len(b) / 2)
+
+	for i := 0; i < len(b); {
+		// Паттерн: C3 90-9F или C2 80-BF (при обнаружении кириллической кодировки)
+		if ((b[i] == 0xC3 && i+1 < len(b) && b[i+1] >= 0x90 && b[i+1] <= 0x9F) ||
+			(b[i] == 0xC2 && i+1 < len(b) && b[i+1] >= 0x80 && b[i+1] <= 0xBF)) {
+			r, _ := utf8.DecodeRune(b[i:])
+			if r <= 0xFF {
+				result.WriteByte(byte(r))
+				i += 2
+				continue
+			}
+		}
+
+		result.WriteByte(b[i])
+		i++
+	}
+
+	return result.String()
 }
