@@ -3,6 +3,7 @@ package planner
 import (
 	"ai/domain"
 	"ai/domain/services"
+	"ai/tools"
 )
 
 // AgentFactory — порт конструирования ролевых агентов оркестратора: специалистов
@@ -16,6 +17,13 @@ import (
 // `Step` намеренно принимает доменный AgentType, а не *Step, чтобы реализация
 // фабрики не зависела от этого пакета (иначе получился бы цикл импорта
 // planner → agents/factory → planner).
+// DecomposeToolRemoval — имена инструментов, которые исключаются из набора
+// архитектора при декомпозиции эпика: архитектор создаёт только задачи,
+// а не под-эпики (Fix #2).
+var DecomposeToolRemoval = []string{
+	tools.BoardCreateEpic,
+}
+
 type AgentFactory interface {
 	// Specialist создаёт агента-специалиста по assigned_role задачи.
 	Specialist(project, role, prompt string) services.Agent
@@ -30,6 +38,10 @@ type AgentFactory interface {
 	ConfigureArchitect(a services.Agent, rag services.Searcher, extras ...services.Tool) services.Agent
 	// SetArchitectEpicWorkdir задаёт резолвер worktree ветки эпика (4.1).
 	SetArchitectEpicWorkdir(a services.Agent, fn func() (string, string)) services.Agent
+	// RemoveToolsFromAgent исключает инструменты из набора агента.
+	// Используется для снятия BoardCreateEpic при декомпозиции (Fix #2).
+	// Не-поддерживаемый агент возвращается без изменений.
+	RemoveToolsFromAgent(a services.Agent, names []string) services.Agent
 	// BusinessAnalyst создаёт бизнес-аналитика для фазы business_review эпика.
 	BusinessAnalyst(project, prompt string, store services.BoardStore) services.Agent
 }
@@ -53,6 +65,9 @@ func (noopAgentFactory) ConfigureArchitect(a services.Agent, _ services.Searcher
 	return a
 }
 func (noopAgentFactory) SetArchitectEpicWorkdir(a services.Agent, _ func() (string, string)) services.Agent {
+	return a
+}
+func (noopAgentFactory) RemoveToolsFromAgent(a services.Agent, _ []string) services.Agent {
 	return a
 }
 func (noopAgentFactory) BusinessAnalyst(string, string, services.BoardStore) services.Agent {

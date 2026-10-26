@@ -14,8 +14,15 @@ import (
 	"ai/agents/qaengineer"
 	"ai/domain"
 	"ai/domain/services"
+	"ai/tools"
 	"strings"
 )
+
+// toolRemover — интерфейс агентов с набором инструментов, допускающим удаление.
+// Все агенты, встраивающие *agents.Base, удовлетворяют ему (ToolsSet() *tools.Set).
+type toolRemover interface {
+	ToolsSet() *tools.Set
+}
 
 // Factory — фабрика по умолчанию: ролевые агенты + архитектор + бизнес-аналитик.
 type Factory struct {
@@ -104,6 +111,17 @@ func (architectFactory) ConfigureArchitect(a agents.Agent, searcher services.Sea
 func (architectFactory) SetArchitectEpicWorkdir(a agents.Agent, fn func() (string, string)) agents.Agent {
 	if arch, ok := a.(*architect.Architect); ok {
 		arch.SetEpicWorkdir(fn)
+	}
+	return a
+}
+
+func (architectFactory) RemoveToolsFromAgent(a agents.Agent, names []string) agents.Agent {
+	tr, ok := a.(toolRemover)
+	if !ok {
+		return a
+	}
+	for _, n := range names {
+		tr.ToolsSet().Remove(n)
 	}
 	return a
 }

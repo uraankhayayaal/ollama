@@ -97,6 +97,22 @@ func (s *Set) Has(name string) bool {
 	return ok
 }
 
+// Remove исключает инструмент из набора по имени. Используется для
+// контекстной модификации: например, архитектор при декомпозиции
+// эпика создаёт только задачи (BoardCreateTask), а не эпики.
+func (s *Set) Remove(name string) {
+	if s.byName == nil {
+		return
+	}
+	delete(s.byName, name)
+	for i, n := range s.order {
+		if n == name {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			return
+		}
+	}
+}
+
 // Execute диспетчеризует вызов модели к инструменту по имени.
 func (s *Set) Execute(name string, args map[string]any) ([]byte, error) {
 	t, ok := s.byName[name]

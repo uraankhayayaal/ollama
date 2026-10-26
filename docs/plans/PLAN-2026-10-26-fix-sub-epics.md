@@ -78,31 +78,32 @@ for _, e := range freshEpics {
 
 ## 4. Порядок реализации
 
-### Шаг 1: Проверить наличие `Tools.Remove()`
+### Шаг 1: Добавить `Tools.Remove()`
 
-- [ ] 1.1 Проверить, есть ли метод `Remove(name string)` в `ToolSet` (`tools/tools.go` или аналог)
-- [ ] 1.2 Если нет — добавить метод (одна строка: `delete(s.tools, name)`)
-- [ ] **Гейт:** `go build ./...`
+- [x] 1.1 Добавить `Remove(name string)` в `tools.Set` (`tools/registry.go`) — `delete(byName, name)` + удалить из `order`
+- [x] **Гейт:** `go build ./...` ✓
 
 ### Шаг 2: Снять `BoardCreateEpic` в `phaseArchitectDecompose`
 
-- [ ] 2.1 В `kanban_architect_decompose.go` — после `arch = k.prepareArchitect(arch)` добавить `arch.Tools.Remove(tools.BoardCreateEpic)`
-- [ ] 2.2 Проверить, что `Tools` — доступное поле `*architect.Architect` (или `services.Agent`)
-- [ ] **Гейт:** `go build ./...`
+- [x] 2.1 Добавить `RemoveToolsFromAgent(a services.Agent, names []string) services.Agent` в `AgentFactory` интерфейс (`application/planner/agentfactory.go`)
+- [x] 2.2 Реализовать в `agents/factory/factory.go` — type assertion на `toolRemover` (интерфейс с `ToolsSet() *tools.Set`)
+- [x] 2.3 Добавить `ToolsSet() *tools.Set` в `agents.Base` (экспорт существующего поля)
+- [x] 2.4 В `phaseArchitectDecompose`: `arch = factory.RemoveToolsFromAgent(arch, DecomposeToolRemoval)`
+- [x] 2.5 `DecomposeToolRemoval = []string{tools.BoardCreateEpic}` — константа в `agentfactory.go`
+- [x] **Гейт:** `go build ./...` ✓, `go test ./application/planner/...` ✓
 
 ### Шаг 3: Добавить валидацию новых эпиков
 
-- [ ] 3.1 До вызова `k.generate` — сохранить список существующих эпиков (`beforeEpics`)
-- [ ] 3.2 После `k.generate` — проверить `ListEpics` на новые эпики
-- [ ] 3.3 При обнаружении суб-эпика — удалить его с логированием `Warnf`
-- [ ] **Гейт:** `go build ./...`, `go test ./application/planner/...`
+- [x] 3.1 До `k.generate` — сохранить `beforeEpics` (map по TaskID всех эпиков доски)
+- [x] 3.2 После `k.generate` — `ListEpics` и сравнение с `beforeEpics`
+- [x] 3.3 При обнаружении суб-эпика — `DeleteEpic` + `Warnf` логирование
+- [x] **Гейт:** `go build ./...` ✓, `go test ./application/planner/...` ✓
 
 ### Шаг 4: Обновить `architectDecomposePrompt`
 
-- [ ] 4.1 Добавить пример: `{"tasks": [{"task_id": "T-01", ...}]}` с вызовом `BoardCreateTask`
-- [ ] 4.2 Явный запрет: `НЕ используй BoardCreateEpic — создавай только задачи (BoardCreateTask)`
-- [ ] 4.3 Добавить пример правильного вызова: `BoardCreateTask({"task_id": "T-01", "epic_id": "%s", ...})`
-- [ ] **Гейт:** `go build ./...`
+- [x] 4.1 Явный запрет: `НЕ создавай эпики — инструмент BoardCreateEpic недоступен`
+- [x] 4.2 Дублирование контекста: `Ты разбиваешь ЭПИК на ЗАДАЧИ, а не на под-эпики`
+- [x] **Гейт:** `go build ./...` ✓
 
 ---
 
@@ -121,6 +122,18 @@ func TestArchitectDecomposeNoSubEpics(t *testing.T) {
 
 | Риск | Смягчение |
 |---|---|
-| `Tools.Remove()` ломает другие фазы архитектора | Убираем только в `phaseArchitectDecompose` (контекстно). Другие фазы (`phaseArchitect`) имеют полный набор. |
-| Модель игнорирует запрет в промпте | Физически убираем `BoardCreateEpic` из инструментов — модель не сможет его вызвать. Промпт дублирует запрет для ясности. |
+| `RemoveToolsFromAgent` ломает другие фазы архитектора | Убираем только в `phaseArchitectDecompose` (контекстно). Другие фазы (`phaseArchitect`, `phaseArchitectReviewer`) имеют полный набор. |
+| Агент не удовлетворяет `toolRemover` | `RemoveToolsFromAgent` возвращает агент без изменений — деградация безопасна. Все агенты из `agents/factory` имеют `*agents.Base` и удовлетворяют интерфейсу. |
+| Модель игнорирует запрет в промпте | Физически убираем `BoardCreateEpic` из инструментов — модель не сможет его вызвать. Валидация-очистка (шаг 3) — второй слой защиты. |
 | Суб-эпики уже созданы до фикса | Валидация-очистка (шаг 3) удаляет их при следующем проходе оркестратора. |
+
+---
+
+## 7. Результат
+
+- `BoardCreateEpic` физически недоступен архитектору при декомпозиции
+- Промпт явно запрещает создание эпиков (дублирование для ясности модели)
+- Валидация-очистка удаляет суб-эпики даже при обходе защиты
+- Двойная защита: снятие инструмента + post-hoc валидация
+- Изменения не затрагивают другие фазы архитектора (обычный режим, ревизия)
+- Гейты: `go build ./...` ✓, `go test ./application/planner/...` ✓

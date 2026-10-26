@@ -46,6 +46,12 @@ func (b *Base) SetTools(toolNames []string, deps tools.Deps) {
 	b.Tools = tools.Select(toolNames, deps)
 }
 
+// ToolsSet возвращает набор инструментов агента. Используется фабрикой
+// для модификации набора вне агента (Fix #2: снятие BoardCreateEpic).
+func (b *Base) ToolsSet() *tools.Set {
+	return b.Tools
+}
+
 // GetSystemMessages возвращает системный промпт по умолчанию (если задан).
 func (b *Base) GetSystemMessages(_ []Message) []Message {
 	if b.SystemPrompt == "" {

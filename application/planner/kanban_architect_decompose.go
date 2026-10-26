@@ -19,6 +19,10 @@ func (k *KanbanRunner) phaseArchitectDecompose(ctx context.Context) (bool, error
 		return false, err
 	}
 
+	// Снимем инструменты создания эпиков — архитектор в декомпозиции
+	// создаёт только задачи.
+	factory := agentFactory()
+
 	progress := false
 	for _, e := range epics {
 		if e.Status != domain.StatusSystemAnalysis {
@@ -38,8 +42,19 @@ func (k *KanbanRunner) phaseArchitectDecompose(ctx context.Context) (bool, error
 
 		k.log.Infof("[эпик %s] декомпозиция архитектором: %s", e.TaskID, truncateText(e.Title, 60))
 
-		arch := agentFactory().Architect(k.store.Project(), k.architectDecomposePrompt(e), k.store)
+		// Сохраняем список эпиков до декомпозиции для проверки суб-эпиков.
+		allEpics, err := k.store.ListEpics(ctx)
+		if err != nil {
+			return false, err
+		}
+		beforeEpics := make(map[string]bool, len(allEpics))
+		for _, ep := range allEpics {
+			beforeEpics[ep.TaskID] = true
+		}
+
+		arch := factory.Architect(k.store.Project(), k.architectDecomposePrompt(e), k.store)
 		arch = k.prepareArchitect(arch)
+		arch = factory.RemoveToolsFromAgent(arch, DecomposeToolRemoval)
 
 		resp, err := k.generate(ctx, tokens.ScopeEpic(e.TaskID), arch)
 		if err != nil {
@@ -50,6 +65,20 @@ func (k *KanbanRunner) phaseArchitectDecompose(ctx context.Context) (bool, error
 		}
 		if resp != nil && resp.Truncated {
 			return false, fmt.Errorf("эпик %s: декомпозиция остановлена по лимиту раундов", e.TaskID)
+		}
+
+		// Удаляем суб-эпики, которые архитектор мог создать через BoardCreateEpic.
+		freshEpics, err := k.store.ListEpics(ctx)
+		if err == nil {
+			for _, fe := range freshEpics {
+				if !beforeEpics[fe.TaskID] {
+					if delErr := k.store.DeleteEpic(ctx, fe.TaskID); delErr != nil {
+						k.log.Warnf("[декомпозиция] не удалось удалить суб-эпик %s: %v", fe.TaskID, delErr)
+					} else {
+						k.log.Warnf("[декомпозиция] удалён суб-эпик %s (создан архитектором вместо задачи)", fe.TaskID)
+					}
+				}
+			}
 		}
 
 		// Проверяем, что агент создал задачи.
@@ -122,7 +151,8 @@ func (k *KanbanRunner) architectDecomposePrompt(epic *domain.Epic) string {
 
 5. Опиши каждую задачу детально: контракты, сигнатуры, API, структуры.
 
-НЕ создавай эпики — только задачи в рамках этого эпика.`,
+ВАЖНО: используй ТОЛЬКО BoardCreateTask. НЕ создавай эпики — инструмент BoardCreateEpic недоступен.
+Ты разбиваешь ЭПИК на ЗАДАЧИ, а не на под-эпики.`,
 		k.store.Project(), epic.TaskID, epic.Title, epic.Description, epic.TaskID)
 }
 
