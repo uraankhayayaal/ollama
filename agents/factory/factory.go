@@ -9,6 +9,7 @@ import (
 	"ai/agents"
 	"ai/agents/architect"
 	"ai/agents/backendlead"
+	"ai/agents/businessanalyst"
 	"ai/agents/developer"
 	"ai/agents/devops"
 	"ai/agents/devopslead"
@@ -19,11 +20,11 @@ import (
 	"strings"
 )
 
-// Factory — фабрика по умолчанию: ролевые агенты + архитектор. Структурно
-// реализует planner.AgentFactory (без импорта planner — иначе цикл).
+// Factory — фабрика по умолчанию: ролевые агенты + архитектор + бизнес-аналитик.
 type Factory struct {
 	roleFactory
 	architectFactory
+	businessAnalystFactory
 }
 
 // New возвращает фабрику ролевых агентов и архитектора.
@@ -89,6 +90,8 @@ func (roleFactory) Step(agentType domain.AgentType, projectName, prompt string) 
 		return frontendlead.NewFrontendLead(projectName, prompt)
 	case domain.AgentBackendLead:
 		return backendlead.NewBackendLead(projectName, prompt)
+	case domain.AgentBusinessAnalyst:
+		return businessanalyst.NewBusinessAnalyst(projectName, prompt)
 	}
 	return nil
 }
@@ -125,4 +128,15 @@ func (architectFactory) SetArchitectEpicWorkdir(a agents.Agent, fn func() (strin
 		arch.SetEpicWorkdir(fn)
 	}
 	return a
+}
+
+// businessAnalystFactory — бизнес-аналитик поверх agents/businessanalyst.
+type businessAnalystFactory struct{}
+
+func (businessAnalystFactory) BusinessAnalyst(project, prompt string, store services.BoardStore) agents.Agent {
+	ba := businessanalyst.NewBusinessAnalyst(project, prompt)
+	if store != nil {
+		ba.SetBoardStore(store)
+	}
+	return ba
 }

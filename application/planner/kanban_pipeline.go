@@ -73,52 +73,63 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 		}
 	}
 
-	// Ревизия эпиков-черновиков (Ф-8): эпики с RequiresReview=true проверяются
-	// Системным архитектором в режиме ревизии ПЕРЕД декомпозицией лидами.
-	p, err := k.phaseArchitectReview(ctx)
-	if err != nil {
-		return false, err
+	// Бизнес-ревью эпиков: бизнес-аналитик уточняет требования,
+	// добавляет User Stories и Acceptance Criteria, переводит в system_analysis.
+	{
+		p, err := k.phaseBusinessReview(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
 	}
-	progress = progress || p
 
 	// Декомпозиция лидами.
-	p, err = k.phaseLeads(ctx)
-	if err != nil {
-		return false, err
+	{
+		p, err := k.phaseLeads(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
 	}
-	progress = progress || p
 
 	// Готовность к работе -> затвор HITL «утвердить задачи» (перед
-	// раздачей специалистам).
-	p, err = k.phaseReady(ctx)
-	if err != nil {
-		return false, err
-	}
-	progress = progress || p
-	if k.gate != nil && p {
-		if err := k.waitReadyTasks(ctx); err != nil {
+	// раздачей специалистами).
+	{
+		p, err := k.phaseReady(ctx)
+		if err != nil {
 			return false, err
+		}
+		progress = progress || p
+		if k.gate != nil && p {
+			if err := k.waitReadyTasks(ctx); err != nil {
+				return false, err
+			}
 		}
 	}
 
 	// Исполнение специалистами.
-	p, err = k.phaseExecute(ctx)
-	if err != nil {
-		return false, err
+	{
+		p, err := k.phaseExecute(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
 	}
-	progress = progress || p
 
 	// Финализация эпиков.
-	p, err = k.phaseComplete(ctx)
-	if err != nil {
-		return false, err
+	{
+		p, err := k.phaseComplete(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
 	}
 
 	// Ф-3: проход по доске, фиксирующий факт расхода токенов по всем
 	// терминальным единицам. Идемпотентен, ошибки учёта не роняют цикл.
 	k.finalizeTokens(ctx)
 
-	return progress || p, nil
+	return progress, nil
 }
 
 // finishIfAllDone завершает оркестрацию, если все эпики и задачи выполнены:

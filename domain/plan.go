@@ -19,11 +19,12 @@ const (
 	AgentQAEngineer   AgentType = "qa"
 	AgentFrontendLead AgentType = "frontendlead"
 	AgentBackendLead  AgentType = "backendlead"
-	// Типы вне ролей плана (архитектор и вспомогательные агенты).
-	AgentArchitect    AgentType = "architect"
-	AgentPromptCheck  AgentType = "prompt_check"
-	AgentCodeReviewer AgentType = "code_reviewer"
-	AgentChatAssist   AgentType = "chat_assist"
+	// Типы вне ролей плана (архитектор, бизнес-аналитик и вспомогательные агенты).
+	AgentArchitect      AgentType = "architect"
+	AgentBusinessAnalyst AgentType = "businessanalyst"
+	AgentPromptCheck    AgentType = "prompt_check"
+	AgentCodeReviewer   AgentType = "code_reviewer"
+	AgentChatAssist     AgentType = "chat_assist"
 )
 
 type Role string

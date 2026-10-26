@@ -33,6 +33,8 @@ type AgentFactory interface {
 	ConfigureArchitect(a services.Agent, rag services.Searcher, extras ...services.Tool) services.Agent
 	// SetArchitectEpicWorkdir задаёт резолвер worktree ветки эпика (4.1).
 	SetArchitectEpicWorkdir(a services.Agent, fn func() (string, string)) services.Agent
+	// BusinessAnalyst создаёт бизнес-аналитика для фазы business_review эпика.
+	BusinessAnalyst(project, prompt string, store services.BoardStore) services.Agent
 }
 
 // noopAgentFactory — фабрика по умолчанию, пока composition root не установил
@@ -56,6 +58,9 @@ func (noopAgentFactory) ConfigureArchitect(a services.Agent, _ services.Searcher
 }
 func (noopAgentFactory) SetArchitectEpicWorkdir(a services.Agent, _ func() (string, string)) services.Agent {
 	return a
+}
+func (noopAgentFactory) BusinessAnalyst(string, string, services.BoardStore) services.Agent {
+	return nil
 }
 
 // defaultAgentFactory — фабрика по умолчанию (устанавливается в main.go).
