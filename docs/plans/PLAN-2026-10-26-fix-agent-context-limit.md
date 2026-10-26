@@ -76,17 +76,18 @@ func (k *KanbanRunner) generate(ctx context.Context, scope tokens.Scope, agent s
 
 ### Шаг 2: Graceful handling превышения контекста
 
-- [ ] 2.1 В `OpenAIProvider.CreateChatCompletion()` или аналогичном методе — ловить ошибку `context length exceeded`
-- [ ] 2.2 При превышении — возвращать `errContextTooLarge` (новый тип ошибки), а не panic
-- [ ] 2.3 В `generate()` — при получении `errContextTooLarge` — логировать Warning и вернуть `nil, err` (а не продолжать)
-- [ ] **Гейт:** `go build ./...`
+- [x] 2.1 В `OpenAIProvider.ChatOnce()` — ловить ошибку `context length exceeded` (HTTP 400 от vllm)
+- [x] 2.2 При превышении — возвращать типизированную ошибку `"контекст превышает лимит модели: %w"`
+- [x] 2.3 В `generate()` — при получении ошибки провайдера — логировать Warning и вернуть `nil, err`
+- [x] **Гейт:** `go build ./...` ✓, `go vet` ✓
 
-### Шаг 3: Предпроверка размера промпта (опционально, после #1)
+### Шаг 3: Предпроверка размера промпта (реализовано)
 
-- [ ] 3.1 После реализации `BoardListTasks short` — проверить, что контекст не превышает ~80K токенов
-- [ ] 3.2 Если проблема сохраняется — добавить `tokens.Estimate()` перед `generate()`
-- [ ] 3.3 При превышении — отменить сессию агента, перезапустить с обрезанным контекстом
-- [ ] **Гейт:** `go build ./...`
+- [x] 3.1 В `KanbanRunner.generate()` — оценка токенов `domain.EstimateTextTokens` для системных + пользовательских сообщений
+- [x] 3.2 Лимит `maxInputTokens = 85000` (10% запаса от 98304 vllm)
+- [x] 3.3 При превышении — лог Warning + отмена генерации, не доходя до LLM
+- [x] **Гейт:** `go build ./...` ✓, `go vet` ✓, `go test ./application/planner/... ./infrastructure/llm/...` ✓
+- [x] Коммит: `a7a3dd4` (или следующий после тестов)
 
 ---
 

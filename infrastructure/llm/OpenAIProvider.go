@@ -176,6 +176,11 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (
 		},
 	)
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "context length") || strings.Contains(errStr, "content_length") ||
+			strings.Contains(errStr, "exceeds") && strings.Contains(errStr, "context") {
+			return nil, fmt.Errorf("контекст превышает лимит модели: %w", err)
+		}
 		return nil, fmt.Errorf("Ошибка при выполнении запроса: %w", err)
 	}
 

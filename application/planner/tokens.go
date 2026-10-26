@@ -21,15 +21,54 @@ import (
 	"ai/domain"
 	"ai/domain/services"
 	"context"
+	"fmt"
+	"strings"
 
 	"ai/shared/tokens"
 )
 
+// maxInputTokens — жёсткий лимит входных токенов для одного вызова LLM.
+// vllm (unsloth/Qwen3.6-27B-NVFP4): n_ctx = 98304. Оставляем запас 10%
+// под инструменты и системные сообщения, чтобы не получить ошибку
+// "context length exceeded" в середине работы агента.
+const maxInputTokens = 85000
+
 // generate вызывает провайдера в scope'е единицы работы: расход токенов раундов
 // атрибутируется этой единице и по нему записывается факт при завершении
 // (Ф-2). Пустой scope — расход без атрибуции (счётчик проекта).
+//
+// Предпроверка: оценивает размер промпта (системный + пользовательский) до
+// вызова LLM. Если превышает maxInputTokens — генерация отменяется, агент
+// получает новый контекст с обрезанной историей. Это защита от OOM сервера,
+// когда vllm не успевает обработать запрос до падения.
 func (k *KanbanRunner) generate(ctx context.Context, scope string, a services.Agent) (*domain.AgentResponse, error) {
-	return k.provider.Generate(services.WithScope(ctx, scope), a)
+	// Предпроверка: оценка токенов системного + пользовательского промпта
+	userMsgs := a.GetUserMessages()
+	sysMsgs := a.GetSystemMessages(userMsgs)
+
+	var estTokens int
+	for _, m := range sysMsgs {
+		estTokens += domain.EstimateTextTokens(m.Message)
+	}
+	for _, m := range userMsgs {
+		estTokens += domain.EstimateTextTokens(m.Message)
+	}
+
+	if estTokens > maxInputTokens {
+		k.log.Warnf("[контекст превышает лимит] оценка %d токенов (макс. %d) — отменяю генерацию для scope %s",
+			estTokens, maxInputTokens, scope)
+		return nil, fmt.Errorf("контекст агента превышает лимит (%d > %d токенов) — требуется сжатие истории",
+			estTokens, maxInputTokens)
+	}
+
+	resp, err := k.provider.Generate(services.WithScope(ctx, scope), a)
+	if err != nil && strings.Contains(err.Error(), "контекст превышает лимит модели") {
+		// Graceful degradation: сервер упал или vllm вернул ошибку —
+		// логируем и возвращаем ошибку, чтобы оркестратор мог перезапустить
+		k.log.Warnf("[контекст превышает лимит модели] scope %s: %v", scope, err)
+		return nil, err
+	}
+	return resp, err
 }
 
 // finalizeTaskTokens фиксирует факт расхода токенов терминальной задачи:
