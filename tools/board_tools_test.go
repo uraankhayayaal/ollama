@@ -4,6 +4,7 @@ import (
 	"ai/infrastructure/board"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -318,4 +319,131 @@ func TestBoardNotFoundListsExistingIDs(t *testing.T) {
 // задачи (нет исходного кода/зависимостей, блокер). Без причины инструмент
 // отказывает; с причиной она оседает в записи задачи (карточка UI) и
 // очищается при выходе из human_help, чтобы не висеть после возобновления.
+
+// BoardListTasks(short=true) — экономит контекст: description у всех задач пустой.
+func TestBoardListTasksShort(t *testing.T) {
+	set, store := newBoardToolSet(t)
+	ctx := context.Background()
+
+	epicID := "E-SHORT"
+	if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{
+		TaskID: epicID, Title: "Эпик", Description: "epic desc", AssignedRole: "Architect",
+	}}); err != nil {
+		t.Fatalf("создание эпика: %v", err)
+	}
+	for i := 1; i <= 3; i++ {
+		desc := strings.Repeat("x", 5000)
+		if err := store.CreateTask(ctx, &board.Task{TaskSpec: board.TaskSpec{
+			TaskID: fmt.Sprintf("T-%d", i), Title: fmt.Sprintf("T%d", i),
+			Description: desc, AssignedRole: "Developer",
+		}, EpicID: epicID}); err != nil {
+			t.Fatalf("создание задачи: %v", err)
+		}
+	}
+
+	// Full: description должен быть не пустым
+	out, err := set.Execute(BoardListTasks, map[string]any{})
+	if err != nil {
+		t.Fatalf("BoardListTasks: %v", err)
+	}
+	var fullTasks []map[string]any
+	if err := json.Unmarshal(out, &fullTasks); err != nil {
+		t.Fatalf("не JSON: %v", err)
+	}
+	if len(fullTasks) != 3 {
+		t.Fatalf("ожидаем 3 задачи, got %d", len(fullTasks))
+	}
+	var totalDescLen int
+	for _, tk := range fullTasks {
+		if d, _ := tk["description"].(string); d != "" {
+			totalDescLen += len(d)
+		}
+	}
+	if totalDescLen == 0 {
+		t.Fatal("при short=false description должен быть не пустым")
+	}
+
+	// Short: description должен быть пустым
+	out2, err := set.Execute(BoardListTasks, map[string]any{"short": true})
+	if err != nil {
+		t.Fatalf("BoardListTasks short: %v", err)
+	}
+	var shortTasks []map[string]any
+	if err := json.Unmarshal(out2, &shortTasks); err != nil {
+		t.Fatalf("не JSON: %v", err)
+	}
+	if len(shortTasks) != 3 {
+		t.Fatalf("ожидаем 3 задачи при short=true, got %d", len(shortTasks))
+	}
+	for _, tk := range shortTasks {
+		if d, _ := tk["description"].(string); d != "" {
+			t.Fatalf("при short=true description должен быть пустым, got %q", d)
+		}
+	}
+	// Другие поля должны остаться
+	for _, tk := range shortTasks {
+		if id, _ := tk["task_id"].(string); id == "" {
+			t.Fatal("task_id должен остаться при short=true")
+		}
+		if title, _ := tk["title"].(string); title == "" {
+			t.Fatal("title должен остаться при short=true")
+		}
+		if status, _ := tk["status"].(string); status == "" {
+			t.Fatal("status должен остаться при short=true")
+		}
+	}
+}
+
+// BoardListTasks(epic_id) — фильтр по эпику работает.
+func TestBoardListTasksEpicFilter(t *testing.T) {
+	set, store := newBoardToolSet(t)
+	ctx := context.Background()
+
+	for _, eid := range []string{"E-1", "E-2"} {
+		if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{
+			TaskID: eid, Title: eid, Description: "d", AssignedRole: "Architect",
+		}}); err != nil {
+			t.Fatalf("создание эпика %s: %v", eid, err)
+		}
+		for j := 1; j <= 2; j++ {
+			if err := store.CreateTask(ctx, &board.Task{TaskSpec: board.TaskSpec{
+				TaskID: fmt.Sprintf("%s-T%d", eid, j), Title: fmt.Sprintf("T%d", j),
+				Description: "desc", AssignedRole: "Developer",
+			}, EpicID: eid}); err != nil {
+				t.Fatalf("создание задачи: %v", err)
+			}
+		}
+	}
+
+	// Без фильтра — все 4 задачи
+	out, err := set.Execute(BoardListTasks, map[string]any{})
+	if err != nil {
+		t.Fatalf("BoardListTasks: %v", err)
+	}
+	var allTasks []map[string]any
+	if err := json.Unmarshal(out, &allTasks); err != nil {
+		t.Fatalf("не JSON: %v", err)
+	}
+	if len(allTasks) != 4 {
+		t.Fatalf("ожидаем 4 задачи без фильтра, got %d", len(allTasks))
+	}
+
+	// С фильтром epic_id=E-1 — только 2 задачи
+	out2, err := set.Execute(BoardListTasks, map[string]any{"epic_id": "E-1"})
+	if err != nil {
+		t.Fatalf("BoardListTasks filter: %v", err)
+	}
+	var filterTasks []map[string]any
+	if err := json.Unmarshal(out2, &filterTasks); err != nil {
+		t.Fatalf("не JSON: %v", err)
+	}
+	if len(filterTasks) != 2 {
+		t.Fatalf("ожидаем 2 задачи для E-1, got %d", len(filterTasks))
+	}
+	for _, tk := range filterTasks {
+		if epid, _ := tk["epic_id"].(string); epid != "E-1" {
+			t.Fatalf("ожидаем epic_id=E-1, got %s", epid)
+		}
+	}
+}
 

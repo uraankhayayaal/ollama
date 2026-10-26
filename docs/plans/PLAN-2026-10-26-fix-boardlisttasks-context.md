@@ -68,40 +68,37 @@ func (t *boardListTasksTool) Execute(args map[string]any) ([]byte, error) {
 
 ## 4. Порядок реализации
 
-### Шаг 1: BoardListTasks — параметр `short` ✅
+### Шаг 1: BoardListTasks — параметр `short`
 
-- [ ] 1.1 В `BoardListTasks.Definition().Parameters` — добавить опциональный `"short": {"type": "boolean"}` в свойства
-- [ ] 1.2 В `BoardListTasks.Execute` — проверить `boolArg(args, "short")`: при `true` очистить `Description` у каждой задачи
-- [ ] 1.3 `BoardListTasks.Execute` — параметр `epic_id` уже фильтрует по эпику — оставить
-- [ ] **Гейт:** `go build ./...`, `go test ./tools/...`
+- [x] 1.1 В `BoardListTasks.Definition().Parameters` — добавить `"short": {"type": "boolean", "description": "Не включать поле description"}`
+- [x] 1.2 В `BoardListTasks.Execute` — `boolArg(args, "short")`: при `true` обнулять `Description` у каждой задачи
+- [x] 1.3 `epic_id` — фильтр по эпику остаётся
+- [x] 1.4 `boolArg` — добавить вспомогательную функцию рядом с `strArg`
+- [x] 1.5 Тесты: `TestBoardListTasksShort`, `TestBoardListTasksEpicFilter`
+- [x] **Гейт:** `go build ./...` ✓, `go test ./tools/...` ✓
 
 ### Шаг 2: Обновить промпты архитектора
 
-- [ ] 2.1 В `architectureSystemPrompt` (строки 274-275) — добавить инструкцию: `BoardListTasks({\"short\": true})` для обзора доски, `BoardGetTask` для деталей
-- [ ] 2.2 В `architectDecomposePrompt` (`kanban_architect_decompose.go:96-127`) — добавить в правило 2: «получай контекст доски через BoardListTasks с short=true»
-- [ ] **Гейт:** `go build ./...`
+- [x] 2.1 В `architectureSystemPrompt` — `BoardListTasks(short=true)` для обзора, `BoardGetTask` для деталей
+- [x] 2.2 В плане работы архитектора — `BoardListTasks(short=true)` без перегрузки контекста
+- [x] 2.3 В `epicReviewSystemPrompt` — аналогично `BoardListTasks(short=true)`
+- [x] **Гейт:** `go build ./...` ✓
 
-### Шаг 3: Аналогично — Business Analyst
+### Шаг 3: Business Analyst
 
-- [ ] 3.1 Проверить, что `businessanalyst/agent.go` не имеет аналогичной проблемы с контекстом
-- [ ] При необходимости — добавить аналогичную инструкцию в промпт BA
+- [x] 3.1 `businessanalyst/agent.go` — НЕ использует `BoardListTasks` → не нужен
 
 ---
 
 ## 5. Проверка
 
 ```bash
-# Проверить, что BoardListTasks с short=true не содержит описаний:
-curl -s -X POST http://127.0.0.1:8090/api/tools/BoardListTasks \
-  -H 'Content-Type: application/json' \
-  -d '{"args": {"project": "mytrip", "short": true}}' | python3 -c "
-import sys, json
-tasks = json.load(sys.stdin)
-print(f'Задач: {len(tasks)}, сумм. длин description: {sum(len(t.get(\"description\",\"\")) for t in tasks)}')
-"
+# Unit-тесты:
+go test -v -run TestBoardListTasks ./tools/...
+# → TestBoardListTasksShort PASS, TestBoardListTasksEpicFilter PASS
 ```
 
-Ожидаемый результат: `сумм. длин description: 0` (при `short=true`).
+Ожидаемый результат: description пустой при `short=true`, все другие поля (task_id, title, status, epic_id, assigned_role) остаются.
 
 ---
 
@@ -109,5 +106,11 @@ print(f'Задач: {len(tasks)}, сумм. длин description: {sum(len(t.get
 
 | Риск | Смягчение |
 |---|---|
-| Архитектор не использует `short=true` | Добавить явную инструкцию в промпт. Модели склонны следовать параметрам в описании инструмента. |
-| Описание задачи нужно для декомпозиции | Промпт указывает: для декомпозиции конкретного эпика — используй `BoardGetEpic` (там description полный). |
+| Архитектор не использует `short=true` | Промпт содержит явную инструкцию; LLM следует параметрам из определения инструмента |
+| Описание задачи нужно для декомпозиции | Промпт указывает: для деталей — `BoardGetTask` (полное description); для обзора — `short=true` |
+
+---
+
+## 7. Зависимости
+
+Снижает контекст архитектора с ~155K → ~5K символов (~39K → ~1.3K токенов). В комбинации с предпроверкой (фикс #4, `maxInputTokens = 85000`) — контекст укладывается в лимит без сжатия.

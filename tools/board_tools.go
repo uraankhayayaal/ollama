@@ -116,6 +116,11 @@ func strArg(args map[string]any, key string) string {
 	return strings.TrimSpace(s)
 }
 
+func boolArg(args map[string]any, key string) bool {
+	b, _ := args[key].(bool)
+	return b
+}
+
 // boardErr приводит ошибку доски к текстовому JSON для модели.
 func boardErr(action string, err error) ([]byte, error) {
 	res, _ := json.Marshal(map[string]string{
@@ -250,6 +255,7 @@ func (t *boardListTasksTool) Definition() ToolDefinition {
 			"type": "object",
 			"properties": map[string]any{
 				"epic_id": map[string]any{"type": "string", "description": "Ограничить список задачами указанного эпика (необязательно)"},
+				"short":   map[string]any{"type": "boolean", "description": "Не включать поле description (экономия контекста, ~150K → 5K символов)"},
 			},
 		},
 	}
@@ -271,6 +277,11 @@ func (t *boardListTasksTool) Execute(args map[string]any) ([]byte, error) {
 			}
 		}
 		tasks = filtered
+	}
+	if boolArg(args, "short") {
+		for i := range tasks {
+			tasks[i].Description = ""
+		}
 	}
 	data, _ := json.Marshal(tasks)
 	return data, nil
