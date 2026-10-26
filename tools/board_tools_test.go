@@ -182,17 +182,18 @@ func TestBoardToolsTaskDeleteGuards(t *testing.T) {
 		"description": "описание", "assigned_role": "Senior Go Developer",
 	})
 
-	// Задача в работе или выполненная: удаление запрещено. Пока задача не взята
-	// в работу (test_cases/development) — удалять можно. Каждый сценарий на своей задаче,
-	// чтобы не сбрасывать статус через конечный автомат.
+	// Задача в работе (test_cases/development) или отменённая (cancelled):
+	// удаление запрещено. Задачи не взятые в работу (draft/infra) и завершённые
+	// (done) — можно удалить. Каждый сценарий на своей задаче.
 	scenarios := []struct {
 		status board.Status
 		taskID string
+		allow  bool // true — удаление разрешено, false — запрещено
 	}{
-		{board.StatusInfra, "T-I"},
-		{board.StatusTestCases, "T-T"},
-		{board.StatusDevelopment, "T-D"},
-		{board.StatusDone, "T-F"},
+		{board.StatusInfra, "T-I", true},
+		{board.StatusTestCases, "T-T", false},
+		{board.StatusDevelopment, "T-D", false},
+		{board.StatusDone, "T-F", true},
 	}
 	for _, sc := range scenarios {
 		mustExec(t, set, BoardCreateTask, map[string]any{
@@ -200,15 +201,15 @@ func TestBoardToolsTaskDeleteGuards(t *testing.T) {
 			"description": "описание", "assigned_role": "Senior Go Developer",
 		})
 		chainStatus(t, store, sc.taskID, sc.status)
-		if sc.status != board.StatusInfra {
-			msg := errExec(t, set, BoardDeleteTask, map[string]any{"task_id": sc.taskID})
-			if msg == "" {
-				t.Fatalf("удаление в статусе %s должно быть запрещено", sc.status)
-			}
-		} else {
+		if sc.allow {
 			mustExec(t, set, BoardDeleteTask, map[string]any{"task_id": sc.taskID})
 			if _, err := store.GetTask(ctx, sc.taskID); err == nil {
 				t.Fatalf("задача в статусе %s должна удаляться", sc.status)
+			}
+		} else {
+			msg := errExec(t, set, BoardDeleteTask, map[string]any{"task_id": sc.taskID})
+			if msg == "" {
+				t.Fatalf("удаление в статусе %s должно быть запрещено", sc.status)
 			}
 		}
 	}

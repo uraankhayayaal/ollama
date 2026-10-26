@@ -458,7 +458,7 @@ func (t *boardDeleteEpicTool) Name() string { return BoardDeleteEpic }
 func (t *boardDeleteEpicTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardDeleteEpic,
-		Description: "Удалить эпик с доски вместе с его задачами. Нельзя удалить эпик, задачи которого уже взяты специалистами в работу или выполнены.",
+		Description: "Удалить эпик с доски вместе с его задачами. Эпики можно удалять, если все задачи ещё не взяты в работу (статусы draft/infra) или выполнены (done). Пустые эпики удаляются всегда.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -778,7 +778,7 @@ func (t *boardDeleteTaskTool) Name() string { return BoardDeleteTask }
 func (t *boardDeleteTaskTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardDeleteTask,
-		Description: "Удалить задачу с доски. Удалять можно только задачи, которые ещё НЕ взяты специалистом в работу (статус не in_progress/done). Используется лидами направлений при ревизии задач.",
+		Description: "Удалить задачу с доски. Можно удалить задачи в статусах draft/infra (не взяты в работу) и done (завершённую работу). Нельзя удалить задачи в test_cases/development (специалист работает) или cancelled. Используется лидами и архитектором при ревизии.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

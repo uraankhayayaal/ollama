@@ -459,18 +459,21 @@ func (s *Store) MoveTask(ctx context.Context, taskID, toEpicID string) error {
 	return s.SaveEpic(ctx, toEpic)
 }
 
-// DeleteTask удаляет задачу с доски (вместе с индексами). Удалять можно
-// только задачи, которые ещё не взял в работу специалист (ready/new/analysis).
+// DeleteTask удаляет задачу с доски (вместе с индексами).
+// Можно удалить: задачи в начальных статусах (draft, infra) — ещё не взяты
+// в работу, и задачи в статусе done — завершенную работу можно убрать.
+// Нельзя удалить: задачи в test_cases/development — специалист в работе,
+// или cancelled — отменённая задача может иметь зависящие записи.
 // Засависившие от неё задачи — ошибка (иначе на доске останутся битые связи).
 func (s *Store) DeleteTask(ctx context.Context, id string) error {
 	t, err := s.GetTask(ctx, id)
 	if err != nil {
 		return err
 	}
-	// Только задачи, которые специалист реально начал делать (не в начальном статусе infra),
-	// или завершённые — нельзя удалить.
-	if t.Status == StatusTestCases || t.Status == StatusDevelopment || t.Status == StatusDone || t.Status == StatusCancelled {
-		return fmt.Errorf("board: задачу %q нельзя удалить (статус %s: специалист уже начал работу или работа завершена)", id, t.Status)
+	// Нельзя удалить задачи, которые специалист реально начал делать,
+	// или отменённые (могут быть зависящие записи).
+	if t.Status == StatusTestCases || t.Status == StatusDevelopment || t.Status == StatusCancelled {
+		return fmt.Errorf("board: задачу %q нельзя удалить (статус %s: специалист начал работу или задача отменена)", id, t.Status)
 	}
 	if err := s.checkNoDependents(ctx, "task:"+id); err != nil {
 		return err

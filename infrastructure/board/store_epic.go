@@ -198,9 +198,9 @@ func (s *Store) setEpicTasksStatus(ctx context.Context, epicID string, from []St
 
 // --- Задачи ---
 
-// DeleteEpic удаляет эпик вместе с его задачами. Удалять можно только эпики,
-// задачи которых ещё не взяты в работу специалистами. Зависимости извне
-// эпика — ошибка.
+// DeleteEpic удаляет эпик вместе с его задачами. Пустые эпики удаляются всегда.
+// Эпики с задачами — если задачи можно удалить (draft/infra/done).
+// Зависимости извне эпика — ошибка.
 func (s *Store) DeleteEpic(ctx context.Context, id string) error {
 	e, err := s.GetEpic(ctx, id)
 	if err != nil {
