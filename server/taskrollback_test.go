@@ -96,13 +96,13 @@ func newRollbackFixture(t *testing.T) *rollbackFixture {
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1},
 		EpicID:   "e1",
-		Status:   board.StatusReady,
+		Status:   board.StatusTestCases,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// Старт задачи: хук создаёт worktree и снимает base_sha.
 	f := &rollbackFixture{srv: srv, handler: handler, store: store, project: project}
-	f.do(t, "PUT", "/api/projects/"+project+"/tasks/t1", `{"status":"in_progress"}`, http.StatusOK)
+	f.do(t, "PUT", "/api/projects/"+project+"/tasks/t1", `{"status":"development"}`, http.StatusOK)
 	ref, err := srv.reg.TaskBranch(project, "t1")
 	if err != nil || strings.TrimSpace(ref.Worktree) == "" {
 		t.Fatalf("worktree задачи не создан: %+v err=%v", ref, err)
@@ -182,7 +182,7 @@ func TestRollbackTaskToLastGood(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("ответ: %v (%s)", err, rec.Body.String())
 	}
-	if !resp.OK || resp.SHA != sha1 || resp.Status != string(board.StatusReady) {
+	if !resp.OK || resp.SHA != sha1 || resp.Status != string(board.StatusInfra) {
 		t.Fatalf("ответ: %+v", resp)
 	}
 	if got := gitFixtureRun(t, f.work, "rev-parse", "HEAD"); got != sha1 {
@@ -196,8 +196,8 @@ func TestRollbackTaskToLastGood(t *testing.T) {
 		t.Fatalf("файл не откатан: %q", body)
 	}
 	task := f.task(t)
-	if task.Status != board.StatusReady {
-		t.Fatalf("статус задачи: %s, ожидался ready", task.Status)
+	if task.Status != board.StatusInfra {
+		t.Fatalf("статус задачи: %s, ожидался инфраструктура", task.Status)
 	}
 	if task.LastError != "" || task.AgentState != "" {
 		t.Fatalf("ошибка/состояние отменённого кода не сняты: %q / %q", task.LastError, task.AgentState)
@@ -286,7 +286,7 @@ func TestRollbackTaskRefusals(t *testing.T) {
 	if got := gitFixtureRun(t, f.work, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("отказы изменили код: HEAD=%s, ожидался %s", got, head)
 	}
-	if f.task(t).Status != board.StatusInProgress {
+	if f.task(t).Status != board.StatusDevelopment {
 		t.Fatalf("отказы должны были оставить задачу в работе: %s", f.task(t).Status)
 	}
 }
@@ -302,7 +302,7 @@ func TestRollbackTaskWithoutWorktree(t *testing.T) {
 	}
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1},
-		EpicID:   "e1", Status: board.StatusInProgress,
+		EpicID:   "e1", Status: board.StatusDevelopment,
 	}); err != nil {
 		t.Fatal(err)
 	}

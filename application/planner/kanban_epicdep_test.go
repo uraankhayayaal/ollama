@@ -81,7 +81,7 @@ func TestPhaseLeadsUnblocksEpicDependency(t *testing.T) {
 			Dependencies: []string{"ARCH-01"},
 		},
 		EpicID: "ARCH-04",
-		Status: board.StatusNew,
+		Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}

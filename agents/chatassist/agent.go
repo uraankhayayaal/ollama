@@ -22,10 +22,8 @@ import (
 
 // assistantToolNames — инструменты ассистента: чтение файлов (List/ReadFiles/
 // ReadMap), LSP-навигация по символам, семантический поиск по коду (CodeSearch,
-// RAG) и Kanban-доска — чтение (Board* read: эпики/задачи/баги) и запись
-// (Board* write: создание эпиков/багов и смена статусов, но не задач: задачи
-// внутри эпика создают лиды направлений — Ф-8) — по решению модели, а не по
-// ключевым словам.
+// RAG) и Kanban-доска — чтение (Board* read: эпики/задачи) и запись
+// (Board* write: создание эпиков и смена статусов).
 var assistantToolNames = []string{
 	"List", "ReadFiles", "ReadMap",
 	tools.LspDefinition, tools.LspReferences, tools.LspHover,
@@ -33,10 +31,8 @@ var assistantToolNames = []string{
 	tools.WebSearch,
 	tools.BoardListEpics, tools.BoardGetEpic,
 	tools.BoardListTasks, tools.BoardGetTask,
-	tools.BoardListBugs, tools.BoardGetBug,
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
 	tools.BoardSetTaskStatus,
-	tools.BoardCreateBug, tools.BoardSetBugStatus, tools.BoardReviewBug,
 }
 
 // assistantSystemPrompt — системный промпт ассистента-исполнителя (Ф-1): по

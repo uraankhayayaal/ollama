@@ -13,7 +13,6 @@ import (
 type fakeStore struct {
 	epics []*iboard.Epic
 	tasks []*iboard.Task
-	bugs  []*iboard.BugReport
 	meta  *iboard.Meta
 	err   error
 }
@@ -32,13 +31,6 @@ func (f *fakeStore) ListTasks(context.Context) ([]*iboard.Task, error) {
 	return f.tasks, nil
 }
 
-func (f *fakeStore) ListBugReports(context.Context) ([]*iboard.BugReport, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.bugs, nil
-}
-
 func (f *fakeStore) GetMeta(context.Context) (*iboard.Meta, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -54,7 +46,6 @@ func TestViewOrdersEpicsAndCollects(t *testing.T) {
 	store := &fakeStore{
 		epics: []*iboard.Epic{epic("EP-1", 1), epic("EP-3", 3), epic("EP-2", 5)},
 		tasks: []*iboard.Task{{TaskSpec: iboard.TaskSpec{TaskID: "T-1"}}},
-		bugs:  []*iboard.BugReport{{BugID: "B-1"}},
 		meta:  &iboard.Meta{ProjectName: "proj"},
 	}
 	v, err := View(context.Background(), store)
@@ -64,8 +55,8 @@ func TestViewOrdersEpicsAndCollects(t *testing.T) {
 	if v.Meta == nil || v.Meta.ProjectName != "proj" {
 		t.Fatalf("meta = %+v", v.Meta)
 	}
-	if len(v.Tasks) != 1 || len(v.Bugs) != 1 {
-		t.Fatalf("tasks/bugs = %d/%d", len(v.Tasks), len(v.Bugs))
+	if len(v.Tasks) != 1 {
+		t.Fatalf("tasks = %d", len(v.Tasks))
 	}
 	// Порядок по приоритету (убывание): 5, 3, 1.
 	got := []string{v.Epics[0].TaskID, v.Epics[1].TaskID, v.Epics[2].TaskID}
@@ -96,14 +87,13 @@ func TestViewPageFullAndPaged(t *testing.T) {
 			{TaskSpec: iboard.TaskSpec{TaskID: "T-3"}},
 			{TaskSpec: iboard.TaskSpec{TaskID: "T-4"}},
 		},
-		bugs: []*iboard.BugReport{{BugID: "B-1"}, {BugID: "B-2"}},
 	}
 
 	full, err := ViewPage(context.Background(), store, 0, 0)
 	if err != nil {
 		t.Fatalf("ViewPage full: %v", err)
 	}
-	if full.Total == nil || full.Total.Epics != 3 || full.Total.Tasks != 4 || full.Total.Bugs != 2 {
+	if full.Total == nil || full.Total.Epics != 3 || full.Total.Tasks != 4 {
 		t.Fatalf("total = %+v", full.Total)
 	}
 	if len(full.Epics) != 3 || len(full.Tasks) != 4 {
@@ -114,8 +104,8 @@ func TestViewPageFullAndPaged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ViewPage page: %v", err)
 	}
-	if len(page.Epics) != 2 || len(page.Tasks) != 2 || len(page.Bugs) != 1 {
-		t.Fatalf("страница = epics %d, tasks %d, bugs %d", len(page.Epics), len(page.Tasks), len(page.Bugs))
+	if len(page.Epics) != 2 || len(page.Tasks) != 2 {
+		t.Fatalf("страница = epics %d, tasks %d", len(page.Epics), len(page.Tasks))
 	}
 	if page.Total == nil || page.Total.Tasks != 4 {
 		t.Fatalf("страница total = %+v", page.Total)
@@ -132,7 +122,7 @@ func TestViewPageFullAndPaged(t *testing.T) {
 
 	// Пустая страница за пределами.
 	beyond, _ := ViewPage(context.Background(), store, 2, 99)
-	if len(beyond.Epics) != 0 || len(beyond.Tasks) != 0 || len(beyond.Bugs) != 0 {
+	if len(beyond.Epics) != 0 || len(beyond.Tasks) != 0 {
 		t.Fatal("страница за пределами должна быть пустой")
 	}
 }

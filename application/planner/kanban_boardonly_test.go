@@ -1,16 +1,52 @@
 package planner
 
 import (
+	"ai/agents/architect"
+	"ai/domain"
+	"ai/domain/services"
 	"ai/infrastructure/board"
+	"ai/runner"
 	"ai/shared/projects"
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 )
+
+type loopedProvider struct{}
+
+func (p *loopedProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
+	var umsg string
+	if us := agent.GetUserMessages(); len(us) > 0 {
+		umsg = us[0].Message
+	}
+	switch {
+	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
+		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
+	case strings.HasPrefix(umsg, "Ты — специалист"):
+		return &runner.AgentResponse{
+			Content:    "пробую снова",
+			Looped:     true,
+			LoopReason: "вызов WriteFiles повторён 3 раз с одними и теми же аргументами",
+			Rounds:     6,
+		}, nil
+	default:
+		if a, ok := agent.(*architect.Architect); ok {
+			if _, err := a.CallFunction(architect.SubmitBacklogToolName, architectBacklogArgs); err != nil {
+				return nil, err
+			}
+		}
+		return &runner.AgentResponse{Content: ""}, nil
+	}
+}
+
+func (p *loopedProvider) ChatOnce(context.Context, domain.ChatRequest) (*runner.ModelReply, error) {
+	return &runner.ModelReply{}, nil
+}
 
 // TestKanbanBoardOnlyEmptyGoesStandby — запуск по кнопке (board-only) на пустой
 // доске: оркестрация не создаёт новых записей (не вызывает архитектора/лидов,

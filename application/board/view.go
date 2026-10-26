@@ -1,10 +1,9 @@
 // Package board содержит read-model Kanban-доски: сборку упорядоченного снимка
-// (эпики в эффективном порядке очереди лидов, задачи, баги, meta) и пагинацию
-// снимка. Вынесено из HTTP-слоя (`server/session.go`, Этап 6): порядок строк
-// доски совпадает с порядком, в котором эпики берёт оркестратор — это правило
-// предметной области, а не серверная обвязка. Git-статус проекта в снимок не
-// входит (его добавляет сервер: это презентация git-flow, завязанная на реестр
-// проектов).
+// (эпики в эффективном порядке, задачи, meta) и пагинацию снимка. Вынесено из
+// HTTP-слоя (`server/session.go`, Этап 6): порядок строк доски совпадает с
+// порядком, в котором эпики берёт оркестратор — это правило предметной области,
+// а не серверная обвязка. Git-статус проекта в снимок не входит (его добавляет
+// сервер: это презентация git-flow, завязанная на реестр проектов).
 package board
 
 import (
@@ -17,24 +16,21 @@ import (
 type Store interface {
 	ListEpics(ctx context.Context) ([]*domain.Epic, error)
 	ListTasks(ctx context.Context) ([]*domain.Task, error)
-	ListBugReports(ctx context.Context) ([]*domain.BugReport, error)
 	GetMeta(ctx context.Context) (*domain.Meta, error)
 }
 
 // Snapshot — полный снимок доски для REST/SSE.
 type Snapshot struct {
-	Meta  *domain.Meta        `json:"meta,omitempty"`
-	Epics []*domain.Epic      `json:"epics"`
-	Tasks []*domain.Task      `json:"tasks"`
-	Bugs  []*domain.BugReport `json:"bugs"`
-	Total *Total              `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
+	Meta  *domain.Meta   `json:"meta,omitempty"`
+	Epics []*domain.Epic `json:"epics"`
+	Tasks []*domain.Task `json:"tasks"`
+	Total *Total         `json:"total,omitempty"` // счётчики всех элементов (Ф-3: пагинация)
 }
 
 // Total — полные счётчики доски (когда снимок ограничен limit/offset).
 type Total struct {
 	Epics int `json:"epics"`
 	Tasks int `json:"tasks"`
-	Bugs  int `json:"bugs"`
 }
 
 // View собирает снимок доски: эпики, задачи, баги и meta. Порядок эпиков
@@ -52,12 +48,8 @@ func View(ctx context.Context, store Store) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	bugs, err := store.ListBugReports(ctx)
-	if err != nil {
-		return Snapshot{}, err
-	}
 	meta, _ := store.GetMeta(ctx)
-	return Snapshot{Meta: meta, Epics: epics, Tasks: tasks, Bugs: bugs}, nil
+	return Snapshot{Meta: meta, Epics: epics, Tasks: tasks}, nil
 }
 
 // ViewPage ограничивает снимок доски страницей (limit/limit+offset=0 — полный
@@ -67,7 +59,7 @@ func ViewPage(ctx context.Context, store Store, limit, offset int) (Snapshot, er
 	if err != nil {
 		return Snapshot{}, err
 	}
-	total := &Total{Epics: len(v.Epics), Tasks: len(v.Tasks), Bugs: len(v.Bugs)}
+	total := &Total{Epics: len(v.Epics), Tasks: len(v.Tasks)}
 	if limit <= 0 {
 		v.Total = total
 		return v, nil
@@ -77,7 +69,6 @@ func ViewPage(ctx context.Context, store Store, limit, offset int) (Snapshot, er
 	}
 	v.Epics = SlicePage(v.Epics, offset, limit)
 	v.Tasks = SlicePage(v.Tasks, offset, limit)
-	v.Bugs = SlicePage(v.Bugs, offset, limit)
 	v.Total = total
 	return v, nil
 }

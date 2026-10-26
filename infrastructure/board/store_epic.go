@@ -19,7 +19,7 @@ func (s *Store) CreateEpic(ctx context.Context, e *Epic) error {
 	}
 	e.ProjectName = s.project
 	s.applyRepositories(&e.Repositories)
-	e.Status = FirstNonZeroStatus(e.Status, StatusNew)
+	e.Status = FirstNonZeroStatus(e.Status, StatusDraft)
 	e.CreatedAt = now()
 	e.UpdatedAt = e.CreatedAt
 	// Ф-5: прогноз расхода токенов по истории завершённых единиц (если задан).
@@ -140,18 +140,16 @@ func (s *Store) ReorderEpics(ctx context.Context, order []string) (int, error) {
 	return updated, nil
 }
 
-// SetEpicStatus переводит эпик в новый статус (с проверкой перехода). «Помощь
-// человека» (human_help), возобновление (ready/in_progress из human_help) и
-// отмена (cancelled) каскадно переводят задачи эпика, следуя за родителем:
-// не взятые в работу задачи «останавливаются»/«отменяются», при выходе —
-// возвращаются в исходный статус (ResumeStatus). Задачи «в работе»/«на
-// тестирование» не трогаются: их доводит текущий раунд оркестратора.
+// SetEpicStatus переводит эпик в новый статус (с проверкой перехода).
+// Отмена (cancelled) каскадно переводит задачи эпика, следуя за родителем:
+// задачи ещё не взятые в работу «отменяются». Задачи, которые специалист
+// уже взял в работу, не трогаются: их доводит текущий раунд оркестратора.
 func (s *Store) SetEpicStatus(ctx context.Context, id string, st Status) error {
 	e, err := s.GetEpic(ctx, id)
 	if err != nil {
 		return err
 	}
-	if err := ValidateTransition(e.Status, st); err != nil {
+	if err := ValidateTransition(e.Status, st, EntityTypeEpic); err != nil {
 		return err
 	}
 	from := e.Status
@@ -159,25 +157,12 @@ func (s *Store) SetEpicStatus(ctx context.Context, id string, st Status) error {
 	if err := s.SaveEpic(ctx, e); err != nil {
 		return err
 	}
-	// Каскад статусов задач эпика (без FSM-хуков — прямое сохранение):
-	// трансляция остановки/возобновления/отмены родителя на его задачи.
-	if st == StatusHumanHelp && from != StatusHumanHelp {
-		if err := s.pauseEpicTasks(ctx, id); err != nil {
-			return err
-		}
-	}
-	if (st == StatusReady || st == StatusInProgress) && from == StatusHumanHelp {
-		if err := s.resumeEpicTasks(ctx, id); err != nil {
-			return err
-		}
-	}
 	if st == StatusCancelled && from != StatusCancelled {
-		if err := s.setEpicTasksStatus(ctx, id, []Status{StatusNew, StatusAnalysis, StatusReady, StatusHumanHelp}, StatusCancelled); err != nil {
+		// Каскад отмены: задачи в любой нерабочей фазе следуют за родителем.
+		if err := s.setEpicTasksStatus(ctx, id, []Status{StatusDraft, StatusBusinessReview, StatusSystemAnalysis, StatusInfra, StatusTestCases, StatusDevelopment}, StatusCancelled); err != nil {
 			return err
 		}
 	}
-	// Ф-4: авто-синхрон релизной ветки эпика с main при достижении done.
-	// Хук внедряется сервером; ошибки хука не ломают сам переход.
 	if st == StatusDone && s.EpicDoneHook != nil {
 		s.EpicDoneHook(ctx, e, from)
 	}
@@ -185,8 +170,7 @@ func (s *Store) SetEpicStatus(ctx context.Context, id string, st Status) error {
 }
 
 // setEpicTasksStatus переводит задачи эпика из from статусов в to напрямую
-// (обход FSM — статусы задач следуют за каскадом родителя). Задачи с другими
-// статусами (в работе/на тестировании/выполнены) не трогаются.
+// (обход FSM — статусы задач следуют за каскадом родителя).
 func (s *Store) setEpicTasksStatus(ctx context.Context, epicID string, from []Status, to Status) error {
 	tasks, err := s.TasksByEpic(ctx, epicID)
 	if err != nil {
@@ -205,60 +189,8 @@ func (s *Store) setEpicTasksStatus(ctx context.Context, epicID string, from []St
 			continue
 		}
 		t.Status = to
-		t.ResumeStatus = ""
 		if err := s.SaveTask(ctx, t); err != nil {
 			return fmt.Errorf("задача %s: %s -> %s: %w", t.TaskID, prev, to, err)
-		}
-	}
-	return nil
-}
-
-// pauseEpicTasks останавливает каскадом задачи эпика, которые ещё не взял в
-// работу специалист (new/analysis/ready), запоминая исходный статус в
-// ResumeStatus — возобновление вернёт задачу на прежнее место цепочки
-// (зависимости и фазовые гейты оркестратор проверит заново). Задачи «в
-// работе»/«на тестирование» не трогаются: их доводит текущий раунд
-// оркестратора, иначе агент не смог бы закрыть задачу.
-func (s *Store) pauseEpicTasks(ctx context.Context, epicID string) error {
-	tasks, err := s.TasksByEpic(ctx, epicID)
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		switch t.Status {
-		case StatusNew, StatusAnalysis, StatusReady:
-		default:
-			continue
-		}
-		t.ResumeStatus = t.Status
-		t.Status = StatusHumanHelp
-		if err := s.SaveTask(ctx, t); err != nil {
-			return fmt.Errorf("задача %s: помощь человека: %w", t.TaskID, err)
-		}
-	}
-	return nil
-}
-
-// resumeEpicTasks возвращает остановленные каскадом задачи эпика в статус,
-// из которого они были остановлены (ResumeStatus). Задачи БЕЗ ResumeStatus —
-// «помощь человека» понадобилась им самим (эскалация, форсмажор) — каскад не
-// трогает: возврат с human_help делается только вручную.
-func (s *Store) resumeEpicTasks(ctx context.Context, epicID string) error {
-	tasks, err := s.TasksByEpic(ctx, epicID)
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		if t.Status != StatusHumanHelp {
-			continue
-		}
-		if t.ResumeStatus == "" {
-			continue
-		}
-		t.Status = t.ResumeStatus
-		t.ResumeStatus = ""
-		if err := s.SaveTask(ctx, t); err != nil {
-			return fmt.Errorf("задача %s: возобновление: %w", t.TaskID, err)
 		}
 	}
 	return nil

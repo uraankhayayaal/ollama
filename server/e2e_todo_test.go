@@ -388,7 +388,7 @@ func todoEAnyActive(sess *Session) bool {
 	tasks, _ := sess.board.ListTasks(context.Background())
 	for _, tk := range tasks {
 		switch tk.Status {
-		case board.StatusAnalysis, board.StatusInProgress, board.StatusTesting:
+		case board.StatusAnalysis, board.StatusDevelopment, board.StatusDevelopment:
 			return true
 		}
 	}
@@ -406,7 +406,7 @@ func todoEStallReason(sess *Session) string {
 		fmt.Fprintf(&b, "  %-10s %-12s attempts=%d escalations=%d", tk.TaskID, tk.Status, tk.Attempts, tk.Escalations)
 		if tk.PauseReason != "" {
 			fmt.Fprintf(&b, " pause=%q", todoEClip(tk.PauseReason, 200))
-			if tk.Status == board.StatusHumanHelp {
+			if tk.Status == board.StatusCancelled {
 				human = append(human, tk.TaskID+": "+tk.PauseReason)
 			}
 		}
@@ -1088,14 +1088,14 @@ func TestE2EOrchestrationGuards(t *testing.T) {
 			waitWithin: 3 * time.Minute,
 			waitDesc:   "задача T-01 ушла в human_help (зациклилась)",
 			waitPred: func(s *Session) bool {
-				return todoEStatus(s, "T-01") == board.StatusHumanHelp
+				return todoEStatus(s, "T-01") == board.StatusCancelled
 			},
 			assert: func(t *testing.T, o *todoEOrch) {
 				tk := todoETask(o, "T-01")
 				if tk == nil {
 					t.Fatalf("задача T-01 не найдена")
 				}
-				e2eCheck(t, "T-01 human_help", tk.Status == board.StatusHumanHelp, string(tk.Status))
+				e2eCheck(t, "T-01 human_help", tk.Status == board.StatusCancelled, string(tk.Status))
 				e2eCheck(t, "T-01 причина «зациклилась»", strings.Contains(tk.PauseReason, "зациклилась"), tk.PauseReason)
 				e2eCheck(t, "T-01 эскалации исчерпаны", tk.Escalations >= budget, fmt.Sprintf("%d", tk.Escalations))
 				e2eCheck(t, "T-01 системный комментарий «Форсмажор»", todoEHasTaskComment(o, "T-01", "Форсмажор"), "")
@@ -1108,14 +1108,14 @@ func TestE2EOrchestrationGuards(t *testing.T) {
 			waitWithin: 3 * time.Minute,
 			waitDesc:   "задача INFRA-01 ушла в human_help (работа не сделана)",
 			waitPred: func(s *Session) bool {
-				return todoEStatus(s, "INFRA-01") == board.StatusHumanHelp
+				return todoEStatus(s, "INFRA-01") == board.StatusCancelled
 			},
 			assert: func(t *testing.T, o *todoEOrch) {
 				tk := todoETask(o, "INFRA-01")
 				if tk == nil {
 					t.Fatalf("задача INFRA-01 не найдена")
 				}
-				e2eCheck(t, "INFRA-01 human_help", tk.Status == board.StatusHumanHelp, string(tk.Status))
+				e2eCheck(t, "INFRA-01 human_help", tk.Status == board.StatusCancelled, string(tk.Status))
 				e2eCheck(t, "INFRA-01 причина «работа не сделана»", strings.Contains(tk.PauseReason, "работа не сделана"), tk.PauseReason)
 				e2eCheck(t, "INFRA-01 эскалации исчерпаны", tk.Escalations >= budget, fmt.Sprintf("%d", tk.Escalations))
 			},
@@ -1165,7 +1165,7 @@ func TestE2EOrchestrationGuards(t *testing.T) {
 		setEnv(t)
 		o := todoEStartOrchestration(t, &todoE2EProvider{t: t, mode: todoEModeDevLoop}, "todoapp-guard-stall")
 		todoEWaitFor(t, o.sess, 2*time.Minute, "доска заморожена (T-01 human_help)", func(s *Session) bool {
-			return todoEStatus(s, "T-01") == board.StatusHumanHelp
+			return todoEStatus(s, "T-01") == board.StatusCancelled
 		})
 
 		start := time.Now()

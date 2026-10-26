@@ -18,7 +18,7 @@ func driveTaskDone(t *testing.T, project, taskID string) {
 		t.Fatalf("store: %v", err)
 	}
 	defer store.Close()
-	for _, st := range []board.Status{board.StatusAnalysis, board.StatusReady, board.StatusInProgress, board.StatusDone} {
+	for _, st := range []board.Status{board.StatusTestCases, board.StatusDevelopment, board.StatusDone} {
 		if err := store.SetTaskStatus(ctx, taskID, st); err != nil {
 			t.Fatalf("task %s -> %s: %v", taskID, st, err)
 		}
@@ -64,8 +64,8 @@ func TestReopenTaskEndpointWithExistingComment(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reopen = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if reopened.Status != board.StatusReady {
-		t.Fatalf("статус = %s, ожидался ready", reopened.Status)
+	if reopened.Status != board.StatusInfra {
+		t.Fatalf("статус = %s, ожидался infra", reopened.Status)
 	}
 	found := false
 	for _, c := range reopened.Comments {
@@ -93,8 +93,8 @@ func TestReopenTaskEndpointWithBody(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reopen = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if reopened.Status != board.StatusReady {
-		t.Fatalf("статус = %s, ожидался ready", reopened.Status)
+	if reopened.Status != board.StatusInfra {
+		t.Fatalf("статус = %s, ожидался infra", reopened.Status)
 	}
 	if len(reopened.Comments) != 1 || !reopened.Comments[0].Accounted {
 		t.Fatalf("комментарий из тела не сохранён/не учтён: %+v", reopened.Comments)

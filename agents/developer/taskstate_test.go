@@ -28,7 +28,7 @@ func stateStore(t *testing.T) *board.Store {
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "T-1", Title: "задача", SequenceOrder: 1},
 		EpicID:   "E-1",
-		Status:   board.StatusInProgress,
+		Status:   board.StatusDevelopment,
 	}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

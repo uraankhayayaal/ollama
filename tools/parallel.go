@@ -19,7 +19,7 @@ func IsParallelSafe(name string) bool {
 	switch name {
 	case "List", "ReadFiles", "ReadMap":
 		return true
-	case BoardListEpics, BoardGetEpic, BoardListTasks, BoardGetTask, BoardListBugs, BoardGetBug:
+	case BoardListEpics, BoardGetEpic, BoardListTasks, BoardGetTask:
 		return true
 	}
 	return false

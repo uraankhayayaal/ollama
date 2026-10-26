@@ -129,67 +129,84 @@ func TestUnmarshalTasksPathPrefixProse(t *testing.T) {
 	}
 }
 
-func TestValidateTransition(t *testing.T) {
+func TestValidateTransitionEpic(t *testing.T) {
 	valid := []struct{ from, to Status }{
-		{StatusNew, StatusAnalysis},
-		{StatusNew, StatusCancelled},
-		{StatusAnalysis, StatusReady},
-		{StatusAnalysis, StatusCancelled},
-		{StatusReady, StatusInProgress},
-		{StatusReady, StatusCancelled},
-		{StatusInProgress, StatusDone},
-		{StatusInProgress, StatusCancelled},
+		{StatusDraft, StatusBusinessReview},
+		{StatusDraft, StatusCancelled},
+		{StatusBusinessReview, StatusSystemAnalysis},
+		{StatusBusinessReview, StatusDraft},
+		{StatusBusinessReview, StatusCancelled},
+		{StatusSystemAnalysis, StatusDone},
+		{StatusSystemAnalysis, StatusCancelled},
 		{StatusDone, StatusDone},
-		// «Помощь человека» — боковая ветка (Р-6): вход из любого
-		// нетерминального статуса, выход только обратно в работу; отмена
-		// из боковой ветки допустима.
-		{StatusNew, StatusHumanHelp},
-		{StatusAnalysis, StatusHumanHelp},
-		{StatusReady, StatusHumanHelp},
-		{StatusInProgress, StatusHumanHelp},
-		{StatusTesting, StatusHumanHelp},
-		{StatusHumanHelp, StatusHumanHelp},
-		{StatusHumanHelp, StatusReady},
-		{StatusHumanHelp, StatusInProgress},
-		{StatusHumanHelp, StatusCancelled},
-		// «На тестирование»: сдача разработчиком, замечания тестировщика,
-		// приёмка, отмена.
-		{StatusInProgress, StatusTesting},
-		{StatusTesting, StatusInProgress},
-		{StatusTesting, StatusDone},
-		{StatusTesting, StatusCancelled},
+		{StatusCancelled, StatusCancelled},
 	}
 	for _, c := range valid {
-		if err := ValidateTransition(c.from, c.to); err != nil {
-			t.Errorf("%s -> %s должно быть разрешено: %v", c.from, c.to, err)
+		if err := ValidateTransition(c.from, c.to, EntityTypeEpic); err != nil {
+			t.Errorf("epic: %s -> %s должно быть разрешено: %v", c.from, c.to, err)
 		}
 	}
 
 	invalid := []struct{ from, to Status }{
-		{StatusNew, StatusReady},
-		{StatusNew, StatusDone},
-		{StatusAnalysis, StatusInProgress},
-		{StatusReady, StatusDone},
-		{StatusInProgress, StatusAnalysis},
-		{StatusDone, StatusNew},
-		{StatusCancelled, StatusNew},
-		{StatusNew, "unknown"},
-		// Терминальные статусы не «останавливаются» и не переводятся в
-		// помощь человека.
-		{StatusDone, StatusHumanHelp},
-		{StatusCancelled, StatusHumanHelp},
-		// Из боковой ветки — только обратно в работу (и отмена);
-		// терминальные статусы из неё недостижимы.
-		{StatusHumanHelp, StatusDone},
-		{StatusHumanHelp, StatusAnalysis},
-		{StatusHumanHelp, StatusNew},
-		// «На тестирование» — только из работы; мимо работы недостижимо.
-		{StatusReady, StatusTesting},
-		{StatusNew, StatusTesting},
+		{StatusDraft, StatusDone},
+		{StatusDraft, StatusSystemAnalysis},
+		{StatusBusinessReview, StatusDone},
+		{StatusSystemAnalysis, StatusDraft},
+		{StatusSystemAnalysis, StatusBusinessReview},
+		{StatusDone, StatusCancelled},
+		{StatusDone, StatusDraft},
+		{StatusCancelled, StatusDraft},
+		{StatusDraft, "unknown"},
 	}
 	for _, c := range invalid {
-		if err := ValidateTransition(c.from, c.to); err == nil {
-			t.Errorf("%s -> %s должно быть запрещено", c.from, c.to)
+		if err := ValidateTransition(c.from, c.to, EntityTypeEpic); err == nil {
+			t.Errorf("epic: %s -> %s должно быть запрещено", c.from, c.to)
 		}
+	}
+}
+
+func TestValidateTransitionTask(t *testing.T) {
+	valid := []struct{ from, to Status }{
+		{StatusInfra, StatusTestCases},
+		{StatusInfra, StatusCancelled},
+		{StatusTestCases, StatusDevelopment},
+		{StatusTestCases, StatusCancelled},
+		{StatusDevelopment, StatusDone},
+		{StatusDevelopment, StatusCancelled},
+		{StatusDone, StatusDone},
+		{StatusCancelled, StatusCancelled},
+	}
+	for _, c := range valid {
+		if err := ValidateTransition(c.from, c.to, EntityTypeTask); err != nil {
+			t.Errorf("task: %s -> %s должно быть разрешено: %v", c.from, c.to, err)
+		}
+	}
+
+	invalid := []struct{ from, to Status }{
+		{StatusInfra, StatusDone},
+		{StatusInfra, StatusDevelopment},
+		{StatusTestCases, StatusDone},
+		{StatusDevelopment, StatusTestCases},
+		{StatusDevelopment, StatusInfra},
+		{StatusTestCases, StatusInfra},
+		{StatusDone, StatusCancelled},
+		{StatusDone, StatusInfra},
+		{StatusCancelled, StatusInfra},
+		{StatusInfra, "unknown"},
+	}
+	for _, c := range invalid {
+		if err := ValidateTransition(c.from, c.to, EntityTypeTask); err == nil {
+			t.Errorf("task: %s -> %s должно быть запрещено", c.from, c.to)
+		}
+	}
+}
+
+func TestValidateTransitionCrossType(t *testing.T) {
+	// Epic-переход должен быть запрещён для Task и наоборот
+	if err := ValidateTransition(StatusDraft, StatusBusinessReview, EntityTypeTask); err == nil {
+		t.Error("epic-переход должен быть запрещён для task")
+	}
+	if err := ValidateTransition(StatusInfra, StatusTestCases, EntityTypeEpic); err == nil {
+		t.Error("task-переход должен быть запрещён для epic")
 	}
 }

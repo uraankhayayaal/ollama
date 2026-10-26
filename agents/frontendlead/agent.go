@@ -100,6 +100,9 @@ func (l *FrontendLead) SetBoardStore(s services.BoardStore) {
 	l.SetTools(frontendLeadToolNames, tools.Deps{Board: s})
 }
 
+// GetBoard возвращает подключённую доску (nil — standalone-режим).
+func (l *FrontendLead) GetBoard() services.BoardStore { return l.Store }
+
 // RequiredToolFirstRound — Frontend Tech Lead не обязан обязательно вызывать
 // конкретный инструмент в первом раунде: обязательные действия задаются
 // обобщённо через RequiredToolGroups (изучить код + опубликовать задачи).

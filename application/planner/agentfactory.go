@@ -28,8 +28,6 @@ type AgentFactory interface {
 	Architect(project, prompt string, store services.BoardStore) services.Agent
 	// ArchitectReviewer создаёт архитектора в режиме ревизии черновиков эпиков.
 	ArchitectReviewer(project, prompt string, store services.BoardStore) services.Agent
-	// ArchitectBugExpert создаёт архитектора в режиме экспертизы багрепортов.
-	ArchitectBugExpert(project, prompt string, store services.BoardStore) services.Agent
 	// ConfigureArchitect применяет к архитектору RAG и серверные инструменты
 	// (Ф-4/Р-5); не-архитектор возвращается без изменений.
 	ConfigureArchitect(a services.Agent, rag services.Searcher, extras ...services.Tool) services.Agent
@@ -51,9 +49,6 @@ func (noopAgentFactory) Architect(string, string, services.BoardStore) services.
 	return nil
 }
 func (noopAgentFactory) ArchitectReviewer(string, string, services.BoardStore) services.Agent {
-	return nil
-}
-func (noopAgentFactory) ArchitectBugExpert(string, string, services.BoardStore) services.Agent {
 	return nil
 }
 func (noopAgentFactory) ConfigureArchitect(a services.Agent, _ services.Searcher, _ ...services.Tool) services.Agent {

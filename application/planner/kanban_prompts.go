@@ -35,34 +35,6 @@ func (k *KanbanRunner) leadFor(epic *domain.Epic) (services.Agent, error) {
 	return agentFactory().Lead(project, epic.AssignedRole, prompt), nil
 }
 
-// bugTriagePrompt формирует задание QA Lead на триаж багрепортов (new):
-// подтвердить (BoardSetBugStatus, confirmed) или отсеять «нейрослоп» (slop).
-func (k *KanbanRunner) bugTriagePrompt(project string, bugs []*domain.BugReport) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Проведи триаж %d багрепортов QA-специалистов проекта %q с доски.\n\n", len(bugs), project)
-	for _, bug := range bugs {
-		fmt.Fprintf(&b, "- %s (статус new): %s\n  Репортёр: %s, задача %s, эпик %s\n  %s\n",
-			bug.BugID, bug.Title, bug.ReporterRole, bug.TaskID, bug.EpicID, truncateText(bug.Description, 400))
-	}
-	b.WriteString("\nДля каждого багрепорта вызови BoardSetBugStatus: реальная, воспроизводимая проблема — status=confirmed; надуманное, «нейрослоп», дубль или жалоба без фактов — status=slop.\n")
-	b.WriteString("Ответь текстом, что триаж выполнен.")
-	return b.String()
-}
-
-// bugExpertPrompt формирует задание архитектора (режим экспертизы) по
-// подтверждённым багрепортам: вынести вердикт BoardReviewBugReport
-// (fix|feature|wont_fix) и при fix создать эпик исправления.
-func (k *KanbanRunner) bugExpertPrompt(project string, bugs []*domain.BugReport) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Системный архитектор проекта %q: QA Lead подтвердил %d багрепортов, требуется твоя экспертиза.\n\n", project, len(bugs))
-	for i, bug := range bugs {
-		fmt.Fprintf(&b, "%d) %s — %s\n   Репортёр %s, задача %s, эпик %s.\n   %s\n",
-			i+1, bug.BugID, bug.Title, bug.ReporterRole, bug.TaskID, bug.EpicID, truncateText(bug.Description, 600))
-	}
-	b.WriteString("\nДля каждого багрепорта вызови BoardReviewBugReport с вердиктом: fix (создай эпик исправления), feature (это фича), wont_fix (не исправляем). Параметры эпика исправления укажи в том же вызове (epic_task_id, epic_title, epic_description, epic_assigned_role, epic_sequence_order).")
-	return b.String()
-}
-
 // leadPrompt формирует задание лиду: эпик, архитектурная сводка. Лид публикует
 // задачи инструментами доски (если они доступны), иначе — JSON-декомпозицией.
 // 5.3: НЕ-QA лиды (backend/frontend/devops) дополнительно пишут СКЕЛЕТОН в

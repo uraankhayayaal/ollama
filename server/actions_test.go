@@ -39,9 +39,7 @@ type fakeActions struct {
 	finishOut    map[string]any
 	finishErr    error
 	// Ручная смена статуса багрепорта.
-	bugID       string
-	bugStatus   string
-	bugPriority *int
+
 	bugErr      error
 }
 
@@ -65,16 +63,6 @@ func (f *fakeActions) IndexBackground(_ context.Context, branch string) error {
 	return f.indexErr
 }
 func (f *fakeActions) ActionConfirmed(context.Context) bool { return f.confirmed }
-
-func (f *fakeActions) SetBugStatusManual(_ context.Context, bugID, status string, priority *int) (string, error) {
-	f.bugID = bugID
-	f.bugStatus = status
-	f.bugPriority = priority
-	if f.bugErr != nil {
-		return "", f.bugErr
-	}
-	return "баг обновлён", nil
-}
 
 func (f *fakeActions) ConflictResolve(_ context.Context, req ConflictRequest) (map[string]any, error) {
 	f.conflictReq = req
@@ -501,26 +489,4 @@ func TestChatAssistantKanbanStartLaunchesOrchestration(t *testing.T) {
 		}
 	}
 	sess.stop()
-}
-
-// TestSetBugStatusManualTool — мост ручной смены статуса/приоритета бага
-// пробрасывает аргументы в backend и не требует подтверждения.
-func TestSetBugStatusManualTool(t *testing.T) {
-	b := &fakeActions{}
-	tool := newSetBugStatusManualTool(b)
-
-	out, err := tool.Execute(map[string]any{"bug_id": "BUG-1", "status": "slop", "priority": 3.0})
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	m := decodeToolResult(t, out)
-	if m["status"] != "success" {
-		t.Fatalf("status = %v, want success (body: %s)", m["status"], out)
-	}
-	if b.bugID != "BUG-1" || b.bugStatus != "slop" {
-		t.Fatalf("backend got bugID=%q status=%q", b.bugID, b.bugStatus)
-	}
-	if b.bugPriority == nil || *b.bugPriority != 3 {
-		t.Fatalf("priority = %v, want 3", b.bugPriority)
-	}
 }

@@ -136,7 +136,7 @@ func TestSubmitBacklogPersistsEpics(t *testing.T) {
 		if e.Summary != "Общее архитектурное решение" {
 			t.Errorf("эпик %s: architecture_summary = %q", e.TaskID, e.Summary)
 		}
-		if e.ProjectName != "testproj" || e.Status != board.StatusNew {
+		if e.ProjectName != "testproj" || e.Status != board.StatusDraft {
 			t.Errorf("эпик %s: project=%s status=%s", e.TaskID, e.ProjectName, e.Status)
 		}
 	}
@@ -207,20 +207,13 @@ func (f *fakeArchitectSearcher) ProjectInfo(_ context.Context, _ string) (rag.Pr
 
 // TestArchitectPromptMentionsRAGWorkflow — Ф-1: промпт архитектора велит
 // изучать проект через CodeSearch/RAG и при skipped-выдаче проверять
-// статус индекса инструментом RagIndexStatus (обе секции: проектирование и
-// экспертиза багов).
+// статус индекса инструментом RagIndexStatus.
 func TestArchitectPromptMentionsRAGWorkflow(t *testing.T) {
 	a := newTestArchitect(t)
 	p := a.GetSystemMessages(nil)[0].Message
 	for _, want := range []string{"CodeSearch", "RagIndexStatus", "RAG"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("промпт не содержит %q:\n%s", want, p)
-		}
-	}
-	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
-	for _, want := range []string{"CodeSearch", "RagIndexStatus"} {
-		if !strings.Contains(bug, want) {
-			t.Errorf("промпт экспертизы не содержит %q:\n%s", want, bug)
 		}
 	}
 }
@@ -280,15 +273,10 @@ func TestArchitectPromptCorrectnessAndPatterns(t *testing.T) {
 	}
 }
 
-// TestBugExpertAndReviewPromptsMentionAskUser — Ф-4/Ф-8: режимы экспертизы
-// багрепортов и ревизии черновиков тоже умеют уточнять ТЗ (AskUser) до
-// вердикта/правки, иначе фиксируют допущения.
-func TestBugExpertAndReviewPromptsMentionAskUser(t *testing.T) {
+// TestReviewPromptMentionsAskUser — Ф-8: режим ревизии черновиков умеет
+// уточнять ТЗ (AskUser) до правки, иначе фиксирует допущения.
+func TestReviewPromptMentionsAskUser(t *testing.T) {
 	a := newTestArchitect(t)
-	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
-	if !strings.Contains(bug, "AskUser") || !strings.Contains(bug, "допущения") {
-		t.Errorf("промпт экспертизы багов не упоминает AskUser/допущения:\n%s", bug)
-	}
 	r := a.AsReviewer().GetSystemMessages(nil)[0].Message
 	if !strings.Contains(r, "AskUser") || !strings.Contains(r, "допущения") {
 		t.Errorf("промпт ревизии черновиков не упоминает AskUser/допущения:\n%s", r)
@@ -298,8 +286,7 @@ func TestBugExpertAndReviewPromptsMentionAskUser(t *testing.T) {
 // TestArchitectPromptMentionsMakefile — Ф-1 PLAN-2026-09-24-todo-makefile.md:
 // промпт архитектора велит управлять наличием корневого Makefile через бэклог
 // (эпик «Makefile проекта» с эталонным контрактом целей: backend-*/frontend-*,
-// e2e, инфра-блок). Режимы экспертизы и ревизии содержат правило сверки
-// контракта Makefile при эпиках о сборке/тестах/запуске.
+// e2e, инфра-блок).
 func TestArchitectPromptMentionsMakefile(t *testing.T) {
 	a := newTestArchitect(t)
 	p := a.GetSystemMessages(nil)[0].Message
@@ -315,15 +302,6 @@ func TestArchitectPromptMentionsMakefile(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("промпт не упоминает контрактную цель %q:\n%s", want, p)
 		}
-	}
-
-	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
-	if !strings.Contains(bug, "MAKEFILE ПРОЕКТА") || !strings.Contains(bug, "контракт целей корневого Makefile") {
-		t.Errorf("промпт экспертизы багов не упоминает сверку контракта Makefile:\n%s", bug)
-	}
-	r := a.AsReviewer().GetSystemMessages(nil)[0].Message
-	if !strings.Contains(r, "MAKEFILE ПРОЕКТА") || !strings.Contains(r, "контракт целей корневого Makefile") {
-		t.Errorf("промпт ревизии черновиков не упоминает сверку контракта Makefile:\n%s", r)
 	}
 }
 
@@ -500,16 +478,12 @@ func TestSubmitBacklogWithOpportunities(t *testing.T) {
 	}
 }
 
-// TestArchitectPromptMentionsOpportunities — Ф-6: промпты (основной и режим
-// экспертизы багов) упоминают кросс-функциональные возможности (opportunities).
+// TestArchitectPromptMentionsOpportunities — Ф-6: промпт упоминает
+// кросс-функциональные возможности (opportunities).
 func TestArchitectPromptMentionsOpportunities(t *testing.T) {
 	a := newTestArchitect(t)
 	p := a.GetSystemMessages(nil)[0].Message
 	if !strings.Contains(p, "opportunities") || !strings.Contains(p, "КРОСС-ФУНКЦИОНАЛЬНЫЕ ВОЗМОЖНОСТИ") {
 		t.Errorf("промпт не упоминает opportunities:\n%s", p)
-	}
-	bug := a.AsBugExpert().GetSystemMessages(nil)[0].Message
-	if !strings.Contains(bug, "opportunities") {
-		t.Errorf("промпт экспертизы багов не упоминает opportunities:\n%s", bug)
 	}
 }

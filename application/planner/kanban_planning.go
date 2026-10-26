@@ -93,7 +93,7 @@ func (k *KanbanRunner) phaseArchitectReview(ctx context.Context) (bool, error) {
 		// Черновики не трогаем только в терминальных/остановленных
 		// состояниях («помощь человека» замораживает ревизию, Ф-8): в
 		// остальных состояниях ревизия обязательна, пока флаг не снят.
-		if !epic.RequiresReview || epic.Status.Terminal() || epic.Status == domain.StatusHumanHelp {
+		if !epic.RequiresReview || epic.Status.Terminal() {
 			continue
 		}
 		drafts = append(drafts, epic)
@@ -210,11 +210,10 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 		}
 	}
 
-	// «В анализе»: для новой декомпозиции обязателен; при ревизии эпик может
-	// находиться дальше по цепочке — некритично (переход в анализ не требуется).
-	if err := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusAnalysis); err != nil {
+	// Эпик идёт в бизнес-ревью (лид разбирает задачи).
+	if err := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusBusinessReview); err != nil {
 		if _, ok := err.(*domain.StatusError); !ok {
-			return false, k.leadFail(ctx, epic, fmt.Errorf("эпик %s: перевод в «в анализе»: %w", epic.TaskID, err))
+			return false, k.leadFail(ctx, epic, fmt.Errorf("эпик %s: перевод в бизнес-ревью: %w", epic.TaskID, err))
 		}
 	}
 	k.log.Infof("[%s] декомпозиция/ревизия эпика %s (%s) (нужна ревизия: %v)",
@@ -284,9 +283,9 @@ func (k *KanbanRunner) phaseLeads(ctx context.Context) (bool, error) {
 
 	if !needDecompose && needResync {
 		// Ревизия: статус «в работе» уже не откатываем; доводим эпик к работе,
-		// если он стоит «в анализе» или «готова к работе».
+		// если он стоит «в бизнес-ревью».
 	} else if !needResync {
-		if err := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusReady); err != nil {
+		if err := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusSystemAnalysis); err != nil {
 			if _, ok := err.(*domain.StatusError); !ok {
 				return false, fmt.Errorf("эпик %s: перевод в «готов к работе»: %w", epic.TaskID, err)
 			}
@@ -336,13 +335,12 @@ func (k *KanbanRunner) blockingDependencyEpic(ctx context.Context, epics []*doma
 	}
 	var best *domain.Epic
 	for _, t := range tasks {
-		switch t.Status {
-		case domain.StatusDone, domain.StatusCancelled, domain.StatusHumanHelp:
+		if t.Status.Terminal() {
 			continue
 		}
 		for _, dep := range t.Dependencies {
 			depEpic, ok := byID[dep]
-			if !ok || depEpic.Status.Terminal() || depEpic.Status == domain.StatusHumanHelp {
+			if !ok || depEpic.Status.Terminal() {
 				continue
 			}
 			if depEpic.RequiresReview || len(depEpic.Tasks) > 0 {
@@ -392,7 +390,7 @@ func (k *KanbanRunner) nextLeadEpic(ctx context.Context, epics []*domain.Epic) (
 		// Терминальные и остановленные эпики не трогаем: «помощь человека»
 		// замораживает и декомпозицию, и ревизию лидом (код остаётся в
 		// своей ветке).
-		if epic.Status.Terminal() || epic.Status == domain.StatusHumanHelp {
+		if epic.Status.Terminal() {
 			continue
 		}
 		// Черновик (requires_review=true, Ф-8) не декомпозируется лидом, пока

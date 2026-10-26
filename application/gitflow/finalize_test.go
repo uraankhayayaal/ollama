@@ -192,7 +192,7 @@ func TestTaskFinalizerConflictResolvedByLLM(t *testing.T) {
 	if h.resolveCalls != 1 || len(h.resolveFiles) != 1 || h.resolveFiles[0] != "x.go" {
 		t.Errorf("LLM-резолв должен получить файлы конфликта: %+v", h)
 	}
-	if task.MergeConflictFiles != nil || task.Status == domain.StatusInProgress {
+	if task.MergeConflictFiles != nil || task.Status == domain.StatusDevelopment {
 		t.Errorf("разрешённый конфликт не должен откатывать задачу: %+v", task)
 	}
 	if len(h.removed) != 1 {
@@ -219,7 +219,7 @@ func TestTaskFinalizerConflictNeedsHuman(t *testing.T) {
 	}
 	(&TaskFinalizer{Host: h}).Finalize(ctx, "p", task)
 
-	if task.Status != domain.StatusInProgress {
+	if task.Status != domain.StatusDevelopment {
 		t.Errorf("задача должна откатиться в in_progress, got %q", task.Status)
 	}
 	if strings.Join(task.MergeConflictFiles, ",") != "x.go,y.go" {
@@ -234,7 +234,7 @@ func TestTaskFinalizerConflictNeedsHuman(t *testing.T) {
 	if len(h.statuses) != 1 || !strings.Contains(h.statuses[0], "не прошёл") {
 		t.Errorf("специалист должен получить статус: %v", h.statuses)
 	}
-	if len(h.emits) == 0 || !strings.Contains(h.emits[len(h.emits)-1], "откат в in_progress") {
+	if len(h.emits) == 0 || !strings.Contains(h.emits[len(h.emits)-1], "откат в development") {
 		t.Errorf("нет сообщения об откате: %v", h.emits)
 	}
 }

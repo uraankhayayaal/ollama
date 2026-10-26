@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// readyReopenTask создаёт эпик и задачу и доводит задачу до ready.
+// readyReopenTask создаёт эпик и задачу и доводит задачу до development.
 func readyReopenTask(t *testing.T, s *Store, ctx context.Context, taskID string) {
 	t.Helper()
 	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "E-1", Title: "epic"}}); err != nil {
@@ -19,7 +19,7 @@ func readyReopenTask(t *testing.T, s *Store, ctx context.Context, taskID string)
 	}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	for _, st := range []Status{StatusAnalysis, StatusReady} {
+	for _, st := range []Status{StatusTestCases, StatusDevelopment} {
 		if err := s.SetTaskStatus(ctx, taskID, st); err != nil {
 			t.Fatalf("task -> %s: %v", st, err)
 		}
@@ -30,13 +30,11 @@ func readyReopenTask(t *testing.T, s *Store, ctx context.Context, taskID string)
 func doneReopenTask(t *testing.T, s *Store, ctx context.Context, taskID string, needEpicDone bool) {
 	t.Helper()
 	readyReopenTask(t, s, ctx, taskID)
-	for _, st := range []Status{StatusInProgress, StatusDone} {
-		if err := s.SetTaskStatus(ctx, taskID, st); err != nil {
-			t.Fatalf("task -> %s: %v", st, err)
-		}
+	if err := s.SetTaskStatus(ctx, taskID, StatusDone); err != nil {
+		t.Fatalf("task -> done: %v", err)
 	}
 	if needEpicDone {
-		for _, st := range []Status{StatusAnalysis, StatusReady, StatusInProgress, StatusDone} {
+		for _, st := range []Status{StatusBusinessReview, StatusSystemAnalysis, StatusDone} {
 			if err := s.SetEpicStatus(ctx, "E-1", st); err != nil {
 				t.Fatalf("epic -> %s: %v", st, err)
 			}
@@ -55,8 +53,8 @@ func TestReopenTaskWithNewComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReopenTask: %v", err)
 	}
-	if task.Status != StatusReady {
-		t.Fatalf("статус = %s, ожидался ready", task.Status)
+	if task.Status != StatusInfra {
+		t.Fatalf("статус = %s, ожидался infra", task.Status)
 	}
 	// Исполнитель сохраняется — дорабатывает тот же специалист.
 	if task.Assignee != "Senior Go Developer" {
@@ -69,7 +67,7 @@ func TestReopenTaskWithNewComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if got.Status != StatusReady {
+	if got.Status != StatusInfra {
 		t.Fatalf("на доске статус = %s", got.Status)
 	}
 	if len(got.Comments) != 1 {
@@ -151,7 +149,7 @@ func TestReopenTaskCannotReuseAccountedComment(t *testing.T) {
 		t.Fatalf("первое переоткрытие: %v", err)
 	}
 	// Доводим задачу снова до done.
-	for _, st := range []Status{StatusInProgress, StatusDone} {
+	for _, st := range []Status{StatusTestCases, StatusDevelopment, StatusDone} {
 		if err := s.SetTaskStatus(ctx, "T-1", st); err != nil {
 			t.Fatalf("task -> %s: %v", st, err)
 		}
@@ -176,7 +174,7 @@ func TestReopenTaskReopensDoneEpic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEpic: %v", err)
 	}
-	if e.Status != StatusReady {
-		t.Fatalf("эпик = %s, ожидался ready (иначе оркестратор не увидит задачу)", e.Status)
+	if e.Status != StatusSystemAnalysis {
+		t.Fatalf("эпик = %s, ожидался system_analysis (иначе оркестратор не увидит задачу)", e.Status)
 	}
 }

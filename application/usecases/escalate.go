@@ -50,18 +50,16 @@ type EscalationPorts struct {
 // Escalate реагирует на неудачную попытку задачи (зацикливание или работа
 // без результата) в рамках бюджета автономии. Возвращает true, если работа
 // продвинулась (задача поставлена в очередь на новый прогон с эскалацией или
-// остановлена для человека) — это честный «прогресс» раунда, иначе цикл решил
-// бы, что прогресса нет, и упал.
+// отменена) — это честный «прогресс» раунда, иначе цикл решил бы, что
+// прогресса нет, и упал.
 //
 // Пока бюджет не исчерпан: пишем в задачу требование большой модели
 // (model_tier), инъекцию с диагнозом (причина видна модели с первого запроса
-// нового прогона) и возвращаем задачу в очередь (ready). Откат кода при этом
+// нового прогона) и возвращаем задачу в очередь (infra). Откат кода при этом
 // НЕ делается (Р-2).
 //
-// Исчерпали бюджет: останавливаем работу задачи и зовём человека — «помощь
-// человека» (status human_help, не терминальный: вернуть в очередь можно
-// одной кнопкой) плюс явное сообщение в чат и причина остановки в задаче.
-// Никаких «выполнено»/фиктивного успеха.
+// Исчерпали бюджет: отменяем задачу (status cancelled) плюс явное сообщение
+// в чат и причина остановки в задаче.
 func Escalate(ctx context.Context, taskID string, diag EscalationDiag, p EscalationPorts) (bool, error) {
 	if p.Tasks == nil {
 		return false, fmt.Errorf("задача %s: эскалация без хранилища", taskID)
@@ -95,8 +93,8 @@ func Escalate(ctx context.Context, taskID string, diag EscalationDiag, p Escalat
 		}); err != nil {
 			return false, fmt.Errorf("задача %s: запись причины остановки: %w", taskID, err)
 		}
-		if err := p.Tasks.SetTaskStatus(ctx, taskID, domain.StatusHumanHelp); err != nil {
-			return false, fmt.Errorf("задача %s: остановка исчерпанием бюджета: %w", taskID, err)
+		if err := p.Tasks.SetTaskStatus(ctx, taskID, domain.StatusCancelled); err != nil {
+			return false, fmt.Errorf("задача %s: отмена исчерпанием бюджета: %w", taskID, err)
 		}
 		_, _ = p.Tasks.AddTaskComment(ctx, taskID, domain.Comment{
 			Author: "system",
@@ -132,8 +130,14 @@ func Escalate(ctx context.Context, taskID string, diag EscalationDiag, p Escalat
 	}); err != nil {
 		return false, fmt.Errorf("задача %s: запись эскалации: %w", taskID, err)
 	}
-	if err := p.Tasks.SetTaskStatus(ctx, taskID, domain.StatusReady); err != nil {
-		return false, fmt.Errorf("задача %s: возврат в очередь после эскалации: %w", taskID, err)
+	// Строго линейный FSM — возвратов назад нет. Очистка heartbeat и agent_state,
+	// чтобы следующий цикл подхватил задачу на текущем статусе.
+	if err := p.Tasks.PatchTask(ctx, taskID, func(cur *domain.Task) error {
+		cur.HeartbeatAt = ""
+		cur.AgentState = ""
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("задача %s: очистка после эскалации: %w", taskID, err)
 	}
 	status("[задача %s] %s (%s) — эскалация %d/%d: продолжаем на большой модели с разбором причины",
 		t.TaskID, diag.Event, ClipText(diag.Detail, 160), escalation, budget)

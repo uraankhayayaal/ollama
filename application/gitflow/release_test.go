@@ -300,7 +300,7 @@ func TestReleaserReleaseEpicStateErrors(t *testing.T) {
 	}
 
 	notDone := newFakeReleaseHost()
-	notDone.status = domain.StatusInProgress
+	notDone.status = domain.StatusDevelopment
 	if _, _, _, err := (Releaser{Host: notDone}).ReleaseEpic(ctx, "p", "E-1"); !errors.Is(err, ErrEpicNotDone) {
 		t.Fatalf("эпик не done: %v", err)
 	}

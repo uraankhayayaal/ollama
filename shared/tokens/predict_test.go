@@ -130,7 +130,7 @@ func TestHistoryFromBoard(t *testing.T) {
 			{TaskSpec: board.TaskSpec{TaskID: "e-done", Title: "Готово", Description: "описание эпика", AssignedRole: "backendlead"},
 				Status: board.StatusDone, Tasks: []string{"t1", "t2"},
 				TokenUsage: board.TokenUsage{TokensTotal: 8000}},
-			{TaskSpec: board.TaskSpec{TaskID: "e-new", Title: "В работе"}, Status: board.StatusInProgress,
+			{TaskSpec: board.TaskSpec{TaskID: "e-new", Title: "В работе"}, Status: board.StatusDevelopment,
 				TokenUsage: board.TokenUsage{TokensTotal: 400}},
 			{TaskSpec: board.TaskSpec{TaskID: "e-nofact"}, Status: board.StatusDone},
 		},
@@ -139,7 +139,7 @@ func TestHistoryFromBoard(t *testing.T) {
 				Assignee: "developer", Status: board.StatusDone,
 				TokenUsage: board.TokenUsage{TokensTotal: 2500}},
 			{TaskSpec: board.TaskSpec{TaskID: "t2"}, Assignee: "developer", Status: board.StatusDone},
-			{TaskSpec: board.TaskSpec{TaskID: "t3"}, Assignee: "developer", Status: board.StatusInProgress,
+			{TaskSpec: board.TaskSpec{TaskID: "t3"}, Assignee: "developer", Status: board.StatusDevelopment,
 				TokenUsage: board.TokenUsage{TokensTotal: 999}},
 		},
 	}

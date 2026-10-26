@@ -34,18 +34,18 @@ func TestStoreEpicLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEpic: %v", err)
 	}
-	if e.Status != StatusNew || e.ProjectName != "testproj" {
+	if e.Status != StatusDraft || e.ProjectName != "testproj" {
 		t.Errorf("эпик создан неверно: %+v", e)
 	}
 
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusReady); err == nil {
-		t.Fatal("new -> ready должен быть запрещён")
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusSystemAnalysis); err == nil {
+		t.Fatal("draft -> system_analysis должен быть запрещён")
 	}
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusAnalysis); err != nil {
-		t.Fatalf("new -> analysis: %v", err)
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusBusinessReview); err != nil {
+		t.Fatalf("draft -> business_review: %v", err)
 	}
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusReady); err != nil {
-		t.Fatalf("analysis -> ready: %v", err)
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusSystemAnalysis); err != nil {
+		t.Fatalf("business_review -> system_analysis: %v", err)
 	}
 
 	epics, err := s.ListEpics(ctx)
@@ -115,22 +115,19 @@ func TestStoreTaskTwoWayLinkAndDependencies(t *testing.T) {
 	}
 
 	if err := s.SetTaskStatus(ctx, "T-01", StatusDone); err == nil {
-		t.Fatal("new -> done должен быть запрещён")
+		t.Fatal("infra -> done должен быть запрещён")
 	}
-	if err := s.SetTaskStatus(ctx, "T-01", StatusReady); err == nil {
-		t.Fatal("new -> ready должен быть запрещён")
+	if err := s.SetTaskStatus(ctx, "T-01", StatusDevelopment); err == nil {
+		t.Fatal("infra -> development должен быть запрещён")
 	}
-	if err := s.SetTaskStatus(ctx, "T-01", StatusAnalysis); err != nil {
-		t.Fatalf("new -> analysis: %v", err)
+	if err := s.SetTaskStatus(ctx, "T-01", StatusTestCases); err != nil {
+		t.Fatalf("infra -> test_cases: %v", err)
 	}
-	if err := s.SetTaskStatus(ctx, "T-01", StatusReady); err != nil {
-		t.Fatalf("analysis -> ready: %v", err)
-	}
-	if err := s.SetTaskStatus(ctx, "T-01", StatusInProgress); err != nil {
-		t.Fatalf("ready -> in_progress: %v", err)
+	if err := s.SetTaskStatus(ctx, "T-01", StatusDevelopment); err != nil {
+		t.Fatalf("test_cases -> development: %v", err)
 	}
 	if err := s.SetTaskStatus(ctx, "T-01", StatusDone); err != nil {
-		t.Fatalf("in_progress -> done: %v", err)
+		t.Fatalf("development -> done: %v", err)
 	}
 }
 
@@ -155,9 +152,8 @@ func TestStoreAllDone(t *testing.T) {
 	}
 
 	finish := func(id string) {
-		s.SetEpicStatus(ctx, id, StatusAnalysis)
-		s.SetEpicStatus(ctx, id, StatusReady)
-		s.SetEpicStatus(ctx, id, StatusInProgress)
+		s.SetEpicStatus(ctx, id, StatusBusinessReview)
+		s.SetEpicStatus(ctx, id, StatusSystemAnalysis)
 		s.SetEpicStatus(ctx, id, StatusDone)
 	}
 	finish("ARC-01")
@@ -173,9 +169,8 @@ func TestStoreAllDone(t *testing.T) {
 	if done, _ := s.AllDone(ctx); done {
 		t.Fatal("решение требует выполнения всех задач")
 	}
-	s.SetTaskStatus(ctx, "T-01", StatusAnalysis)
-	s.SetTaskStatus(ctx, "T-01", StatusReady)
-	s.SetTaskStatus(ctx, "T-01", StatusInProgress)
+	s.SetTaskStatus(ctx, "T-01", StatusTestCases)
+	s.SetTaskStatus(ctx, "T-01", StatusDevelopment)
 	s.SetTaskStatus(ctx, "T-01", StatusDone)
 	if done, err := s.AllDone(ctx); err != nil || !done {
 		t.Fatalf("все эпики и задачи выполнены — доска должна быть решённой: done=%v err=%v", done, err)
@@ -218,19 +213,17 @@ func TestMeta(t *testing.T) {
 	}
 }
 
-// TestStoreEpicHumanHelpCascade — «помощь человека» эпика (Р-4) каскадом
-// останавливает его задачи, которые ещё не взял в работу специалист,
-// запоминая исходный статус; «в работе» доводит текущий раунд оркестратора.
-// Возобновление возвращает задачи на прежнее место цепочки.
-func TestStoreEpicHumanHelpCascade(t *testing.T) {
+// TestStoreEpicCancelCascade — отмена эпика (Ф-6) помечает отменёнными его
+// незавершённые задачи, не удаляя записи: ветки и код остаются как артефакт,
+// хронология доски сохраняется.
+func TestStoreEpicCancelCascade(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
 	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "ARC-01", Title: "Backend"}}); err != nil {
 		t.Fatal(err)
 	}
-	// T-01 — «в работе» (специалист уже пишет код), T-02 — «готова к работе»,
-	// T-03 — новая (ждёт зависимости).
+	// T-01 — «в разработке», T-02 — «написание тестов», T-03 — новая.
 	for _, id := range []string{"T-01", "T-02", "T-03"} {
 		if err := s.CreateTask(ctx, &Task{TaskSpec: TaskSpec{TaskID: id, SequenceOrder: 1}, EpicID: "ARC-01"}); err != nil {
 			t.Fatal(err)
@@ -244,14 +237,12 @@ func TestStoreEpicHumanHelpCascade(t *testing.T) {
 			}
 		}
 	}
-	mustTask("T-01", StatusAnalysis, StatusReady, StatusInProgress)
-	mustTask("T-02", StatusAnalysis, StatusReady)
+	mustTask("T-01", StatusTestCases, StatusDevelopment)
+	mustTask("T-02", StatusTestCases)
 
-	// Эпик доводится до «в работе», затем останавливается (помощь человека).
-	for _, st := range []Status{StatusAnalysis, StatusReady, StatusInProgress, StatusHumanHelp} {
-		if err := s.SetEpicStatus(ctx, "ARC-01", st); err != nil {
-			t.Fatalf("эпик -> %s: %v", st, err)
-		}
+	// Эпик отменён — незавершённые задачи тоже отменяются.
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusCancelled); err != nil {
+		t.Fatalf("эпик -> cancelled: %v", err)
 	}
 	assertTasks := func(want map[string]Status) {
 		t.Helper()
@@ -266,108 +257,35 @@ func TestStoreEpicHumanHelpCascade(t *testing.T) {
 		}
 	}
 	assertTasks(map[string]Status{
-		"T-01": StatusInProgress, // «в работе» остановка эпика не трогает
-		"T-02": StatusHumanHelp,
-		"T-03": StatusHumanHelp,
+		"T-01": StatusCancelled,
+		"T-02": StatusCancelled,
+		"T-03": StatusCancelled,
 	})
-	// Исходные статусы запомнены — возобновление вернёт задачи на место.
-	for _, id := range []string{"T-02", "T-03"} {
-		got, err := s.GetTask(ctx, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := StatusReady
-		if id == "T-03" {
-			want = StatusNew
-		}
-		if got.ResumeStatus != want {
-			t.Errorf("задача %s: resume_status = %s, ожидалось %s", id, got.ResumeStatus, want)
-		}
-	}
-
-	// Возобновление: эпик human_help -> ready, задачи возвращаются в свои статусы.
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusReady); err != nil {
-		t.Fatalf("эпик human_help -> ready: %v", err)
-	}
-	assertTasks(map[string]Status{
-		"T-01": StatusInProgress,
-		"T-02": StatusReady,
-		"T-03": StatusNew,
-	})
-	for _, id := range []string{"T-02", "T-03"} {
-		got, err := s.GetTask(ctx, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.ResumeStatus != "" {
-			t.Errorf("задача %s: resume_status должен очиститься, получено %s", id, got.ResumeStatus)
-		}
-	}
-}
-
-// TestStoreEpicCancelCascade — отмена эпика (Ф-6) помечает отменёнными его
-// незавершённые задачи (включая остановленные), не удаляя записи: ветки и
-// код остаются как артефакт, хронология доски сохраняется.
-func TestStoreEpicCancelCascade(t *testing.T) {
-	ctx := context.Background()
-	s := newTestStore(t)
-
-	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "ARC-01"}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"T-01", "T-02"} {
-		if err := s.CreateTask(ctx, &Task{TaskSpec: TaskSpec{TaskID: id, SequenceOrder: 1}, EpicID: "ARC-01"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := s.SetTaskStatus(ctx, "T-01", StatusAnalysis); err != nil {
-		t.Fatal(err)
-	}
-
-	// Эпик остановлен (T-01/T-02 — «помощь человека»), затем отменён.
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusHumanHelp); err != nil {
-		t.Fatalf("эпик new -> human_help: %v", err)
-	}
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusCancelled); err != nil {
-		t.Fatalf("эпик human_help -> cancelled: %v", err)
-	}
-	for _, id := range []string{"T-01", "T-02"} {
-		got, err := s.GetTask(ctx, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Status != StatusCancelled {
-			t.Errorf("задача %s = %s, ожидалось отменена", id, got.Status)
-		}
-		if got.ResumeStatus != "" {
-			t.Errorf("задача %s: resume_status должен очиститься при отмене", id)
-		}
-	}
 	// Записи не удалены — хронология сохраняется.
 	tasks, err := s.ListTasks(ctx)
-	if err != nil || len(tasks) != 2 {
+	if err != nil || len(tasks) != 3 {
 		t.Fatalf("задачи должны остаться на доске: %d, err = %v", len(tasks), err)
 	}
 }
 
-// TestStoreEpicHumanHelpDoesNotBlockAllDone — остановленный эпик не считается
-// выполненным: задача пользователя не решена, пока эпик на «помощи человека».
-func TestStoreEpicHumanHelpDoesNotBlockAllDone(t *testing.T) {
+// TestStoreEpicCancelledDoesNotBlockAllDone — отменённый эпик не считается
+// выполненным: задача пользователя не решена, когда эпик отменён.
+func TestStoreEpicCancelledDoesNotBlockAllDone(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
 	if err := s.CreateEpic(ctx, &Epic{TaskSpec: TaskSpec{TaskID: "ARC-01"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetEpicStatus(ctx, "ARC-01", StatusHumanHelp); err != nil {
-		t.Fatalf("new -> human_help: %v", err)
+	if err := s.SetEpicStatus(ctx, "ARC-01", StatusCancelled); err != nil {
+		t.Fatalf("draft -> cancelled: %v", err)
 	}
 	done, err := s.AllDone(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if done {
-		t.Fatal("эпик на «помощи человека» не даёт успешного решения задачи")
+		t.Fatal("отменённый эпик не даёт успешного решения задачи")
 	}
 }
 

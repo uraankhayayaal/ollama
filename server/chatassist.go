@@ -193,7 +193,7 @@ const chatWriteAttempts = 2
 // phantomActionCorrection — корректирующая инструкция для повторного хода:
 // прямо называет факт, что прошлый ответ был ложью, и требует выполнить
 // действие инструментом в этом же ходе.
-const phantomActionCorrection = `ВАЖНО (исправление): в прошлой попытке ты ответил текстом, что создал запись на доске, но НЕ ВЫЗВАЛ НИ ОДНОГО инструмента доски — на доске ничего не появилось, это ложь. Сейчас обязательно вызови нужный инструмент (BoardCreateEpic для эпика, BoardCreateBug для бага, KanbanStart для запуска работы) в этом же ходе и отчитайся об успехе ТОЛЬКО после его status=success. Если обязательных полей не хватает — задай ОДИН вопрос (AskUser). Не повторяй ложный отчёт текстом.`
+const phantomActionCorrection = `ВАЖНО (исправление): в прошлой попытке ты ответил текстом, что создал запись на доске, но НЕ ВЫЗВАЛ НИ ОДНОГО инструмента доски — на доске ничего не появилось, это ложь. Сейчас обязательно вызови нужный инструмент (BoardCreateEpic для эпика, KanbanStart для запуска работы) в этом же ходе и отчитайся об успехе ТОЛЬКО после его status=success. Если обязательных полей не хватает — задай ОДИН вопрос (AskUser). Не повторяй ложный отчёт текстом.`
 
 // boardWriteToolNames — инструменты, успешный вызов которых реально меняет
 // доску (создание/правка записей, запуск оркестрации). Чтение (BoardList*,
@@ -209,9 +209,6 @@ var boardWriteToolNames = map[string]bool{
 	tools.BoardUpdateTask:    true,
 	tools.BoardDeleteTask:    true,
 	tools.BoardSetTaskStatus: true,
-	tools.BoardCreateBug:     true,
-	tools.BoardSetBugStatus:  true,
-	tools.BoardReviewBug:     true,
 	actionKanbanStart:        true,
 }
 
@@ -308,7 +305,6 @@ func (sess *Session) chatPromptFor(ask chatAsk) string {
 		Meta:  v.Meta,
 		Epics: v.Epics,
 		Tasks: v.Tasks,
-		Bugs:  v.Bugs,
 	}))
 
 	// Дайджест логов (Ф-5, кнопка «Разобрать»). Идёт последним: он большой и

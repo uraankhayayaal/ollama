@@ -36,7 +36,7 @@ func TestCreateEpicBranchCreatesAndRegisters(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
 	defer store.Close()
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -501,8 +501,8 @@ func TestTaskDoneAutoMergeHook(t *testing.T) {
 	srv, handler, mr := setupGitflow(t, git)
 	seedGitflowBoard(t, mr, srv)
 
-	// ready → in_progress → done (конечный автомат запрещает new→done).
-	for _, st := range []string{"in_progress", "done"} {
+	// ready → development → done (конечный автомат запрещает infra→done).
+	for _, st := range []string{"development", "done"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(
 			"PUT", "/api/projects/myrepo/tasks/task-1",
@@ -534,8 +534,8 @@ func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	srv, handler, mr := setupGitflow(t, git)
 	seedGitflowBoard(t, mr, srv)
 
-	// ready → in_progress → done; конфликт при done значения не имеет.
-	for _, st := range []string{"in_progress", "done"} {
+	// ready → development → done; конфликт при done значения не имеет.
+	for _, st := range []string{"development", "done"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(
 			"PUT", "/api/projects/myrepo/tasks/task-1",
@@ -555,10 +555,10 @@ func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	if len(task.MergeConflictFiles) != 0 {
 		t.Fatalf("task.merge_conflict_files = %v, want [] (авто-разрешён)", task.MergeConflictFiles)
 	}
-	// Ф-3: in_progress создаёт worktree задачи (работу специалиста позже
+	// Ф-3: development создаёт worktree задачи (работу специалиста позже
 	// авто-коммитят); после done он снимается.
 	if !git.saw("git worktree add ") {
-		t.Fatalf("in_progress не создал worktree задачи (Ф-3), вызовы: %v", git.callsList())
+		t.Fatalf("development не создал worktree задачи (Ф-3), вызовы: %v", git.callsList())
 	}
 	if !git.saw("git worktree remove --force ") {
 		t.Fatalf("после done worktree задачи не снят, вызовы: %v", git.callsList())
@@ -660,7 +660,7 @@ func TestTaskDoneMergeConflictRollback(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
 	defer store.Close()
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +682,7 @@ func TestTaskDoneMergeConflictRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Задача НЕ считается выполненной: мёрдж не прошёл → откат в in_progress.
-	if task.Status != board.StatusInProgress {
+	if task.Status != board.StatusDevelopment {
 		t.Fatalf("task.status = %s, want in_progress (мёрдж не прошёл)", task.Status)
 	}
 	// Конфликт виден на доске: специалист решает сам.
@@ -706,7 +706,7 @@ func seedGitflowBoard(t *testing.T, mr *miniredis.Miniredis, srv *Server) {
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
 		EpicID:   "epic-1",
-		Status:   board.StatusReady,
+		Status:   board.StatusTestCases,
 	}); err != nil {
 		t.Fatal(err)
 	}

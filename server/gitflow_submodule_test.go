@@ -127,7 +127,7 @@ func newSubmoduleTaskFixture(t *testing.T) *submoduleTaskFixture {
 	if err := store.CreateTask(context.Background(), &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1},
 		EpicID:   "e1",
-		Status:   board.StatusInProgress,
+		Status:   board.StatusDevelopment,
 	}); err != nil {
 		t.Fatal(err)
 	}

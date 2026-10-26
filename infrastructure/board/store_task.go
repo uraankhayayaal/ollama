@@ -39,7 +39,7 @@ func (s *Store) CreateTask(ctx context.Context, t *Task) error {
 		}
 	}
 
-	t.Status = FirstNonZeroStatus(t.Status, StatusNew)
+	t.Status = FirstNonZeroStatus(t.Status, StatusInfra)
 	t.CreatedAt = now()
 	t.UpdatedAt = t.CreatedAt
 	// Ф-5: прогноз расхода токенов по истории завершённых единиц (если задан).
@@ -229,7 +229,7 @@ func (s *Store) RemoveTaskComment(ctx context.Context, taskID, cmID string) (Com
 	return out, true, nil
 }
 
-// ReopenTask переоткрывает ВЫПОЛНЕННУЮ задачу на доработку: done -> ready с
+// ReopenTask переоткрывает ВЫПОЛНЕННУЮ задачу на доработку: done → infra с
 // сохранением прежнего исполнителя (assignee не меняется — дорабатывает тот же
 // специалист). Обоснование обязательно: либо уже добавленные необработанные
 // комментарии задачи, либо новый комментарий reason.Body. Все использованные
@@ -237,14 +237,13 @@ func (s *Store) RemoveTaskComment(ctx context.Context, taskID, cmID string) (Com
 // задачу тем же комментарием нельзя — иначе доработка запускалась бы по одному
 // и тому же поводу бесконечно.
 //
-// Переход done -> ready запрещён общим FSM (терминальный статус), но это
+// Переход done → infra запрещён общим FSM (терминальный статус), но это
 // осознанное действие человека через отдельный эндпоинт (POST .../reopen) с
 // обязательным комментарием; поэтому статус ставится напрямую, минуя
-// ValidateTransition (ср. setEpicTasksStatus для каскадов эпика).
+// ValidateTransition.
 //
-// Если эпик задачи уже выполнен, он тоже возвращается в ready: иначе
-// оркестратор не увидит переоткрытую задачу в очереди (epicWorkable игнорирует
-// done-эпики).
+// Если эпик задачи уже выполнен, он тоже возвращается в очередь: иначе
+// оркестратор не увидит переоткрытую задачу в очереди.
 //
 // Возвращает обновлённую задачу и число учтённых комментариев.
 func (s *Store) ReopenTask(ctx context.Context, taskID string, reason Comment) (*Task, int, error) {
@@ -257,8 +256,6 @@ func (s *Store) ReopenTask(ctx context.Context, taskID string, reason Comment) (
 	}
 
 	accounted := 0
-	// Новый комментарий (если передан) — сам является обоснованием и сразу
-	// учитывается.
 	if body := strings.TrimSpace(reason.Body); body != "" {
 		reason.Body = body
 		reason.TaskID = taskID
@@ -276,8 +273,6 @@ func (s *Store) ReopenTask(ctx context.Context, taskID string, reason Comment) (
 		t.Comments = append(t.Comments, reason)
 		accounted++
 	}
-	// Прочие необработанные комментарии тоже считаются учтёнными этим
-	// переоткрытием: они — часть обоснования доработки.
 	for i := range t.Comments {
 		if t.Comments[i].Accounted {
 			continue
@@ -289,9 +284,8 @@ func (s *Store) ReopenTask(ctx context.Context, taskID string, reason Comment) (
 		return nil, 0, fmt.Errorf("board: нельзя переоткрыть задачу без комментария")
 	}
 
-	// Эпик выполнен — возвращаем и его в очередь (см. комментарий к функции).
 	if e, err := s.GetEpic(ctx, t.EpicID); err == nil && e.Status == StatusDone {
-		e.Status = StatusReady
+		e.Status = StatusSystemAnalysis
 		if err := s.SaveEpic(ctx, e); err != nil {
 			return nil, 0, err
 		}
@@ -299,9 +293,7 @@ func (s *Store) ReopenTask(ctx context.Context, taskID string, reason Comment) (
 		return nil, 0, err
 	}
 
-	t.Status = StatusReady
-	// Хвост прошлого прогона сбрасываем: причина остановки и последняя ошибка
-	// проверки не относятся к новой попытке.
+	t.Status = StatusInfra
 	t.PauseReason = ""
 	t.LastError = ""
 	if err := s.SaveTask(ctx, t); err != nil {
@@ -403,7 +395,7 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 	if err != nil {
 		return err
 	}
-	if err := ValidateTransition(t.Status, st); err != nil {
+	if err := ValidateTransition(t.Status, st, EntityTypeTask); err != nil {
 		return err
 	}
 	from := t.Status
@@ -417,25 +409,15 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 		}
 	}
 	t.Status = st
-	// Ф-6 State Tracking: «взята в работу» — попытка номер N. Счётчик переживает
-	// рестарт сервера (лежит на доске) и нужен бюджету автономии этапа 4.
-	// Возврат из «на тестирование» после замечаний тестировщика — новая
-	// попытка (за откат по счётчику цикл dev↔qa ограничен бюджетом эскалации).
-	if st == StatusInProgress && from != StatusInProgress {
-		t.Attempts++
-	}
 	if err := s.SaveTask(ctx, t); err != nil {
 		return err
 	}
-	// Общий хук смены статуса — публикует снимок доски, чтобы прямые вызовы
-	// оркестратора (human_help, детект зацикливания) виделись в Web UI без
-	// перезагрузки страницы. nil — хука нет (консольный режим).
 	if s.TaskStatusChangedHook != nil {
 		s.TaskStatusChangedHook(ctx, t, from, st)
 	}
 	// Ф-2: авто-действия при достижении done (gitflow: ветка задачи → релизная
 	// ветка эпика). Хук внедряется сервером; ошибки хука не ломают сам переход.
-	if st == StatusInProgress && s.TaskInProgressHook != nil {
+	if st == StatusDevelopment && s.TaskInProgressHook != nil {
 		s.TaskInProgressHook(ctx, t, from)
 	}
 	if st == StatusDone && s.TaskDoneHook != nil {
@@ -485,7 +467,9 @@ func (s *Store) DeleteTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if t.Status == StatusInProgress || t.Status == StatusTesting || t.Status == StatusDone || t.Status == StatusCancelled {
+	// Только задачи, которые специалист реально начал делать (не в начальном статусе infra),
+	// или завершённые — нельзя удалить.
+	if t.Status == StatusTestCases || t.Status == StatusDevelopment || t.Status == StatusDone || t.Status == StatusCancelled {
 		return fmt.Errorf("board: задачу %q нельзя удалить (статус %s: специалист уже начал работу или работа завершена)", id, t.Status)
 	}
 	if err := s.checkNoDependents(ctx, "task:"+id); err != nil {

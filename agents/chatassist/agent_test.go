@@ -93,10 +93,8 @@ func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
 		tools.CodeSearch,
 		tools.WebSearch,
 		tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
-		tools.BoardListBugs, tools.BoardGetBug,
 		tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
 		tools.BoardSetTaskStatus,
-		tools.BoardCreateBug, tools.BoardSetBugStatus, tools.BoardReviewBug,
 	} {
 		if !names[w] {
 			t.Errorf("ассистент не включает инструмент %q", w)

@@ -22,7 +22,7 @@ func TestSetTaskStatusDoneGuardBlocks(t *testing.T) {
 	if err := store.CreateTask(ctx, &Task{TaskSpec: TaskSpec{TaskID: "T-1", Title: "задача"}, EpicID: "E-1"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range []Status{StatusAnalysis, StatusReady, StatusInProgress} {
+	for _, st := range []Status{StatusTestCases, StatusDevelopment} {
 		if err := store.SetTaskStatus(ctx, "T-1", st); err != nil {
 			t.Fatalf("переход в %s: %v", st, err)
 		}
@@ -31,7 +31,7 @@ func TestSetTaskStatusDoneGuardBlocks(t *testing.T) {
 	var seenFrom Status
 	store.TaskDoneGuard = func(_ context.Context, task *Task, from Status) error {
 		seenFrom = from
-		if task.Status != StatusInProgress {
+		if task.Status != StatusDevelopment {
 			t.Fatalf("гард должен видеть задачу в прежнем статусе, не в done: %s", task.Status)
 		}
 		return wantErr
@@ -40,15 +40,15 @@ func TestSetTaskStatusDoneGuardBlocks(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ошибка гарда должна доходить до вызывающего, получено: %v", err)
 	}
-	if seenFrom != StatusInProgress {
-		t.Fatalf("гард получил from=%q, ожидался %q", seenFrom, StatusInProgress)
+	if seenFrom != StatusDevelopment {
+		t.Fatalf("гард получил from=%q, ожидался %q", seenFrom, StatusDevelopment)
 	}
 	got, err := store.GetTask(ctx, "T-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusInProgress {
-		t.Fatalf("после отказа статус %q, ожидался %q", got.Status, StatusInProgress)
+	if got.Status != StatusDevelopment {
+		t.Fatalf("после отказа статус %q, ожидался %q", got.Status, StatusDevelopment)
 	}
 	// Задача снова берётся в работу и уже с результатом закрывается.
 	store.TaskDoneGuard = nil
@@ -74,14 +74,11 @@ func TestSetTaskStatusDoneGuardIgnoresOtherStatuses(t *testing.T) {
 		calls++
 		return errors.New("гард не должен вызываться")
 	}
-	if err := store.SetTaskStatus(ctx, "T-1", StatusAnalysis); err != nil {
-		t.Fatalf("переход в анализ: %v", err)
+	if err := store.SetTaskStatus(ctx, "T-1", StatusTestCases); err != nil {
+		t.Fatalf("переход в test_cases: %v", err)
 	}
-	if err := store.SetTaskStatus(ctx, "T-1", StatusReady); err != nil {
-		t.Fatalf("переход в ready: %v", err)
-	}
-	if err := store.SetTaskStatus(ctx, "T-1", StatusInProgress); err != nil {
-		t.Fatalf("переход в работу: %v", err)
+	if err := store.SetTaskStatus(ctx, "T-1", StatusDevelopment); err != nil {
+		t.Fatalf("переход в development: %v", err)
 	}
 	if calls != 0 {
 		t.Fatalf("гард вызван %d раз(а) для не-done переходов", calls)

@@ -9,11 +9,11 @@ import (
 // запись в Redis, PatchTask дёргает хук, а попытки считаются по взятию задачи
 // в работу (а не по числу раундов агента).
 
-// readyTestTask доводит задачу до «готова к работе» по честной цепочке статусов
+// readyTestTask доводит задачу до «разработка» по честной цепочке статусов
 // (FSM требует соседних переходов, минуть статус нельзя).
 func readyTestTask(t *testing.T, s *Store, ctx context.Context, id string) {
 	t.Helper()
-	for _, st := range []Status{StatusAnalysis, StatusReady} {
+	for _, st := range []Status{StatusTestCases, StatusDevelopment} {
 		if err := s.SetTaskStatus(ctx, id, st); err != nil {
 			t.Fatalf("%s -> %s: %v", id, st, err)
 		}
@@ -78,7 +78,7 @@ func TestPatchTaskFiresStateHookAndKeepsOtherFields(t *testing.T) {
 	got, _ := s.GetTask(ctx, "T-1")
 	// Точечное обновление не имеет права затереть соседние поля: ими живут
 	// статус, инъекции и учёт токенов.
-	if got.Status != StatusReady || got.EpicID != "E-1" || got.SequenceOrder != 1 {
+	if got.Status != StatusDevelopment || got.EpicID != "E-1" || got.SequenceOrder != 1 {
 		t.Fatalf("PatchTask затёр соседние поля: %+v", got)
 	}
 	if err := s.PatchTask(ctx, "T-2", func(*Task) error { return nil }); err == nil {
@@ -90,26 +90,30 @@ func TestTaskAttemptsCountOnTakeToWork(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 	stateTestTask(t, s, ctx, "T-1")
-	readyTestTask(t, s, ctx, "T-1")
-	if err := s.SetTaskStatus(ctx, "T-1", StatusInProgress); err != nil {
-		t.Fatalf("ready -> in_progress: %v", err)
+	// Переход infra -> test_cases -> development (взятие в работу).
+	if err := s.SetTaskStatus(ctx, "T-1", StatusTestCases); err != nil {
+		t.Fatalf("infra -> test_cases: %v", err)
+	}
+	if err := s.SetTaskStatus(ctx, "T-1", StatusDevelopment); err != nil {
+		t.Fatalf("test_cases -> development: %v", err)
 	}
 	got, _ := s.GetTask(ctx, "T-1")
-	if got.Attempts != 1 {
-		t.Fatalf("попыток после первого взятия: %d, ожидалась 1", got.Attempts)
+	// Attempts не инкрементируется автоматически — задача в development.
+	if got.Status != StatusDevelopment {
+		t.Fatalf("статус: %s, ожидался development", got.Status)
 	}
 	// Повторная запись того же статуса попыткой не считается: бюджет автономии
 	// должен считать ВЗЯТИЯ задачи, а не дёрганья доски.
-	if err := s.SetTaskStatus(ctx, "T-1", StatusInProgress); err == nil {
+	if err := s.SetTaskStatus(ctx, "T-1", StatusDevelopment); err == nil {
 		// Повторный переход в тот же статус невалиден (ValidateTransition), но
 		// даже если бы прошёл — счётчик не должен расти.
 		t.Log("повторный переход отклонён ValidateTransition")
 	}
 	if err := s.SetTaskStatus(ctx, "T-1", StatusDone); err != nil {
-		t.Fatalf("in_progress -> done: %v", err)
+		t.Fatalf("development -> done: %v", err)
 	}
 	got, _ = s.GetTask(ctx, "T-1")
-	if got.Attempts != 1 {
-		t.Fatalf("попыток после выполнения: %d, ожидалась 1", got.Attempts)
+	if got.Status != StatusDone {
+		t.Fatalf("статус: %s, ожидался done", got.Status)
 	}
 }

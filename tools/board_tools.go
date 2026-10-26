@@ -23,8 +23,6 @@ const (
 	BoardGetEpic       = "BoardGetEpic"
 	BoardListTasks     = "BoardListTasks"
 	BoardGetTask       = "BoardGetTask"
-	BoardListBugs      = "BoardListBugs"
-	BoardGetBug        = "BoardGetBug"
 	BoardCreateEpic    = "BoardCreateEpic"
 	BoardUpdateEpic    = "BoardUpdateEpic"
 	BoardDeleteEpic    = "BoardDeleteEpic"
@@ -33,19 +31,14 @@ const (
 	BoardUpdateTask    = "BoardUpdateTask"
 	BoardDeleteTask    = "BoardDeleteTask"
 	BoardSetTaskStatus = "BoardSetTaskStatus"
-	BoardCreateBug     = "BoardCreateBugReport"
-	BoardSetBugStatus  = "BoardSetBugStatus"
-	BoardReviewBug     = "BoardReviewBugReport"
 )
 
 // boardToolNames — все инструменты доски (одна точка правды для Select:
 // без подключённого board.Store они недоступны агенту).
 var boardToolNames = []string{
 	BoardListEpics, BoardGetEpic, BoardListTasks, BoardGetTask,
-	BoardListBugs, BoardGetBug, BoardCreateEpic, BoardUpdateEpic,
-	BoardDeleteEpic, BoardSetEpicStatus, BoardCreateTask, BoardUpdateTask,
-	BoardDeleteTask, BoardSetTaskStatus, BoardCreateBug, BoardSetBugStatus,
-	BoardReviewBug,
+	BoardCreateEpic, BoardUpdateEpic, BoardDeleteEpic, BoardSetEpicStatus,
+	BoardCreateTask, BoardUpdateTask, BoardDeleteTask, BoardSetTaskStatus,
 }
 
 // IsBoardTool сообщает, является ли инструмент инструментом Kanban-доски.
@@ -308,70 +301,6 @@ func (t *boardGetTaskTool) Execute(args map[string]any) ([]byte, error) {
 		return boardErrStore(BoardGetTask, t.b, err)
 	}
 	return json.Marshal(tk)
-}
-
-type boardListBugsTool struct{ b services.BoardStore }
-
-func (t *boardListBugsTool) Name() string { return BoardListBugs }
-func (t *boardListBugsTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name:        BoardListBugs,
-		Description: "Список багрепортов общей Kanban-доски проекта (статусы, вердикты). Доступно на чтение всем участникам команды.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"status": map[string]any{"type": "string", "description": "Фильтр по статусу багрепорта (необязательно): new, confirmed, slop, fix, feature, wont_fix, fixed"},
-			},
-		},
-	}
-}
-func (t *boardListBugsTool) Execute(args map[string]any) ([]byte, error) {
-	if t.b == nil {
-		return boardErr(BoardListBugs, fmt.Errorf("доска не подключена"))
-	}
-	ctx := context.Background()
-	bugs, err := t.b.ListBugReports(ctx)
-	if err != nil {
-		return boardErrStore(BoardListBugs, t.b, err)
-	}
-	if st := strArg(args, "status"); st != "" {
-		filtered := bugs[:0]
-		for _, b := range bugs {
-			if string(b.Status) == st {
-				filtered = append(filtered, b)
-			}
-		}
-		bugs = filtered
-	}
-	data, _ := json.Marshal(bugs)
-	return data, nil
-}
-
-type boardGetBugTool struct{ b services.BoardStore }
-
-func (t *boardGetBugTool) Name() string { return BoardGetBug }
-func (t *boardGetBugTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name:        BoardGetBug,
-		Description: "Получить багрепорт доски по ID.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"bug_id": map[string]any{"type": "string", "description": "ID багрепорта"},
-			},
-			"required": []string{"bug_id"},
-		},
-	}
-}
-func (t *boardGetBugTool) Execute(args map[string]any) ([]byte, error) {
-	if t.b == nil {
-		return boardErr(BoardGetBug, fmt.Errorf("доска не подключена"))
-	}
-	r, err := t.b.GetBugReport(context.Background(), strArg(args, "bug_id"))
-	if err != nil {
-		return boardErrStore(BoardGetBug, t.b, err)
-	}
-	return json.Marshal(r)
 }
 
 // --- Эпики (CRUD — Системный архитектор) ---
@@ -893,253 +822,22 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 	ctx := context.Background()
 	id := strArg(args, "task_id")
 	st := domain.Status(strArg(args, "status"))
-	reason := strings.TrimSpace(strArg(args, "reason"))
-	// «Помощь человека» без причины — загадочный простой: модель обязана
-	// объяснить блокер, иначе человек не поймёт, что ей делать (и зачем вообще
-	// останавливать задачу).
-	if st == domain.StatusHumanHelp && reason == "" {
-		return boardErr(BoardSetTaskStatus, fmt.Errorf("для human_help обязателен reason: опиши, что блокирует задачу (нет исходного кода/зависимостей, внешний блокер и т.п.)"))
-	}
 	tk, err := t.b.GetTask(ctx, id)
 	if err != nil {
 		return boardErrStore(BoardSetTaskStatus, t.b, err)
 	}
-	// Handoff Gate (п.3.3 A7-04): передача из работы в приёмку — только с
-	// чистым деревом и зелёной сборкой. Инфра-деграды не блокируют.
-	if tk.Status == domain.StatusInProgress && st == domain.StatusTesting {
+	// Handoff Gate (п.3.3 A7-04): передача в done — только с чистым деревом
+	// и зелёной сборкой. Инфра-деграды не блокируют.
+	if st == domain.StatusDone {
 		if gerr := handoffGate(t.ops); gerr != nil {
 			return boardErr(BoardSetTaskStatus, gerr)
-		}
-	}
-	// Возврат из приёмки в работу (testing → in_progress) — откат задачи
-	// разработчику. Без конкретного дефекта это ping-pong testing ↔ in_progress
-	// (инцидент A7-04): требуем внятную причину и сохраняем её комментарием QA,
-	// чтобы следующий раунд разработчика видел, что именно исправлять.
-	qaRevert := tk.Status == domain.StatusTesting && st == domain.StatusInProgress
-	if qaRevert {
-		if verr := validateQaRevertReason(reason); verr != nil {
-			return boardErr(BoardSetTaskStatus, verr)
 		}
 	}
 	if err := t.b.SetTaskStatus(ctx, id, st); err != nil {
 		return boardErrStore(BoardSetTaskStatus, t.b, err)
 	}
-	if qaRevert {
-		if _, cerr := t.b.AddTaskComment(ctx, id, domain.Comment{
-			Author: "qa",
-			Type:   domain.CommentTypeQA,
-			Body:   "Возврат в работу (testing → in_progress). Конкретный дефект: " + reason,
-		}); cerr != nil {
-			// Статус уже изменён: сбой комментария не должен откатывать решение,
-			// но дефект важно не потерять — пишем в лог.
-			logging.For(t.b.Project()).Warnf("[задача %s] возврат в работу: комментарий QA не сохранён: %v", id, cerr)
-		}
-	}
-	// Причина остановки живёт в записи задачи (карточка в UI) и очищается при
-	// выходе из human_help — иначе в карточке висела бы причина прошлой остановки.
-	if st == domain.StatusHumanHelp || tk.Status == domain.StatusHumanHelp {
-		if perr := t.b.PatchTask(ctx, id, func(cur *domain.Task) error {
-			cur.PauseReason = ""
-			if st == domain.StatusHumanHelp {
-				if r := []rune(reason); len(r) > 500 {
-					reason = string(r[:500])
-				}
-				cur.PauseReason = reason
-			}
-			return nil
-		}); perr != nil {
-			return boardErrStore(BoardSetTaskStatus, t.b, perr)
-		}
-	}
-	if st == domain.StatusHumanHelp && reason != "" {
-		logging.For(t.b.Project()).Warnf("[задача %s] статус: %s → %s — причина: %s", id, tk.Status.Label(), st.Label(), reason)
-		return boardOK(map[string]any{"task_id": id, "status": string(st), "reason": reason})
-	}
 	logging.For(t.b.Project()).Infof("[задача %s] статус: %s → %s", id, tk.Status.Label(), st.Label())
 	return boardOK(map[string]any{"task_id": id, "status": string(st)})
-}
-
-// --- Багрепорты ---
-
-type boardCreateBugReportTool struct{ b services.BoardStore }
-
-func (t *boardCreateBugReportTool) Name() string { return BoardCreateBug }
-func (t *boardCreateBugReportTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name:        BoardCreateBug,
-		Description: "Создать багрепорт на общей доске. Используется QA-специалистами при обнаружении реальной проблемы (расхождения с контрактом, падение, некорректное поведение). Далее багрепорт ревьюится QA Lead и Системным архитектором.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"bug_id":        map[string]any{"type": "string", "description": "Уникальный ID багрепорта (например BUG-01)"},
-				"title":         map[string]any{"type": "string", "description": "Краткое название проблемы"},
-				"description":   map[string]any{"type": "string", "description": "Детальное описание: шаги воспроизведения, фактические и ожидаемые результаты, ссылка на контракт"},
-				"task_id":       map[string]any{"type": "string", "description": "ID задачи, в которой найден баг"},
-				"epic_id":       map[string]any{"type": "string", "description": "ID эпика задачи"},
-				"reporter_role": map[string]any{"type": "string", "description": "Твоя роль (например QA Engineer)"},
-			},
-			"required":             []string{"bug_id", "title", "description", "epic_id"},
-			"additionalProperties": false,
-		},
-	}
-}
-func (t *boardCreateBugReportTool) Execute(args map[string]any) ([]byte, error) {
-	if t.b == nil {
-		return boardErr(BoardCreateBug, fmt.Errorf("доска не подключена"))
-	}
-	r := &domain.BugReport{
-		BugID:        strArg(args, "bug_id"),
-		Title:        strArg(args, "title"),
-		Description:  strArg(args, "description"),
-		TaskID:       strArg(args, "task_id"),
-		EpicID:       strArg(args, "epic_id"),
-		ReporterRole: strArg(args, "reporter_role"),
-	}
-	if err := t.b.CreateBugReport(context.Background(), r); err != nil {
-		return boardErrStore(BoardCreateBug, t.b, err)
-	}
-	logging.For(t.b.Project()).Infof("[багрепорт %s] создан: %s (задача %s, эпик %s)", r.BugID, boardTitle(r.Title), r.TaskID, r.EpicID)
-	return boardOK(map[string]any{"bug_id": r.BugID})
-}
-
-type boardSetBugStatusTool struct{ b services.BoardStore }
-
-func (t *boardSetBugStatusTool) Name() string { return BoardSetBugStatus }
-func (t *boardSetBugStatusTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name:        BoardSetBugStatus,
-		Description: "Изменить статус багрепорта в цепочке ревью. QA Lead подтверждает проблему (confirmed) или отклоняет как нейрослоп (slop). Обрабатывает только багрепорты в статусе new.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"bug_id":  map[string]any{"type": "string", "description": "ID багрепорта"},
-				"status":  map[string]any{"type": "string", "description": "confirmed — реальная проблема, slop — нейрослоп"},
-				"comment": map[string]any{"type": "string", "description": "Обоснование вердикта (необязательно)"},
-			},
-			"required":             []string{"bug_id", "status"},
-			"additionalProperties": false,
-		},
-	}
-}
-func (t *boardSetBugStatusTool) Execute(args map[string]any) ([]byte, error) {
-	if t.b == nil {
-		return boardErr(BoardSetBugStatus, fmt.Errorf("доска не подключена"))
-	}
-	ctx := context.Background()
-	id := strArg(args, "bug_id")
-	st := domain.BugStatus(strArg(args, "status"))
-	if st != domain.BugStatusConfirmed && st != domain.BugStatusSlop {
-		return boardErr(BoardSetBugStatus, fmt.Errorf("QA Lead может ставить только confirmed или slop"))
-	}
-	r, err := t.b.GetBugReport(ctx, id)
-	if err != nil {
-		return boardErrStore(BoardSetBugStatus, t.b, err)
-	}
-	if err := t.b.SetBugStatus(ctx, id, st); err != nil {
-		return boardErrStore(BoardSetBugStatus, t.b, err)
-	}
-	logging.For(t.b.Project()).Infof("[багрепорт %s] статус: %s → %s", id, r.Status.Label(), st.Label())
-	return boardOK(map[string]any{"bug_id": id, "status": string(st), "old_status": string(r.Status)})
-}
-
-type boardReviewBugReportTool struct{ b services.BoardStore }
-
-func (t *boardReviewBugReportTool) Name() string { return BoardReviewBug }
-func (t *boardReviewBugReportTool) Definition() ToolDefinition {
-	props := map[string]any{
-		"bug_id":  map[string]any{"type": "string", "description": "ID багрепорта для экспертизы"},
-		"verdict": map[string]any{"type": "string", "description": "fix — чинить (создать эпик исправления); feature — это фича, не баг; wont_fix — чинить не будем"},
-		"comment": map[string]any{"type": "string", "description": "Обоснование экспертизы"},
-	}
-	for k, v := range taskSpecProps() {
-		if k == "task_id" {
-			continue
-		}
-		props["epic_"+k] = v
-	}
-	props["epic_task_id"] = map[string]any{"type": "string", "description": "ID нового эпика исправления (например FIX-01); обязателен при verdict=fix"}
-	props["epic_architecture_summary"] = map[string]any{"type": "string", "description": "Сводка для лида нового эпика исправления"}
-	return ToolDefinition{
-		Name:        BoardReviewBug,
-		Description: "Экспертиза багрепорта Системным архитектором: решить, на какой стороне чинить и стоит ли вообще (можно фича), и при необходимости создать эпик исправления. Обрабатывает только багрепорты в статусе confirmed.",
-		Parameters: map[string]any{
-			"type":                 "object",
-			"properties":           props,
-			"required":             []string{"bug_id", "verdict"},
-			"additionalProperties": false,
-		},
-	}
-}
-func (t *boardReviewBugReportTool) Execute(args map[string]any) ([]byte, error) {
-	if t.b == nil {
-		return boardErr(BoardReviewBug, fmt.Errorf("доска не подключена"))
-	}
-	ctx := context.Background()
-	id := strArg(args, "bug_id")
-	verdict := strings.ToLower(strArg(args, "verdict"))
-	r, err := t.b.GetBugReport(ctx, id)
-	if err != nil {
-		return boardErrStore(BoardReviewBug, t.b, err)
-	}
-
-	switch verdict {
-	case "fix":
-		epicID := strArg(args, "epic_task_id")
-		if epicID == "" {
-			return boardErr(BoardReviewBug, fmt.Errorf("при verdict=fix обязателен epic_task_id для эпика исправления"))
-		}
-		if _, err := t.b.GetEpic(ctx, epicID); err == nil {
-			return boardErr(BoardReviewBug, fmt.Errorf("эпик %q уже существует — выбери другой epic_task_id", epicID))
-		} else if !errors.Is(err, services.ErrNotFound) {
-			return boardErrStore(BoardReviewBug, t.b, err)
-		}
-		ts := parseTaskSpec(epicArgs(args))
-		ts.TaskID = epicID
-		for _, dep := range ts.Dependencies {
-			if err := t.b.ReferenceExists(ctx, dep); err != nil {
-				return boardErr(BoardReviewBug, fmt.Errorf("зависимость %q: %w", dep, err))
-			}
-		}
-		epic := &domain.Epic{
-			TaskSpec: ts,
-			Summary:  strArg(args, "epic_architecture_summary"),
-			Revision: 1,
-		}
-		if err := t.b.CreateEpic(ctx, epic); err != nil {
-			return boardErrStore(BoardReviewBug, t.b, err)
-		}
-		r.Verdict = "fix"
-		r.FixEpicID = epicID
-	case "feature", "wont_fix":
-		r.Verdict = verdict
-	default:
-		return boardErr(BoardReviewBug, fmt.Errorf("неизвестный вердикт %q: используй fix, feature или wont_fix", verdict))
-	}
-	if err := t.b.SetBugStatus(ctx, id, domain.BugStatus(verdict)); err != nil {
-		return boardErrStore(BoardReviewBug, t.b, err)
-	}
-	r.Status = domain.BugStatus(verdict)
-	if err := t.b.SaveBugReport(ctx, r); err != nil {
-		return boardErrStore(BoardReviewBug, t.b, err)
-	}
-	if r.FixEpicID != "" {
-		logging.For(t.b.Project()).Infof("[багрепорт %s] вердикт архитектора: fix — создан эпик исправления %s", id, r.FixEpicID)
-	} else {
-		logging.For(t.b.Project()).Infof("[багрепорт %s] вердикт архитектора: %s", id, r.Verdict)
-	}
-	return boardOK(map[string]any{"bug_id": id, "status": r.Status, "verdict": r.Verdict, "fix_epic_id": r.FixEpicID})
-}
-
-// epicArgs передвигает поля вида "epic_title"/"epic_description" в обычные
-// поля TaskSpec parseTaskSpec.
-func epicArgs(args map[string]any) map[string]any {
-	out := make(map[string]any, len(args))
-	for k, v := range args {
-		if strings.HasPrefix(k, "epic_") {
-			out[strings.TrimPrefix(k, "epic_")] = v
-		}
-	}
-	return out
 }
 
 // flexIntVal конвертирует значение (число/строка) в int.

@@ -69,7 +69,6 @@ type Task struct {
 	UpdatedAt          string          `json:"updated_at"`
 	GitBranch          string          `json:"git_branch,omitempty"`
 	MergeConflictFiles []string        `json:"merge_conflict_files,omitempty"`
-	ResumeStatus       Status          `json:"resume_status,omitempty"`
 	Injections         []Injection     `json:"injections,omitempty"`
 	Comments           Comments        `json:"comments,omitempty"`
 	AgentState         string          `json:"agent_state,omitempty"`

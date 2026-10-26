@@ -122,11 +122,15 @@ func RollbackTask(ctx context.Context, store services.BoardStore, task *domain.T
 	// откатанного кода. Отмена/помощь человека/готово остаются без изменений
 	// (иначе откат тихо воскресил бы отменённую задачу).
 	status := task.Status
-	if status == domain.StatusInProgress {
-		if err := store.SetTaskStatus(ctx, task.TaskID, domain.StatusReady); err != nil {
+	if status == domain.StatusInfra || status == domain.StatusTestCases || status == domain.StatusDevelopment {
+		// FSM запрещает переходы назад: обходим через PatchTask.
+		if err := store.PatchTask(ctx, task.TaskID, func(cur *domain.Task) error {
+			cur.Status = domain.StatusInfra
+			return nil
+		}); err != nil {
 			return RollbackOutcome{}, fmt.Errorf("возврат в очередь: %w", err)
 		}
-		status = domain.StatusReady
+		status = domain.StatusInfra
 	}
 	return RollbackOutcome{SHA: sha, Submodules: submodules, Status: status}, nil
 }

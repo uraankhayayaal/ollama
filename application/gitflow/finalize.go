@@ -144,17 +144,17 @@ func (f *TaskFinalizer) Finalize(ctx context.Context, project string, task *doma
 				return
 			}
 			// LLM не справился — задача НЕ считается выполненной: откат в
-			// in_progress, конфликт виден на доске, специалист решает сам.
+			// development, конфликт виден на доске, специалист решает сам.
 			task.MergeConflictFiles = outcome.ConflictFiles
-			task.Status = domain.StatusInProgress
+			task.Status = domain.StatusDevelopment
 			if serr := f.Host.SaveTask(ctx, task); serr != nil {
 				logging.For(project).Warnf("gitflow: авто-мёрдж %s: запись конфликта на доске: %v", task.TaskID, serr)
 			}
-			f.Host.AppendStatus(fmt.Sprintf("Задача %s: мёрдж в релиз эпика %s не прошёл — конфликт в файлах [%s]. Задача возвращена в in_progress: реши конфликт в своей ветке и повтори мёрдж.",
+			f.Host.AppendStatus(fmt.Sprintf("Задача %s: мёрдж в релиз эпика %s не прошёл — конфликт в файлах [%s]. Задача возвращена в development: реши конфликт в своей ветке и повтори мёрдж.",
 				task.TaskID, task.EpicID, strings.Join(outcome.ConflictFiles, ", ")))
-			// Конфликт не разрешён: задача откачена в in_progress, worktree НЕ
+			// Конфликт не разрешён: задача откачена в development, worktree НЕ
 			// снимаем — специалист решает конфликт в своей ветке.
-			f.Host.EmitBoard("gitflow: авто-мёрдж задачи: конфликт, откат в in_progress")
+			f.Host.EmitBoard("gitflow: авто-мёрдж задачи: конфликт, откат в development")
 			return
 		}
 		logging.For(project).Warnf("gitflow: авто-мёрдж %s: %v", task.TaskID, err)

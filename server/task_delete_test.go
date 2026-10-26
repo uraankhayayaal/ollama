@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"ai/infrastructure/board"
+	"ai/infrastructure/workspace"
 )
 
 // TestHandleDeleteTaskRest — Ф-3/Ф-4: удаление задачи с доски по REST
@@ -73,8 +74,28 @@ func TestHandleDeleteTaskGitRemovesBranch(t *testing.T) {
 	srv, handler, mr := setupGitflow(t, git)
 	ctx := context.Background()
 
-	seedGitflowBoard(t, mr, srv)
-	// У задачи task-1 зарегистрирована ветка (см. seedGitflowBoard).
+	// Создаём задачу в статусе infra (начальный) — чтобы была удаляема.
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	if err := store.CreateEpic(ctx, &board.Epic{
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTask(ctx, &board.Task{
+		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
+		EpicID:   "epic-1",
+		Status:   board.StatusInfra,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
+	if err := srv.reg.SetEpicBranch("myrepo", "epic-1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reg.SetTaskBranch("myrepo", "task-1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+		t.Fatal(err)
+	}
+	// У задачи task-1 зарегистрирована ветка.
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
@@ -84,9 +105,9 @@ func TestHandleDeleteTaskGitRemovesBranch(t *testing.T) {
 	}
 
 	// Задача снята с доски.
-	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
-	defer store.Close()
-	if _, err := store.GetTask(ctx, "task-1"); err == nil {
+	freshStore := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
+	defer freshStore.Close()
+	if _, err := freshStore.GetTask(ctx, "task-1"); err == nil {
 		t.Fatalf("git-задача не удалена с доски")
 	}
 

@@ -34,7 +34,7 @@ func TestAutoCreateEpicBranchOnHook(t *testing.T) {
 	srv.attachGitHooks("myrepo", store)
 
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestAutoCreateTaskBranchOnHook(t *testing.T) {
 	srv.attachGitHooks("myrepo", store)
 
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestAutoCreateTaskBranchSkipsWithoutEpicBranch(t *testing.T) {
 	// создаём (сценарий: эпик без ветки + задача). Сам эпик в хранилище нужен,
 	// иначе CreateTask упрётся в валидацию EpicID.
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +135,9 @@ func TestTaskInProgressCreatesWorktree(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
-		"PUT", "/api/projects/myrepo/tasks/task-1", strings.NewReader(`{"status":"in_progress"}`)))
+		"PUT", "/api/projects/myrepo/tasks/task-1", strings.NewReader(`{"status":"development"}`)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("перевод в in_progress: %d, body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("перевод в development: %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	ref, err := srv.reg.TaskBranch("myrepo", "task-1")
@@ -149,7 +149,7 @@ func TestTaskInProgressCreatesWorktree(t *testing.T) {
 		t.Fatalf("Worktree = %q, want %q", ref.Worktree, want)
 	}
 	if !git.saw("git worktree add " + want) {
-		t.Fatalf("in_progress не создал worktree деревья, вызовы: %v", git.callsList())
+		t.Fatalf("development не создал worktree деревья, вызовы: %v", git.callsList())
 	}
 }
 

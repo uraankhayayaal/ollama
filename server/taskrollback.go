@@ -95,7 +95,7 @@ func (s *Server) handleRollbackTask(w http.ResponseWriter, r *http.Request) {
 	if n := len(out.Submodules); n > 0 {
 		msg += fmt.Sprintf(" (сабмодули: %s)", strings.Join(out.Submodules, ", "))
 	}
-	if out.Status == domain.StatusReady {
+	if out.Status == domain.StatusInfra {
 		msg += "; задача вернулась в очередь"
 	}
 	if sess := s.session(project); sess != nil {

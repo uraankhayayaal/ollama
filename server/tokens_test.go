@@ -180,11 +180,6 @@ func TestReporterWiredIntoSession(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.board.CreateBugReport(ctx, &board.BugReport{
-		BugID: "bug-1", Title: "баг", Description: "описание", EpicID: "epic-1",
-	}); err != nil {
-		t.Fatal(err)
-	}
 
 	if err := sess.start(ctx, "задача", &wiredReporterProvider{t: t}, true); err != nil {
 		t.Fatal(err)

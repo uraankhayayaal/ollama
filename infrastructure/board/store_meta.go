@@ -115,17 +115,6 @@ func (s *Store) AllDone(ctx context.Context) (bool, error) {
 			return false, nil
 		}
 	}
-	// Открытые багрепорты (не прошедшие ревью до терминального статуса)
-	// блокируют решение задачи пользователя.
-	bugs, err := s.ListBugReports(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, b := range bugs {
-		if !b.Status.Terminal() {
-			return false, nil
-		}
-	}
 	// Пустая доска (нет ни эпиков, ни задач) не считается решённой.
 	if len(epics) == 0 && len(tasks) == 0 {
 		return false, nil
@@ -135,16 +124,6 @@ func (s *Store) AllDone(ctx context.Context) (bool, error) {
 
 // FirstNonZeroStatus возвращает первый ненулевой (непустой) статус.
 func FirstNonZeroStatus(values ...Status) Status {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// FirstNonZeroBugStatus возвращает первый ненулевой (непустой) статус багрепорта.
-func FirstNonZeroBugStatus(values ...BugStatus) BugStatus {
 	for _, v := range values {
 		if v != "" {
 			return v

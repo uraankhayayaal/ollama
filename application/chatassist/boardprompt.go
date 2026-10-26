@@ -13,7 +13,6 @@ type BoardView struct {
 	Meta  *domain.Meta
 	Epics []*domain.Epic
 	Tasks []*domain.Task
-	Bugs  []*domain.BugReport
 }
 
 // OrchestrationStatus возвращает строку состояния оркестрации для промпта:
@@ -39,8 +38,8 @@ func BoardRevisionLine(rev uint64) string {
 
 // BoardSummary собирает компактную сводку Kanban-доски для промпта ассистента:
 // исходная задача, эпики, задачи по статусам + список в работе, конфликты
-// мёрджа и баги по статусам. Текст детерминирован и не является новым источником
-// правды: доска доступна ассистенту и напрямую через Board*-инструменты чтения.
+// мёрджа. Текст детерминирован и не является новым источником правды: доска
+// доступна ассистенту и напрямую через Board*-инструменты чтения.
 func BoardSummary(v BoardView) string {
 	var b strings.Builder
 
@@ -63,7 +62,7 @@ func BoardSummary(v BoardView) string {
 	var inProgress []*domain.Task
 	for _, t := range v.Tasks {
 		taskByStatus[t.Status]++
-		if t.Status == domain.StatusInProgress {
+		if t.Status == domain.StatusInfra || t.Status == domain.StatusTestCases || t.Status == domain.StatusDevelopment {
 			inProgress = append(inProgress, t)
 		}
 	}
@@ -71,7 +70,7 @@ func BoardSummary(v BoardView) string {
 		b.WriteString("\nЗадач нет.\n")
 	} else {
 		b.WriteString("\nЗадачи по статусам:\n")
-		for _, st := range []domain.Status{domain.StatusNew, domain.StatusAnalysis, domain.StatusHumanHelp, domain.StatusReady, domain.StatusInProgress, domain.StatusTesting, domain.StatusDone, domain.StatusCancelled} {
+		for _, st := range []domain.Status{domain.StatusInfra, domain.StatusTestCases, domain.StatusDevelopment, domain.StatusDone, domain.StatusCancelled} {
 			if n := taskByStatus[st]; n > 0 {
 				fmt.Fprintf(&b, "- %s: %d\n", st.Label(), n)
 			}
@@ -116,22 +115,6 @@ func BoardSummary(v BoardView) string {
 			fmt.Fprintf(&b, "- задачи (ветка ↔ релиз эпика): %s\n", strings.Join(conflictTasks, "; "))
 		}
 		b.WriteString("НЕ повторяй TaskMerge/EpicRelease при том же конфликте по кругу. Для ЭПИКА (main ↔ релизная ветка) резолв доступен тебе через мосты: ResolveGitConflicts (action=status — конфликтующие файлы и их содержимое, action=start — открыть процесс резолва, action=apply — записать правки) и EpicResolve (приёмка + влитие в main + push, ДЕСТРУКТИВЕН — только после «да»). Для КОНФЛИКТА ЗАДАЧИ (ветка задачи ↔ релизная ветка эпика) автоматического резолва нет — сообщи пользователю файлы и предложи путь (пересоздать ветку задачи, ручной rebase) или спроси через AskUser.\n")
-	}
-
-	// Баги: сводка по статусам.
-	bugByStatus := map[domain.BugStatus]int{}
-	for _, bg := range v.Bugs {
-		bugByStatus[bg.Status]++
-	}
-	if len(v.Bugs) == 0 {
-		b.WriteString("\nБагов нет.\n")
-	} else {
-		b.WriteString("\nБаги:\n")
-		for _, st := range []domain.BugStatus{domain.BugStatusNew, domain.BugStatusConfirmed, domain.BugStatusSlop, domain.BugStatusFix, domain.BugStatusFixed} {
-			if n := bugByStatus[st]; n > 0 {
-				fmt.Fprintf(&b, "- %s: %d\n", st.Label(), n)
-			}
-		}
 	}
 
 	return b.String()

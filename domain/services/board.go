@@ -26,21 +26,13 @@ type BoardStore interface {
 	ListEpics(ctx context.Context) ([]*domain.Epic, error)
 	SetEpicStatus(ctx context.Context, id string, status domain.Status) error
 	DeleteEpic(ctx context.Context, id string) error
-	CreateBugReport(ctx context.Context, bug *domain.BugReport) error
-	GetBugReport(ctx context.Context, id string) (*domain.BugReport, error)
-	SaveBugReport(ctx context.Context, bug *domain.BugReport) error
-	ListBugReports(ctx context.Context) ([]*domain.BugReport, error)
-	SetBugStatus(ctx context.Context, id string, status domain.BugStatus) error
-	SetBugStatusManual(ctx context.Context, id string, status domain.BugStatus) error
-	SetBugPriority(ctx context.Context, id string, priority int) error
 	ReferenceExists(ctx context.Context, id string) error
 	GetMeta(ctx context.Context) (*domain.Meta, error)
 	SaveMeta(ctx context.Context, m *domain.Meta) error
 	EpicCounts(ctx context.Context) (*domain.StatusCounts, error)
 	TaskCounts(ctx context.Context) (*domain.StatusCounts, error)
-	MarkBugsFixedForEpic(ctx context.Context, epicID string) (int, error)
+	AllDone(ctx context.Context) (bool, error)
 	FinalizeTaskTokens(ctx context.Context, id string, in, out int64) error
 	FinalizeEpicTokens(ctx context.Context, id string, in, out int64) error
-	AllDone(ctx context.Context) (bool, error)
 	Project() string
 }

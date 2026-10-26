@@ -87,7 +87,7 @@ func newDoneGuardFixture(t *testing.T) *doneGuardFixture {
 	if err := store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{TaskID: "e1", Title: "эпик"}}); err != nil {
 		t.Fatal(err)
 	}
-	task := &board.Task{TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1}, EpicID: "e1", Status: board.StatusInProgress}
+	task := &board.Task{TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1}, EpicID: "e1", Status: board.StatusDevelopment}
 	if err := store.CreateTask(ctx, task); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestGuardTaskDoneBlocksEmptyTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != board.StatusInProgress {
+	if got.Status != board.StatusDevelopment {
 		t.Fatalf("статус после отказа = %q, ожидался in_progress", got.Status)
 	}
 }

@@ -188,10 +188,6 @@ func newTool(name string, deps Deps) Tool {
 		return &boardListTasksTool{b: deps.Board}
 	case BoardGetTask:
 		return &boardGetTaskTool{b: deps.Board}
-	case BoardListBugs:
-		return &boardListBugsTool{b: deps.Board}
-	case BoardGetBug:
-		return &boardGetBugTool{b: deps.Board}
 	case BoardCreateEpic:
 		return &boardCreateEpicTool{b: deps.Board}
 	case BoardUpdateEpic:
@@ -208,12 +204,6 @@ func newTool(name string, deps Deps) Tool {
 		return &boardDeleteTaskTool{b: deps.Board}
 	case BoardSetTaskStatus:
 		return &boardSetTaskStatusTool{b: deps.Board, ops: deps.FileOps}
-	case BoardCreateBug:
-		return &boardCreateBugReportTool{b: deps.Board}
-	case BoardSetBugStatus:
-		return &boardSetBugStatusTool{b: deps.Board}
-	case BoardReviewBug:
-		return &boardReviewBugReportTool{b: deps.Board}
 	case BoardAddComment:
 		return &boardAddCommentTool{b: deps.Board}
 	}

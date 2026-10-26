@@ -227,6 +227,9 @@ func (d *base) SetBoardStore(s services.BoardStore) {
 	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s, RAG: d.RAG})
 }
 
+// GetBoard возвращает подключённую доску (nil — standalone-режим).
+func (d *base) GetBoard() services.BoardStore { return d.Store }
+
 // Label возвращает человекочитаемое имя агента для чата.
 func (b *base) Label() string {
 	if b.label != "" {

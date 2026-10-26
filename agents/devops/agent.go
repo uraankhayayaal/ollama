@@ -61,6 +61,9 @@ func (d *Devops) SetBoardStore(s services.BoardStore) {
 	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s})
 }
 
+// GetBoard возвращает подключённую доску (nil — standalone-режим).
+func (d *Devops) GetBoard() services.BoardStore { return d.Store }
+
 // Label возвращает человекочитаемое имя агента для чата.
 func (d *Devops) Label() string { return "DevOps-инженер" }
 

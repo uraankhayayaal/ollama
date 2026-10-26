@@ -42,10 +42,9 @@ var toolNames = []string{
 	"List", "ReadFiles",
 	tools.LspDefinition, tools.LspReferences, tools.LspHover,
 	tools.CodeSearch, tools.RagIndexStatus, tools.DetectStack,
-	tools.BoardListEpics, tools.BoardListTasks, tools.BoardListBugs, tools.BoardGetBug,
+	tools.BoardListEpics, tools.BoardListTasks,
 	tools.BoardGetEpic, tools.BoardGetTask,
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
-	tools.BoardReviewBug,
 	"WriteFiles", "Run",
 }
 
@@ -62,10 +61,6 @@ type Architect struct {
 	// RAG — клиент векторной памяти (CodeSearch + блок «релевантный код» в
 	// промпте). Опционален: nil — инструменты деградируют в skipped, блока нет.
 	RAG services.Searcher
-	// ReviewMode — режим экспертизы багрепортов (фаза phaseBugs оркестратора):
-	// обязательный первый раунд submit_architecture_backlog отключается,
-	// системный промпт меняется на экспертную оценку багов.
-	ReviewMode bool
 	// ReviewerMode — режим Ф-8: ревизия эпиков-черновиков (RequiresReview)
 	// перед их декомпозицией. Обязательный инструмент отключается, системный
 	// промпт меняется, инструмент submit_architecture_backlog не объявляется.
@@ -111,14 +106,6 @@ func (a *Architect) SetRAG(r services.Searcher) *Architect {
 	return a
 }
 
-// AsBugExpert переключает архитектора в режим экспертизы багрепортов:
-// системный промпт меняется, обязательный первый раунд submit_architecture_backlog
-// отключается.
-func (a *Architect) AsBugExpert() *Architect {
-	a.ReviewMode = true
-	return a
-}
-
 // AsReviewer переключает архитектора в режим Ф-8 (ревизия эпиков-черновиков):
 // системный промпт меняется, обязательный первый раунд и инструмент
 // submit_architecture_backlog отключаются.
@@ -154,10 +141,9 @@ func (a *Architect) GetUserMessages() []agents.Message {
 // RequiredToolFirstRound требует, чтобы в первом раунде модель обязательно
 // вызвала submit_architecture_backlog (публикация бэклога), а не ответила
 // текстом. Раннер при необходимости подскажет модели и повторит запрос.
-// В режимах экспертизы багрепортов и ревизии эпиков обязательного
-// инструмента нет.
+// В режиме ревизии эпиков обязательного инструмента нет.
 func (a *Architect) RequiredToolFirstRound() (string, bool) {
-	if a.ReviewMode || a.ReviewerMode {
+	if a.ReviewerMode {
 		return "", false
 	}
 	return SubmitBacklogToolName, true
@@ -170,11 +156,8 @@ func (a *Architect) RequiredToolFirstRound() (string, bool) {
 // ответа — только вызов submit_architecture_backlog.
 func (a *Architect) GetSystemMessages(_ []agents.Message) []agents.Message {
 	prompt := architectureSystemPrompt
-	switch {
-	case a.ReviewerMode:
+	if a.ReviewerMode {
 		prompt = epicReviewSystemPrompt
-	case a.ReviewMode:
-		prompt = bugExpertSystemPrompt
 	}
 	// Этап 4 дал архитектору Run (git add/commit/push структуры в ветку эпика)
 	// и LSP/CodeSearch (чтение кода проекта) — общие фрагменты компактного
@@ -314,37 +297,8 @@ makefile проекта — это корневой Makefile (temp/<проект
 0. Сначала DetectStack — определи фактический стек и состав ролей проекта (назначай эпики только реально нужным лидам) и проверь наличие Makefile (поле makefile/маркер "Makefile"); при его отсутствии — обязательно добавь эпик «Makefile проекта» по контракту выше.
 1. Изучи текущее состояние проекта (если проект существует): сначала CodeSearch/RAG — семантический поиск релевантного кода по задаче (плюс блок «релевантный код» ниже, если есть), затем List → ReadFiles для точного чтения, а для навигации по символам (определение, места использования, сигнатуры) — LspDefinition/LspReferences/LspHover по file:line:col (компактнее чтения файлов целиком). Если CodeSearch вернул skipped со словом про индекс — проверь RagIndexStatus; при пустом индексе предложи построение через AskUser + IndexBackground (правило «RAG-индекс»). Перед эпиком, меняющим существующий функционал, исследуй смежные модули (CodeSearch/LSP/ReadFiles) и зафиксируй их в description как «затронет: ...».
 2. Посмотри состояние доски (BoardListEpics/BoardListTasks), чтобы понимать, что уже сделано.
-3. Спроектируй архитектуру и опубликуй бэклог вызовом submit_architecture_backlog (первичный шаг) либо обнови эпики инструментами BoardUpdateEpic/BoardCreateEpic.
-4. По результату submit_architecture_backlog с workdir — выстрой структуру 1-го уровня и корневые файлы в ветке эпика (WriteFiles в пределах allowlist), закоммить и запусть через Run (правило «Ветка эпика и структура»). Без workdir/note — этот шаг пропускается.
-5. Мониторь доску (BoardListBugs) — рассматривай подтверждённые QA Lead багрепорты (см. правила экспертизы).`
-
-// bugExpertSystemPrompt — режим экспертизы багрепортов: QA Lead подтвердил
-// проблему, архитектор решает, чинить ли, на какой стороне, и создаёт эпик
-// исправления (или отклоняет как фичу).
-const bugExpertSystemPrompt = `Ты — Системный архитектор (System Architect) в режиме экспертизы багрепортов. QA Lead уже отфильтровал «нейрослоп» и передал тебе подтверждённые проблемы (статус confirmed). Твоя задача — решить, чинить ли проблему, на какой стороне это чинить и стоит ли вообще.
-
-Ты работаешь с общей Kanban-доской проекта (инструменты Board*). Перед вердиктом при необходимости изучай код через CodeSearch/RAG; если поиск вернул skipped со словом про индекс — проверь RagIndexStatus и работай ReadFiles/ReadMap/LSP.
-
-### ПРАВИЛА ЭКСПЕРТИЗЫ:
-1. Сначала прочитай багрепорт: BoardGetBug, а для контекста — связанные эпик (BoardGetEpic) и задачу (BoardListTasks), контракты.
-2. Перед вердиктом, если проблема касается существующего кода, — изучи его: CodeSearch/ReadFiles/LSP (что реализовано, как устроено, какие смежные модули затронуты). Не выноси вердикт по догадкам.
-3. Оцени строго по фактам:
-   - Проблема действительно описана и воспроизводима — это БАГ (вердикт fix).
-   - Ожидаемое поведение не зафиксировано контрактом, либо описанное поведение — намеренное — это ФИЧА (вердикт feature).
-   - Проблема реальна, но чинить её дороже, чем польза, либо вне рамок текущей задачи пользователя — НЕ ИСПРАВЛЯЕМ (вердикт wont_fix).
-4. Эпик исправления создавай с полной глубиной: сторона исправления (assigned_role), контракт, тесты, затронутые смежные модули — как и обычные эпики (см. «Глубина декомпозиции»).
-5. Если при экспертизе видишь возможности оптимизации/улучшения для смежных направлений, не входящие в эпик исправления, — зафиксируй их отдельной пометкой «opportunities: <роль> — <предложение>» в описании эпика исправления (рекомендация лидам, не задача).
-6. Порядок разработки сохраняется: сначала инфраструктура, затем приложение, затем тестирование — учитывай это при создании эпика исправления.
-7. При недостаточном/противоречивом описании багрепорта — уточни у пользователя AskUser (если доступен), иначе зафиксируй допущения в параметрах эпика исправления. Не выноси вердикт по догадкам.
-8. MAKEFILE ПРОЕКТА: при эпиках исправления, затрагивающих сборку/тесты/запуск, сверяй, что контракт целей корневого Makefile (build/test/lint/run/e2e + backend-*/frontend-* по составу, инфра-блок up/down/logs/ps/infra.<цель>) актуален и покрыт; отсутствие Makefile не блокирует исправление — фолбэк на стандартные команды.
-
-### ОГРАНИЧЕНИЕ НА ФОРМАТ ОТВЕТА:
-Отвечай ТОЛЬКО вызовом инструмента BoardReviewBugReport для каждого багрепорта (или сопровождающими чтениями BoardGetBug/BoardGetEpic/BoardListTasks). Любой текстовый ответ вместо вызова инструмента — критическая ошибка.
-
-Твой план работы:
-1. Прочитай список подтверждённых багрепортов (BoardListBugs, status=confirmed).
-2. Для каждого: изучи контекст и вынеси вердикт вызовом BoardReviewBugReport.
-3. При вердикте fix — в том же вызове укажи параметры эпика исправления (epic_task_id, epic_title, epic_description, epic_assigned_role, epic_sequence_order, epic_dependencies).`
+ 3. Спроектируй архитектуру и опубликуй бэклог вызовом submit_architecture_backlog (первичный шаг) либо обнови эпики инструментами BoardUpdateEpic/BoardCreateEpic.
+ 4. По результату submit_architecture_backlog с workdir — выстрой структуру 1-го уровня и корневые файлы в ветке эпика (WriteFiles в пределах allowlist), закоммить и запусть через Run (правило «Ветка эпика и структура»). Без workdir/note — этот шаг пропускается.`
 
 // epicReviewSystemPrompt — режим Ф-8: ревизия эпиков-черновиков, созданных на
 // доске вне бэклога архитектора (например, чат-ассистентом). Архитектор

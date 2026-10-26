@@ -143,48 +143,6 @@ func (d *DomainStore) DeleteEpic(ctx context.Context, id string) error {
 	return d.Store.DeleteEpic(ctx, id)
 }
 
-func (d *DomainStore) CreateBugReport(ctx context.Context, bug *domain.BugReport) error {
-	br := boardBugReportFromDomain(bug)
-	return d.Store.CreateBugReport(ctx, br)
-}
-
-func (d *DomainStore) GetBugReport(ctx context.Context, id string) (*domain.BugReport, error) {
-	r, err := d.Store.GetBugReport(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return domainBugReportFromBoard(r), nil
-}
-
-func (d *DomainStore) SaveBugReport(ctx context.Context, bug *domain.BugReport) error {
-	br := boardBugReportFromDomain(bug)
-	return d.Store.SaveBugReport(ctx, br)
-}
-
-func (d *DomainStore) ListBugReports(ctx context.Context) ([]*domain.BugReport, error) {
-	bugs, err := d.Store.ListBugReports(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*domain.BugReport, 0, len(bugs))
-	for _, b := range bugs {
-		out = append(out, domainBugReportFromBoard(b))
-	}
-	return out, nil
-}
-
-func (d *DomainStore) SetBugStatus(ctx context.Context, id string, status domain.BugStatus) error {
-	return d.Store.SetBugStatus(ctx, id, boardBugStatusFromDomain(status))
-}
-
-func (d *DomainStore) SetBugStatusManual(ctx context.Context, id string, status domain.BugStatus) error {
-	return d.Store.SetBugStatusManual(ctx, id, boardBugStatusFromDomain(status))
-}
-
-func (d *DomainStore) SetBugPriority(ctx context.Context, id string, priority int) error {
-	return d.Store.SetBugPriority(ctx, id, priority)
-}
-
 func (d *DomainStore) ReferenceExists(ctx context.Context, id string) error {
 	return d.Store.ReferenceExists(ctx, id)
 }
@@ -197,10 +155,6 @@ func boardStatusFromDomain(s domain.Status) Status {
 	return Status(s)
 }
 
-func boardBugStatusFromDomain(s domain.BugStatus) BugStatus {
-	return BugStatus(s)
-}
-
 func boardTaskFromDomain(t *domain.Task) *Task { return t }
 
 func domainTaskFromBoard(t *Task) *domain.Task { return t }
@@ -208,10 +162,6 @@ func domainTaskFromBoard(t *Task) *domain.Task { return t }
 func boardEpicFromDomain(e *domain.Epic) *Epic { return e }
 
 func domainEpicFromBoard(e *Epic) *domain.Epic { return e }
-
-func boardBugReportFromDomain(b *domain.BugReport) *BugReport { return b }
-
-func domainBugReportFromBoard(b *BugReport) *domain.BugReport { return b }
 
 func boardCommentFromDomain(c domain.Comment) Comment { return c }
 

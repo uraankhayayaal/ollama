@@ -1,18 +1,15 @@
 // Package board реализует организационный паттерн Kanban / Shared Task Board
-// поверх Redis. Хранит общую доску задач проекта: эпики (крупные задачи от
-// Системного архитектора для Тимлидов), задачи (декомпозиция эпиков лидами для
-// рядовых специалистов) и их статусы.
+// поверх Redis. Хранит общую доску задач проекта: эпики (крупные задачи верхнего
+// уровня) и задачи (подзадачи эпиков) и их статусы.
 //
 // Связи:
-//   - Epic — задача верхнего уровня из бэклога Системного архитектора.
-//   - Task — подзадача эпика, создаётся лидом направления.
+//   - Epic — задача верхнего уровня.
+//   - Task — подзадача эпика.
 //   - эпик ссылается на свои задачи (Epic.Tasks), задача — на родительский
 //     эпик (Task.EpicID).
 //
-// Статусы эпиков и задач единые: новая -> в анализе -> готова к работе ->
-// [помощь человека] -> в работе -> на тестирование -> выполнена (или
-// отменена). «Помощь человека» — боковая ветка (эскалации, форсмажоры),
-// «на тестирование» — сдача разработчиком и приёмка тестировщиком.
+// Статусы эпиков: draft → business_review → system_analysis → done (автоматически, когда все задачи done).
+// Статусы задач: infra → test_cases → development → done (строго линейно, Test-First).
 // Переходы валидируются (ValidateTransition).
 package board
 
@@ -24,25 +21,36 @@ import (
 // переходов принадлежат домену (domain.Status / domain.ValidateTransition);
 // здесь — алиасы для совместимости кода доски.
 //
-// Порядок колонок доски: new → analysis → human_help → ready → in_progress →
-// testing → done → cancelled.
+// Порядок колонок доски (эпики): draft → business_review → system_analysis → done.
+// Порядок колонок доски (задачи): infra → test_cases → development → done.
 type Status = domain.Status
 
 const (
-	StatusNew        = domain.StatusNew        // новая
-	StatusAnalysis   = domain.StatusAnalysis   // в анализе
-	StatusReady      = domain.StatusReady      // готова к работе
-	StatusHumanHelp  = domain.StatusHumanHelp  // помощь человека
-	StatusInProgress = domain.StatusInProgress // в работе
-	StatusTesting    = domain.StatusTesting    // на тестирование
-	StatusDone       = domain.StatusDone       // выполнена
-	StatusCancelled  = domain.StatusCancelled  // отменена
+	// Эпики
+	StatusDraft           = domain.StatusDraft           // черновик
+	StatusBusinessReview  = domain.StatusBusinessReview  // бизнес-ревью
+	StatusSystemAnalysis  = domain.StatusSystemAnalysis  // системный анализ
+	// Задачи
+	StatusInfra       = domain.StatusInfra       // инфраструктура
+	StatusTestCases   = domain.StatusTestCases   // написание тестов
+	StatusDevelopment = domain.StatusDevelopment // разработка
+	// Общие
+	StatusDone      = domain.StatusDone      // выполнена
+	StatusCancelled = domain.StatusCancelled // отменена
+)
+
+// EntityType — тип сущности на доске (алиас доменного типа).
+type EntityType = domain.EntityType
+
+const (
+	EntityTypeEpic = domain.EntityTypeEpic
+	EntityTypeTask = domain.EntityTypeTask
 )
 
 // ValidateTransition делегирует доменному конечному автомату статусов
 // (domain.ValidateTransition).
-func ValidateTransition(from, to Status) error {
-	return domain.ValidateTransition(from, to)
+func ValidateTransition(from, to Status, entityType EntityType) error {
+	return domain.ValidateTransition(from, to, entityType)
 }
 
 // StatusError — ошибка некорректного перехода статуса (доменный тип).
@@ -97,42 +105,6 @@ const (
 // коммит, после которого проверка была зелёной («снести всё» и «вернуться к
 // рабочему» — два разных отката).
 type TaskCheckpoint = domain.TaskCheckpoint
-
-// BugStatus — статус багрепорта на общей доске. Тип принадлежит домену
-// (domain.BugStatus), здесь — алиас.
-type BugStatus = domain.BugStatus
-
-// Статусы багрепортов: цепочка ревью QA Lead -> экспертиза Системного
-// архитектора. Терминальные статусы переходов не имеют.
-const (
-	BugStatusNew       = domain.BugStatusNew
-	BugStatusConfirmed = domain.BugStatusConfirmed
-	BugStatusSlop      = domain.BugStatusSlop
-	BugStatusFix       = domain.BugStatusFix
-	BugStatusFeature   = domain.BugStatusFeature
-	BugStatusWontFix   = domain.BugStatusWontFix
-	BugStatusFixed     = domain.BugStatusFixed
-)
-
-// ValidateBugTransition — алиас domain.ValidateBugTransition (допустимость
-// перехода статуса багрепорта).
-func ValidateBugTransition(from, to BugStatus) error {
-	return domain.ValidateBugTransition(from, to)
-}
-
-// ValidateBugTransitionManual — алиас domain.ValidateBugTransitionManual
-// (допустимость ручной смены статуса багрепорта оператором).
-func ValidateBugTransitionManual(from, to BugStatus) error {
-	return domain.ValidateBugTransitionManual(from, to)
-}
-
-// BugStatusError — ошибка некорректного перехода статуса багрепорта.
-// Тип принадлежит домену (domain.BugStatusError), здесь — алиас.
-type BugStatusError = domain.BugStatusError
-
-// BugReport — багрепорт с общей доски. Тип принадлежит домену
-// (domain.BugReport), здесь — алиас.
-type BugReport = domain.BugReport
 
 // Meta — метаданные доски проекта: исходная задача пользователя и общий
 // статус решения (done — все эпики и задачи успешно выполнены). Тип принадлежит

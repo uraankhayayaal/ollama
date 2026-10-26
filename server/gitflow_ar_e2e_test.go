@@ -122,7 +122,7 @@ func TestTaskLLMResolveE2E(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
 	defer store.Close()
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}

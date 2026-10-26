@@ -85,6 +85,9 @@ func (l *BackendLead) SetBoardStore(s services.BoardStore) {
 	l.SetTools(backendLeadToolNames, tools.Deps{Board: s})
 }
 
+// GetBoard возвращает подключённую доску (nil — standalone-режим).
+func (l *BackendLead) GetBoard() services.BoardStore { return l.Store }
+
 // newBackendLead создаёт агента в заданной директории: собирает *tools.FileOps
 // (лимиты записи берутся из конфига) и выбирает из реестра инструменты агента.
 // Используется всеми конструкторами.

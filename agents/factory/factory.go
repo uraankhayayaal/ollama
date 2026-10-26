@@ -106,10 +106,6 @@ func (architectFactory) ArchitectReviewer(project, prompt string, store services
 	return architect.NewArchitectWithStore(project, prompt, store).AsReviewer()
 }
 
-func (architectFactory) ArchitectBugExpert(project, prompt string, store services.BoardStore) agents.Agent {
-	return architect.NewArchitectWithStore(project, prompt, store).AsBugExpert()
-}
-
 func (architectFactory) ConfigureArchitect(a agents.Agent, searcher services.Searcher, extras ...services.Tool) agents.Agent {
 	arch, ok := a.(*architect.Architect)
 	if !ok {

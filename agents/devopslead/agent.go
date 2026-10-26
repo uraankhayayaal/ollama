@@ -92,6 +92,9 @@ func (d *DevopsLead) SetBoardStore(s services.BoardStore) {
 	d.SetTools(leadToolNames, tools.Deps{Board: s})
 }
 
+// GetBoard возвращает подключённую доску (nil — standalone-режим).
+func (d *DevopsLead) GetBoard() services.BoardStore { return d.Store }
+
 func (d *DevopsLead) RequiredToolFirstRound() (string, bool) {
 	return "", false
 }

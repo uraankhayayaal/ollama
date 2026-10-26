@@ -23,14 +23,9 @@ var qaToolNames = []string{
 
 // qaBoardToolNames — инструменты общей Kanban-доски, добавляемые
 // QA-инженеру, когда оркестратор Kanban подключает доску (SetBoardStore):
-// чтение своей задачи, смена её статуса, публикация багрепортов, а также
-// инструменты QA-лида (тот же агент в роли лида направления): чтение
-// багрепортов и их триаж new → confirmed/slop (BoardSetBugStatus).
-// BoardSetBugStatus раньше жил в отдельном пакете agents/qalead; после
-// объединения лида в qaengineer (commit 6968e2a) триаж остался без инструмента.
+// чтение своей задачи, смена её статуса, комментарии.
 var qaBoardToolNames = []string{
-	tools.BoardGetTask, tools.BoardSetTaskStatus, tools.BoardCreateBug,
-	tools.BoardListBugs, tools.BoardGetBug, tools.BoardSetBugStatus, tools.BoardAddComment,
+	tools.BoardGetTask, tools.BoardSetTaskStatus, tools.BoardAddComment,
 }
 
 // QAEngineer — агент QA Engineer и приёмки (объединение QA и acceptor).
@@ -78,6 +73,9 @@ func (q *QAEngineer) SetBoardStore(s services.BoardStore) {
 	names := append(append([]string{}, qaToolNames...), qaBoardToolNames...)
 	q.Tools = tools.Select(names, tools.Deps{FileOps: q.FileOps, Board: s})
 }
+
+// GetBoard возвращает подключённую доску (nil — standalone-режим).
+func (q *QAEngineer) GetBoard() services.BoardStore { return q.Store }
 
 // NewQAEngineer создаёт QA-инженера в общей для всех агентов выходной папке
 // temp/<projectName> в корне модуля. projectName — имя проекта, задаётся

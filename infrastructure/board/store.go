@@ -123,14 +123,9 @@ func (s *Store) epicsID() string { return s.key("epics") }
 // tasksID — set-ключ с ID задач проекта.
 func (s *Store) tasksID() string { return s.key("tasks") }
 
-// bugsID — set-ключ с ID багрепортов проекта.
-func (s *Store) bugsID() string { return s.key("bugs") }
-
 func (s *Store) epicKey(id string) string { return s.key("epic:" + id) }
 
 func (s *Store) taskKey(id string) string { return s.key("task:" + id) }
-
-func (s *Store) bugKey(id string) string { return s.key("bug:" + id) }
 
 func (s *Store) metaKey() string { return s.key("meta") }
 

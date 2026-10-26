@@ -2,53 +2,62 @@ package domain
 
 import "fmt"
 
-// Status — статус эпика или задачи на Kanban-доске. Порядок колонок:
-// new → analysis → human_help → ready → in_progress → testing → done →
-// cancelled. Конечный автомат переходов — ValidateTransition.
+// EntityType — тип записи на доске: эпик или задача.
+// Каждая сущность имеет свой конечный автомат переходов (ValidateTransition).
+type EntityType string
+
+const (
+	EntityTypeEpic EntityType = "epic"
+	EntityTypeTask EntityType = "task"
+)
+
+// Status — статус эпика или задачи на Kanban-доске.
+//
+// Эпики: draft → business_review → system_analysis → done (автоматически, когда все задачи done)
+// Задачи: infra → test_cases → development → done (строго линейно)
+// Конечный автомат переходов — ValidateTransition.
 type Status string
 
 const (
-	StatusNew        Status = "new"
-	StatusAnalysis   Status = "analysis"
-	StatusReady      Status = "ready"
-	StatusHumanHelp  Status = "human_help"
-	StatusInProgress Status = "in_progress"
-	StatusTesting    Status = "testing"
-	StatusDone       Status = "done"
-	StatusCancelled  Status = "cancelled"
-	// StatusPaused — устаревший статус (заменён на human_help), оставлен для
-	// совместимости разбора старых снимков доски.
-	StatusPaused Status = "paused"
+	// Эпики
+	StatusDraft           Status = "draft"
+	StatusBusinessReview  Status = "business_review"
+	StatusSystemAnalysis  Status = "system_analysis"
+	// Задачи (Test-First)
+	StatusInfra       Status = "infra"
+	StatusTestCases   Status = "test_cases"
+	StatusDevelopment Status = "development"
+	// Общие
+	StatusDone    Status = "done"
+	StatusCancelled Status = "cancelled"
 )
 
 // Label возвращает человекочитаемое название статуса (для логов/UI).
 func (s Status) Label() string {
 	switch s {
-	case StatusNew:
-		return "новая"
-	case StatusAnalysis:
-		return "в анализе"
-	case StatusReady:
-		return "готова к работе"
-	case StatusHumanHelp:
-		return "помощь человека"
-	case StatusInProgress:
-		return "в работе"
-	case StatusTesting:
-		return "на тестирование"
+	case StatusDraft:
+		return "черновик"
+	case StatusBusinessReview:
+		return "бизнес-ревью"
+	case StatusSystemAnalysis:
+		return "системный анализ"
+	case StatusInfra:
+		return "инфраструктура"
+	case StatusTestCases:
+		return "написание тестов"
+	case StatusDevelopment:
+		return "разработка"
 	case StatusDone:
 		return "выполнена"
 	case StatusCancelled:
 		return "отменена"
-	case StatusPaused:
-		return "пауза"
 	default:
 		return string(s)
 	}
 }
 
 // Terminal сообщает, является ли статус завершающим (дальнейшие переходы
-// запрещены). «Помощь человека» — боковая ветка, не терминальна.
+// запрещены).
 func (s Status) Terminal() bool {
 	return s == StatusDone || s == StatusCancelled
 }
@@ -56,80 +65,99 @@ func (s Status) Terminal() bool {
 // Valid проверяет, что статус известен системе.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusNew, StatusAnalysis, StatusReady, StatusHumanHelp,
-		StatusInProgress, StatusTesting, StatusDone, StatusCancelled, StatusPaused:
+	case StatusDraft, StatusBusinessReview, StatusSystemAnalysis,
+		StatusInfra, StatusTestCases, StatusDevelopment,
+		StatusDone, StatusCancelled:
 		return true
 	}
 	return false
 }
 
 // ValidateTransition проверяет допустимость перехода from -> to по конечному
-// автомату статусов Kanban-доски:
+// автомату статусов Kanban-доски.
 //
-//	новая           -> в анализе, помощь человеку, отменена
-//	в анализе       -> готова к работе, помощь человеку, отменена
-//	готова к работе -> в работе, помощь человеку, отменена
-//	помощь человека -> готова к работе, в работе, отменена
-//	в работе        -> готова к работе, на тестирование, помощь человеку,
-//	                   выполнена, отменена
-//	на тестирование -> в работе, готова к работе, выполнена, помощь
-//	                   человеку, отмена
-//	(терминальные: выполнена/отменена переходов не имеют)
+// Эпики:
 //
-// «Помощь человека» — боковая ветка: вход из любого нетерминального статуса,
-// выход только обратно в работу. Отмена доступна из любого нетерминального
-// статуса. Одинаковый статус не считается переходом (идемпотентность).
-// «На тестирование» → «готова к работе» — возврат в очередь: тестирование не
-// подтвердило результат (гард отклонил done «phantom done», прогон оборвался
-// без смены статуса), задача должна быть взята заново с эскалацией.
-func ValidateTransition(from, to Status) error {
+//	draft            -> business_review, cancelled
+//	business_review  -> system_analysis, draft, cancelled
+//	system_analysis  -> done, cancelled
+//	(терминальные: done/cancelled переходов не имеют)
+//
+// Задачи (строго линейно):
+//
+//	infra        -> test_cases, cancelled
+//	test_cases   -> development, cancelled
+//	development  -> done, cancelled
+//	(терминальные: done/cancelled переходов не имеют)
+//
+// Переходов назад нет. Отмена доступна из любого нетерминального статуса.
+// Одинаковый статус не считается переходом (идемпотентность).
+func ValidateTransition(from, to Status, entityType EntityType) error {
 	if from == to {
 		return nil
 	}
 	if !from.Valid() || !to.Valid() {
-		return &StatusError{From: from, To: to, Reason: "неизвестный статус"}
+		return &StatusError{From: from, To: to, EntityType: entityType, Reason: "неизвестный статус"}
 	}
-	if !from.Terminal() && (to == StatusHumanHelp || to == StatusCancelled) {
+	if !from.Terminal() && to == StatusCancelled {
 		return nil
 	}
+	switch entityType {
+	case EntityTypeEpic:
+		return validateEpic(from, to)
+	case EntityTypeTask:
+		return validateTask(from, to)
+	default:
+		return &StatusError{From: from, To: to, EntityType: entityType, Reason: "неизвестный тип сущности"}
+	}
+}
+
+func validateEpic(from, to Status) error {
 	switch from {
-	case StatusNew:
-		if to == StatusAnalysis {
+	case StatusDraft:
+		if to == StatusBusinessReview {
 			return nil
 		}
-	case StatusAnalysis:
-		if to == StatusReady {
+	case StatusBusinessReview:
+		if to == StatusSystemAnalysis || to == StatusDraft {
 			return nil
 		}
-	case StatusReady:
-		if to == StatusInProgress {
-			return nil
-		}
-	case StatusHumanHelp:
-		if to == StatusReady || to == StatusInProgress {
-			return nil
-		}
-	case StatusInProgress:
-		if to == StatusReady || to == StatusTesting || to == StatusDone {
-			return nil
-		}
-	case StatusTesting:
-		if to == StatusInProgress || to == StatusDone || to == StatusReady {
+	case StatusSystemAnalysis:
+		if to == StatusDone {
 			return nil
 		}
 	}
-	return &StatusError{From: from, To: to, Reason: "переход не разрешён конечным автоматом"}
+	return &StatusError{From: from, To: to, EntityType: EntityTypeEpic, Reason: "переход не разрешён конечным автоматом эпиков"}
+}
+
+func validateTask(from, to Status) error {
+	switch from {
+	case StatusInfra:
+		if to == StatusTestCases {
+			return nil
+		}
+	case StatusTestCases:
+		if to == StatusDevelopment {
+			return nil
+		}
+	case StatusDevelopment:
+		if to == StatusDone {
+			return nil
+		}
+	}
+	return &StatusError{From: from, To: to, EntityType: EntityTypeTask, Reason: "переход не разрешён конечным автоматом задач"}
 }
 
 // StatusError — ошибка некорректного перехода статуса.
 type StatusError struct {
-	From   Status
-	To     Status
-	Reason string
+	From       Status
+	To         Status
+	EntityType EntityType
+	Reason     string
 }
 
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("переход статуса %s -> %s запрещён: %s", e.From.Label(), e.To.Label(), e.Reason)
+	return fmt.Sprintf("переход статуса %s (%s) -> %s запрещён: %s", e.From.Label(), e.EntityType, e.To.Label(), e.Reason)
 }
 
 // StatusCounts — распределение записей доски по статусам.

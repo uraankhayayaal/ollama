@@ -97,8 +97,8 @@ func TestEscalateRetriesWithinBudget(t *testing.T) {
 	if stopReason != "" {
 		t.Errorf("в пределах бюджета stopReason не ставится, получено %q", stopReason)
 	}
-	if len(store.statuses) != 1 || store.statuses[0] != domain.StatusReady {
-		t.Errorf("статусы = %v, ожидался [ready]", store.statuses)
+	if len(store.statuses) != 0 {
+		t.Errorf("в пределах бюджета SetTaskStatus не вызывается: %+v", store.statuses)
 	}
 	if statusCalls == "" {
 		t.Error("аудит эскалации не отправлен в чат/лог")
@@ -124,8 +124,8 @@ func TestEscalateStopsAndAsksHumanWhenBudgetExhausted(t *testing.T) {
 	if !ok {
 		t.Fatal("остановка задачи — тоже «прогресс» раунда (иначе цикл упадёт)")
 	}
-	if store.task.Status != domain.StatusHumanHelp {
-		t.Errorf("статус = %q, ожидался human_help", store.task.Status)
+	if store.task.Status != domain.StatusCancelled {
+		t.Errorf("статус = %q, ожидался cancelled", store.task.Status)
 	}
 	if !strings.Contains(store.task.PauseReason, "Бюджет автономии исчерпан") {
 		t.Errorf("причина остановки не записана: %q", store.task.PauseReason)

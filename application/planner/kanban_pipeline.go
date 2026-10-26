@@ -26,12 +26,12 @@ func (k *KanbanRunner) runBoardOnly(ctx context.Context) error {
 			return fmt.Errorf("исчерпан бюджет Kanban-раундов (%d), работа по доске не завершена, доска: %s",
 				maxKanbanRounds, k.boardSummary(ctx))
 		}
-		// Watchdog по heartbeat (Ф-6, 4.1): после «в режиме ожидания» на доске
+		// Watchdog по heartbeat: после «в режиме ожидания» на доске
 		// могли остаться задачи «в работе» — их тоже нужно вернуть в очередь.
 		if n, err := k.recoverStuckTasks(ctx); err != nil {
 			return err
 		} else if n > 0 {
-			k.status("[Kanban] зависших «в работе» задач возвращено в очередь: %d", n)
+			k.status("[Kanban] зависших задач возвращено в очередь: %d", n)
 		}
 		progress, err := k.runPhases(ctx)
 		if err != nil {
@@ -61,11 +61,6 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 	progress := false
 
 	if !k.boardOnly {
-		// Архитектура: эпики -> затвор HITL «утвердить эпики» (перед
-		// декомпозицией лидами). Затвор срабатывает только в раунде, где
-		// архитектор что-то опубликовал (phaseArchitect вернул true) — в
-		// последующих раундах эпики уже есть, и повторного подтверждения
-		// не требуется.
 		p, err := k.phaseArchitect(ctx)
 		if err != nil {
 			return false, err
@@ -80,17 +75,13 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 
 	// Ревизия эпиков-черновиков (Ф-8): эпики с RequiresReview=true проверяются
 	// Системным архитектором в режиме ревизии ПЕРЕД декомпозицией лидами.
-	// Работает в обоих режимах (обычном и board-only): чат-ассистент создаёт
-	// черновики на доске в любом из них. Фаза снимает флаг RequiresReview —
-	// и только после этого лид может декомпозировать эпик.
 	p, err := k.phaseArchitectReview(ctx)
 	if err != nil {
 		return false, err
 	}
 	progress = progress || p
 
-	// Декомпозиция лидами: в board-only обрабатываются эпики, уже лежащие на
-	// доске (созданные чатом/вручную, но ещё без задач), а также их ревизия.
+	// Декомпозиция лидами.
 	p, err = k.phaseLeads(ctx)
 	if err != nil {
 		return false, err
@@ -98,9 +89,7 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 	progress = progress || p
 
 	// Готовность к работе -> затвор HITL «утвердить задачи» (перед
-	// раздачей специалистам). Срабатывает в раунде, где появились новые
-	// готовые задачи; уже подтверждённые потоки в следующих раундах
-	// исполняются без повторного подтверждения.
+	// раздачей специалистам).
 	p, err = k.phaseReady(ctx)
 	if err != nil {
 		return false, err
@@ -119,30 +108,14 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 	}
 	progress = progress || p
 
-	// Фаза «На тестирование»: задачи в testing доводит тестировщик/специалист.
-	p, err = k.phaseTesting(ctx)
-	if err != nil {
-		return false, err
-	}
-	progress = progress || p
-
-	// Багрепорты и финализация эпиков.
-	p, err = k.phaseBugs(ctx)
-	if err != nil {
-		return false, err
-	}
-	progress = progress || p
-
+	// Финализация эпиков.
 	p, err = k.phaseComplete(ctx)
 	if err != nil {
 		return false, err
 	}
 
 	// Ф-3: проход по доске, фиксирующий факт расхода токенов по всем
-	// терминальным единицам. Основные точки фиксации — конец phaseExecute и
-	// phaseComplete; проход закрывает переходы, сделанные помимо оркестратора
-	// (специалист, чат-ассистент, человек в Web UI). Идемпотентен, ошибки учёта
-	// не роняют цикл.
+	// терминальным единицам. Идемпотентен, ошибки учёта не роняют цикл.
 	k.finalizeTokens(ctx)
 
 	return progress || p, nil
@@ -169,8 +142,6 @@ func (k *KanbanRunner) finishIfAllDone(ctx context.Context) (bool, error) {
 
 // waitForWork опрашивает доску в режиме ожидания: возврат, как только на ней
 // появляется работа, которую можно взять (или отменён контекст — остановка).
-// Опрос раз в standbyPoll дополнен событийным Wake: сервер будит runner по
-// board_changed, так что новая работа подхватывается сразу, а не с задержкой.
 func (k *KanbanRunner) waitForWork(ctx context.Context) error {
 	ticker := time.NewTicker(standbyPoll)
 	defer ticker.Stop()
@@ -199,46 +170,16 @@ func (k *KanbanRunner) waitForWork(ctx context.Context) error {
 }
 
 // hasWork сообщает, есть ли на доске что взять в работу БЕЗ создания новых
-// записей: готовая/работающая задача, задача, которую phaseReady способен
-// продвинуть (зависимости и фаза-гейт пройдены), эпик, которому нужна
-// декомпозиция/ревизия лида или который готов к финализации, либо багрепорт,
-// требующий триажа/экспертизы.
+// записей: активная задача, эпик, которому нужна декомпозиция или финализация.
 func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
 		return false, err
 	}
 	for _, t := range tasks {
-		// «Помощь человека» и «на тестирование» работой не считаются:
-		// human_help ждёт ручного выхода, testing возьмёт phaseTesting
-		// (этап 7 плана) — пока фазы нет, такие статусы не должны ни
-		// будить runner, ни давать «прогресс» циклу (иначе — кручение
-		// без результата).
 		switch t.Status {
-		case domain.StatusReady, domain.StatusInProgress:
+		case domain.StatusInfra, domain.StatusTestCases, domain.StatusDevelopment:
 			ok, err := k.epicWorkable(ctx, t.EpicID)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				return true, nil
-			}
-		case domain.StatusNew, domain.StatusAnalysis:
-			ok, err := k.epicWorkable(ctx, t.EpicID)
-			if err != nil {
-				return false, err
-			}
-			if !ok {
-				continue
-			}
-			ok, err = k.depsDone(ctx, t)
-			if err != nil {
-				return false, err
-			}
-			if !ok {
-				continue
-			}
-			ok, err = k.phasePrereqSatisfied(ctx, t)
 			if err != nil {
 				return false, err
 			}
@@ -253,11 +194,9 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, e := range epics {
-		if e.Status.Terminal() || e.Status == domain.StatusHumanHelp {
+		if e.Status.Terminal() {
 			continue
 		}
-		// Эпик без задач (или с необработанной ревизией) — работа для лида:
-		// в board-only он декомпозируется, после чего задачи пойдут в исполнение.
 		if len(e.Tasks) == 0 || e.Revision > e.LeadSyncedRev {
 			return true, nil
 		}
@@ -269,37 +208,25 @@ func (k *KanbanRunner) hasWork(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
-
-	bugs, err := k.store.ListBugReports(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, b := range bugs {
-		if b.Status == domain.BugStatusNew || b.Status == domain.BugStatusConfirmed {
-			return true, nil
-		}
-	}
 	return false, nil
 }
 
-// epicWorkable сообщает, можно ли брать в работу задачи эпика: эпик существует
-// и не находится на «помощи человека»/в отмене/выполнен. Остановленные и
-// отменённые эпики «замораживают» свои задачи — оркестратор их не трогает
-// (код/ветки остаются на месте, позже можно возобновить). Отсутствующий эпик —
-// «нет работы» (задача-сирота без родителя исполняться не должна).
+// epicWorkable сообщает, можно ли брать в работу задачи эпика: эпик существует,
+// не отменён и не выполнен. Отсутствующий эпик — задача может работать
+// автономно (нет родителя).
 func (k *KanbanRunner) epicWorkable(ctx context.Context, epicID string) (bool, error) {
 	if epicID == "" {
-		return false, nil
+		return true, nil
 	}
 	e, err := k.store.GetEpic(ctx, epicID)
 	if err != nil {
 		if errors.Is(err, services.ErrNotFound) {
-			return false, nil
+			return true, nil
 		}
 		return false, err
 	}
 	switch e.Status {
-	case domain.StatusHumanHelp, domain.StatusCancelled, domain.StatusDone:
+	case domain.StatusCancelled, domain.StatusDone:
 		return false, nil
 	}
 	return true, nil
@@ -318,14 +245,14 @@ func (k *KanbanRunner) setStandby(v bool) {
 func (k *KanbanRunner) ensureMeta(ctx context.Context, projectName, taskText string) error {
 	meta, err := k.store.GetMeta(ctx)
 	if errors.Is(err, services.ErrNotFound) {
-		meta = &domain.Meta{ProjectName: projectName, Task: taskText, Status: domain.StatusNew}
+		meta = &domain.Meta{ProjectName: projectName, Task: taskText, Status: domain.StatusDraft}
 		if err := k.store.SaveMeta(ctx, meta); err != nil {
 			return err
 		}
 		k.log.Infof("[доска] проект %q создан: %s", projectName, truncateText(taskText, 80))
 	}
 	if meta.Status != domain.StatusDone {
-		meta.Status = domain.StatusInProgress
+		meta.Status = domain.StatusSystemAnalysis
 		return k.store.SaveMeta(ctx, meta)
 	}
 	return nil
@@ -342,10 +269,10 @@ func (k *KanbanRunner) touchMeta(ctx context.Context) error {
 		}
 		return err
 	}
-	if meta == nil || meta.Status.Terminal() || meta.Status == domain.StatusInProgress {
+	if meta == nil || meta.Status.Terminal() || meta.Status == domain.StatusSystemAnalysis {
 		return nil
 	}
-	meta.Status = domain.StatusInProgress
+	meta.Status = domain.StatusSystemAnalysis
 	if err := k.store.SaveMeta(ctx, meta); err != nil {
 		return err
 	}
@@ -356,8 +283,7 @@ func (k *KanbanRunner) touchMeta(ctx context.Context) error {
 // staleTaskMinDefault — сколько ждать пульса задачи, прежде чем считать прогон
 // брошенным. Heartbeat обновляет агент каждый раунд (Ф-6, этап 2), поэтому
 // порог — «заметно дольше одного раунда», а не точное время. Перекрывается
-// переменной KANBAN_STALE_TASK_MIN; 0 отключает порог (тогда брошенной
-// считается любая задача вне active).
+// переменной KANBAN_STALE_TASK_MIN; 0 отключает порог.
 const staleTaskMinDefault = 30
 
 func staleTaskAfter() time.Duration {
@@ -369,28 +295,9 @@ func staleTaskAfter() time.Duration {
 	return staleTaskMinDefault * time.Minute
 }
 
-// recoverStuckTasks возвращает в «готова к работе» задачи, зависшие «в работе».
-// Иначе их никто не исполнит (phaseExecute берёт только готовые), а
-// незавершённая задача блокирует и pipeline (очередь лидов), и финализацию
+// recoverStuckTasks возвращает в очередь задачи, зависшие в активной фазе.
+// Иначе их никто не исполнит, а незавершённая задача блокирует финализацию
 // эпиков — цикл падал бы с «нет прогресса».
-//
-// Решение принимается по двум сигналам, а не «сбросить всё подряд» (Ф-6,
-// этап 4.1):
-//
-//   - задача, которую выполняет ЭТОТ раннер (k.active), жива по определению;
-//   - задача со СВЕЖИМ heartbeat принадлежит живому прогону (другой процесс
-//     оркестрации, ещё работающий агент) — её не трогаем. Прежний код
-//     полагался на «в этом раунде своих in_progress ещё нет», из-за чего два
-//     запуска одного проекта мешали друг другу.
-//
-// Всё остальное — брошено: пульс старше порога либо его нет вовсе (задача
-// старше State Tracking или агент не отчитывался). Переход «в работе» →
-// «готова к работе» теперь разрешён конечным автоматом (см. board/entity.go),
-// поэтому статус идёт через SetTaskStatus, а не в обход валидации.
-//
-// «Помощь человека» и «на тестирование» сюда НЕ попадают: human_help снимается
-// только вручную (иначе авто-цикл заменил бы собой ручной разбор), testing
-// ждёт тестировщика.
 func (k *KanbanRunner) recoverStuckTasks(ctx context.Context) (int, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
@@ -399,7 +306,7 @@ func (k *KanbanRunner) recoverStuckTasks(ctx context.Context) (int, error) {
 	stale := staleTaskAfter()
 	reset := 0
 	for _, t := range tasks {
-		if t.Status != domain.StatusInProgress {
+		if t.Status != domain.StatusDevelopment && t.Status != domain.StatusTestCases && t.Status != domain.StatusInfra {
 			continue
 		}
 		if k.isActive(t.TaskID) {
@@ -412,17 +319,24 @@ func (k *KanbanRunner) recoverStuckTasks(ctx context.Context) (int, error) {
 			case err != nil:
 				reason = fmt.Sprintf("нечитаемый пульс %q", hb)
 			case stale > 0 && time.Since(age) < stale:
-				k.log.Detailf("[задача %s] «в работе», пульс %s назад — не трогаем (живой прогон)",
+				k.log.Detailf("[задача %s] активна, пульс %s назад — не трогаем (живой прогон)",
 					t.TaskID, time.Since(age).Truncate(time.Second))
 				continue
 			default:
 				reason = fmt.Sprintf("пульс %s назад", time.Since(age).Truncate(time.Second))
 			}
 		}
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusReady); err != nil {
-			return 0, fmt.Errorf("задача %s: возврат «в работе» → «готова к работе»: %w", t.TaskID, err)
+		// Строго линейный FSM — возвратов назад нет. Сбрасываем heartbeat
+		// и agent_state, чтобы следующий цикл подхватил задачу.
+		if err := k.store.PatchTask(ctx, t.TaskID, func(task *domain.Task) error {
+			task.HeartbeatAt = ""
+			task.AgentState = ""
+			return nil
+		}); err != nil {
+			k.log.Warnf("[задача %s] очистка heartbeat: %v", t.TaskID, err)
+			continue
 		}
-		k.status("[задача %s] возврат в очередь: была «в работе», но %s", t.TaskID, reason)
+		k.status("[задача %s] возврат в очередь: «%s», %s", t.TaskID, t.Status.Label(), reason)
 		reset++
 	}
 	return reset, nil

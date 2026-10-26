@@ -150,14 +150,14 @@ func chainStatus(t *testing.T, store *board.Store, id string, target board.Statu
 	ctx := context.Background()
 	var steps []board.Status
 	switch target {
-	case board.StatusAnalysis:
-		steps = []board.Status{board.StatusAnalysis}
-	case board.StatusReady:
-		steps = []board.Status{board.StatusAnalysis, board.StatusReady}
-	case board.StatusInProgress:
-		steps = []board.Status{board.StatusAnalysis, board.StatusReady, board.StatusInProgress}
+	case board.StatusInfra:
+		steps = []board.Status{board.StatusInfra}
+	case board.StatusTestCases:
+		steps = []board.Status{board.StatusInfra, board.StatusTestCases}
+	case board.StatusDevelopment:
+		steps = []board.Status{board.StatusInfra, board.StatusTestCases, board.StatusDevelopment}
 	case board.StatusDone:
-		steps = []board.Status{board.StatusAnalysis, board.StatusReady, board.StatusInProgress, board.StatusDone}
+		steps = []board.Status{board.StatusInfra, board.StatusTestCases, board.StatusDevelopment, board.StatusDone}
 	case board.StatusCancelled:
 		steps = []board.Status{board.StatusCancelled}
 	}
@@ -182,16 +182,16 @@ func TestBoardToolsTaskDeleteGuards(t *testing.T) {
 	})
 
 	// Задача в работе или выполненная: удаление запрещено. Пока задача не взята
-	// в работу (analysis/ready) — удалять можно. Каждый сценарий на своей задаче,
+	// в работу (test_cases/development) — удалять можно. Каждый сценарий на своей задаче,
 	// чтобы не сбрасывать статус через конечный автомат.
 	scenarios := []struct {
 		status board.Status
 		taskID string
 	}{
-		{board.StatusAnalysis, "T-A"},
-		{board.StatusReady, "T-R"},
-		{board.StatusInProgress, "T-I"},
-		{board.StatusDone, "T-D"},
+		{board.StatusInfra, "T-I"},
+		{board.StatusTestCases, "T-T"},
+		{board.StatusDevelopment, "T-D"},
+		{board.StatusDone, "T-F"},
 	}
 	for _, sc := range scenarios {
 		mustExec(t, set, BoardCreateTask, map[string]any{
@@ -199,7 +199,7 @@ func TestBoardToolsTaskDeleteGuards(t *testing.T) {
 			"description": "описание", "assigned_role": "Senior Go Developer",
 		})
 		chainStatus(t, store, sc.taskID, sc.status)
-		if sc.status == board.StatusInProgress || sc.status == board.StatusDone {
+		if sc.status != board.StatusInfra {
 			msg := errExec(t, set, BoardDeleteTask, map[string]any{"task_id": sc.taskID})
 			if msg == "" {
 				t.Fatalf("удаление в статусе %s должно быть запрещено", sc.status)
@@ -220,7 +220,6 @@ func TestBoardToolsReadOnlyScope(t *testing.T) {
 	// Читающий участник перечисляет только read-инструменты: write недоступен.
 	readOnly := []string{
 		BoardListEpics, BoardGetEpic, BoardListTasks, BoardGetTask,
-		BoardListBugs, BoardGetBug,
 	}
 	set := Select(readOnly, Deps{Board: board.NewDomainStore(store)})
 
@@ -283,100 +282,6 @@ func TestBoardToolCallWithoutStoreSoftError(t *testing.T) {
 	}
 }
 
-func TestBoardToolsBugPipeline(t *testing.T) {
-	set, store := newBoardToolSet(t)
-	ctx := context.Background()
-
-	// Эпик и задача, в которой QA-инженер найдёт дефект.
-	mustExec(t, set, BoardCreateEpic, map[string]any{
-		"task_id": "EPIC-01", "title": "Backend", "description": "API",
-		"assigned_role": "Backend Lead",
-	})
-	mustExec(t, set, BoardCreateTask, map[string]any{
-		"epic_id": "EPIC-01", "task_id": "T-01", "title": "Хандлер users",
-		"description": "REST", "assigned_role": "Senior Go Developer",
-	})
-
-	// QA-инженер нашёл дефект при выполнении задачи.
-	mustExec(t, set, BoardCreateBug, map[string]any{
-		"bug_id": "BUG-01", "title": "GET /users возвращает 500",
-		"description": "При статусе 500; контракт нарушен", "task_id": "T-01",
-		"epic_id": "EPIC-01", "reporter_role": "QA Engineer",
-	})
-	r, err := store.GetBugReport(ctx, "BUG-01")
-	if err != nil {
-		t.Fatalf("GetBugReport: %v", err)
-	}
-	if r.Status != board.BugStatusNew {
-		t.Fatalf("статус нового багрепорта = %s, ожидался new", r.Status)
-	}
-
-	// QA Lead подтверждает (не нейрослоп).
-	mustExec(t, set, BoardSetBugStatus, map[string]any{"bug_id": "BUG-01", "status": "confirmed"})
-	r, _ = store.GetBugReport(ctx, "BUG-01")
-	if r.Status != board.BugStatusConfirmed {
-		t.Fatalf("после триажа статус = %s", r.Status)
-	}
-
-	// QA Lead не может ставить статус мимо цепочки (например done).
-	msg := errExec(t, set, BoardSetBugStatus, map[string]any{"bug_id": "BUG-01", "status": "done"})
-	if msg == "" {
-		t.Fatalf("QA Lead не должен ставить произвольные статусы багрепорта")
-	}
-
-	// Архитектор: вердикт fix + создание эпика исправления в одном вызове.
-	m := mustExec(t, set, BoardReviewBug, map[string]any{
-		"bug_id": "BUG-01", "verdict": "fix",
-		"epic_task_id": "FIX-01", "epic_title": "Починить /users",
-		"epic_description": "Исправить обработку ошибок БД", "epic_assigned_role": "Backend Lead",
-		"epic_sequence_order": "2",
-	})
-	if m["verdict"] != "fix" || m["fix_epic_id"] != "FIX-01" {
-		t.Fatalf("вердикт fix: %v", m)
-	}
-
-	r, _ = store.GetBugReport(ctx, "BUG-01")
-	if r.Status != board.BugStatusFix || r.FixEpicID != "FIX-01" {
-		t.Fatalf("после экспертизы: status=%s fix_epic=%s", r.Status, r.FixEpicID)
-	}
-	fix, err := store.GetEpic(ctx, "FIX-01")
-	if err != nil {
-		t.Fatalf("эпик исправления не создан: %v", err)
-	}
-	if fix.Revision != 1 {
-		t.Fatalf("ревизия нового эпика = %d, ожидалась 1", fix.Revision)
-	}
-
-	// Эпик исправления выполнен — багрепорт закрывается автоматически.
-	if err := store.SetEpicStatus(ctx, "FIX-01", board.StatusAnalysis); err != nil {
-		t.Fatalf("эпик: %v", err)
-	}
-	if err := store.SetEpicStatus(ctx, "FIX-01", board.StatusReady); err != nil {
-		t.Fatalf("эпик: %v", err)
-	}
-	if err := store.SetEpicStatus(ctx, "FIX-01", board.StatusInProgress); err != nil {
-		t.Fatalf("эпик: %v", err)
-	}
-	if err := store.SetEpicStatus(ctx, "FIX-01", board.StatusDone); err != nil {
-		t.Fatalf("эпик done: %v", err)
-	}
-	n, err := store.MarkBugsFixedForEpic(ctx, "FIX-01")
-	if err != nil || n != 1 {
-		t.Fatalf("MarkBugsFixedForEpic: n=%d err=%v", n, err)
-	}
-	r, _ = store.GetBugReport(ctx, "BUG-01")
-	if r.Status != board.BugStatusFixed {
-		t.Fatalf("багрепорт после фикса: status=%s, ожидался fixed", r.Status)
-	}
-
-	// Исправленный багрепорт пропускается списком с фильтром по статусу.
-	var fixed []*board.BugReport
-	set.marshalExec(t, BoardListBugs, map[string]any{"status": "fixed"}, &fixed)
-	if len(fixed) != 1 {
-		t.Fatalf("после фикса список fixed = %d, ожидался 1", len(fixed))
-	}
-}
-
 // Модель обратилась к несуществующему эпику (выдумала ID): ответ должен
 // перечислять реальные записи доски, иначе модель продолжает перебирать
 // несуществующие идентификаторы и оркестрация стоит на месте.
@@ -413,116 +318,4 @@ func TestBoardNotFoundListsExistingIDs(t *testing.T) {
 // задачи (нет исходного кода/зависимостей, блокер). Без причины инструмент
 // отказывает; с причиной она оседает в записи задачи (карточка UI) и
 // очищается при выходе из human_help, чтобы не висеть после возобновления.
-func TestBoardSetTaskStatusHumanHelpReason(t *testing.T) {
-	set, store := newBoardToolSet(t)
-	ctx := context.Background()
 
-	mustExec(t, set, BoardCreateEpic, map[string]any{
-		"task_id": "EPIC-P", "title": "Приёмка", "description": "тесты", "assigned_role": "QA Lead",
-		"sequence_order": 1,
-	})
-	mustExec(t, set, BoardCreateTask, map[string]any{
-		"epic_id": "EPIC-P", "task_id": "P-01", "title": "Тесты service",
-		"description": "юнит-тесты", "assigned_role": "QA Engineer", "sequence_order": 1,
-	})
-	// Конечный автомат статусов: new → analysis → ready → in_progress.
-	for _, st := range []string{"analysis", "ready", "in_progress"} {
-		mustExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "P-01", "status": st})
-	}
-
-	msg := errExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "P-01", "status": "human_help"})
-	if !strings.Contains(msg, "reason") {
-		t.Fatalf("human_help без причины должна отказывать с упоминанием reason, got %q", msg)
-	}
-	got, err := store.GetTask(ctx, "P-01")
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.Status != board.StatusInProgress {
-		t.Fatalf("отказ не должен менять статус: %s", got.Status)
-	}
-
-	mustExec(t, set, BoardSetTaskStatus, map[string]any{
-		"task_id": "P-01", "status": "human_help", "reason": "нет пакета internal/service: тестировать нечего",
-	})
-	if got, err = store.GetTask(ctx, "P-01"); err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.Status != board.StatusHumanHelp {
-		t.Fatalf("статус %s, ожидалась помощь человека", got.Status)
-	}
-	if got.PauseReason != "нет пакета internal/service: тестировать нечего" {
-		t.Fatalf("причина остановки не сохранилась: %q", got.PauseReason)
-	}
-
-	// Возобновление чистит причину прошлой остановки.
-	mustExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "P-01", "status": "ready"})
-	if got, err = store.GetTask(ctx, "P-01"); err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.Status != board.StatusReady {
-		t.Fatalf("статус после возобновления: %s", got.Status)
-	}
-	if got.PauseReason != "" {
-		t.Fatalf("причина паузы должна очиститься при выходе из паузы: %q", got.PauseReason)
-	}
-}
-
-// BoardSetTaskStatus(testing → in_progress) — откат работы разработчику требует
-// конкретного дефекта (инцидент A7-04: ping-pong testing ↔ in_progress без
-// замечаний). Общая формулировка отклоняется, конкретная — принимается и
-// оседает QA-комментарием, чтобы разработчик видел, что исправлять.
-func TestBoardSetTaskStatusQaRevertRequiresConcreteDefect(t *testing.T) {
-	set, store := newBoardToolSet(t)
-	ctx := context.Background()
-
-	mustExec(t, set, BoardCreateEpic, map[string]any{
-		"task_id": "EPIC-QA", "title": "Приёмка", "description": "тесты", "assigned_role": "QA Lead",
-		"sequence_order": 1,
-	})
-	mustExec(t, set, BoardCreateTask, map[string]any{
-		"epic_id": "EPIC-QA", "task_id": "QA-01", "title": "Фото CRUD",
-		"description": "photos", "assigned_role": "Middle Go Developer", "sequence_order": 1,
-	})
-	for _, st := range []string{"analysis", "ready", "in_progress", "testing"} {
-		mustExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "QA-01", "status": st})
-	}
-
-	// Без reason — отказ, статус не меняется.
-	msg := errExec(t, set, BoardSetTaskStatus, map[string]any{"task_id": "QA-01", "status": "in_progress"})
-	if !strings.Contains(msg, "reason") {
-		t.Fatalf("возврат без причины должен отказывать с упоминанием reason, got %q", msg)
-	}
-	// Общая формулировка — тоже отказ.
-	msg = errExec(t, set, BoardSetTaskStatus, map[string]any{
-		"task_id": "QA-01", "status": "in_progress", "reason": "нужна доработка",
-	})
-	if !strings.Contains(msg, "конкрет") {
-		t.Fatalf("общая причина должна отказывать с упоминанием конкретики, got %q", msg)
-	}
-	if got, _ := store.GetTask(ctx, "QA-01"); got.Status != board.StatusTesting {
-		t.Fatalf("отказ не должен менять статус: %s", got.Status)
-	}
-
-	// Конкретный дефект (файл:строка) — принимается, комментарий QA сохранён.
-	mustExec(t, set, BoardSetTaskStatus, map[string]any{
-		"task_id": "QA-01", "status": "in_progress",
-		"reason": "internal/storage/s3_storage.go:49 — синтаксическая ошибка, go build падает",
-	})
-	got, err := store.GetTask(ctx, "QA-01")
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.Status != board.StatusInProgress {
-		t.Fatalf("конкретный дефект должен вернуть задачу в работу: %s", got.Status)
-	}
-	found := false
-	for _, c := range got.Comments {
-		if c.Type == board.CommentTypeQA && strings.Contains(c.Body, "s3_storage.go:49") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("QA-комментарий с дефектом не сохранён: %+v", got.Comments)
-	}
-}

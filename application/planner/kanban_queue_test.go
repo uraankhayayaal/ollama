@@ -58,14 +58,14 @@ func TestKanbanLeadQueueFollowsDependencies(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-queue"})
 	t.Cleanup(func() { _ = os.RemoveAll(projects.ProjectDir("kanban-queue")) })
 
-	if err := store.SaveMeta(ctx, &board.Meta{ProjectName: "kanban-queue", Task: "x", Status: board.StatusInProgress}); err != nil {
+	if err := store.SaveMeta(ctx, &board.Meta{ProjectName: "kanban-queue", Task: "x", Status: board.StatusDevelopment}); err != nil {
 		t.Fatal(err)
 	}
 	// Работающий эпик: декомпозирован ранее, задача ещё в работе.
 	if err := store.CreateEpic(ctx, &board.Epic{
 		TaskSpec: board.TaskSpec{TaskID: "BE-01", Title: "Бэкенд", Description: "x",
 			AssignedRole: "Backend Lead", SequenceOrder: 1, CanRunParallel: true},
-		Status:        board.StatusInProgress,
+		Status:        board.StatusSystemAnalysis,
 		LeadSyncedRev: 1,
 	}); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestKanbanLeadQueueFollowsDependencies(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range []board.Status{board.StatusAnalysis, board.StatusReady, board.StatusInProgress} {
+	for _, st := range []board.Status{board.StatusTestCases, board.StatusTestCases, board.StatusDevelopment} {
 		if err := store.SetTaskStatus(ctx, "B-01", st); err != nil {
 			t.Fatal(err)
 		}
@@ -154,10 +154,7 @@ func (p *queueProvider) Generate(ctx context.Context, agent services.Agent) (*ru
 		p.decomposeOrder = append(p.decomposeOrder, "ARCH-BE")
 		return &runner.AgentResponse{Content: backendQueueDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		// Разработчик всегда ставит задачу в testing (Этап 6); тестировщик —
-		// в done (Этап 7). Без фактического вызова BoardSetTaskStatus задача
-		// зависла бы в testing/in_progress и recoverStuckTasks вернул бы её в
-		// ready — цикл.
+		// Специалист ставит задачу в done.
 		var resp *runner.AgentResponse
 		if _, ok := agent.(*qaengineer.QAEngineer); ok {
 			resp = &runner.AgentResponse{
@@ -170,7 +167,7 @@ func (p *queueProvider) Generate(ctx context.Context, agent services.Agent) (*ru
 			resp = &runner.AgentResponse{
 				Content: "Задача выполнена.",
 				ToolCalls: []tools.ToolCall{
-					{Name: "BoardSetTaskStatus", Arguments: `{"status":"testing"}`},
+					{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`},
 				},
 			}
 		}

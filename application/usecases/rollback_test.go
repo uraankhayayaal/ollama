@@ -33,6 +33,11 @@ func (f *fakeBoard) PatchTask(_ context.Context, _ string, mutate func(*domain.T
 	}
 	f.lastErr = t.LastError
 	f.agState = t.AgentState
+	// Rollback использует PatchTask для возврата в очередь — фиксируем статус.
+	if t.Status != "" {
+		f.status = t.Status
+		f.setDone = true
+	}
 	return nil
 }
 
@@ -104,7 +109,7 @@ func TestRollbackTaskReturnsToQueue(t *testing.T) {
 	rb := &fakeRollbacker{sha: "aaaaaaa1", submodules: []string{"sub/mod"}}
 	task := &domain.Task{
 		TaskSpec:   domain.TaskSpec{TaskID: "T-9"},
-		Status:     domain.StatusInProgress,
+		Status:     domain.StatusDevelopment,
 		LastError:  "сборка упала",
 		AgentState: "working",
 		Checkpoint: &domain.TaskCheckpoint{BaseSHA: "b0"},
@@ -117,13 +122,13 @@ func TestRollbackTaskReturnsToQueue(t *testing.T) {
 	if rb.gotTarget != "b0" {
 		t.Fatalf("цель отката: got %q, want b0", rb.gotTarget)
 	}
-	if out.SHA != "aaaaaaa1" || out.Status != domain.StatusReady {
+	if out.SHA != "aaaaaaa1" || out.Status != domain.StatusInfra {
 		t.Fatalf("outcome: %#v", out)
 	}
 	if !store.patched || store.cpSHA != "aaaaaaa1" || store.lastErr != "" || store.agState != "" {
 		t.Fatalf("чекпойнт не обновлён: %#v", store)
 	}
-	if !store.setDone || store.status != domain.StatusReady {
+	if !store.setDone || store.status != domain.StatusInfra {
 		t.Fatalf("задача не вернулась в очередь: %#v", store)
 	}
 }
@@ -155,7 +160,7 @@ func TestRollbackTaskNoWorktree(t *testing.T) {
 func TestRollbackTaskNoSuchCommit(t *testing.T) {
 	store := &fakeBoard{}
 	rb := &fakeRollbacker{err: ErrNoSuchCommit}
-	task := &domain.Task{TaskSpec: domain.TaskSpec{TaskID: "T-5"}, Status: domain.StatusInProgress}
+	task := &domain.Task{TaskSpec: domain.TaskSpec{TaskID: "T-5"}, Status: domain.StatusDevelopment}
 
 	_, err := RollbackTask(context.Background(), store, task, "/tmp/wt", "deadbeef", rb)
 	if !errors.Is(err, ErrNoSuchCommit) {

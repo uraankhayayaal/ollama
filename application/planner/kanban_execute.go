@@ -36,9 +36,6 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		}
 		busy[t.Assignee] = true
 
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusInProgress); err != nil {
-			return false, fmt.Errorf("задача %s: готова к работе -> в работе: %w", t.TaskID, err)
-		}
 		// Эпик, в котором появилась работающая задача, тоже уходит «в работу».
 		k.noteEpicProgress(ctx, t.EpicID)
 
@@ -46,8 +43,7 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("задача %s: %w", t.TaskID, err)
 		}
-		// Специалисты получают доступ к доске: смена статуса своей задачи,
-		// QA-инженер — публикация багрепортов (BoardCreateBugReport).
+		// Специалисты получают доступ к доске: смена статуса своей задачи.
 		if sb, ok := specialist.(interface {
 			SetBoardStore(services.BoardStore)
 		}); ok {
@@ -165,84 +161,34 @@ func (k *KanbanRunner) phaseExecute(ctx context.Context) (bool, error) {
 		}
 		if current.Status == domain.StatusDone {
 			k.log.Infof("[задача %s] в работе → выполнена (агент подтвердил сам)", t.TaskID)
-			// Ф-3: факт расхода токенов задачи фиксируется сразу после выполнения.
 			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
 				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
 			}
 			progress = true
 			continue
 		}
-		if current.Status == domain.StatusTesting {
-			k.log.Infof("[задача %s] в работе → на тестирование (агент подтвердил сам)", t.TaskID)
-			if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
-				k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
-			}
-			progress = true
-			// Приёмка сразу после разработчика: не копим задачи в «На
-			// тестировании» — зависимые задачи ждут именно done предыдущей.
-			tested, terr := k.testTask(ctx, current)
-			if terr != nil {
-				return false, terr
-			}
-			progress = progress || tested
-			continue
-		}
-		// Специалист сам вывел задачу из работы: human_help (задача
-		// невыполнима — нет исходного кода/зависимостей, блокер, зацикливание)
-		// или cancelled (снята с работы). Это осознанный шаг агента, а не
-		// «пустая попытка»: уважаем статус, сообщаем человеку и НЕ страхуем
-		// fallback-ом в done — гард всё равно бы отказал, а эскалация (ниже)
-		// затёрла бы решение специалиста: оба статуса нетерминальны, вернуть
-		// задачу в очередь можно одной кнопкой (или докомандой лиду).
-		if current.Status == domain.StatusHumanHelp || current.Status == domain.StatusCancelled {
+		// Специалист сам снял задачу с работы (cancelled). Осознанный шаг
+		// агента: уважаем статус, сообщаем человеку.
+		if current.Status == domain.StatusCancelled {
 			reason := truncateText(current.PauseReason, 400)
 			if reason == "" {
 				reason = "причина не указана"
 			}
-			what := "перевёл в human_help (просит помощь человека)"
-			if current.Status == domain.StatusCancelled {
-				what = "снял с работы (cancelled)"
-			}
-			k.log.Warnf("[задача %s] специалист %s: %s", t.TaskID, what, reason)
-			k.status("[задача %s] специалист %s — задача ждёт решения человека: %s", t.TaskID, what, reason)
+			k.log.Warnf("[задача %s] специалист снял с работы (cancelled): %s", t.TaskID, reason)
+			k.status("[задача %s] специалист снял с работу: %s", t.TaskID, reason)
 			progress = true
 			continue
 		}
 		// Разработчик завершил раунд, но не сменил статус (непонятный исход) —
-		// по Этапу 6: переводим задачу в «На тестирование» (testing).
-		// «Отказ гарда» (переход отклонён) трактуем как невозможность сдать задачу:
-		// эскалируем в human_help с комментарием и постановкой причины.
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusTesting); err != nil {
-			k.log.Warnf("[задача %s] переход в testing отклонён: %v", t.TaskID, err)
-			if _, perr := k.store.AddTaskComment(ctx, t.TaskID, domain.Comment{
-				Author: "system",
-				Type:   domain.CommentTypeSystem,
-				Body:   fmt.Sprintf("Авто-фолбэк: не удалось перевести задачу в «На тестирование» (testing). Причина: %s", truncateText(err.Error(), 400)),
-			}); perr != nil {
-				k.log.Warnf("[задача %s] комментарий к задаче: %v", t.TaskID, perr)
-			}
-			if _, escErr := k.escalate(ctx, current, escalationDiag{
-				Event:  "работа не сделана",
-				Detail: err.Error(),
-				Action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима (нужного кода, зависимостей или доступа в проекте нет) — переведи её в human_help инструментом BoardSetTaskStatus с обязательной причиной (reason).",
-			}); escErr != nil {
-				return false, fmt.Errorf("задача %s: эскалация пустой работы: %w", t.TaskID, escErr)
-			}
-			progress = true
-			continue
-		}
-		k.log.Infof("[задача %s] в работе → на тестирование (fallback: агент не сменил статус)", t.TaskID)
-		if err := k.finalizeTaskTokens(ctx, t.TaskID); err != nil {
-			k.log.Warnf("[учёт токенов] задача %s: %v", t.TaskID, err)
+		// эскалируем: задача возвращается в очередь с диагнозом.
+		if _, escErr := k.escalate(ctx, current, escalationDiag{
+			Event:  "работа не сделана",
+			Detail: "агент не сменил статус задачи",
+			Action: "Сделай работу по существу — внеси правки в проект (файлы в worktree задачи) и зафиксируй их коммитом. Если задача невыполнима — переведи её в cancelled с обязательной причиной.",
+		}); escErr != nil {
+			return false, fmt.Errorf("задача %s: эскалация пустой работы: %w", t.TaskID, escErr)
 		}
 		progress = true
-		// Приёмка сразу после разработчика: не копим задачи в «На
-		// тестировании» — зависимые задачи ждут именно done предыдущей.
-		tested, terr := k.testTask(ctx, current)
-		if terr != nil {
-			return false, terr
-		}
-		progress = progress || tested
 	}
 	return progress, nil
 }
@@ -297,16 +243,12 @@ func (k *KanbanRunner) escalateLoop(ctx context.Context, t *domain.Task, reason 
 	})
 }
 
-// forceMajeure — форсмажор фазы (4.5): «Помощь человека» + запись причины.
+// forceMajeure — форсмажор фазы: отмена задачи + запись причины.
 // В отличие от эскалации петли (escalateLoop) здесь нет задачи для повторного
-// прогона: работа архитектора не состоялась, и человек должен решить, что
-// делать. Если taskID задан — комментарий с причиной крепится к задаче и её
-// статус уходит в human_help; без taskID (фаза архитектора работает до
-// появления задач — комментарий требует TaskID) помечается мета-задача
-// доски. Ошибки записи не маскируют исходный сбой: только логируются.
-//
-// human_help не терминален: ensureMeta/touchMeta снимут пометку при следующем
-// запуске, а ручной кнопкой доска возвращается в работу.
+// прогона: работа не состоялась, и человек должен решить, что делать.
+// Если taskID задан — комментарий с причиной крепится к задаче и её
+// статус уходит в cancelled; без taskID помечается мета-задача доски.
+// Ошибки записи не маскируют исходный сбой: только логируются.
 func (k *KanbanRunner) forceMajeure(ctx context.Context, taskID, reason string) {
 	msg := fmt.Sprintf("форс-мажор: %s", truncateText(reason, 400))
 	k.setStopReason(msg)
@@ -315,7 +257,7 @@ func (k *KanbanRunner) forceMajeure(ctx context.Context, taskID, reason string) 
 		if _, err := k.store.AddTaskComment(ctx, taskID, domain.Comment{
 			Author: "system",
 			Type:   domain.CommentTypeSystem,
-			Body:   "Форсмажор (непредвиденный случай): " + reason + ". Нужно решение человека: разбери причину (логи проекта, вывод проверок) и верни задачу в работу.",
+			Body:   "Форсмажор (непредвиденный случай): " + reason + ". Нужно решение человека: разбери причину (логи проекта, вывод проверок) и при необходимости создай новую задачу.",
 		}); err != nil {
 			k.log.Warnf("[доска] форс-мажор задачи %s: комментарий: %v", taskID, err)
 		}
@@ -325,13 +267,13 @@ func (k *KanbanRunner) forceMajeure(ctx context.Context, taskID, reason string) 
 			}
 			return nil
 		})
-		if err := k.store.SetTaskStatus(ctx, taskID, domain.StatusHumanHelp); err != nil {
-			k.log.Warnf("[доска] форс-мажор задачи %s: статус human_help: %v", taskID, err)
+		if err := k.store.SetTaskStatus(ctx, taskID, domain.StatusCancelled); err != nil {
+			k.log.Warnf("[доска] форс-мажор задачи %s: статус cancelled: %v", taskID, err)
 		}
 	} else if meta, err := k.store.GetMeta(ctx); err == nil && meta != nil && !meta.Status.Terminal() {
-		meta.Status = domain.StatusHumanHelp
+		meta.Status = domain.StatusCancelled
 		if err := k.store.SaveMeta(ctx, meta); err != nil {
-			k.log.Warnf("[доска] форс-мажор: статус meta human_help: %v", err)
+			k.log.Warnf("[доска] форс-мажор: статус meta cancelled: %v", err)
 		}
 	}
 	k.status("[доска] %s — работа остановлена, нужна помощь человека", msg)
@@ -353,14 +295,10 @@ func (k *KanbanRunner) architectFail(ctx context.Context, err error) error {
 	return err
 }
 
-// leadFail — 5.4: падение лид-фазы (декомпозиции эпика) останавливает ЭПИК
-// с human_help вместо бесконечных повторов цикла: эпик не разобран, повтор с
-// тем же промптом ничего не меняет. В отличие от forceMajeure (задача/мета)
-// здесь комментарий к эпику пока не ставим — у эпиков на доске нет комментариев
-// (только AddTaskComment для задач); причину несут стоп-причина запуска и
-// статус эпика, а подробный разбор отложен в Этап 9. SetEpicStatus сам каскадом
-// ставит на паузу незакрытые задачи эпика (pauseEpicTasks). Отмена контекста —
-// не форсмажор: пробрасываем как есть. Возвращает err без изменений —
+// leadFail — падение лид-фазы (декомпозиции эпика) останавливает ЭПИК
+// с cancelled вместо бесконечных повторов цикла: эпик не разобран, повтор с
+// тем же промптом ничего не меняет. Отмена контекста — не форсмажор:
+// пробрасываем как есть. Возвращает err без изменений —
 // можно писать `return k.leadFail(ctx, epic, err)`.
 func (k *KanbanRunner) leadFail(ctx context.Context, epic *domain.Epic, err error) error {
 	if err == nil {
@@ -371,8 +309,8 @@ func (k *KanbanRunner) leadFail(ctx context.Context, epic *domain.Epic, err erro
 	}
 	reason := fmt.Sprintf("декомпозиция эпика %s не удалась: %s", epic.TaskID, truncateText(err.Error(), 300))
 	k.setStopReason(reason)
-	if serr := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusHumanHelp); serr != nil {
-		k.log.Warnf("[эпик %s] не удалось перевести в human_help: %v", epic.TaskID, serr)
+	if serr := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusCancelled); serr != nil {
+		k.log.Warnf("[эпик %s] не удалось перевести в cancelled: %v", epic.TaskID, serr)
 	}
 	k.status("[эпик %s] %s — нужна помощь человека", epic.TaskID, reason)
 	return err

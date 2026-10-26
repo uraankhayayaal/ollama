@@ -284,7 +284,7 @@ func TestConflictRebaseStateErrors(t *testing.T) {
 		{"repo", func(h *fakeConflictHost) { h.repoErr = errors.New("x") }, ErrRepoUnavailable},
 		{"board", func(h *fakeConflictHost) { h.statusErr = errors.New("x") }, ErrBoardUnavailable},
 		{"no-epic", func(h *fakeConflictHost) { h.found = false }, ErrEpicNotFound},
-		{"not-done", func(h *fakeConflictHost) { h.status = domain.StatusNew }, ErrEpicNotDone},
+		{"not-done", func(h *fakeConflictHost) { h.status = domain.StatusDraft }, ErrEpicNotDone},
 		{"no-branch", func(h *fakeConflictHost) { h.epicRefErr = errors.New("x") }, ErrEpicBranchMissing},
 	}
 	for _, tc := range cases {

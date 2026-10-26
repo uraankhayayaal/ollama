@@ -179,7 +179,7 @@ func TestAutoCreateBranchesRealGit(t *testing.T) {
 
 	// Эпик → ветка ai/epic/epic-1 от main; задача → ветка от ветки эпика.
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -374,13 +374,13 @@ func TestTaskStartSyncsEpicAndRebases(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
 	defer store.Close()
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
-		EpicID:   "epic-1", Status: board.StatusReady,
+		EpicID:   "epic-1", Status: board.StatusTestCases,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +467,7 @@ func TestTaskNoCommitsMergedWithoutBlock(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "myrepo"})
 	defer store.Close()
 	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusNew,
+		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Релиз"}, Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}

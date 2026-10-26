@@ -55,7 +55,7 @@ func TestGenerateAttributesScopeToUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.CreateTask(ctx, &board.Task{
-		TaskSpec: board.TaskSpec{TaskID: "T-1"}, EpicID: "ARCH-01", Status: board.StatusInProgress,
+		TaskSpec: board.TaskSpec{TaskID: "T-1"}, EpicID: "ARCH-01", Status: board.StatusDevelopment,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestFinalizeTaskTokensWritesFact(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.CreateTask(ctx, &board.Task{
-		TaskSpec: board.TaskSpec{TaskID: "T-1"}, EpicID: "ARCH-01", Status: board.StatusInProgress,
+		TaskSpec: board.TaskSpec{TaskID: "T-1"}, EpicID: "ARCH-01", Status: board.StatusDevelopment,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestFinalizeTokensSweepCoversExternalTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.CreateTask(ctx, &board.Task{
-		TaskSpec: board.TaskSpec{TaskID: "T-1"}, EpicID: "ARCH-01", Status: board.StatusInProgress,
+		TaskSpec: board.TaskSpec{TaskID: "T-1"}, EpicID: "ARCH-01", Status: board.StatusDevelopment,
 	}); err != nil {
 		t.Fatal(err)
 	}

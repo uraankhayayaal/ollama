@@ -327,7 +327,7 @@ func TestChatAssistPromptHasBoardContext(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-qa-board"})
 	ctx := context.Background()
 	store.CreateEpic(ctx, &board.Epic{TaskSpec: board.TaskSpec{TaskID: "epic-a", Title: "Логин"}})
-	store.CreateTask(ctx, &board.Task{TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Форма входа", AssignedRole: "Dev"}, EpicID: "epic-a", Status: board.StatusInProgress})
+	store.CreateTask(ctx, &board.Task{TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Форма входа", AssignedRole: "Dev"}, EpicID: "epic-a", Status: board.StatusDevelopment})
 
 	sess, _, err := srv.getOrCreate("proj-qa-board")
 	if err != nil {
@@ -725,86 +725,6 @@ func readBoardSnapshot(t *testing.T, conn net.Conn, timeout time.Duration) (boar
 
 // TestChatAssistantCreatesEpicAndBug — «хочу канбан на рефакторинг» и «заведи
 // баг» приводят к действиям на доске (эпик-черновик, баг). С Ф-8 ассистент НЕ
-// создаёт задачи (их заводят лиды направлений), поэтому эпик помечается как
-// черновик на обязательную ревизию архитектора.
-func TestChatAssistantCreatesEpicAndBug(t *testing.T) {
-	srv, _, _ := newTestServer(t)
-	registerTestDir(t, srv, "proj-act-bug")
-	sess, _, err := srv.getOrCreate("proj-act-bug")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Раунд 1: канбан на рефакторинг → эпик-черновик (без задач).
-	runScriptedChatAssistant(t, sess, "хочу канбан на рефакторинг сервера",
-		&runner.ModelReply{
-			ToolCalls: []tools.ToolCall{{
-				Name:      tools.BoardCreateEpic,
-				Arguments: `{"task_id":"CHAT-01","title":"Канбан на рефакторинг","description":"рефакторинг сервера","assigned_role":"Backend Lead"}`,
-			}},
-			FinishReason: "tool_calls",
-		},
-		&runner.ModelReply{Content: "Канбан заведён.", FinishReason: "stop"},
-	)
-
-	waitBoard(t, sess, 3*time.Second, func() bool {
-		epics, err := sess.board.ListEpics(context.Background())
-		if err != nil || len(epics) != 1 {
-			return false
-		}
-		// Ф-8: задачи в эпике создают лиды, ассистент — только черновик.
-		tasks, err := sess.board.ListTasks(context.Background())
-		return err == nil && len(tasks) == 0 && epics[0].RequiresReview
-	})
-
-	runScriptedChatAssistant(t, sess, "заведи баг про тормоза интерфейса",
-		&runner.ModelReply{
-			ToolCalls: []tools.ToolCall{{
-				Name:      tools.BoardCreateBug,
-				Arguments: `{"bug_id":"BUG-01","title":"Тормоза интерфейса","description":"UI фризит при открытии","epic_id":"CHAT-01"}`,
-			}},
-			FinishReason: "tool_calls",
-		},
-		&runner.ModelReply{Content: "Баг заведён.", FinishReason: "stop"},
-	)
-
-	waitBoard(t, sess, 3*time.Second, func() bool {
-		bugs, err := sess.board.ListBugReports(context.Background())
-		return err == nil && len(bugs) == 1 && bugs[0].BugID == "BUG-01"
-	})
-}
-
-// TestChatAssistantLeavesBoardUntouched — «привет»/«как дела»: модель отвечает
-// текстом без вызовов инструментов, доска не трогается.
-func TestChatAssistantLeavesBoardUntouched(t *testing.T) {
-	srv, _, _ := newTestServer(t)
-	registerTestDir(t, srv, "proj-act-chat")
-	sess, _, err := srv.getOrCreate("proj-act-chat")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	m := runScriptedChatAssistant(t, sess, "привет, как дела?",
-		&runner.ModelReply{Content: "Привет! Всё спокойно.", FinishReason: "stop"},
-	)
-	if !strings.Contains(m.Content, "Привет") {
-		t.Fatalf("ответ ассистента = %q", m.Content)
-	}
-
-	waitBoard(t, sess, 500*time.Millisecond, func() bool {
-		epics, err := sess.board.ListEpics(context.Background())
-		if err != nil {
-			return false
-		}
-		tasks, err := sess.board.ListTasks(context.Background())
-		if err != nil {
-			return false
-		}
-		bugs, err := sess.board.ListBugReports(context.Background())
-		return err == nil && len(epics) == 0 && len(tasks) == 0 && len(bugs) == 0
-	})
-}
-
 // TestSessionInjectionHotApply: Upsert → SessionInjections возвращает
 // добавленную; Remove по id возвращает признак наличия записи.
 func TestSessionInjectionHotApply(t *testing.T) {

@@ -418,7 +418,7 @@ func TestGetBoardReturnsSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
 		t.Fatal(err)
 	}
-	if snap.Epics == nil || snap.Tasks == nil || snap.Bugs == nil {
+	if snap.Epics == nil || snap.Tasks == nil {
 		t.Fatalf("доска должна отдавать пустые массивы: %+v", snap)
 	}
 }
@@ -442,7 +442,7 @@ func TestDeleteEpic(t *testing.T) {
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "task-2", Title: "в работе"},
 		EpicID:   "epic-2",
-		Status:   board.StatusInProgress,
+		Status:   board.StatusDevelopment,
 	}); err != nil {
 		t.Fatal(err)
 	}

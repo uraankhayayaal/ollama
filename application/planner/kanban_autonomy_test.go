@@ -5,7 +5,6 @@ package planner
 
 import (
 	"ai/agents/architect"
-	"ai/agents/qaengineer"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/infrastructure/board"
@@ -65,10 +64,10 @@ func taskStatus(t *testing.T, store *board.Store, id string) board.Status {
 // этого же раннера остаются «в работе» — прежний код сбрасывал всё подряд.
 func TestRecoverStuckTasksUsesHeartbeat(t *testing.T) {
 	store := autonomyStore(t, "watchdog-hb")
-	putTask(t, store, "FRESH", board.StatusInProgress, time.Now().Add(-time.Minute))
-	putTask(t, store, "STALE", board.StatusInProgress, time.Now().Add(-90*time.Minute))
-	putTask(t, store, "NOBEAT", board.StatusInProgress, time.Time{})
-	putTask(t, store, "READY", board.StatusReady, time.Time{})
+	putTask(t, store, "FRESH", board.StatusDevelopment, time.Now().Add(-time.Minute))
+	putTask(t, store, "STALE", board.StatusDevelopment, time.Now().Add(-90*time.Minute))
+	putTask(t, store, "NOBEAT", board.StatusDevelopment, time.Time{})
+	putTask(t, store, "READY", board.StatusTestCases, time.Time{})
 
 	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	kr.markActive("READY")
@@ -81,16 +80,17 @@ func TestRecoverStuckTasksUsesHeartbeat(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("возвращено в очередь %d задач, ожидалось 2 (STALE + NOBEAT)", n)
 	}
-	if got := taskStatus(t, store, "FRESH"); got != board.StatusInProgress {
-		t.Fatalf("живой пульс: статус %s, ожидался %s (чужой прогон не трогаем)", got, board.StatusInProgress)
+	if got := taskStatus(t, store, "FRESH"); got != board.StatusDevelopment {
+		t.Fatalf("живой пульс: статус %s, ожидался %s (чужой прогон не трогаем)", got, board.StatusDevelopment)
 	}
-	if got := taskStatus(t, store, "STALE"); got != board.StatusReady {
-		t.Fatalf("мёртвый пульс: статус %s, ожидался %s", got, board.StatusReady)
+	// Строго линейный FSM — статусы не меняются при возврате, очищается heartbeat.
+	if got := taskStatus(t, store, "STALE"); got != board.StatusDevelopment {
+		t.Fatalf("мёртвый пульс: статус %s, ожидался %s (статус не меняется)", got, board.StatusDevelopment)
 	}
-	if got := taskStatus(t, store, "NOBEAT"); got != board.StatusReady {
-		t.Fatalf("без пульса: статус %s, ожидался %s", got, board.StatusReady)
+	if got := taskStatus(t, store, "NOBEAT"); got != board.StatusDevelopment {
+		t.Fatalf("без пульса: статус %s, ожидался %s (статус не меняется)", got, board.StatusDevelopment)
 	}
-	if got := taskStatus(t, store, "READY"); got != board.StatusReady {
+	if got := taskStatus(t, store, "READY"); got != board.StatusTestCases {
 		t.Fatalf("статус задачи вне зоны отката изменился: %s", got)
 	}
 }
@@ -100,7 +100,7 @@ func TestRecoverStuckTasksUsesHeartbeat(t *testing.T) {
 // сбрасывается.
 func TestRecoverStuckTasksKeepsOwnActiveTask(t *testing.T) {
 	store := autonomyStore(t, "watchdog-own")
-	putTask(t, store, "MINE", board.StatusInProgress, time.Now().Add(-2*time.Hour))
+	putTask(t, store, "MINE", board.StatusDevelopment, time.Now().Add(-2*time.Hour))
 
 	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	kr.markActive("MINE")
@@ -112,7 +112,7 @@ func TestRecoverStuckTasksKeepsOwnActiveTask(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("своя задача сброшена: %d", n)
 	}
-	if got := taskStatus(t, store, "MINE"); got != board.StatusInProgress {
+	if got := taskStatus(t, store, "MINE"); got != board.StatusDevelopment {
 		t.Fatalf("статус своей задачи: %s", got)
 	}
 }
@@ -122,7 +122,7 @@ func TestRecoverStuckTasksKeepsOwnActiveTask(t *testing.T) {
 func TestRecoverStuckTasksZeroThresholdDisablesHeartbeat(t *testing.T) {
 	t.Setenv("KANBAN_STALE_TASK_MIN", "0")
 	store := autonomyStore(t, "watchdog-zero")
-	putTask(t, store, "FRESH", board.StatusInProgress, time.Now())
+	putTask(t, store, "FRESH", board.StatusDevelopment, time.Now())
 
 	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	if n, err := kr.recoverStuckTasks(context.Background()); err != nil || n != 1 {
@@ -134,7 +134,7 @@ func TestRecoverStuckTasksZeroThresholdDisablesHeartbeat(t *testing.T) {
 // оставлять задачу висеть навсегда: нечитаемое значение считаем мёртвым.
 func TestRecoverStuckTasksUnparsableHeartbeat(t *testing.T) {
 	store := autonomyStore(t, "watchdog-bad")
-	putTask(t, store, "BAD", board.StatusInProgress, time.Time{})
+	putTask(t, store, "BAD", board.StatusDevelopment, time.Time{})
 	if err := store.PatchTask(context.Background(), "BAD", func(task *board.Task) error {
 		task.HeartbeatAt = "вчера вечером"
 		return nil
@@ -149,14 +149,14 @@ func TestRecoverStuckTasksUnparsableHeartbeat(t *testing.T) {
 }
 
 // TestRecoverStuckTasksOnServerRestart — сценарий 4.2: задача была «в работе»
-// (сервер упал посреди прогона) — новый запуск возвращает её в очередь, и она
-// снова берётся в работу (attempts растёт).
+// (сервер упал посреди прогона) — новый запуск очищает heartbeat и задача
+// снова берётся в работу на том же статусе.
 func TestRecoverStuckTasksOnServerRestart(t *testing.T) {
 	store := autonomyStore(t, "watchdog-restart")
-	putTask(t, store, "T-1", board.StatusReady, time.Time{})
+	putTask(t, store, "T-1", board.StatusTestCases, time.Time{})
 	ctx := context.Background()
 	// Прогон «до падения»: задача ушла в работу, агент отчитался пульсом.
-	if err := store.SetTaskStatus(ctx, "T-1", board.StatusInProgress); err != nil {
+	if err := store.SetTaskStatus(ctx, "T-1", board.StatusDevelopment); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PatchTask(ctx, "T-1", func(task *board.Task) error {
@@ -169,7 +169,7 @@ func TestRecoverStuckTasksOnServerRestart(t *testing.T) {
 	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	kr.recoverStuckTasks(ctx)
 	kr.recoverStuckTasks(ctx) // порог по умолчанию 30 мин: пульс свежий
-	if got := taskStatus(t, store, "T-1"); got != board.StatusInProgress {
+	if got := taskStatus(t, store, "T-1"); got != board.StatusDevelopment {
 		t.Fatalf("свежий пульс после рестарта: статус %s (задача ещё считается живой)", got)
 	}
 
@@ -183,15 +183,13 @@ func TestRecoverStuckTasksOnServerRestart(t *testing.T) {
 	if _, err := kr.recoverStuckTasks(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := taskStatus(t, store, "T-1"); got != board.StatusReady {
-		t.Fatalf("протухший пульс: статус %s, ожидался %s", got, board.StatusReady)
-	}
-	if err := store.SetTaskStatus(ctx, "T-1", board.StatusInProgress); err != nil {
-		t.Fatalf("повторный старт задачи: %v", err)
+	// Строго линейный FSM — статус не меняется при возврате, очищается heartbeat.
+	if got := taskStatus(t, store, "T-1"); got != board.StatusDevelopment {
+		t.Fatalf("протухший пульс: статус %s, ожидался %s (статус не меняется)", got, board.StatusDevelopment)
 	}
 	task, _ := store.GetTask(ctx, "T-1")
-	if task.Attempts < 2 {
-		t.Fatalf("attempts=%d: повторный прогон должен учитываться", task.Attempts)
+	if task.HeartbeatAt != "" {
+		t.Fatalf("heartbeat не очищен после возврата: %q", task.HeartbeatAt)
 	}
 }
 
@@ -225,18 +223,13 @@ func (p *heavyProbeProvider) Generate(ctx context.Context, agent services.Agent)
 	switch {
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
-	case strings.HasPrefix(umsg, "Ты — специалист"):
+		case strings.HasPrefix(umsg, "Ты — специалист"):
 		if domain.HeavyModelFor(ctx) {
 			p.note("large")
-			// Сильная модель доводит задачу до конца: разработчик сдаёт в
-			// testing, тестировщик — в done.
-			status := "testing"
-			if _, ok := agent.(*qaengineer.QAEngineer); ok {
-				status = "done"
-			}
+			// Сильная модель доводит задачу до конца.
 			resp := &runner.AgentResponse{
 				Content:   "готово",
-				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"` + status + `"}`}},
+				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`}},
 			}
 			executeBoardToolCalls(agent, resp)
 			return resp, nil
@@ -316,7 +309,7 @@ func TestLoopEscalationSwitchesModelOnRetry(t *testing.T) {
 // на большой модели сразу (эскалация не «теряется» между прогонами).
 func TestEscalatedRequirementSurvivesNextRun(t *testing.T) {
 	store := autonomyStore(t, "escalate-persist")
-	putTask(t, store, "T-1", board.StatusReady, time.Time{})
+	putTask(t, store, "T-1", board.StatusTestCases, time.Time{})
 	ctx := context.Background()
 	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 	task, _ := store.GetTask(ctx, "T-1")
@@ -328,8 +321,12 @@ func TestEscalatedRequirementSurvivesNextRun(t *testing.T) {
 	if got.ModelTier != board.ModelTierLarge {
 		t.Fatalf("model_tier=%q после эскалации", got.ModelTier)
 	}
-	if got.Status != board.StatusReady {
-		t.Fatalf("после эскалации задача должна вернуться в очередь, got %s", got.Status)
+	// Строго линейный FSM — статус не меняется при эскалации.
+	if got.Status != board.StatusTestCases {
+		t.Fatalf("статус изменился: %s, ожидался %s (эскалация не меняет статус)", got.Status, board.StatusTestCases)
+	}
+	if got.HeartbeatAt != "" {
+		t.Fatalf("heartbeat не очищен после эскалации: %q", got.HeartbeatAt)
 	}
 
 	// Следующий прогон: требование на месте даже без повторной петли.
@@ -351,7 +348,7 @@ func TestEscalatedRequirementSurvivesNextRun(t *testing.T) {
 func TestEscalationBudgetStopsAndAsksHuman(t *testing.T) {
 	t.Setenv("KANBAN_MAX_ESCALATIONS", "1")
 	store := autonomyStore(t, "escalate-budget")
-	putTask(t, store, "T-1", board.StatusInProgress, time.Now())
+	putTask(t, store, "T-1", board.StatusDevelopment, time.Now())
 	ctx := context.Background()
 	kr := NewKanbanRunner(&loopedProvider{}, board.NewDomainStore(store))
 
@@ -365,14 +362,14 @@ func TestEscalationBudgetStopsAndAsksHuman(t *testing.T) {
 	}
 	// Вторая: бюджет исчерпан.
 	task, _ = store.GetTask(ctx, "T-1")
-	if err := store.SetTaskStatus(ctx, "T-1", board.StatusInProgress); err != nil {
+	if err := store.SetTaskStatus(ctx, "T-1", board.StatusDevelopment); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := kr.escalateLoop(ctx, task, "петля два"); err != nil {
 		t.Fatalf("escalateLoop 2: %v", err)
 	}
 	got, _ := store.GetTask(ctx, "T-1")
-	if got.Status != board.StatusHumanHelp {
+	if got.Status != board.StatusCancelled {
 		t.Fatalf("после исчерпания бюджета статус %s, ожидалась «помощь человека»", got.Status)
 	}
 	if got.Escalations != 1 {

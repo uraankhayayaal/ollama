@@ -8,19 +8,16 @@ import (
 	"fmt"
 )
 
-// phaseReady: задачи, у которых выполнены все зависимости и фаза-гейт
-// (инфраструктура → приложение → тестирование), переводятся «новая» ->
-// «в анализе» -> «готова к работе» (готова к раздаче специалистам).
+// phaseReady: задачи в активном статусе (infra/test_cases/development), у которых
+// эпик не остановлен, готовы к исполнению. Функция возвращает true, если есть
+// готовые к выполнению задачи (phaseExecute возьмёт их в работу).
 func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
 		return false, err
 	}
-
-	// «Новая»: зависимости и фаза-порядок выполнены — «в анализе».
-	progress := false
 	for _, t := range tasks {
-		if t.Status != domain.StatusNew {
+		if t.Status != domain.StatusInfra && t.Status != domain.StatusTestCases && t.Status != domain.StatusDevelopment {
 			continue
 		}
 		ok, err := k.epicWorkable(ctx, t.EpicID)
@@ -37,55 +34,13 @@ func (k *KanbanRunner) phaseReady(ctx context.Context) (bool, error) {
 		if !ok {
 			continue
 		}
-		ok, err = k.phasePrereqSatisfied(ctx, t)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			continue
-		}
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusAnalysis); err != nil {
-			return false, fmt.Errorf("задача %s: новая -> в анализе: %w", t.TaskID, err)
-		}
-		k.log.Infof("[задача %s] новая → в анализе", t.TaskID)
-		progress = true
+		return true, nil
 	}
-
-	// «В анализе»: фаза-гейт пройден и готова к раздаче — «готова к работе».
-	// Перечитаем доску: первый цикл только что перевёл «новые» в «в анализе».
-	tasks, err = k.store.ListTasks(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, t := range tasks {
-		if t.Status != domain.StatusAnalysis {
-			continue
-		}
-		ok, err := k.epicWorkable(ctx, t.EpicID)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			continue
-		}
-		ok, err = k.phasePrereqSatisfied(ctx, t)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			continue
-		}
-		if err := k.store.SetTaskStatus(ctx, t.TaskID, domain.StatusReady); err != nil {
-			return false, fmt.Errorf("задача %s: в анализе -> готова к работе: %w", t.TaskID, err)
-		}
-		k.log.Infof("[задача %s] в анализе → готова к работе", t.TaskID)
-		progress = true
-	}
-	return progress, nil
+	return false, nil
 }
 
-// readyTasks возвращает задачи «готова к работе» (эпик не остановлен/не
-// отменён), отсортированные по порядку (sequence_order) и ID.
+// readyTasks возвращает задачи в активном статусе (infra/test_cases/development),
+// у которых эпик не остановлен/не отменён, отсортированные по порядку (sequence_order) и ID.
 func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*domain.Task, error) {
 	tasks, err := k.store.ListTasks(ctx)
 	if err != nil {
@@ -93,7 +48,7 @@ func (k *KanbanRunner) readyTasks(ctx context.Context) ([]*domain.Task, error) {
 	}
 	var ready []*domain.Task
 	for _, t := range tasks {
-		if t.Status != domain.StatusReady {
+		if t.Status != domain.StatusInfra && t.Status != domain.StatusTestCases && t.Status != domain.StatusDevelopment {
 			continue
 		}
 		ok, err := k.epicWorkable(ctx, t.EpicID)

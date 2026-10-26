@@ -56,7 +56,7 @@ func (p *askFirstProvider) Generate(ctx context.Context, agent services.Agent) (
 		return (&kanbanProvider{}).Generate(ctx, agent)
 	default:
 		a, ok := agent.(*architect.Architect)
-		if !ok || a.ReviewMode || a.ReviewerMode {
+		if !ok || a.ReviewerMode {
 			return &runner.AgentResponse{Content: ""}, nil
 		}
 		// AskUser должен быть инжектирован через KanbanRunner.SetArchitectExtras:
@@ -138,7 +138,7 @@ func (p *autonomyProvider) Generate(ctx context.Context, agent services.Agent) (
 		return (&kanbanProvider{}).Generate(ctx, agent)
 	default:
 		a, ok := agent.(*architect.Architect)
-		if !ok || a.ReviewMode || a.ReviewerMode {
+		if !ok || a.ReviewerMode {
 			return &runner.AgentResponse{Content: ""}, nil
 		}
 		_, okAsk := a.Tools.Get("AskUser")

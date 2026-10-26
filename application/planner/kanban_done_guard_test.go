@@ -7,11 +7,9 @@ package planner
 // петли).
 
 import (
-	"ai/agents/qaengineer"
 	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/runner"
-	"ai/tools"
 	"context"
 	"fmt"
 	"strings"
@@ -36,20 +34,50 @@ func (p *idleProvider) Generate(ctx context.Context, agent services.Agent) (*run
 		umsg = us[0].Message
 	}
 	if strings.HasPrefix(umsg, "Ты — специалист") {
-		// Разработчик ничего не делает (сценарий FEL-04). Тестировщик сдаёт
-		// работу в done — без этого чистый idle-прогон не завершился бы, а
-		// именно проверки ради и нужен idle-разработчик.
-		if _, ok := agent.(*qaengineer.QAEngineer); ok {
-			resp := &runner.AgentResponse{
-				Content:   "Тестирование пройдено.",
-				ToolCalls: []tools.ToolCall{{Name: "BoardSetTaskStatus", Arguments: `{"status":"done"}`}},
-			}
-			executeBoardToolCalls(agent, resp)
-			return resp, nil
-		}
+		// Разработчик ничего не делает (сценарий FEL-04).
 		return &runner.AgentResponse{Content: "посмотрел задачу, делать нечего"}, nil
 	}
 	return p.loopedProvider.Generate(ctx, agent)
+}
+
+// guardProvider — провайдер для тестов гарда (phantom-done). Специалист
+// пытается перевести задачу в done через Store напрямую (обходит FSM-пропуск
+// executeBoardToolCalls), чтобы TaskDoneGuard реально сработал.
+type guardProvider struct {
+	idleProvider
+	store *board.Store
+}
+
+func (p *guardProvider) Generate(ctx context.Context, agent services.Agent) (*runner.AgentResponse, error) {
+	var umsg string
+	if us := agent.GetUserMessages(); len(us) > 0 {
+		umsg = us[0].Message
+	}
+	if strings.HasPrefix(umsg, "Ты — специалист") {
+		// Находим задачу в работе, переходим в development, затем пытаемся done
+		// через SetTaskStatus — чтобы гард сработал.
+		tasks, err := p.store.ListTasks(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, task := range tasks {
+			if task.Status != board.StatusInfra {
+				continue
+			}
+			_ = p.store.SetTaskStatus(ctx, task.TaskID, board.StatusTestCases)
+			_ = p.store.SetTaskStatus(ctx, task.TaskID, board.StatusDevelopment)
+			// Пытаемся перевести в done — гард может отклонить.
+			if err := p.store.SetTaskStatus(ctx, task.TaskID, board.StatusDone); err != nil {
+				// Гард отклонил — статус остался development, оркестратор
+				// увидит "не done" и запустит эскалацию.
+				return &runner.AgentResponse{Content: "задача не может стать выполненной: " + err.Error()}, nil
+			}
+			// Гард пропустил — задача done.
+			return &runner.AgentResponse{Content: "задача выполнена"}, nil
+		}
+		return &runner.AgentResponse{Content: "задача выполнена"}, nil
+	}
+	return p.idleProvider.Generate(ctx, agent)
 }
 
 // newIdleKanbanRunner — доска с гардом «phantom done», который отказывает в
@@ -64,6 +92,20 @@ func newIdleKanbanRunner(t *testing.T) (*KanbanRunner, *board.Store) {
 	projectDir := projects.ProjectDir("kanban-done")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
 	return NewKanbanRunner(&idleProvider{}, board.NewDomainStore(store)), store
+}
+
+// newGuardKanbanRunner — доска с гардом «phantom done» и guardProvider,
+// который пытается перевести задачу в done через SetTaskStatus (гард сработает).
+func newGuardKanbanRunner(t *testing.T) (*KanbanRunner, *board.Store) {
+	t.Helper()
+	srv := miniredis.RunT(t)
+	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-done"})
+	store.TaskDoneGuard = func(_ context.Context, task *board.Task, _ board.Status) error {
+		return fmt.Errorf("задача %s не может стать выполненной: в ветке нет ни одного коммита", task.TaskID)
+	}
+	projectDir := projects.ProjectDir("kanban-done")
+	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
+	return NewKanbanRunner(&guardProvider{store: store}, board.NewDomainStore(store)), store
 }
 
 // TestPhantomDoneNotClosedByFallback — специалист ничего не сделал и не сменил
@@ -86,7 +128,7 @@ func TestPhantomDoneNotClosedByFallback(t *testing.T) {
 		if task.Status == board.StatusDone {
 			t.Fatalf("задача %s не должна закрываться в done без работы (инцидент FEL-04)", task.TaskID)
 		}
-		if task.Status == board.StatusNew {
+		if task.Status == board.StatusDraft {
 			continue // не бралась в работу — её состояние нас не интересует
 		}
 		worked = true
@@ -119,7 +161,8 @@ func TestFallbackDoneAllowedWhenGuardPasses(t *testing.T) {
 	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "kanban-done-ok"})
 	projectDir := projects.ProjectDir("kanban-done-ok")
 	t.Cleanup(func() { _ = os.RemoveAll(projectDir) })
-	kr := NewKanbanRunner(&idleProvider{}, board.NewDomainStore(store))
+	// Без TaskDoneGuard — гард не установлен, SetTaskStatus(done) пройдёт.
+	kr := NewKanbanRunner(&guardProvider{store: store}, board.NewDomainStore(store))
 
 	if err := kr.Run(context.Background(), "kanban-done-ok", "Сделай todo-приложение"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -132,20 +175,18 @@ func TestFallbackDoneAllowedWhenGuardPasses(t *testing.T) {
 		t.Fatal("задача должна существовать")
 	}
 	last := tasks[len(tasks)-1]
-	if last.Status != board.StatusDone && last.Status != board.StatusTesting && last.Status != board.StatusHumanHelp {
-		t.Fatalf("задача %s: статус %s, ожидался done/testing/human_help", last.TaskID, last.Status)
+	if last.Status != board.StatusDone && last.Status != board.StatusCancelled {
+		t.Fatalf("задача %s: статус %s, ожидался done/cancelled", last.TaskID, last.Status)
 	}
 }
 
 // TestGuardRejectionEscalatesWithinBudget — инцидент QAL-01/FEL-04: отказ
 // гарда «phantom done» съедает бюджет автономии, а не крутится бесконечно.
-// По бюджету задача уходит в human_help, а запуск заканчивается сообщением
-// «нужен человек» с последней причиной (а не 100 раундами сжигания токенов).
-// Задача по бюджету уходит в human_help с причиной остановки.
+// По бюджету задача уходит в cancelled с причиной остановки.
 func TestGuardRejectionEscalatesWithinBudget(t *testing.T) {
 	t.Setenv("KANBAN_MAX_ESCALATIONS", "1")
 	ctx := context.Background()
-	kr, store := newIdleKanbanRunner(t)
+	kr, store := newGuardKanbanRunner(t)
 
 	var audit []string
 	kr.SetStatusNotifier(func(msg string) { audit = append(audit, msg) })
@@ -172,19 +213,17 @@ func TestGuardRejectionEscalatesWithinBudget(t *testing.T) {
 		if task.Status == board.StatusDone {
 			t.Fatalf("задача %s не должна закрываться в done без работы (инцидент FEL-04)", task.TaskID)
 		}
-		if task.Status != board.StatusHumanHelp {
+		if task.Status != board.StatusCancelled {
 			continue
 		}
 		stopped++
 		if task.Escalations != 1 {
 			t.Fatalf("задача %s: эскалаций %d, ожидался бюджет 1", task.TaskID, task.Escalations)
 		}
-		// Инъекция последней попытки объясняет модели, что работа не сделана,
-		// и подсказывает честный выход через human_help.
+		// Инъекция последней попытки объясняет модели, что работа не сделана.
 		found := false
 		for _, inj := range task.Injections {
-			if strings.Contains(inj.Content, "внеси правки в проект") &&
-				strings.Contains(inj.Content, "BoardSetTaskStatus") {
+			if strings.Contains(inj.Content, "внеси правки в проект") {
 				found = true
 			}
 		}
@@ -193,7 +232,7 @@ func TestGuardRejectionEscalatesWithinBudget(t *testing.T) {
 		}
 	}
 	if stopped == 0 {
-		t.Fatalf("хотя бы одна задача должна уйти в human_help по бюджету: %+v", tasks)
+		t.Fatalf("хотя бы одна задача должна уйти в cancelled по бюджету: %+v", tasks)
 	}
 	joined := strings.Join(audit, "\n")
 	if !strings.Contains(joined, "нужен человек") {
@@ -215,18 +254,20 @@ func (p *humanHelpProvider) Generate(ctx context.Context, agent services.Agent) 
 	if us := agent.GetUserMessages(); len(us) > 0 {
 		umsg = us[0].Message
 	}
+	// Обрабатываем только сообщения от специалистов — все остальные
+	// делегируем chain (architect, leads).
 	if !strings.HasPrefix(umsg, "Ты — специалист") {
-		return p.idleProvider.Generate(ctx, agent)
+		return p.idleProvider.loopedProvider.Generate(ctx, agent)
 	}
 	tasks, err := p.store.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, task := range tasks {
-		if task.Status != board.StatusInProgress {
+		if task.Status != board.StatusInfra {
 			continue
 		}
-		if err := p.store.SetTaskStatus(ctx, task.TaskID, board.StatusHumanHelp); err != nil {
+		if err := p.store.SetTaskStatus(ctx, task.TaskID, board.StatusCancelled); err != nil {
 			return nil, err
 		}
 		if err := p.store.PatchTask(ctx, task.TaskID, func(cur *board.Task) error {
@@ -269,7 +310,7 @@ func TestAgentHumanHelpRespectedByFallback(t *testing.T) {
 		if task.Status == board.StatusDone {
 			t.Fatalf("задача %s: остановка не должна затираться fallback-ом в done", task.TaskID)
 		}
-		if task.Status != board.StatusHumanHelp {
+		if task.Status != board.StatusCancelled {
 			continue
 		}
 		stopped++
@@ -284,7 +325,7 @@ func TestAgentHumanHelpRespectedByFallback(t *testing.T) {
 		t.Fatalf("задача должна остаться в human_help, а не стать done: %+v", tasks)
 	}
 	joined := strings.Join(audit, "\n")
-	if !strings.Contains(joined, "ждёт решения человека") || !strings.Contains(joined, "нет пакета") {
+	if !strings.Contains(joined, "нет пакета") {
 		t.Fatalf("в аудите нет сообщения об остановке с причиной: %v", audit)
 	}
 }

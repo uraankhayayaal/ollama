@@ -32,7 +32,7 @@ func TestBoardRevisionLine(t *testing.T) {
 
 func TestBoardSummaryEmpty(t *testing.T) {
 	got := BoardSummary(BoardView{})
-	for _, want := range []string{"Эпиков нет.", "Задач нет.", "Багов нет."} {
+	for _, want := range []string{"Эпиков нет.", "Задач нет."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("пустая доска: нет %q:\n%s", want, got)
 		}
@@ -43,7 +43,7 @@ func TestBoardSummaryFull(t *testing.T) {
 	task := &iboard.Task{
 		TaskSpec: iboard.TaskSpec{TaskID: "task-1", Title: "Форма входа", AssignedRole: "Dev"},
 		EpicID:   "epic-a",
-		Status:   iboard.StatusInProgress,
+		Status:   iboard.StatusDevelopment,
 		Assignee: "Алиса",
 	}
 	conflictTask := &iboard.Task{
@@ -52,13 +52,12 @@ func TestBoardSummaryFull(t *testing.T) {
 		MergeConflictFiles: []string{"my-rust-app"},
 	}
 	v := BoardView{
-		Meta: &iboard.Meta{ProjectName: "proj", Task: "Сделать логин", Status: iboard.StatusInProgress},
+		Meta: &iboard.Meta{ProjectName: "proj", Task: "Сделать логин", Status: iboard.StatusDevelopment},
 		Epics: []*iboard.Epic{
-			{TaskSpec: iboard.TaskSpec{TaskID: "epic-a", Title: "Логин"}, Status: iboard.StatusInProgress, Tasks: []string{"task-1"}},
+			{TaskSpec: iboard.TaskSpec{TaskID: "epic-a", Title: "Логин"}, Status: iboard.StatusDevelopment, Tasks: []string{"task-1"}},
 			{TaskSpec: iboard.TaskSpec{TaskID: "epic-c", Title: "Чистка кода"}, MergeConflictFiles: []string{"src/main.rs"}},
 		},
 		Tasks: []*iboard.Task{task, conflictTask},
-		Bugs:  []*iboard.BugReport{{BugID: "B-1", Status: iboard.BugStatusConfirmed}},
 	}
 	got := BoardSummary(v)
 	for _, want := range []string{
@@ -73,8 +72,6 @@ func TestBoardSummaryFull(t *testing.T) {
 		"Конфликты мёрджа",
 		"эпики (main ↔ релизная ветка): epic-c [src/main.rs]",
 		"задачи (ветка ↔ релиз эпика): task-c [my-rust-app]",
-		"Баги:",
-		"подтверждён: 1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("сводка не содержит %q:\n%s", want, got)
