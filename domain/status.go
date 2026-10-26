@@ -20,15 +20,15 @@ type Status string
 
 const (
 	// Эпики
-	StatusDraft           Status = "draft"
-	StatusBusinessReview  Status = "business_review"
-	StatusSystemAnalysis  Status = "system_analysis"
+	StatusDraft          Status = "draft"
+	StatusBusinessReview Status = "business_review"
+	StatusSystemAnalysis Status = "system_analysis"
 	// Задачи (Test-First)
 	StatusInfra       Status = "infra"
 	StatusTestCases   Status = "test_cases"
 	StatusDevelopment Status = "development"
 	// Общие
-	StatusDone    Status = "done"
+	StatusDone      Status = "done"
 	StatusCancelled Status = "cancelled"
 )
 
@@ -132,16 +132,20 @@ func validateEpic(from, to Status) error {
 
 func validateTask(from, to Status) error {
 	switch from {
+	case StatusDraft:
+		if to == StatusInfra || to == StatusCancelled {
+			return nil
+		}
 	case StatusInfra:
-		if to == StatusTestCases {
+		if to == StatusTestCases || to == StatusCancelled {
 			return nil
 		}
 	case StatusTestCases:
-		if to == StatusDevelopment {
+		if to == StatusDevelopment || to == StatusCancelled {
 			return nil
 		}
 	case StatusDevelopment:
-		if to == StatusDone {
+		if to == StatusDone || to == StatusCancelled {
 			return nil
 		}
 	}

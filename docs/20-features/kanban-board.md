@@ -1,8 +1,8 @@
 # Kanban-доска
 
-Общая доска проекта в Redis. Системный архитектор публикует эпики, лиды
-разлагают их в задачи, специалисты выполняют и закрывают. Приёмка и QA
-регистрируют багрепорты.
+Общая доска проекта в Redis. Системный архитектор публикует эпики,
+бизнес-аналитик уточняет требования, архитектор разлагает эпики в задачи,
+специалисты (DevOps, QA Engineer, Developer) выполняют и закрывают.
 
 Пакет `infrastructure/board/`, модель данных — `infrastructure/board/entity.go`, хранилище — `infrastructure/board/store.go`.
 
@@ -35,40 +35,40 @@ BOARD_TTL=0            # 0 = без истечения; например 24h
 |---|---|---|
 | `task_id` | string | Идентификатор |
 | `title`, `description` | string | Заголовок, описание |
-| `assigned_role` | string | Владелец направления |
+| `assigned_role` | string | Направление (опционально) |
 | `sequence_order` | FlexInt | Порядок (терпит `"1"` из JSON) |
 | `can_run_parallel` | FlexBool | Можно ли распараллелить (терпит `"true"`) |
 | `dependencies` | []string | Зависимости от других эпиков |
 | `contracts` | []Contract | Контракты (опционально) |
 | `tasks` | []string | ID подзадач |
 | `project_name`, `repositories` | string, []string | Проект, мульти-репо |
-| `status` | Status | Статус |
+| `status` | Status | Статус (epic — `EntityTypeEpic`) |
 | `created_at`, `updated_at` | time | Метки времени |
 | `git_branch` | string | Релизная ветка |
 | `merge_conflict_files` | []string | **Конфликты мёрджа** |
 | `merged_into_main` | bool | Флаг «влито в main» |
 | `architecture_summary` | string | Сводка архитектуры |
-| `revision`, `lead_synced_rev` | int | Ревизии для синхронизации с лидом |
-| `requires_review` | bool | **Черновик**, ждёт ревизии архитектора |
-| `priority` | int | **Приоритет** (пересортировка строк доски): чем больше — тем раньше в очереди лидов; действует внутри фазы |
+| `revision` | int | Ревизии контента |
+| `requires_review` | bool | **Черновик**, ждёт бизнес-ревью |
+| `priority` | int | **Приоритет** (пересортировка строк доски): чем больше — тем раньше в очереди |
 | `TokenUsage` | struct | Учёт токенов |
 
-`FlexInt`/`FlexBool` (`infrastructure/board/entity.go:439-476`) принимают JSON-строку вместо
+`FlexInt`/`FlexBool` (`infrastructure/board/entity.go`) принимают JSON-строку вместо
 числа/булева — модели часто присылают `"1"`/`"true"`.
 
 > **Важно про `requires_review`:** при разборе JSON **отсутствующее поле
-> трактуется как `true`** (`infrastructure/board/entity.go:290-306`). Это защитный дефолт:
-> старые записи и эпики из чата требуют ревизии архитектора. Явно снимается
-> либо `submit_architecture_backlog`, либо `BoardUpdateEpic`.
+> трактуется как `true`**. Это защитный дефолт: старые записи и эпики из чата
+> требуют бизнес-ревью. Явно снимается бизнес-аналитиком или
+> `BoardUpdateEpic`.
 
 ### Задача (`Task`)
 
 Атомарная единица работы одного специалиста. Соответствует фича-ветке
 `ai/task/<id>`.
 
-Отличия от эпика: `epic_id`, `assignee`, `resume_status` (из какого статуса
-снята в human_help). Остальные поля те же, включая `merge_conflict_files` и
-`TokenUsage`.
+Отличия от эпика: `epic_id`, `assignee`, `assigned_role`, `dependencies`
+(зависимости от других задач/эпиков), `type` (entity type для FSM).
+Остальные поля те же, включая `merge_conflict_files` и `TokenUsage`.
 
 У задачи есть `injections` — промпт-инъекции этой задачи. Они принадлежат ровно
 одной задаче и применяются к промпту её исполнителя со следующего обращения к
@@ -78,109 +78,109 @@ BOARD_TTL=0            # 0 = без истечения; например 24h
 `PUT .../tasks/{tid}` или инструментом доски `BoardUpdateTask` — то есть указание
 можно дать прямо из чата. Формат записи и условия — [Промпт-инъекции](chat-assistant.md#промпт-инъекции-injections).
 
-### Багрепорт (`BugReport`)
+### Комментарии (`Comments`)
 
-`bug_id`, `project_name`, `title`, `description`, `reporter_role`,
-`task_id`, `epic_id`, `status`, `verdict`, `fix_epic_id`, `created_at`,
-`updated_at`.
-
-### Бэклог (`Backlog`)
-
-`architecture_summary` + `tasks[]` + `opportunities[]`.
-`Opportunity{target_role, suggestion}` — кросс-функциональная рекомендация
-(«эта задача создаёт работу для смежной роли»), `infrastructure/board/entity.go:149-162`.
+Задача и эпик хранят массив комментариев — уточнения, замечания, результаты
+проверок. Каждый комментарий содержит `author`, `type` (`user`, `qa`,
+`system`), `body` и `created_at`. Пишутся через `BoardAddComment`,
+чтаются через `BoardGetTask`/`BoardGetEpic`, обновляются через
+`BoardUpdateTask`/`BoardUpdateEpic` (список заменяется целиком).
 
 ## Статусы и переходы
 
-### Задачи и эпики (`infrastructure/board/entity.go:32-150`)
+### Эпики (`domain/status.go`)
 
-Основная цепочка (Р-6) плюс боковая ветка «помощь человека»:
+Финальный автомат эпиков — строго линейный, без возвратов:
 
 ```
-new ──► analysis ──► ready ──► in_progress ──► testing ──► done
-  │         │          │            │ ▲           │
-  │         │          │            └─┘           │
-  │         │          │        (замечания:       │
-  │         │          │         testing →        │
-  │         │          │         in_progress)     │
-  └─────────┴──────────┴──► human_help ◄──────────┘
-                ▲  │           (боковая ветка: вход из любого
-                │  └──────────── нетерминального статуса,
-                │   ready / in_progress — помощь получена)
-cancelled ◄─────┴────────────── из любого нетерминального статуса
+draft ──► business_review ──► system_analysis ──► done
+ │            │                    │
+ └────────────┴────────────────────┴──► cancelled
 ```
 
 Точные разрешённые переходы:
 
 | Из | В |
 |---|---|
-| `new` | `analysis`, `human_help`, `cancelled` |
-| `analysis` | `ready`, `human_help`, `cancelled` |
-| `ready` | `in_progress`, `human_help`, `cancelled` |
-| `human_help` | `ready` (помощь получена, задача в очередь), `in_progress` (продолжаем), `cancelled` |
-| `in_progress` | `ready` (ручной откат кода), `testing` (сдача), `done`, `human_help`, `cancelled` |
-| `testing` | `in_progress` (замечания тестировщика), `done` (приёмка), `human_help`, `cancelled` |
+| `draft` | `business_review`, `cancelled` |
+| `business_review` | `system_analysis`, `draft` |
+| `system_analysis` | `done`, `cancelled` |
+| `done` | `done` |
+| `cancelled` | `cancelled` |
 
-- Терминальны только `done` и `cancelled` (`entity.go:68-71`).
+### Задачи (`domain/status.go`)
+
+Финальный автомат задач — строго линейный, без возвратов:
+
+```
+draft ──► infra ──► test_cases ──► development ──► done
+ │          │          │               │
+ └──────────┴──────────┴───────────────┴──► cancelled
+```
+
+Точные разрешённые переходы:
+
+| Из | В |
+|---|---|
+| `draft` | `infra`, `cancelled` |
+| `infra` | `test_cases`, `cancelled` |
+| `test_cases` | `development`, `cancelled` |
+| `development` | `done`, `cancelled` |
+| `done` | `done` |
+| `cancelled` | `cancelled` |
+
+- Тип сущности (`EntityTypeEpic` / `EntityTypeTask`) определяет, какие
+  переходы разрешены — один и тот же статус может иметь разные переходы
+  для эпика и задачи (`domain/status.go`).
 - Переход в тот же статус — идемпотентный «переход», не ошибка.
 - Неизвестный статус → `StatusError`.
-- `human_help` **замораживает** ревизию: `phaseArchitectReview` пропускает
-  эпики в «помощи человека» (`application/planner/kanban.go:817`).
-- Специалист сам переводит свою задачу в `human_help` инструментом
-  `BoardSetTaskStatus` с обязательным `reason` (задача невыполнима: кода или
-  зависимостей нет, блокер) — причина оседает в `pause_reason` и видна в
-  карточке; оркестратор уважает `human_help`/`cancelled` от агента и не
-  затирает их fallback'ом в `done` (`application/planner/kanban.go`, ветка после
-  «агент подтвердил сам»). Исчерпание бюджета автономии
-  (`KANBAN_MAX_ESCALATIONS`) тоже ведёт в `human_help` — с последней причиной
-  в `pause_reason`.
-
-### Багрепорты (`infrastructure/board/entity.go:313-394`)
-
-```
-new ──► confirmed ──► fix ──► fixed
- │           │
- │           └──► slop · feature · wont_fix
- └──► slop
-```
-
-Терминальны: `slop`, `feature`, `wont_fix`, `fixed`.
+- Нет лидов, нет багрепортов, нет обратных переходов.
+- `human_help` — исключительный статус: специалист сам переводит задачу,
+  если выполнить её невозможно (нет кода/зависимостей, блокер). Причина
+  оседает в `pause_reason`. Исчерпание бюджета автономии
+  (`KANBAN_MAX_ESCALATIONS`) тоже ведёт в `human_help`.
+- **Handoff Gate** (gate before `infra → test_cases` и `development → done`):
+  проверяет чистоту дерева (`git status --short`), сборку (`go build ./...`)
+  и ветку задачи (не main). `INFRA_DEGRADED` (нет go, нет песочницы) не
+  блокирует. (`tools/board_handoff.go`).
+- **Garage Guard** (guard on `development → done`): задача не может стать
+  `done`, если у неё нет коммитов (пустая ветка, чистый worktree).
+  (`infrastructure/board/done_guard.go`).
 
 ## Хуки
 
-`infrastructure/board/store.go:53-83` — колбэки, вызываемые **после** сохранения, вне
+`infrastructure/board/store.go` — колбэки, вызываемые **после** сохранения, вне
 блокировок. Ошибка git-шага не ломает переход статуса.
 
 | Хук | Что делает сервер |
 |---|---|
 | `EpicCreatedHook` | `autoCreateEpicBranch` — создать релизную ветку от `git_base` |
 | `TaskCreatedHook` | `autoCreateTaskBranch` — создать фича-ветку от ветки эпика |
-| `TaskInProgressHook` | `taskWorktree` — подготовить worktree |
+| `TaskInfraHook` | `taskWorktree` — sync эпика с main + rebase задачи + создать worktree |
 | `TaskDoneHook` | `autoCommitAndMergeTask` — коммит → авто-MR → merge |
 | `EpicDoneHook` | `syncEpicWithMain` — фоновая синхронизация с main |
 
-Устанавливаются в `server/gitflow.go:516`. Подробнее —
+Устанавливаются в `server/gitflow.go`. Подробнее —
 [Git-flow](gitops-workflow.md).
 
 ## Инструменты
 
-17 инструментов (`tools/board_tools.go:20-48`):
+13 инструментов (`tools/board_tools.go`):
 
 | Группа | Инструменты |
 |---|---|
-| Чтение | `BoardListEpics`, `BoardGetEpic`, `BoardListTasks`, `BoardGetTask`, `BoardListBugs`, `BoardGetBug` |
+| Чтение | `BoardListEpics`, `BoardGetEpic`, `BoardListTasks`, `BoardGetTask` |
 | Эпики | `BoardCreateEpic`, `BoardUpdateEpic`, `BoardDeleteEpic`, `BoardSetEpicStatus` |
 | Задачи | `BoardCreateTask`, `BoardUpdateTask`, `BoardDeleteTask`, `BoardSetTaskStatus` |
-| Баги | `BoardCreateBugReport`, `BoardSetBugStatus`, `BoardReviewBugReport` |
+| Комментарии | `BoardAddComment` |
 
-> **Нюанс именования:** Go-константы `BoardCreateBug` и `BoardReviewBug`
-> имеют строковые значения `BoardCreateBugReport` и `BoardReviewBugReport`
-> (`tools/board_tools.go:35,37`). Поиск по константам покажет «несуществующие»
-> инструменты — ищите по строковым значениям.
+`BoardCreateEpic` **всегда** ставит `requires_review: true` — эпики из чата
+требуют бизнес-ревью. `BoardUpdateEpic` умеет его снимать.
 
-`BoardCreateEpic` **всегда** ставит `requires_review: true`
-(`tools/board_tools.go:411`); `BoardUpdateEpic` умеет его снимать
-(`:503`).
+`BoardSetTaskStatus` при переходе `infra → test_cases` и `development → done`
+запускает **Handoff Gate**: проверяет чистоту дерева, сборку и ветку задачи.
+При `development → done` дополнительно проверяется **Done Guard** (коммиты не
+пустые).
 
 ## Токены
 
@@ -196,25 +196,24 @@ new ──► confirmed ──► fix ──► fixed
 
 ## Пересортировка эпиков (приоритет)
 
-Порядок строк доски = приоритет эпиков в очереди лидов. Единый компаратор
-`board.EpicLess` (`infrastructure/board/order.go`) использует и снимок доски (`boardView`
-сортирует строки), и оркестратор (`nextLeadEpic`, `phaseArchitect`,
+Порядок строк доски = приоритет эпиков в очереди оркестратора. Единый
+компаратор `board.EpicLess` (`infrastructure/board/order.go`) использует и снимок
+доски (`boardView` сортирует строки), и оркестратор (`phaseArchitect`,
 `blockingDependencyEpic`), поэтому «что видно» = «что берут в работу»:
 
 1. **Фаза** — инфраструктура (DevOps) → приложение (backend/frontend) →
    тестирование, QA Last (`epicPhaseRank`). Фаза первична: строка с большим
    приоритетом, но позже фазой, не может обогнать предыдущую фазу;
 2. **`priority`** по убыванию — задаётся пересортировкой строк (Web UI);
-3. `sequence_order` (порядок от архитектора/лида);
+3. `sequence_order` (порядок от архитектора);
 4. `task_id` — тайбрейкер для детерминизма.
 
 Ручная пересортировка — `POST /api/projects/<id>/epics/reorder`
 (`handleReorderEpics`, `server/server.go`), тело `{"order": ["EPIC-1", …]}`,
 первый ID получает наибольший приоритет (`Store.ReorderEpics`,
-`infrastructure/board/store.go:311`). Нюансы:
+`infrastructure/board/store.go`). Нюансы:
 
-- ревизию эпика **не** увеличивает (приоритет — не содержание, повторная
-  декомпозиция лидом не нужна);
+- ревизию эпика **не** увеличивает (приоритет — не содержание);
 - неизвестный ID — 404 (частичный результат уже применён: клиент получит
   ошибку и перечитает доску);
 - пропущенные эпики сохраняют прежний приоритет;
@@ -232,13 +231,17 @@ new ──► confirmed ──► fix ──► fixed
 - JSON-ключи — `snake_case`.
 - `assigned_role` не выдумывается: если роль неизвестна, запись считается
   грязной и пропускается.
-- `description` эпика из чата — черновик: требует ревизии архитектора.
+- `description` эпика из чата — черновик: требует бизнес-ревью.
 - Статусы меняются только через `Set*Status` — прямая запись поля `status`
   в `Update*` не является путём смены состояния.
+- Нет лидов, нет багрепортов, нет обратных переходов.
+- Нет обратной совместимости с legacy-статусами (`new`, `analysis`,
+  `ready`, `in_progress`, `testing`, `human_help`).
 
 ## Связанное
 
 - [Архитектор](architect.md) — кто создаёт эпики
+- [Бизнес-аналитик](business-analyst.md) — кто уточняет требования
 - [Агенты и роли](agents-and-roles.md) — права по ролям
 - [Git-flow](gitops-workflow.md) — хуки и ветки
 - [Web UI](web-ui.md) — визуализация доски

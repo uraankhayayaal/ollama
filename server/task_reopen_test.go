@@ -18,7 +18,7 @@ func driveTaskDone(t *testing.T, project, taskID string) {
 		t.Fatalf("store: %v", err)
 	}
 	defer store.Close()
-	for _, st := range []board.Status{board.StatusTestCases, board.StatusDevelopment, board.StatusDone} {
+	for _, st := range []board.Status{board.StatusInfra, board.StatusTestCases, board.StatusDevelopment, board.StatusDone} {
 		if err := store.SetTaskStatus(ctx, taskID, st); err != nil {
 			t.Fatalf("task %s -> %s: %v", taskID, st, err)
 		}

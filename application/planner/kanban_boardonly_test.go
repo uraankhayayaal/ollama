@@ -2,11 +2,13 @@ package planner
 
 import (
 	"ai/agents/architect"
+	"ai/agents/businessanalyst"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/infrastructure/board"
 	"ai/runner"
 	"ai/shared/projects"
+	"ai/tools"
 	"context"
 	"errors"
 	"os"
@@ -35,7 +37,32 @@ func (p *loopedProvider) Generate(ctx context.Context, agent services.Agent) (*r
 			Rounds:     6,
 		}, nil
 	default:
+		// Бизнес-аналитик: переводит эпик в system_analysis
+		if ba, ok := agent.(*businessanalyst.BusinessAnalyst); ok {
+			epicID := ""
+			for _, m := range ba.GetUserMessages() {
+				if idx := strings.Index(m.Message, "ID: "); idx >= 0 {
+					lineEnd := strings.Index(m.Message[idx:], "\n")
+					if lineEnd > 0 {
+						epicID = strings.TrimSpace(m.Message[idx+4 : idx+lineEnd])
+					}
+					break
+				}
+			}
+			if epicID != "" {
+				_, _ = ba.CallFunction(tools.BoardSetEpicStatus, map[string]any{"epic_id": epicID, "status": "system_analysis"})
+			}
+			return &runner.AgentResponse{Content: "Требования уточнены."}, nil
+		}
 		if a, ok := agent.(*architect.Architect); ok {
+			if epicID := extractArchitectEpicID(a.GetUserMessages()); epicID != "" {
+				return &runner.AgentResponse{Content: architectDecomposeForEpic(epicID)}, nil
+			}
+			for _, m := range a.GetUserMessages() {
+				if strings.Contains(m.Message, "Разбьёп эпик") {
+					return &runner.AgentResponse{Content: architectDecomposeJSON}, nil
+				}
+			}
 			if _, err := a.CallFunction(architect.SubmitBacklogToolName, architectBacklogArgs); err != nil {
 				return nil, err
 			}

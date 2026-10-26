@@ -5,21 +5,18 @@ import (
 	"ai/domain/services"
 )
 
-// AgentFactory — порт конструирования ролевых агентов оркестратора: лидов
-// направлений (Lead), специалистов по assigned_role задачи (Specialist),
-// агента шага plan-исполнителя (Step) и системного архитектора. Логика
-// оркестрации зависит только от этого порта; конкретные пакеты агентов
-// (backendlead/developer/devops/architect/…) сведены в реализацию внешнего
-// пакета `ai/agents/factory`, которую устанавливает composition root
-// (`main.go`) через SetAgentFactory. Так application/planner не импортирует
-// agents/* — направление зависимости соблюдено.
+// AgentFactory — порт конструирования ролевых агентов оркестратора: специалистов
+// по assigned_role задачи (Specialist), агента шага plan-исполнителя (Step),
+// системного архитектора и бизнес-аналитика. Логика оркестрации зависит только
+// от этого порта; конкретные пакеты агентов (developer/devops/architect/…)
+// сведены в реализацию внешнего пакета `ai/agents/factory`, которую устанавливает
+// composition root (`main.go`) через SetAgentFactory. Так application/planner
+// не импортирует agents/* — направление зависимости соблюдено.
 //
 // `Step` намеренно принимает доменный AgentType, а не *Step, чтобы реализация
 // фабрики не зависела от этого пакета (иначе получился бы цикл импорта
 // planner → agents/factory → planner).
 type AgentFactory interface {
-	// Lead создаёт агента-лида направления по assigned_role эпика.
-	Lead(project, role, prompt string) services.Agent
 	// Specialist создаёт агента-специалиста по assigned_role задачи.
 	Specialist(project, role, prompt string) services.Agent
 	// Step создаёт агента шага plan-исполнителя по типу шага; nil — неизвестный.
@@ -42,7 +39,6 @@ type AgentFactory interface {
 // установленной фабрики — ошибка сборки, а не молчаливое поведение.
 type noopAgentFactory struct{}
 
-func (noopAgentFactory) Lead(string, string, string) services.Agent       { return nil }
 func (noopAgentFactory) Specialist(string, string, string) services.Agent { return nil }
 func (noopAgentFactory) Step(domain.AgentType, string, string) services.Agent {
 	return nil

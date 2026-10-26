@@ -3,13 +3,10 @@ package main
 import (
 	"ai/agents"
 	"ai/agents/acceptor"
-	"ai/agents/backendlead"
 	"ai/agents/codereviewer"
 	"ai/agents/developer"
 	"ai/agents/devops"
-	"ai/agents/devopslead"
 	"ai/agents/factory"
-	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/application/planner"
 	apprag "ai/application/rag"
@@ -196,15 +193,6 @@ func main() {
 		projName = projectName
 		prompt := strings.Join(agentArgs[1:], " ")
 		agent = devops.NewDevops(projectName, prompt)
-	case "devopslead":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . devopslead <имя_проекта> <промпт>\n" +
-				"Пример: go run . devopslead billingService \"Декомпозируй инфраструктуру: Docker Compose локально, Kubernetes на проде, CI/CD с автотестами QA\"")
-		}
-		projectName := agentArgs[0]
-		projName = projectName
-		prompt := strings.Join(agentArgs[1:], " ")
-		agent = devopslead.NewDevopsLead(projectName, prompt)
 	case "qa":
 		if len(agentArgs) < 2 {
 			logging.Fatalf("Использование: go run . qa <имя_проекта> <промпт>\n" +
@@ -215,25 +203,6 @@ func main() {
 		prompt := strings.Join(agentArgs[1:], " ")
 		// Объединённый агент QA-приёмки: сборка → автотесты → приёмка.
 		agent = qaengineer.NewQAEngineer(projectName, prompt)
-
-	case "frontendlead":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . frontendlead <имя_проекта> <промпт>\n" +
-				"Пример: go run . frontendlead billingService \"Декомпозируй интерфейс на UI-модули, спроектируй стейт и API-контракты\"")
-		}
-		projectName := agentArgs[0]
-		projName = projectName
-		prompt := strings.Join(agentArgs[1:], " ")
-		agent = frontendlead.NewFrontendLead(projectName, prompt)
-	case "backendlead":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . backendlead <имя_проекта> <промпт>\n" +
-				"Пример: go run . backendlead billingService \"Декомпозируй сервисную часть на модули, спроектируй контракты API\"")
-		}
-		projectName := agentArgs[0]
-		projName = projectName
-		prompt := strings.Join(agentArgs[1:], " ")
-		agent = backendlead.NewBackendLead(projectName, prompt)
 	case "kanban":
 		// Kanban-оркестрация: архитектор публикует эпики на Redis-доску,
 		// лиды декомпозируют их на JSON-задачи, специалисты выполняют —
@@ -272,7 +241,7 @@ func main() {
 			}
 		}
 	default:
-		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . devopslead <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . frontendlead <имя> <промпт>', 'go run . backendlead <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Режим планировщика обрабатывается отдельно и до общего прогона:
@@ -306,11 +275,10 @@ func main() {
 		logging.Warnf("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
 	}
 
-	// Standalone-запуск лида (без подключённой Kanban-доски): модель вернула
-	// JSON-декомпозицию. Печатаем в консоль список спроектированных задач,
-	// чтобы результат работы лида был виден сразу, до передачи исполнителям.
+	// Standalone-запуск агента: модель вернула
+	// JSON-декомпозицию. Печатаем в консоль список спроектированных задач.
 	switch agent.(type) {
-	case *backendlead.BackendLead, *frontendlead.FrontendLead, *devopslead.DevopsLead, *qaengineer.QAEngineer:
+	case *qaengineer.QAEngineer:
 		printLeadDecomposition(resp.Content)
 	}
 
@@ -401,7 +369,7 @@ func projectFromArgs(args []string) string {
 		return "unnamed"
 	}
 	switch args[1] {
-	case "generate", "backend", "frontend", "devops", "devopslead", "qa", "frontendlead", "backendlead", "plan", "kanban", "accept", "index":
+	case "generate", "backend", "frontend", "devops", "qa", "plan", "kanban", "accept", "index":
 		if len(args) >= 3 && args[2] != "" {
 			return args[2]
 		}

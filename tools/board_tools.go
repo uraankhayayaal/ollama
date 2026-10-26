@@ -802,13 +802,13 @@ func (t *boardSetTaskStatusTool) Name() string { return BoardSetTaskStatus }
 func (t *boardSetTaskStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetTaskStatus,
-		Description: "Перевести задачу в новый статус: new, analysis, human_help, ready, in_progress, testing, done, cancelled. Специалист, завершив работу (сборка и проверки зелёные), переводит задачу в testing («На тестирование»); приёмку выполняет тестировщик — только он ставит done или возвращает задачу в in_progress с конкретными замечаниями, поэтому done разработчику ставить не нужно. Возврат testing → in_progress требует конкретного reason (файл:строка, команда воспроизведения или шаги): общее «нужна доработка» отклоняется — иначе задача крутится между приёмкой и работой. human_help (с обязательной причиной reason) — если задачу невозможно выполнить: нет исходного кода/зависимостей, есть блокер, зациклилась работа; это останавливает задачу и передаёт её человеку вместо повторов без результата. Лиды используют инструмент для перепланирования.",
+		Description: "Перевести задачу в новый статус: infra, test_cases, development, done, cancelled. Специалист, завершив работу (сборка и проверки зелёные), переводит задачу в следующий статус или в done. human_help (с обязательной причиной reason) — если задачу невозможно выполнить: нет исходного кода/зависимостей, есть блокер, зациклилась работа; это останавливает задачу и передаёт её человеку вместо повторов без результата.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "new | analysis | human_help | ready | in_progress | testing | done | cancelled"},
-				"reason":  map[string]any{"type": "string", "description": "Причина: обязателен для human_help (что именно блокирует выполнение) и для возврата testing → in_progress (конкретный дефект: файл:строка, команда воспроизведения или шаги); для остальных статусов необязателен."},
+				"status":  map[string]any{"type": "string", "description": "infra | test_cases | development | done | cancelled | human_help"},
+				"reason":  map[string]any{"type": "string", "description": "Причина: обязателен для human_help (что именно блокирует выполнение); для остальных статусов необязателен."},
 			},
 			"required":             []string{"task_id", "status"},
 			"additionalProperties": false,
@@ -826,9 +826,9 @@ func (t *boardSetTaskStatusTool) Execute(args map[string]any) ([]byte, error) {
 	if err != nil {
 		return boardErrStore(BoardSetTaskStatus, t.b, err)
 	}
-	// Handoff Gate (п.3.3 A7-04): передача в done — только с чистым деревом
+	// Handoff Gate: передача задачи из фазы — только с чистым деревом
 	// и зелёной сборкой. Инфра-деграды не блокируют.
-	if st == domain.StatusDone {
+	if st == domain.StatusDone || st == domain.StatusTestCases {
 		if gerr := handoffGate(t.ops); gerr != nil {
 			return boardErr(BoardSetTaskStatus, gerr)
 		}

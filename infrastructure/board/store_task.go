@@ -417,8 +417,8 @@ func (s *Store) SetTaskStatus(ctx context.Context, id string, st Status) error {
 	}
 	// Ф-2: авто-действия при достижении done (gitflow: ветка задачи → релизная
 	// ветка эпика). Хук внедряется сервером; ошибки хука не ломают сам переход.
-	if st == StatusDevelopment && s.TaskInProgressHook != nil {
-		s.TaskInProgressHook(ctx, t, from)
+	if st == StatusInfra && s.TaskInfraHook != nil {
+		s.TaskInfraHook(ctx, t, from)
 	}
 	if st == StatusDone && s.TaskDoneHook != nil {
 		s.TaskDoneHook(ctx, t, from)

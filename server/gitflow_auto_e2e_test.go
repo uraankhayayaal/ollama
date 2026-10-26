@@ -380,12 +380,12 @@ func TestTaskStartSyncsEpicAndRebases(t *testing.T) {
 	}
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
-		EpicID:   "epic-1", Status: board.StatusTestCases,
+		EpicID:   "epic-1", Status: board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Хук in_progress: синхронизация эпика с main + rebase задачи.
+	// Хук infra: синхронизация эпика с main + rebase задачи.
 	srv.taskWorktree(ctx, "myrepo", &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
 		EpicID:   "epic-1",

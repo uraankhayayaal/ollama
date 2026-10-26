@@ -128,8 +128,8 @@ func TestPhantomDoneNotClosedByFallback(t *testing.T) {
 		if task.Status == board.StatusDone {
 			t.Fatalf("задача %s не должна закрываться в done без работы (инцидент FEL-04)", task.TaskID)
 		}
-		if task.Status == board.StatusDraft {
-			continue // не бралась в работу — её состояние нас не интересует
+		if task.Status == board.StatusDraft || task.Status == board.StatusInfra {
+			continue // не бралась в работу (зависимости не выполнены) — её состояние нас не интересует
 		}
 		worked = true
 		// Требование сделать работу остаётся на доске (инъекция/комментарий эскалации).

@@ -38,7 +38,7 @@ func computeStatus(running, gating, standby bool, meta *board.Meta) string {
 		switch meta.Status {
 		case board.StatusDone:
 			status = "done"
-		case board.StatusInfra, board.StatusTestCases, board.StatusDevelopment:
+		case board.StatusDraft, board.StatusInfra, board.StatusTestCases, board.StatusDevelopment:
 			if !running {
 				status = "in_progress"
 			}

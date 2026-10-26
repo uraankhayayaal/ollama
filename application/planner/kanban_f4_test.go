@@ -2,6 +2,7 @@ package planner
 
 import (
 	"ai/agents/architect"
+	"ai/agents/businessanalyst"
 	"ai/domain"
 	"ai/domain/services"
 	"ai/infrastructure/board"
@@ -55,7 +56,33 @@ func (p *askFirstProvider) Generate(ctx context.Context, agent services.Agent) (
 		// tool-call'ы, как боевой цикл (llm.OllamaProvider).
 		return (&kanbanProvider{}).Generate(ctx, agent)
 	default:
+		if ba, ok := agent.(*businessanalyst.BusinessAnalyst); ok {
+			epicID := ""
+			for _, m := range ba.GetUserMessages() {
+				if idx := strings.Index(m.Message, "ID: "); idx >= 0 {
+					lineEnd := strings.Index(m.Message[idx:], "\n")
+					if lineEnd > 0 {
+						epicID = strings.TrimSpace(m.Message[idx+4 : idx+lineEnd])
+					}
+					break
+				}
+			}
+			if epicID != "" {
+				_, _ = ba.CallFunction(tools.BoardSetEpicStatus, map[string]any{"epic_id": epicID, "status": "system_analysis"})
+			}
+			return &runner.AgentResponse{Content: "Требования уточнены."}, nil
+		}
 		a, ok := agent.(*architect.Architect)
+		if a != nil {
+			if epicID := extractArchitectEpicID(a.GetUserMessages()); epicID != "" {
+				return &runner.AgentResponse{Content: architectDecomposeForEpic(epicID)}, nil
+			}
+			for _, m := range a.GetUserMessages() {
+				if strings.Contains(m.Message, "Разбьёп эпик") {
+					return &runner.AgentResponse{Content: architectDecomposeJSON}, nil
+				}
+			}
+		}
 		if !ok || a.ReviewerMode {
 			return &runner.AgentResponse{Content: ""}, nil
 		}
@@ -137,7 +164,33 @@ func (p *autonomyProvider) Generate(ctx context.Context, agent services.Agent) (
 		// tool-call'ы, как боевой цикл (llm.OllamaProvider).
 		return (&kanbanProvider{}).Generate(ctx, agent)
 	default:
+		if ba, ok := agent.(*businessanalyst.BusinessAnalyst); ok {
+			epicID := ""
+			for _, m := range ba.GetUserMessages() {
+				if idx := strings.Index(m.Message, "ID: "); idx >= 0 {
+					lineEnd := strings.Index(m.Message[idx:], "\n")
+					if lineEnd > 0 {
+						epicID = strings.TrimSpace(m.Message[idx+4 : idx+lineEnd])
+					}
+					break
+				}
+			}
+			if epicID != "" {
+				_, _ = ba.CallFunction(tools.BoardSetEpicStatus, map[string]any{"epic_id": epicID, "status": "system_analysis"})
+			}
+			return &runner.AgentResponse{Content: "Требования уточнены."}, nil
+		}
 		a, ok := agent.(*architect.Architect)
+		if a != nil {
+			if epicID := extractArchitectEpicID(a.GetUserMessages()); epicID != "" {
+				return &runner.AgentResponse{Content: architectDecomposeForEpic(epicID)}, nil
+			}
+			for _, m := range a.GetUserMessages() {
+				if strings.Contains(m.Message, "Разбьёп эпик") {
+					return &runner.AgentResponse{Content: architectDecomposeJSON}, nil
+				}
+			}
+		}
 		if !ok || a.ReviewerMode {
 			return &runner.AgentResponse{Content: ""}, nil
 		}

@@ -3,12 +3,9 @@ package agents_test
 import (
 	"ai/agents"
 	"ai/agents/architect"
-	"ai/agents/backendlead"
 	"ai/agents/chatassist"
 	"ai/agents/developer"
 	"ai/agents/devops"
-	"ai/agents/devopslead"
-	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/shared/projects"
 	"ai/tools"
@@ -53,33 +50,14 @@ func runAgents(t *testing.T) []withRunAgent {
 	if err != nil {
 		t.Fatalf("DevOps-инженер: %v", err)
 	}
-	// Архитектор получил Run и LSP/CodeSearch на Этапе 4 (git и чтение кода
-	// в ветке эпика) — фрагменты компактного вывода ему уместны.
 	arch := architect.NewArchitectWithStore("tokeneconomy-arch-test", "задание", nil)
 	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-arch-test"))
-	// Лиды получили Run и скелетон в ветке эпика на Этапе 5 (проверка
-	// сборки и git-пуш) — фрагмент компактного вывода им уместен. LSP у
-	// лидов нет, поэтому LSP-фолбэк не добавляется (hasLSP=false).
-	be, err := backendlead.NewBackendLeadInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("Backend Lead: %v", err)
-	}
-	fe, err := frontendlead.NewFrontendLeadInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("Frontend Lead: %v", err)
-	}
-	dl, err := devopslead.NewDevopsLeadInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("DevOps Lead: %v", err)
-	}
+
 	return []withRunAgent{
 		{"backend-разработчик", backend.GetSystemMessages(nil)[0].Message, setOf(backend.GetTools()), true},
 		{"QA-инженер", qa.GetSystemMessages(nil)[0].Message, setOf(qa.GetTools()), false},
 		{"DevOps-инженер", dev.GetSystemMessages(nil)[0].Message, setOf(dev.GetTools()), false},
 		{"Системный архитектор", arch.GetSystemMessages(nil)[0].Message, setOf(arch.GetTools()), true},
-		{"Backend Lead", be.GetSystemMessages(nil)[0].Message, setOf(be.GetTools()), false},
-		{"Frontend Lead", fe.GetSystemMessages(nil)[0].Message, setOf(fe.GetTools()), false},
-		{"DevOps Lead", dl.GetSystemMessages(nil)[0].Message, setOf(dl.GetTools()), false},
 	}
 }
 

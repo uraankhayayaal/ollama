@@ -8,12 +8,9 @@ package factory
 import (
 	"ai/agents"
 	"ai/agents/architect"
-	"ai/agents/backendlead"
 	"ai/agents/businessanalyst"
 	"ai/agents/developer"
 	"ai/agents/devops"
-	"ai/agents/devopslead"
-	"ai/agents/frontendlead"
 	"ai/agents/qaengineer"
 	"ai/domain"
 	"ai/domain/services"
@@ -44,19 +41,6 @@ func isRole(role string, markers ...string) bool {
 // roleFactory — конкретная реализация ролевых агентов поверх пакетов агентов.
 type roleFactory struct{}
 
-func (roleFactory) Lead(project, role, prompt string) agents.Agent {
-	switch {
-	case isRole(role, "qa", "тест", "testing"):
-		return qaengineer.NewQAEngineer(project, prompt)
-	case isRole(role, "devops", "инфра", "infra", "dev", "sre", "ci"):
-		return devopslead.NewDevopsLead(project, prompt)
-	case isRole(role, "front", "react", "ui", "client", "фронт"):
-		return frontendlead.NewFrontendLead(project, prompt)
-	default: // backend
-		return backendlead.NewBackendLead(project, prompt)
-	}
-}
-
 func (roleFactory) Specialist(project, role, prompt string) agents.Agent {
 	switch {
 	case isRole(role, "qa", "тест", "testing"):
@@ -82,14 +66,8 @@ func (roleFactory) Step(agentType domain.AgentType, projectName, prompt string) 
 		return developer.NewFrontendDeveloper(projectName, prompt)
 	case domain.AgentDevops:
 		return devops.NewDevops(projectName, prompt)
-	case domain.AgentDevopsLead:
-		return devopslead.NewDevopsLead(projectName, prompt)
 	case domain.AgentQAEngineer:
 		return qaengineer.NewQAEngineer(projectName, prompt)
-	case domain.AgentFrontendLead:
-		return frontendlead.NewFrontendLead(projectName, prompt)
-	case domain.AgentBackendLead:
-		return backendlead.NewBackendLead(projectName, prompt)
 	case domain.AgentBusinessAnalyst:
 		return businessanalyst.NewBusinessAnalyst(projectName, prompt)
 	}

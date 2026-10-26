@@ -295,27 +295,6 @@ func (k *KanbanRunner) architectFail(ctx context.Context, err error) error {
 	return err
 }
 
-// leadFail — падение лид-фазы (декомпозиции эпика) останавливает ЭПИК
-// с cancelled вместо бесконечных повторов цикла: эпик не разобран, повтор с
-// тем же промптом ничего не меняет. Отмена контекста — не форсмажор:
-// пробрасываем как есть. Возвращает err без изменений —
-// можно писать `return k.leadFail(ctx, epic, err)`.
-func (k *KanbanRunner) leadFail(ctx context.Context, epic *domain.Epic, err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-		return err
-	}
-	reason := fmt.Sprintf("декомпозиция эпика %s не удалась: %s", epic.TaskID, truncateText(err.Error(), 300))
-	k.setStopReason(reason)
-	if serr := k.store.SetEpicStatus(ctx, epic.TaskID, domain.StatusCancelled); serr != nil {
-		k.log.Warnf("[эпик %s] не удалось перевести в cancelled: %v", epic.TaskID, serr)
-	}
-	k.status("[эпик %s] %s — нужна помощь человека", epic.TaskID, reason)
-	return err
-}
-
 // agentChatNameForKanban возвращает человекочитаемое имя агента для чата.
 func agentChatNameForKanban(spec services.Agent, assignee string) string {
 	type labler interface{ Label() string }

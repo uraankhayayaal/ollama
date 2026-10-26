@@ -1285,3 +1285,25 @@ FlexInt`, метки `string`), а `domain.Epic`/`Task` — `domain.TaskSpec` (`
 `domain.*`, затем перенос компаратора/разбора задач и миграция ~183
 `board.*`-обращений planner). Остаются C4 (перенос контекст-плумбинга),
 C5 (порт BoardStore), C6+C3.
+
+Kanban status redesign (26 Oct 2026, итерации 1–10): новый линейный статус-флоу —
+задачи `draft → infra → test_cases → development → done`, эпики `draft → business_review → system_analysis → done`.
+Удалены: лиды (BackendLead, FrontendLead, DevOpsLead, `phaseLead`/`phaseArchitectReview`/
+`nextLeadEpic`/`taskDescription`/`epicDescription`), багрепорты
+(`BoardCreateBugReport`, `BoardSetBugStatus`, `BoardReviewBugReport`, `BoardCreateBug`,
+`BugReport`, `BugStatus`, `BugStatusError`, `validateBugTransition`, `bugs.go`),
+`human_help` как системный статус (остался как исключительный, без возвратов),
+обратные переходы, ручные инструменты `BoardReopenTask`/`BoardCreateBugReport`.
+`handoffGate` теперь срабатывает на `StatusDone` И `StatusTestCases`
+(`infra → test_cases` + `development → done`). `TaskInfraHook` заменяет
+`TaskInProgressHook`, триггер на `StatusInfra`. `phaseInfra`/`phaseTestCases`/
+`phaseDevelopment` в `kanban_specialist.go` заменяют `phaseExecute`.
+`architectDecomposeForEpic(epicID string)` создаёт задачи с зависимостями (T2 зависит
+от T1). `kanban_prompts.go` — role-specific next-status (phase-aware). Тесты:
+30 planner-тестов, 6 провайдеров с BA-хендлером + architect-decompose JSON.
+`phaseExecute` сохранён как legacy для `kanban_injections_test.go`.
+`gofmt` по изменённым файлам чист, `go build ./...`/`go vet ./...`/`make depgate`/
+`make backend-test` — зелёные (единственный FAIL — `TestAcceptMakefileFormatAnalyzeInSubmake`
+на GNU Make 3.81 — известный, не регресс). CI-файлы (autotest.yml,
+sandbox-readiness.yml, e2e.yml) актуальны. Документация обновлена:
+`docs/20-features/kanban-board.md`, `docs/plans/PLAN-2026-10-25-kanban-status-redesign.md`.

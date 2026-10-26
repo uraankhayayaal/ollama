@@ -96,13 +96,13 @@ func newRollbackFixture(t *testing.T) *rollbackFixture {
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1},
 		EpicID:   "e1",
-		Status:   board.StatusTestCases,
+		Status:   board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// Старт задачи: хук создаёт worktree и снимает base_sha.
 	f := &rollbackFixture{srv: srv, handler: handler, store: store, project: project}
-	f.do(t, "PUT", "/api/projects/"+project+"/tasks/t1", `{"status":"development"}`, http.StatusOK)
+	f.do(t, "PUT", "/api/projects/"+project+"/tasks/t1", `{"status":"infra"}`, http.StatusOK)
 	ref, err := srv.reg.TaskBranch(project, "t1")
 	if err != nil || strings.TrimSpace(ref.Worktree) == "" {
 		t.Fatalf("worktree задачи не создан: %+v err=%v", ref, err)
@@ -286,7 +286,7 @@ func TestRollbackTaskRefusals(t *testing.T) {
 	if got := gitFixtureRun(t, f.work, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("отказы изменили код: HEAD=%s, ожидался %s", got, head)
 	}
-	if f.task(t).Status != board.StatusDevelopment {
+	if f.task(t).Status != board.StatusInfra {
 		t.Fatalf("отказы должны были оставить задачу в работе: %s", f.task(t).Status)
 	}
 }
@@ -302,7 +302,7 @@ func TestRollbackTaskWithoutWorktree(t *testing.T) {
 	}
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "t1", Title: "задача", SequenceOrder: 1},
-		EpicID:   "e1", Status: board.StatusDevelopment,
+		EpicID:   "e1", Status: board.StatusInfra,
 	}); err != nil {
 		t.Fatal(err)
 	}

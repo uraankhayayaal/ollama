@@ -40,7 +40,7 @@ type fakeActions struct {
 	finishErr    error
 	// Ручная смена статуса багрепорта.
 
-	bugErr      error
+	bugErr error
 }
 
 func (f *fakeActions) KanbanStart(_ context.Context, task string) error {

@@ -65,11 +65,11 @@ type Store struct {
 	// меняется. nil — гарда нет (поведение прежних вызовов не меняется).
 	TaskDoneGuard func(ctx context.Context, task *Task, from Status) error
 
-	// TaskInProgressHook — опциональный обратный вызов при переводе задачи в
-	// StatusInProgress (Ф-3). Вызывается из SetTaskStatus вне блокировок, после
+	// TaskInfraHook — опциональный обратный вызов при переводе задачи в
+	// StatusInfra (Ф-3). Вызывается из SetTaskStatus вне блокировок, после
 	// успешного сохранения. Назначение: сервер внедряет сюда создание worktree
 	// ветки задачи, в который специалист получает OutputDir. nil — хука нет.
-	TaskInProgressHook func(ctx context.Context, task *Task, from Status)
+	TaskInfraHook func(ctx context.Context, task *Task, from Status)
 
 	// EpicCreatedHook — опциональный обратный вызов после создания эпика (Ф-1).
 	// Вызывается из CreateEpic вне блокировок, после успешного сохранения
@@ -104,11 +104,11 @@ type Store struct {
 	TaskStateHook func(ctx context.Context, t *Task)
 
 	// TaskStatusChangedHook — опциональный обратный вызов при ЛЮБОЙ смене
-	// статуса задачи (не только done/in_progress). Вызывается из SetTaskStatus
-	// после успешного сохранения, до TaskDoneHook/TaskInProgressHook.
-	// Назначение: сервер публикует обновлённый снимок доски — иначе прямые
-	// вызовы оркестратора (эскалация human_help, детект зацикливания) не
-	// увидит Web UI без перезагрузки страницы. nil — хука нет.
+	// статуса задачи. Вызывается из SetTaskStatus после успешного сохранения,
+	// до TaskDoneHook/TaskInfraHook. Назначение: сервер публикует обновлённый
+	// снимок доски — иначе прямые вызовы оркестратора (эскалация human_help,
+	// детект зацикливания) не увидит Web UI без перезагрузки страницы. nil —
+	// хука нет.
 	TaskStatusChangedHook func(ctx context.Context, t *Task, from, to Status)
 }
 

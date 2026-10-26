@@ -2,6 +2,7 @@ package planner
 
 import (
 	"ai/agents/architect"
+	"ai/agents/businessanalyst"
 	"ai/agents/qaengineer"
 	"ai/domain"
 	"ai/domain/services"
@@ -11,6 +12,7 @@ import (
 	"ai/tools"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -36,11 +38,6 @@ func (p *kanbanProvider) Generate(ctx context.Context, agent services.Agent) (*r
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
 		return &runner.AgentResponse{Content: leadDecompositionJSON}, nil
 	case strings.HasPrefix(umsg, "Ты — специалист"):
-		// Разработчик всегда ставит задачу в testing (Этап 6); тестировщик —
-		// в done. Без фактического вызова BoardSetTaskStatus задача
-		// зависла бы и recoverStuckTasks вернул бы её. Боевой провайдер
-		// (llm.OllamaProvider) исполняет tool-call'ы модели внутри своего цикла;
-		// тестовый — делает это здесь.
 		var resp *runner.AgentResponse
 		if _, ok := agent.(*qaengineer.QAEngineer); ok {
 			resp = &runner.AgentResponse{
@@ -60,8 +57,34 @@ func (p *kanbanProvider) Generate(ctx context.Context, agent services.Agent) (*r
 		executeBoardToolCalls(agent, resp)
 		return resp, nil
 	default:
-		// Системный архитектор: реально публикуем бэклог вызовом инструмента.
+		// Бизнес-аналитик: переводит эпик в system_analysis
+		if ba, ok := agent.(*businessanalyst.BusinessAnalyst); ok {
+			epicID := ""
+			for _, m := range ba.GetUserMessages() {
+				if idx := strings.Index(m.Message, "ID: "); idx >= 0 {
+					lineEnd := strings.Index(m.Message[idx:], "\n")
+					if lineEnd > 0 {
+						epicID = strings.TrimSpace(m.Message[idx+4 : idx+lineEnd])
+					}
+					break
+				}
+			}
+			if epicID != "" {
+				_, _ = ba.CallFunction(tools.BoardSetEpicStatus, map[string]any{"epic_id": epicID, "status": "system_analysis"})
+			}
+			return &runner.AgentResponse{Content: "Требования уточнены."}, nil
+		}
+		// Архитектор: два режима — создание бэклога (эпики) и декомпозиция (задачи)
 		if a, ok := agent.(*architect.Architect); ok {
+			if epicID := extractArchitectEpicID(a.GetUserMessages()); epicID != "" {
+				return &runner.AgentResponse{Content: architectDecomposeForEpic(epicID)}, nil
+			}
+			for _, m := range a.GetUserMessages() {
+				if strings.Contains(m.Message, "Разбьёп эпик") {
+					return &runner.AgentResponse{Content: architectDecomposeJSON}, nil
+				}
+			}
+			// Создание бэклога (первичный архитектор)
 			_, err := a.CallFunction(architect.SubmitBacklogToolName, architectBacklogArgs)
 			if err != nil {
 				return nil, err
@@ -91,7 +114,84 @@ var architectBacklogArgs = map[string]any{
 	},
 }
 
-// leadDecompositionJSON — декомпозиция эпика лидом: две задачи одного
+// architectDecomposeJSON — декомпозиция эпика архитектором: две задачи
+// (первая — без петли, вторая — с петлёй для тестов эскалации).
+// Устаревший вариант для одного эпика CALC-01.
+const architectDecomposeJSON = `{
+  "tasks": [
+    {
+      "task_id": "T-01",
+      "title": "Задача 1",
+      "description": "Контракт задачи.",
+      "epic_id": "CALC-01",
+      "assigned_role": "Go Developer",
+      "sequence_order": 1,
+      "can_run_parallel": true,
+      "dependencies": []
+    },
+    {
+      "task_id": "T-02",
+      "title": "Задача 2",
+      "description": "Контракт задачи.",
+      "epic_id": "CALC-01",
+      "assigned_role": "Go Developer",
+      "sequence_order": 2,
+      "can_run_parallel": false,
+      "dependencies": ["T-01"]
+    }
+  ]
+}`
+
+// architectDecomposeForEpic генерирует декомпозиционный JSON с уникальными
+// ID задач, привязанными к конкретному эпику.
+func architectDecomposeForEpic(epicID string) string {
+	task1 := epicID + "-T1"
+	task2 := epicID + "-T2"
+	return fmt.Sprintf(`{
+  "tasks": [
+    {
+      "task_id": "%s",
+      "title": "Задача 1",
+      "description": "Контракт задачи.",
+      "epic_id": "%s",
+      "assigned_role": "Go Developer",
+      "sequence_order": 1,
+      "can_run_parallel": true,
+      "dependencies": []
+    },
+    {
+      "task_id": "%s",
+      "title": "Задача 2",
+      "description": "Контракт задачи.",
+      "epic_id": "%s",
+      "assigned_role": "Go Developer",
+      "sequence_order": 2,
+      "can_run_parallel": false,
+      "dependencies": ["%s"]
+    }
+  ]
+}`, task1, epicID, task2, epicID, task1)
+}
+
+// extractArchitectEpicID извлекает ID эпика из сообщений архитектора.
+func extractArchitectEpicID(userMsgs []domain.AgentMessage) string {
+	prefix := "Эпик: "
+	for _, m := range userMsgs {
+		idx := strings.Index(m.Message, prefix)
+		if idx < 0 {
+			continue
+		}
+		rest := m.Message[idx+len(prefix):]
+		dash := strings.Index(rest, " —")
+		if dash < 0 {
+			dash = len(rest)
+		}
+		return strings.TrimSpace(rest[:dash])
+	}
+	return ""
+}
+
+// leadDecompositionJSON — декомпозиция эпика архитектором: две задачи одного
 // специалиста с зависимостью T-02 -> T-01 (по одной задаче на специалиста за
 // цикл — вторая задача ждёт завершения первой).
 const leadDecompositionJSON = `{
@@ -163,19 +263,19 @@ func TestKanbanSolvesUserTask(t *testing.T) {
 		t.Fatalf("эпик знает о %d задачах, ожидалось 2", len(epics[0].Tasks))
 	}
 
-	t1, err := store.GetTask(ctx, "T-01")
+	t1, err := store.GetTask(ctx, "ARCH-01-T1")
 	if err != nil || t1.Status != board.StatusDone {
-		t.Fatalf("T-01 должен быть выполнен: %+v err=%v", t1, err)
+		t.Fatalf("ARCH-01-T1 должен быть выполнен: %+v err=%v", t1, err)
 	}
-	t2, err := store.GetTask(ctx, "T-02")
+	t2, err := store.GetTask(ctx, "ARCH-01-T2")
 	if err != nil || t2.Status != board.StatusDone {
-		t.Fatalf("T-02 должен быть выполнен: %+v err=%v", t2, err)
+		t.Fatalf("ARCH-01-T2 должен быть выполнен: %+v err=%v", t2, err)
 	}
 	if t2.EpicID != "ARCH-01" || t1.EpicID != "ARCH-01" {
-		t.Errorf("задачи не связаны с эпиком ARCH-01: T-01=%s T-02=%s", t1.EpicID, t2.EpicID)
+		t.Errorf("задачи не связаны с эпиком ARCH-01: ARCH-01-T1=%s ARCH-01-T2=%s", t1.EpicID, t2.EpicID)
 	}
 	if t1.Assignee == "" {
-		t.Error("у задачи T-01 не назначен специалист (assignee)")
+		t.Error("у задачи ARCH-01-T1 не назначен специалист (assignee)")
 	}
 }
 

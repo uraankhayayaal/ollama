@@ -45,6 +45,8 @@ func TestValidateTransitionTask(t *testing.T) {
 	valid := []struct {
 		from, to Status
 	}{
+		{StatusDraft, StatusInfra},
+		{StatusDraft, StatusCancelled},
 		{StatusInfra, StatusTestCases},
 		{StatusInfra, StatusCancelled},
 		{StatusTestCases, StatusDevelopment},
@@ -63,6 +65,9 @@ func TestValidateTransitionTask(t *testing.T) {
 	invalid := []struct {
 		from, to Status
 	}{
+		{StatusDraft, StatusDone},
+		{StatusDraft, StatusTestCases},
+		{StatusDraft, StatusDevelopment},
 		{StatusInfra, StatusDone},
 		{StatusInfra, StatusDevelopment},
 		{StatusTestCases, StatusDone},

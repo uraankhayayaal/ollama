@@ -45,6 +45,7 @@ var toolNames = []string{
 	tools.BoardListEpics, tools.BoardListTasks,
 	tools.BoardGetEpic, tools.BoardGetTask,
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
+	tools.BoardCreateTask, tools.BoardUpdateTask, tools.BoardDeleteTask, tools.BoardSetTaskStatus,
 	"WriteFiles", "Run",
 }
 

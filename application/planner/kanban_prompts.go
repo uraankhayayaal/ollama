@@ -25,83 +25,6 @@ func (k *KanbanRunner) boardSummary(ctx context.Context) string {
 		tc.Total, tc.By[domain.StatusDone], tc.By[domain.StatusCancelled])
 }
 
-// leadFor создаёт агента-лида направления по assigned_role эпика и собирает
-// промпт декомпозиции. Лиды пишут ТОЛЬКО скелетон (allowlist в инструменте,
-// worktree ветки эпика подключается в phaseLeads через epicOutputDir); для QA
-// эпика лидом становится qaengineer.
-func (k *KanbanRunner) leadFor(epic *domain.Epic) (services.Agent, error) {
-	prompt := k.leadPrompt(epic)
-	project := k.store.Project()
-	return agentFactory().Lead(project, epic.AssignedRole, prompt), nil
-}
-
-// leadPrompt формирует задание лиду: эпик, архитектурная сводка. Лид публикует
-// задачи инструментами доски (если они доступны), иначе — JSON-декомпозицией.
-// 5.3: НЕ-QA лиды (backend/frontend/devops) дополнительно пишут СКЕЛЕТОН в
-// worktree ветки эпика: контракты живут в коде скелетона, задачи ссылаются на
-// файлы, а не дублируют контракт текстом. QA-лид скелетона не пишет (у него
-// нет Run и работ с кодом — readme-only до Этапа 8), для него сохраняется
-// старый формат «полный контракт в description».
-func (k *KanbanRunner) leadPrompt(epic *domain.Epic) string {
-	// Скелетон пишут все лиды, кроме QA: их направления имеют Write/Run и
-	// worktree ветки эпика (см. phaseLeads → SetOutputDir).
-	skeleton := !isRole(epic.AssignedRole, "qa", "тест", "testing")
-	var b strings.Builder
-	b.WriteString("Декомпозируй эпик из бэклога Системного архитектора на задачи для рядовых специалистов.\n\n")
-	fmt.Fprintf(&b, "Проект: %s\n", k.store.Project())
-	fmt.Fprintf(&b, "Эпик: %s — %s\n", epic.TaskID, epic.Title)
-	if epic.Summary != "" {
-		fmt.Fprintf(&b, "Архитектурная сводка:\n%s\n\n", epic.Summary)
-	}
-	fmt.Fprintf(&b, "Описание эпика:\n%s\n\n", epic.Description)
-	b.WriteString("Публикация задач:\n")
-	if skeleton {
-		b.WriteString("- Если у тебя есть инструменты доски (BoardCreateTask и др.) — создавай задачи ими (объём, приёмочные критерии и отсылки к файлам скелетона: путь + символ/строка; assigned_role, sequence_order, dependencies). Обновляй и удаляй задачи через BoardUpdateTask/BoardDeleteTask (кроме взятых в работу).\n")
-	} else {
-		b.WriteString("- Если у тебя есть инструменты доски (BoardCreateTask и др.) — создавай задачи ими (полный контракт в description, assigned_role, sequence_order, dependencies). Обновляй и удаляй задачи через BoardUpdateTask/BoardDeleteTask (кроме взятых в работу).\n")
-	}
-	b.WriteString("- Если инструментов доски нет — верни строго JSON-декомпозицию (без markdown-обёрток) по схеме:\n")
-	b.WriteString("{\n")
-	b.WriteString(`  "lead_summary": "краткое техническое описание модуля",` + "\n")
-	b.WriteString(`  "tasks": [` + "\n")
-	b.WriteString("    {\n")
-	b.WriteString(`      "task_id": "уникальный ID (например T-01)",` + "\n")
-	b.WriteString(`      "title": "название задачи",` + "\n")
-	if skeleton {
-		b.WriteString(`      "description": "объём и приёмочные критерии задачи плюс ОБЯЗАТЕЛЬНЫЕ отсылки к файлам скелетона (путь + имя символа), которые ты спроектировал; полный текст контракта не копируется — он зафиксирован в коде скелетона",` + "\n")
-	} else {
-		b.WriteString(`      "description": "детальное техническое описание задачи с готовым контрактом взаимодействия, который ты спроектировал",` + "\n")
-	}
-	b.WriteString(`      "assigned_role": "роль специалиста (например Senior Go Developer / React Developer / QA Engineer / DevOps Engineer)",` + "\n")
-	b.WriteString("      \"sequence_order\": 1,\n")
-	b.WriteString(`      "can_run_parallel": true,` + "\n")
-	b.WriteString(`      "dependencies": [` + "\n")
-	b.WriteString("      ]\n")
-	b.WriteString("    }\n")
-	b.WriteString("  ]\n")
-	b.WriteString("}\n\n")
-	if skeleton {
-		b.WriteString("СКЕЛЕТОН В ВЕТКЕ ЭПИКА (обязательно, если OutputDir — git worktree): до публикации задач спроектируй контракты КОДОМ скелетона в ветке эпика — каркасы файлов своего направления (типы/интерфейсы/заготовки конфигов) с комментариями-подсказками, без реализации. Затем прогони проверку через Run (цель из корневого Makefile), закоммить и запуши (git add → git commit → git push). Если .git нет — скелетон не пиши: только декомпозиция.\n\n")
-		b.WriteString("ДЕТАЛИЗАЦИЯ ЗАДАЧ (обязательно для каждой задачи): описание обязано содержать отсылки к коду скелетона — файл и символ (путь + имя интерфейса/функции/сервиса, где возможно — строка из ReadMap), объём и приёмочные критерии. ПОЛНЫЙ текст контракта в description НЕ копируй: специалист читает файл скелетона, а не пересказ. Зафиксируй правило: специалист не меняет публичные сигнатуры/схемы из скелетона.\n\n")
-	} else {
-		b.WriteString("ДЕТАЛИЗАЦИЯ КОНТРАКТОВ (обязательно для каждой задачи): описание задачи обязано содержать ПОЛНЫЙ контракт, по которому специалист пишет код без догадок: точные типы/структуры (поля с типами), публичные сигнатуры функций/методов/интерфейсов (имя, параметры с типами, возвращаемые значения), API-контракты (метод, путь, схема запроса/ответа, коды ошибок), схему БД, манифесты с конкретными значениями. Зафиксируй контракт в description — специалист не меняет публичные сигнатуры и схемы.\n\n")
-	}
-	b.WriteString("Правила:\n")
-	if skeleton {
-		b.WriteString("- Ты пишешь ТОЛЬКО скелетон (в ветке эпика), НЕ реализацию: контракты фиксируй кодом скелетона, задачи — отсылками к этим файлам. Run — только проверка (сборка/тесты/автостиль) и git-пуш скелетона; реализацию и удаление файлов выполняют специалисты по твоим задачам.\n")
-	} else {
-		b.WriteString("- Ты НЕ пишешь код и НЕ запускаешь команды: только проектируешь контракты и раздаёшь задачи.\n")
-	}
-	b.WriteString("- Порядок разработки: сначала инфраструктура, затем приложение, затем тестирование — проставляй sequence_order и зависимости так, чтобы этот порядок соблюдался (тестовые задачи зависят от прикладных, прикладные — от инфраструктурных).\n")
-	if skeleton {
-		b.WriteString("- Единый источник контрактов — код скелетона: задачи ссылаются на файлы, контракт не дублируется в описаниях.\n")
-	} else {
-		b.WriteString("- Контракты взаимодействия дублируй в описание каждой связанной задачи (единый источник истины).\n")
-	}
-	b.WriteString("- Чётко проставь sequence_order и dependencies: какие задачи параллельны (can_run_parallel: true), какие блокируют друг друга.\n")
-	return b.String()
-}
-
 // specialistFor создаёт агента-специалиста для задачи: QA/DevOps или
 // разработчик (backend/frontend). Разработчик-агент создаёт недостающую
 // структуру подпроекта с нуля и дорабатывает существующий код; выбор
@@ -122,6 +45,13 @@ func SpecialistForRole(project, role, prompt string) services.Agent {
 // taskPrompt формирует задание специалисту по задаче с Kanban-доски.
 func (k *KanbanRunner) taskPrompt(t *domain.Task) string {
 	var b strings.Builder
+	nextStatus := "done"
+	switch taskPhase(t) {
+	case "infra":
+		nextStatus = "test_cases"
+	case "test":
+		nextStatus = "development"
+	}
 	fmt.Fprintf(&b, "Ты — специалист (%s), выполняешь задачу с общей Kanban-доски проекта %q.\n\n", t.AssignedRole, k.store.Project())
 	fmt.Fprintf(&b, "Задача на доске: %s — %s\n\n", t.TaskID, t.Title)
 	b.WriteString("Постановка задачи:\n")
@@ -137,8 +67,7 @@ func (k *KanbanRunner) taskPrompt(t *domain.Task) string {
 	b.WriteString("- Описание задачи — это отсылки к файлам («контракт в ./server/..., см. ./docs/...»), а не полный текст кода или структуры: читай перечисленные файлы из ветки эпика и не вставляй их содержимое в ответы/комментарии.\n")
 	b.WriteString("- Выполни задачу, прогони сборку и проверки через Run, доведи до зелёного состояния.\n")
 	b.WriteString("- Не выходи за пределы своей части монорепозитория (роль задана промптом).\n")
-	fmt.Fprintf(&b, "- Если у тебя есть инструменты доски: идентификатор задачи %s. Ты можешь читать её контракт (BoardGetTask) и комментарии к ней; ОБЯЗАТЕЛЬНО учти описание и комментарии задачи при выполнении. Когда работа полностью выполнена (сборка и проверки зелёные) — ОБЯЗАТЕЛЬНО переведи задачу в статус testing вызовом BoardSetTaskStatus («На тестирование»).\n", t.TaskID)
-	b.WriteString("- Если ты QA-инженер и нашёл дефект по контракту — оформи багрепорт инструментом BoardCreateBugReport (статус new), его разберут QA Lead и архитектор.")
+	fmt.Fprintf(&b, "- Если у тебя есть инструменты доски: идентификатор задачи %s. Ты можешь читать её контракт (BoardGetTask) и комментарии к ней; ОБЯЗАТЕЛЬНО учти описание и комментарии задачи при выполнении. Когда работа полностью выполнена (сборка и проверки зелёные) — ОБЯЗАТЕЛЬНО переведи задачу в статус %s вызовом BoardSetTaskStatus.\n", t.TaskID, nextStatus)
 	return b.String()
 }
 
@@ -183,20 +112,6 @@ func epicList(epics []*domain.Epic) string {
 		ids = append(ids, e.TaskID+" ("+truncateText(e.Title, 40)+")")
 	}
 	return strings.Join(ids, ", ")
-}
-
-// leadName описывает лида направления для логов.
-func leadName(epic *domain.Epic) string {
-	switch {
-	case isRole(epic.AssignedRole, "qa", "тест", "testing"):
-		return "QA Lead"
-	case isRole(epic.AssignedRole, "devops", "инфра", "infra", "dev", "sre", "ci"):
-		return "DevOps Lead"
-	case isRole(epic.AssignedRole, "front", "react", "ui", "client", "фронт"):
-		return "Frontend Lead"
-	default:
-		return "Backend Lead"
-	}
 }
 
 // truncateText обрезает длинный текст для логов.

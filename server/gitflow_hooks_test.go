@@ -126,18 +126,18 @@ func TestAutoCreateTaskBranchSkipsWithoutEpicBranch(t *testing.T) {
 	}
 }
 
-// TestTaskInProgressCreatesWorktree — Ф-3: перевод задачи «в работу» через
+// TestTaskInfraCreatesWorktree — Ф-3: перевод задачи в infra через
 // REST создаёт постоянный worktree её ветки и пишет путь в side-реестр.
-func TestTaskInProgressCreatesWorktree(t *testing.T) {
+func TestTaskInfraCreatesWorktree(t *testing.T) {
 	git := mockMergeGit("")
 	srv, handler, mr := setupGitflow(t, git)
 	seedGitflowBoard(t, mr, srv)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
-		"PUT", "/api/projects/myrepo/tasks/task-1", strings.NewReader(`{"status":"development"}`)))
+		"PUT", "/api/projects/myrepo/tasks/task-1", strings.NewReader(`{"status":"infra"}`)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("перевод в development: %d, body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("перевод в infra: %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	ref, err := srv.reg.TaskBranch("myrepo", "task-1")
@@ -149,7 +149,7 @@ func TestTaskInProgressCreatesWorktree(t *testing.T) {
 		t.Fatalf("Worktree = %q, want %q", ref.Worktree, want)
 	}
 	if !git.saw("git worktree add " + want) {
-		t.Fatalf("development не создал worktree деревья, вызовы: %v", git.callsList())
+		t.Fatalf("infra не создал worktree деревья, вызовы: %v", git.callsList())
 	}
 }
 

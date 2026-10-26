@@ -501,8 +501,8 @@ func TestTaskDoneAutoMergeHook(t *testing.T) {
 	srv, handler, mr := setupGitflow(t, git)
 	seedGitflowBoard(t, mr, srv)
 
-	// ready → development → done (конечный автомат запрещает infra→done).
-	for _, st := range []string{"development", "done"} {
+	// draft → infra → test_cases → development → done
+	for _, st := range []string{"infra", "test_cases", "development", "done"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(
 			"PUT", "/api/projects/myrepo/tasks/task-1",
@@ -534,8 +534,8 @@ func TestTaskDoneAutoMergeConflict(t *testing.T) {
 	srv, handler, mr := setupGitflow(t, git)
 	seedGitflowBoard(t, mr, srv)
 
-	// ready → development → done; конфликт при done значения не имеет.
-	for _, st := range []string{"development", "done"} {
+	// draft → infra → test_cases → development → done; конфликт при done значения не имеет.
+	for _, st := range []string{"infra", "test_cases", "development", "done"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(
 			"PUT", "/api/projects/myrepo/tasks/task-1",
@@ -666,7 +666,8 @@ func TestTaskDoneMergeConflictRollback(t *testing.T) {
 	}
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
-		EpicID:   "epic-1", Status: board.StatusDone,
+		EpicID:   "epic-1",
+		Status:   board.StatusDraft,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +707,6 @@ func seedGitflowBoard(t *testing.T, mr *miniredis.Miniredis, srv *Server) {
 	if err := store.CreateTask(ctx, &board.Task{
 		TaskSpec: board.TaskSpec{TaskID: "task-1", Title: "Фича"},
 		EpicID:   "epic-1",
-		Status:   board.StatusTestCases,
 	}); err != nil {
 		t.Fatal(err)
 	}

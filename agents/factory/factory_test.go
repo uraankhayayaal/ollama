@@ -8,7 +8,7 @@ import (
 
 // TestRoleFactoryMapsRoles фиксирует соответствие «роль → конкретный агент»
 // в порту planner.AgentFactory: инверсия зависимости не должна менять
-// поведение выбора специалиста/лида по маркерам assigned_role.
+// поведение выбора специалиста по маркерам assigned_role.
 func TestRoleFactoryMapsRoles(t *testing.T) {
 	f := roleFactory{}
 	typeName := func(a any) string {
@@ -36,21 +36,6 @@ func TestRoleFactoryMapsRoles(t *testing.T) {
 			t.Errorf("Specialist(%q) = %s, ожидался %s", c.role, got, c.want)
 		}
 	}
-
-	leadCases := []struct {
-		role string
-		want string
-	}{
-		{"QA Lead", "*qaengineer.QAEngineer"},
-		{"DevOps Lead", "*devopslead.DevopsLead"},
-		{"Frontend Lead", "*frontendlead.FrontendLead"},
-		{"Backend Lead", "*backendlead.BackendLead"},
-	}
-	for _, c := range leadCases {
-		if got := typeName(f.Lead("p", c.role, "промпт")); got != c.want {
-			t.Errorf("Lead(%q) = %s, ожидался %s", c.role, got, c.want)
-		}
-	}
 }
 
 func TestRoleFactoryStep(t *testing.T) {
@@ -59,10 +44,8 @@ func TestRoleFactoryStep(t *testing.T) {
 		domain.AgentBackendDev:   "*developer.BackendDeveloper",
 		domain.AgentFrontendDev:  "*developer.FrontendDeveloper",
 		domain.AgentDevops:       "*devops.Devops",
-		domain.AgentDevopsLead:   "*devopslead.DevopsLead",
 		domain.AgentQAEngineer:   "*qaengineer.QAEngineer",
-		domain.AgentFrontendLead: "*frontendlead.FrontendLead",
-		domain.AgentBackendLead:  "*backendlead.BackendLead",
+		domain.AgentBusinessAnalyst: "*businessanalyst.BusinessAnalyst",
 	}
 	for at, want := range cases {
 		got := reflect.TypeOf(f.Step(at, "proj", "p")).String()

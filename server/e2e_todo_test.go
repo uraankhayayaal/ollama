@@ -4,15 +4,14 @@ package server
 
 // Живой E2E полного цикла: от сообщения пользователя до рабочего продукта.
 //
-// Тест задействует всё ПО: оркестратор Kanban (архитектор → лид → специалист),
+// Тест задействует всё ПО: оркестратор Kanban (архитектор → специалисты),
 // доска на miniredis, PostgreSQL, Web UI через виртуальный браузер (chromedp):
 // выбор проекта, дашборд, статусы задач.
 //
 // Провайдер LLM — детерминированный scripted (без сети): архитектор публикует
-// бэклог (инфраструктурный эпик DevOps + прикладной эпик), лиды декомпозируют
-// эпики, DevOps-инженер пишет инфраструктуру продукта (compose.yaml+Dockerfile),
-// разработчик — код продукта (фикстура), QA переводит задачи в done. Харнес
-// поднимает PostgreSQL по compose.yaml, написанному DevOps-инженером.
+// бэклог и декомпозирует эпики на задачи, DevOps-инженер пишет инфраструктуру
+// (compose.yaml+Dockerfile), разработчик — код продукта (фикстура), QA переводит
+// задачи в done. Харнес поднимает PostgreSQL по compose.yaml DevOps-инженера.
 //
 // Запуск:
 //
@@ -24,7 +23,6 @@ import (
 	"ai/agents/architect"
 	"ai/agents/chatassist"
 	"ai/agents/devops"
-	"ai/agents/devopslead"
 	"ai/agents/qaengineer"
 	"ai/domain"
 	"ai/domain/services"
@@ -80,7 +78,7 @@ var todoE2EArchitectArgs = map[string]any{
 	},
 }
 
-// todoE2EInfraLeadJSON — декомпозиция инфраструктурного эпика DevOps-лидом:
+// todoE2EInfraLeadJSON — декомпозиция инфраструктурного эпика (JSON-fallback):
 // одна задача DevOps-инженеру на compose.yaml + Dockerfile.
 const todoE2EInfraLeadJSON = `{
   "lead_summary": "Инфраструктура TODO: PostgreSQL через Docker Compose и многостадийный Dockerfile",
@@ -97,7 +95,7 @@ const todoE2EInfraLeadJSON = `{
   ]
 }`
 
-// todoE2ELeadJSON — декомпозиция прикладного эпика Backend-лидом: две задачи
+// todoE2ELeadJSON — декомпозиция прикладного эпика (JSON-fallback): две задачи
 // (разработка + тестирование). Разработка ждёт готовности инфраструктурного
 // эпика ARCH-01.
 const todoE2ELeadJSON = `{
@@ -165,10 +163,9 @@ func (p *todoE2EProvider) Generate(ctx context.Context, agent services.Agent) (*
 
 	switch {
 	case strings.HasPrefix(umsg, "Декомпозируй эпик"):
-		// Лид направления: инфраструктурный эпик декомпозирует DevOps-лид,
-		// прикладной — Backend-лид. Различаем по типу агента (JSON-fallback путь
-		// оркестратора: лид не создаёт задачи инструментами доски).
-		if _, ok := agent.(*devopslead.DevopsLead); ok {
+		// Архитектор (JSON-fallback: задачи не через инструменты доски).
+		// Различаем по содержанию промпта: инфраструктурный vs прикладный эпик.
+		if strings.Contains(umsg, "инфраструктурн") || strings.Contains(umsg, "инфра") {
 			return &runner.AgentResponse{Content: todoE2EInfraLeadJSON}, nil
 		}
 		return &runner.AgentResponse{Content: todoE2ELeadJSON}, nil

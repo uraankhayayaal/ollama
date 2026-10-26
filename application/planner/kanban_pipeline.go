@@ -83,9 +83,9 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 		progress = progress || p
 	}
 
-	// Декомпозиция лидами.
+	// Декомпозиция архитектором: разбивает эпики в system_analysis на задачи.
 	{
-		p, err := k.phaseLeads(ctx)
+		p, err := k.phaseArchitectDecompose(ctx)
 		if err != nil {
 			return false, err
 		}
@@ -107,9 +107,24 @@ func (k *KanbanRunner) runPhases(ctx context.Context) (bool, error) {
 		}
 	}
 
-	// Исполнение специалистами.
+	// Исполнение специалистами: три специализированные фазы.
+	// Infra (DevOps) → TestCases (QA) → Development (Developer).
 	{
-		p, err := k.phaseExecute(ctx)
+		p, err := k.phaseInfra(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
+	}
+	{
+		p, err := k.phaseTestCases(ctx)
+		if err != nil {
+			return false, err
+		}
+		progress = progress || p
+	}
+	{
+		p, err := k.phaseDevelopment(ctx)
 		if err != nil {
 			return false, err
 		}

@@ -509,8 +509,8 @@ func (s *Server) attachGitHooks(project string, store *board.Store) {
 		s.autoCreateTaskBranch(ctx, project, task, store)
 	}
 
-	// Ф-3: задача пошла «в работу» — worktree её ветки для специалиста.
-	store.TaskInProgressHook = func(ctx context.Context, task *board.Task, _ board.Status) {
+	// Ф-3: задача на доске — worktree её ветки для специалиста.
+	store.TaskInfraHook = func(ctx context.Context, task *board.Task, _ board.Status) {
 		s.taskWorktree(ctx, project, task, store)
 	}
 
