@@ -36,7 +36,7 @@ func (ba *BusinessAnalyst) SetBoardStore(s services.BoardStore) {
 		return
 	}
 	ba.Store = s
-	ba.Tools = tools.Select(baToolNames, tools.Deps{Board: s})
+	ba.Tools = tools.Select(baToolNames, tools.Deps{Board: s, FileOps: ba.FileOps})
 }
 
 // GetBoard возвращает подключённую доску (nil — standalone-режим).

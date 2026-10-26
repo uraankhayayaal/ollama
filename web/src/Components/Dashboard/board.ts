@@ -1,58 +1,65 @@
 // Канбан-модель доски: статусы колонок, подписи и допустимые переходы.
-// Статусы зеркалят board/entity.go (new -> analysis -> ready -> in_progress
-// -> testing -> done; human_help — боковая «помощь человека», cancelled —
-// терминальный). Переходы ограничены соседними статусами строго по серверному
-// ValidateTransition.
+// Статусы зеркалят domain/status.go.
+// Эпики: draft -> business_review -> system_analysis -> done
+// Задачи: draft -> infra -> test_cases -> development -> done
+// Общие терминалы: done, cancelled
+// Переходы ограничены соседними статусами строго по серверному ValidateTransition.
 import type { Status } from "@/Types";
 
-// Порядок колонок на доске: цепочка Р-6 (human_help -> ready -> in_progress
-// -> testing -> done) + терминальные cancelled.
-export const STATUS_ORDER: Status[] = [
-  "new",
-  "analysis",
-  "human_help",
-  "ready",
-  "in_progress",
-  "testing",
+// Порядок колонок на доске для задач (основная сетка).
+export const TASK_STATUS_ORDER: Status[] = [
+  "draft",
+  "infra",
+  "test_cases",
+  "development",
+  "done",
+  "cancelled",
+];
+
+// Порядок колонок для эпиков (заголовок строки).
+export const EPIC_STATUS_ORDER: Status[] = [
+  "draft",
+  "business_review",
+  "system_analysis",
   "done",
   "cancelled",
 ];
 
 export const STATUS_LABEL: Record<Status, string> = {
-  new: "Новые",
-  analysis: "В анализе",
-  ready: "Готовы к работе",
-  human_help: "Помощь человека",
-  in_progress: "В работе",
-  testing: "На тестировании",
+  draft: "Черновик",
+  business_review: "Бизнес-ревью",
+  system_analysis: "Системный анализ",
+  infra: "Инфраструктура",
+  test_cases: "Тесты",
+  development: "Разработка",
   done: "Готово",
   cancelled: "Отменены",
 };
 
-// Допустимые ручные переходы — списки prev/next (назад/вперёд по цепочке),
-// зеркало серверного ValidateTransition без бокового cancelled (отмена —
-// кнопкой эпика, как и раньше). human_help — боковая ветка: вход из любого
-// нетерминального статуса, выход только обратно в работу. Терминальные
-// статусы (done, cancelled) — конечные точки, переносов нет.
-// Порядок в списках — chain-first: основной сосед цепочки первым.
-export const MOVES: Record<Status, { prev: Status[]; next: Status[] }> = {
-  new: { prev: [], next: ["analysis", "human_help"] },
-  analysis: { prev: [], next: ["human_help", "ready"] },
-  human_help: { prev: ["analysis"], next: ["ready", "in_progress"] },
-  ready: { prev: ["human_help"], next: ["in_progress"] },
-  in_progress: { prev: ["ready", "human_help"], next: ["testing", "done"] },
-  testing: { prev: ["in_progress", "human_help"], next: ["done"] },
+// Допустимые ручные переходы задач (строго линейно, без возвратов).
+// Отмена доступна из любого нетерминального статуса.
+export const TASK_MOVES: Record<Status, { prev: Status[]; next: Status[] }> = {
+  draft: { prev: [], next: ["infra", "cancelled"] },
+  infra: { prev: [], next: ["test_cases", "cancelled"] },
+  test_cases: { prev: [], next: ["development", "cancelled"] },
+  development: { prev: [], next: ["done", "cancelled"] },
   done: { prev: [], next: [] },
   cancelled: { prev: [], next: [] },
+  // Epic statuses — not used for task transitions
+  business_review: { prev: [], next: [] },
+  system_analysis: { prev: [], next: [] },
 };
 
-// Фаза эпика (зеркало board/order.go EpicPhase): перетаскивание строк доски
-// разрешено только внутри одной фазы — фаза остаётся первичным ключом очереди
-// лидов (инфраструктура → приложение → тестирование).
-export function epicPhase(e: { assigned_role?: string }): "infra" | "app" | "test" {
-  const role = (e.assigned_role ?? "").toLowerCase();
-  const has = (...markers: string[]) => markers.some((m) => role.includes(m));
-  if (has("qa", "тест", "testing")) return "test";
-  if (has("devops", "инфра", "infra", "sre", "docker", "k8s", "ci")) return "infra";
-  return "app";
-}
+// Допустимые ручные переходы эпиков.
+// business_review может вернуться в draft (единственный переход назад).
+export const EPIC_MOVES: Record<Status, { prev: Status[]; next: Status[] }> = {
+  draft: { prev: [], next: ["business_review", "cancelled"] },
+  business_review: { prev: ["draft"], next: ["system_analysis", "cancelled"] },
+  system_analysis: { prev: [], next: ["done", "cancelled"] },
+  done: { prev: [], next: [] },
+  cancelled: { prev: [], next: [] },
+  // Task statuses — not used for epic transitions
+  infra: { prev: [], next: [] },
+  test_cases: { prev: [], next: [] },
+  development: { prev: [], next: [] },
+};

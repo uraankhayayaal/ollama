@@ -476,12 +476,12 @@ func (t *boardSetEpicStatusTool) Name() string { return BoardSetEpicStatus }
 func (t *boardSetEpicStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetEpicStatus,
-		Description: "Перевести эпик в новый статус: new, analysis, human_help, ready, in_progress, testing, done, cancelled. Переходы валидируются конечным автоматом доски.",
+		Description: "Перевести эпик в новый статус: draft, business_review, system_analysis, done, cancelled. Переходы валидируются конечным автоматом доски.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"epic_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "new | analysis | human_help | ready | in_progress | testing | done | cancelled"},
+				"status":  map[string]any{"type": "string", "description": "draft | business_review | system_analysis | done | cancelled"},
 			},
 			"required":             []string{"epic_id", "status"},
 			"additionalProperties": false,
@@ -802,13 +802,13 @@ func (t *boardSetTaskStatusTool) Name() string { return BoardSetTaskStatus }
 func (t *boardSetTaskStatusTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        BoardSetTaskStatus,
-		Description: "Перевести задачу в новый статус: infra, test_cases, development, done, cancelled. Специалист, завершив работу (сборка и проверки зелёные), переводит задачу в следующий статус или в done. human_help (с обязательной причиной reason) — если задачу невозможно выполнить: нет исходного кода/зависимостей, есть блокер, зациклилась работа; это останавливает задачу и передаёт её человеку вместо повторов без результата.",
+		Description: "Перевести задачу в новый статус: draft, infra, test_cases, development, done, cancelled. Специалист, завершив работу (сборка и проверки зелёные), переводит задачу в следующий статус или в done.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task_id": map[string]any{"type": "string"},
-				"status":  map[string]any{"type": "string", "description": "infra | test_cases | development | done | cancelled | human_help"},
-				"reason":  map[string]any{"type": "string", "description": "Причина: обязателен для human_help (что именно блокирует выполнение); для остальных статусов необязателен."},
+				"status":  map[string]any{"type": "string", "description": "draft | infra | test_cases | development | done | cancelled"},
+				"reason":  map[string]any{"type": "string", "description": "Причина перехода (необязательна)."},
 			},
 			"required":             []string{"task_id", "status"},
 			"additionalProperties": false,

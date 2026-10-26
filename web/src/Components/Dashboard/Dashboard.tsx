@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import type { BoardView, BranchDiffContext, BugRow, EpicRow, TaskRow } from "@/Types";
-import { STATUS_LABEL, STATUS_ORDER, epicPhase } from "./board";
+import { STATUS_LABEL, TASK_STATUS_ORDER } from "./board";
 import { fmtTokens, tokensSummary } from "./tokens";
 import { EpicRow as EpicRowView } from "./EpicRow";
 import { EpicModal } from "./EpicModal";
@@ -21,8 +21,6 @@ export function Dashboard({
   onTaskUpdate,
   onEpicDelete,
   onEpicRelease,
-  onEpicPause,
-  onEpicResume,
   onEpicCancel,
   onEpicReorder,
   onEpicBranch,
@@ -45,9 +43,7 @@ export function Dashboard({
   // ID эпиков, первый — самый приоритетный. Сервер сохраняет приоритеты и при
   // идущей оркестрации мягко перезапускает её.
   onEpicReorder: (order: string[]) => void;
-  // Ф-6: пауза/возобновление/отмена эпика (без отката кода — ветка остаётся).
-  onEpicPause?: (e: EpicRow) => Promise<void>;
-  onEpicResume?: (e: EpicRow) => Promise<void>;
+  // Отмена эпика (без отката кода — ветка остаётся).
   onEpicCancel?: (e: EpicRow) => Promise<void>;
   // Ф-5: создание ветки эпика/задачи и «Создать MR» (пушит ветку и открывает
   // MR через фордж). Кнопки в блоке «ветка + MR» модалок.
@@ -57,7 +53,7 @@ export function Dashboard({
   onTaskMR?: (t: TaskRow) => Promise<void>;
   // Ф-6 (этап 3): ручной откат кода задачи к "last_good"/"base"/SHA.
   onTaskRollback?: (t: TaskRow, to: string) => Promise<void>;
-  // Переоткрытие выполненной задачи на доработку (done -> ready) с
+  // Переоткрытие выполненной задачи на доработку (done -> development) с
   // обязательным комментарием-обоснованием.
   onTaskReopen?: (t: TaskRow, body: string) => Promise<void>;
   onShowDiff?: (context: BranchDiffContext) => void;
@@ -96,7 +92,7 @@ export function Dashboard({
 
   // Свёрнутый режим: только метрики в статусной колонке, доска не рендерится.
   if (collapsed) {
-    const byStatus = STATUS_ORDER.map((s) => ({
+    const byStatus = TASK_STATUS_ORDER.map((s) => ({
       status: s,
       count: board.tasks.filter((t) => t.status === s).length,
     }));
@@ -128,9 +124,9 @@ export function Dashboard({
             <IconTask />
             <b>{board.tasks.length}</b>
           </div>
-          <div className="st bug" title={`Багов: ${board.bugs.length}`}>
+          <div className="st bug" title={`Багов: ${board.bugs?.length ?? 0}`}>
             <IconBug />
-            <b>{board.bugs.length}</b>
+            <b>{board.bugs?.length ?? 0}</b>
           </div>
           {byStatus.map(({ status, count }) => (
             <div
@@ -156,7 +152,7 @@ export function Dashboard({
   }
   // Группируем баги по эпику, сохраняя строки багов без известного эпика.
   const byEpicBug = new Map<string, BugRow[]>();
-  for (const b of board.bugs) {
+  for (const b of board.bugs ?? []) {
     const bugList = byEpicBug.get(b.epic_id) ?? [];
     bugList.push(b);
     byEpicBug.set(b.epic_id, bugList);
@@ -193,7 +189,7 @@ export function Dashboard({
   });
 
   const visibleTasks = visibleRows.flatMap((r) => r.tasks);
-  const statusCounts = STATUS_ORDER.map((s) => ({
+  const statusCounts = TASK_STATUS_ORDER.map((s) => ({
     status: s,
     count: visibleTasks.filter((t) => t.status === s).length,
   }));
@@ -203,15 +199,13 @@ export function Dashboard({
   // по видимым строкам: фильтры доски не должны «прятать» расход.
   const tokens = tokensSummary([...board.epics, ...board.tasks]);
 
-  // Эпик активен, если у него есть незавершённые задачи (new → testing);
-  // только такие по умолчанию развёрнуты полностью. Пауза (human_help),
-  // отмена/done — не активны.
+  // Эпик активен, если у него есть незавершённые задачи (draft → development);
+  // только такие по умолчанию развёрнуты полностью.
   const isActive = (tasks: TaskRow[]) =>
     tasks.some(
       (t) =>
         t.status !== "done" &&
-        t.status !== "cancelled" &&
-        t.status !== "human_help",
+        t.status !== "cancelled",
     );
 
   const isCollapsed = (epicId: string, tasks: TaskRow[]) =>
@@ -234,26 +228,17 @@ export function Dashboard({
     if (from < 0 || to < 0 || from === to) {
       return;
     }
-    const drag = eps[from];
-    const target = eps[to];
-    if (!drag || !target) {
-      return;
-    }
-    if (epicPhase(drag) !== epicPhase(target)) {
-      return;
-    }
     const next = [...eps];
     next.splice(from, 1);
     const insert = next.findIndex((e) => e.task_id === targetId);
     if (insert < 0) {
       return;
     }
-    next.splice(after ? insert + 1 : insert, 0, drag);
+    next.splice(after ? insert + 1 : insert, 0, eps[from]!);
     onEpicReorder(next.map((e) => e.task_id));
   };
 
-  // Стрелки ↑/↓: сдвиг на одну строку внутри своей фазы (границу фазы не
-  // переходим — иначе доска вернула бы порядок обратно).
+  // Стрелки ↑/↓: сдвиг на одну строку вверх/вниз.
   const shiftEpic = (e: EpicRow, dir: -1 | 1) => {
     const idx = board.epics.findIndex((x) => x.task_id === e.task_id);
     if (idx < 0) {
@@ -263,9 +248,6 @@ export function Dashboard({
     if (!target || target.task_id === e.task_id) {
       return;
     }
-    if (epicPhase(e) !== epicPhase(target)) {
-      return;
-    }
     moveEpic(e.task_id, target.task_id, dir === 1);
   };
 
@@ -273,7 +255,7 @@ export function Dashboard({
   // строка исчезла (удалили), модалка просто не рендерится.
   const epic = epicId ? board.epics.find((e) => e.task_id === epicId) ?? null : null;
   const task = taskId ? board.tasks.find((t) => t.task_id === taskId) ?? null : null;
-  const bug = bugId ? board.bugs.find((b) => b.bug_id === bugId) ?? null : null;
+  const bug = bugId ? (board.bugs ?? []).find((b) => b.bug_id === bugId) ?? null : null;
 
   return (
     <div className="dashboard" onDragOver={(e) => e.preventDefault()}>
@@ -295,7 +277,7 @@ export function Dashboard({
           </span>
         )}
         <span className="counts">
-          эпиков {board.epics.length} · задач {board.tasks.length} · багов {board.bugs.length}
+          эпиков {board.epics.length} · задач {board.tasks.length} · багов {board.bugs?.length ?? 0}
           {board.total && board.total.tasks > board.tasks.length && (
             <em> (всего задач: {board.total.tasks}, доска ограничена)</em>
           )}
@@ -315,7 +297,7 @@ export function Dashboard({
         </label>
         <div className="status-filters" aria-label="Фильтр статуса задач">
           <button className={statusFilter === "all" ? "active" : ""} onClick={() => setStatusFilter("all")}>Все</button>
-          {STATUS_ORDER.map((s) => (
+          {TASK_STATUS_ORDER.map((s) => (
             <button key={s} className={statusFilter === s ? `active ${s}` : ""} onClick={() => setStatusFilter(s)}>
               {STATUS_LABEL[s]} <span>{board.tasks.filter((t) => t.status === s).length}</span>
             </button>
@@ -346,8 +328,6 @@ export function Dashboard({
             onEpicOpen={(e) => setEpicId(e.task_id)}
             onEpicDelete={onEpicDelete}
             onEpicRelease={onEpicRelease}
-            onEpicPause={onEpicPause}
-            onEpicResume={onEpicResume}
             onEpicCancel={onEpicCancel}
             onEpicReorder={moveEpic}
             onEpicShift={shiftEpic}
@@ -365,8 +345,6 @@ export function Dashboard({
           onCreateMR={onEpicMR}
           onShowDiff={onShowDiff}
           onAutoResolve={onEpicAutoResolve}
-          onPause={onEpicPause}
-          onResume={onEpicResume}
           onCancel={onEpicCancel}
           onClose={() => setEpicId(null)}
         />

@@ -62,12 +62,10 @@
           white-space: nowrap;
         }
 
-        .status.new { color: var(--st-todo, #64748b); }
-        .status.analysis { color: var(--st-analysis, #7c3aed); }
-        .status.ready { color: var(--st-ready, #0891b2); }
-        .status.human_help { color: var(--st-human-help, #b45309); }
-        .status.in_progress { color: var(--st-in-progress, #2563eb); }
-        .status.testing { color: var(--st-testing, #0f766e); }
+        .status.draft { color: var(--st-todo, #64748b); }
+        .status.infra { color: var(--st-ready, #0891b2); }
+        .status.test_cases { color: var(--st-test, #0d9488); }
+        .status.development { color: var(--st-in-progress, #2563eb); }
         .status.done { color: var(--st-done, #15803d); }
         .status.cancelled { color: var(--muted, #8a94a6); text-decoration: line-through; }
       }

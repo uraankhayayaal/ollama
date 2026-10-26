@@ -1,17 +1,13 @@
 // Быстрые действия эпика под названием на доске.
 //
-//   - «Пауза»/«Продолжить» (Ф-6) — приостановка/возобновление эпика. Эпики и
-//     задачи изолированы в своих git-ветках, поэтому пауза НЕ откатывает код:
-//     задачи эпика каскадом уходят «на паузу», оркестратор их не берёт, ветка
-//     остаётся на месте. «Продолжить» возвращает задачи в «готова к работе».
-//   - «Отменить» (Ф-6) — эпик и его незавершённые задачи помечаются отменёнными
+//   - «Отменить» — эпик и его незавершённые задачи помечаются отменёнными
 //     БЕЗ отката кода: запись и ветка остаются как артефакт (хронология).
 //   - «Удалить» — видна, пока ни одна задача эпика ещё не взята в работу
-//     специалистом (статусы new/analysis/ready).
-//   - «Залить в main» (Ф-3) — ручная кнопка релиза: видна только у эпика со
+//     специалистом (статусы draft, infra, test_cases).
+//   - «Залить в main» — ручная кнопка релиза: видна только у эпика со
 //     статусом done И с созданной релизной веткой (hasBranch по board.git —
 //     регистр-статус сервера). Без ветки кнопки нет, вместо неё — подсказка:
-//     релиз невозможен, пока у эпика нет ветки (Ф-5). Показывает процесс /
+//     релиз невозможен, пока у эпика нет ветки. Показывает процесс /
 //     ошибку / успех прямо под кнопкой.
 import { useState } from "react";
 import type { EpicRow, TaskRow } from "@/Types";
@@ -23,8 +19,6 @@ export function EpicActionBar({
   hasBranch,
   onDelete,
   onRelease,
-  onPause,
-  onResume,
   onCancel,
 }: {
   epic: EpicRow;
@@ -32,8 +26,6 @@ export function EpicActionBar({
   hasBranch?: boolean;
   onDelete: () => void;
   onRelease: () => Promise<void>;
-  onPause?: () => Promise<void>;
-  onResume?: () => Promise<void>;
   onCancel?: () => Promise<void>;
 }) {
   // busyAction — какая кнопка сейчас выполняется (одна на полоску): disables
@@ -45,8 +37,9 @@ export function EpicActionBar({
 
   const canDelete = tasks.every(
     (t) =>
-      t.status !== "in_progress" &&
-      t.status !== "testing" &&
+      t.status !== "infra" &&
+      t.status !== "test_cases" &&
+      t.status !== "development" &&
       t.status !== "done" &&
       t.status !== "cancelled",
   );
@@ -55,16 +48,7 @@ export function EpicActionBar({
   // Подсказка вместо кнопки — только для git-проектов (hasBranch === false),
   // где ветка ещё не создана; для не-git проектов hasBranch === undefined.
   const noBranchHint = epic.status === "done" && hasBranch === false;
-  // Пауза — у активного (не терминального, не приостановленного) эпика:
-  // эпик уходит в human_help («помощь человека»); возобновление — только
-  // у эпика в human_help.
-  const canPause =
-    !!onPause &&
-    epic.status !== "done" &&
-    epic.status !== "cancelled" &&
-    epic.status !== "human_help";
-  const canResume = !!onResume && epic.status === "human_help";
-  // Отмена — у любого не завершённого эпика (в т.ч. приостановленного).
+  // Отмена — у любого не завершённого эпика.
   const canCancel =
     !!onCancel && epic.status !== "done" && epic.status !== "cancelled";
   const busy = busyAction !== "";
@@ -72,8 +56,6 @@ export function EpicActionBar({
     !canDelete &&
     !canRelease &&
     !noBranchHint &&
-    !canPause &&
-    !canResume &&
     !canCancel
   ) {
     return null;
@@ -129,28 +111,6 @@ export function EpicActionBar({
         >
           нет релизной ветки
         </span>
-      )}
-      {canResume && (
-        <button
-          className="epic-resume"
-          onClick={(e) => void runStatus(e, "resume", onResume!)}
-          disabled={busy}
-          title="Возобновить эпик: его задачи вернутся в «готова к работе» (код в ветке не тронут)"
-          aria-label={"Продолжить эпик"}
-        >
-          {busyAction === "resume" ? "…" : "Продолжить"}
-        </button>
-      )}
-      {canPause && (
-        <button
-          className="epic-pause"
-          onClick={(e) => void runStatus(e, "pause", onPause!)}
-          disabled={busy}
-          title="Поставить эпик на паузу: задачи приостановятся, оркестратор их не берёт; код в ветке ai/epic/… остаётся"
-          aria-label={"Поставить эпик на паузу"}
-        >
-          {busyAction === "pause" ? "…" : "Пауза"}
-        </button>
       )}
       {canCancel && (
         <button

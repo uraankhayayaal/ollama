@@ -23,7 +23,12 @@ type OpenAIProvider struct {
 	model     string
 	settings  ModelSettings
 	folderID  string
-	forceTool bool
+	forceTool  bool
+	// noStrict — выключает strict JSON schema adherence при отправке
+	// инструментов к модели. vllm не поддерживает strict (пытается сконвертировать
+	// схему в грамматику и падает с "Invalid grammar specification"). OpenAI,
+	// Yandex, llama.cpp — работают со strict.
+	noStrict bool
 }
 
 func NewOpenAIProvider(name ProviderName, model string, cfg ProviderConfig) (*OpenAIProvider, error) {
@@ -61,6 +66,7 @@ func NewOpenAIProvider(name ProviderName, model string, cfg ProviderConfig) (*Op
 			OutputTokens: cfg.Settings.OutputTokens,
 		},
 		forceTool: name == ProviderTrim || name == ProviderReg,
+		noStrict:  name == ProviderVLLM,
 	}, nil
 }
 
@@ -83,13 +89,16 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (
 	msgs := req.Messages
 	oaTools := make([]openai.ChatCompletionToolParam, 0, len(req.Tools))
 	for _, t := range req.Tools {
+		funcDef := shared.FunctionDefinitionParam{
+			Name:        t.Name,
+			Description: openai.String(t.Description),
+			Parameters:  t.Parameters,
+		}
+		if !p.noStrict {
+			funcDef.Strict = openai.Bool(true)
+		}
 		oaTools = append(oaTools, openai.ChatCompletionToolParam{
-			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name,
-				Description: openai.String(t.Description),
-				Parameters:  t.Parameters,
-				Strict:      openai.Bool(true),
-			},
+			Function: funcDef,
 		})
 	}
 

@@ -18,8 +18,6 @@ export function EpicModal({
   onCreateMR,
   onShowDiff,
   onAutoResolve,
-  onPause,
-  onResume,
   onCancel,
   onClose,
 }: {
@@ -29,20 +27,12 @@ export function EpicModal({
   onCreateMR?: (e: EpicRow) => Promise<void>;
   onShowDiff?: (context: BranchDiffContext) => void;
   onAutoResolve?: (e: EpicRow) => Promise<void>;
-  onPause?: (e: EpicRow) => Promise<void>;
-  onResume?: (e: EpicRow) => Promise<void>;
   onCancel?: (e: EpicRow) => Promise<void>;
   onClose: () => void;
 }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
 
-  const canPause =
-    !!onPause &&
-    epic.status !== "done" &&
-    epic.status !== "cancelled" &&
-    epic.status !== "human_help";
-  const canResume = !!onResume && epic.status === "human_help";
   const canCancel =
     !!onCancel && epic.status !== "done" && epic.status !== "cancelled";
   const epicBranch = git?.epics?.[epic.task_id]?.branch;
@@ -133,38 +123,16 @@ export function EpicModal({
         )}
       </dl>
 
-      {(canPause || canResume || canCancel) && (
+      {canCancel && (
         <div className="epic-status-actions">
-          {canResume && (
-            <button
-              className="epic-resume"
-              disabled={busy !== ""}
-              onClick={() => void run("resume", () => onResume!(epic))}
-              title="Возобновить эпик: его задачи вернутся в «готова к работе»"
-            >
-              {busy === "resume" ? "…" : "Продолжить"}
-            </button>
-          )}
-          {canPause && (
-            <button
-              className="epic-pause"
-              disabled={busy !== ""}
-              onClick={() => void run("pause", () => onPause!(epic))}
-              title="Поставить эпик на паузу: задачи приостановятся, код в ветке останется"
-            >
-              {busy === "pause" ? "…" : "Пауза"}
-            </button>
-          )}
-          {canCancel && (
-            <button
-              className="epic-cancel"
-              disabled={busy !== ""}
-              onClick={() => void run("cancel", () => onCancel!(epic))}
-              title="Отменить эпик без отката кода: запись помечается отменённой, ветка остаётся"
-            >
-              {busy === "cancel" ? "…" : "Отменить"}
-            </button>
-          )}
+          <button
+            className="epic-cancel"
+            disabled={busy !== ""}
+            onClick={() => void run("cancel", () => onCancel!(epic))}
+            title="Отменить эпик без отката кода: запись помечается отменённой, ветка остаётся"
+          >
+            {busy === "cancel" ? "…" : "Отменить"}
+          </button>
           {err && <span className="epic-status-err">{err}</span>}
         </div>
       )}

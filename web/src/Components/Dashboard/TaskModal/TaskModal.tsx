@@ -4,7 +4,7 @@
 // эпика) и «Создать MR» (push → MR в ветку эпика).
 import { useState } from "react";
 import type { AgentState, BranchDiffContext, Comment, GitView, TaskRow } from "@/Types";
-import { MOVES, STATUS_LABEL } from "../board";
+import { TASK_MOVES, STATUS_LABEL } from "../board";
 import { fmtTokens, tokenTitle } from "../tokens";
 import { Modal } from "../Modal";
 import { GitBlock } from "../GitBlock";
@@ -45,7 +45,7 @@ export function TaskModal({
   onReopen?: (t: TaskRow, body: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const m = MOVES[task.status] ?? { prev: [], next: [] };
+  const m = TASK_MOVES[task.status] ?? { prev: [], next: [] };
   const taskGit = git?.tasks?.[task.task_id];
   const taskBranch = taskGit?.branch;
   // Ф-6 (5.3): откат — только пока рабочая копия задачи жива; сабмодули

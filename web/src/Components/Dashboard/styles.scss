@@ -81,21 +81,19 @@
     .status-filters button:hover { color: var(--ink, #1b2330); }
     .status-filters button.active { background: #fff; color: var(--ink, #1b2330); box-shadow: 0 1px 2px rgb(15 23 42 / .08); }
     .status-filters button span { color: #8993a0; font-variant-numeric: tabular-nums; }
-    .status-filters button.active.new { color: var(--st-todo, #64748b); }
-    .status-filters button.active.analysis { color: var(--st-analysis, #7c3aed); }
-    .status-filters button.active.ready { color: var(--st-ready, #0891b2); }
-    .status-filters button.active.human_help { color: var(--st-human-help, #b45309); }
-    .status-filters button.active.in_progress { color: var(--st-in-progress, #2563eb); }
-    .status-filters button.active.testing { color: var(--st-testing, #0f766e); }
+    .status-filters button.active.draft { color: var(--st-todo, #64748b); }
+    .status-filters button.active.infra { color: var(--st-ready, #0891b2); }
+    .status-filters button.active.test_cases { color: var(--st-test, #0d9488); }
+    .status-filters button.active.development { color: var(--st-in-progress, #2563eb); }
     .status-filters button.active.done { color: var(--st-done, #15803d); }
     .match-count { margin-left: auto; color: var(--muted, #8a94a6); font-size: 11px; white-space: nowrap; }
   }
 
   .boardgrid {
     display: grid;
-    // 8 колонок статусов (Этап 2: human_help и testing); минимум сужен, чтобы
-    // матрица влезала в панель доски без горизонтального скролла.
-    grid-template-columns: minmax(170px, 190px) repeat(8, minmax(108px, 1fr));
+    // 6 колонок статусов (draft, infra, test_cases, development, done, cancelled);
+    // минимум сужен, чтобы матрица влезала в панель доски без горизонтального скролла.
+    grid-template-columns: minmax(170px, 190px) repeat(6, minmax(118px, 1fr));
     gap: 7px;
     align-items: start;
     min-width: 0;
@@ -154,12 +152,10 @@
       }
     }
 
-    .grid-head.new { color: var(--st-todo, #64748b); }
-    .grid-head.analysis { color: var(--st-analysis, #7c3aed); }
-    .grid-head.ready { color: var(--st-ready, #0891b2); }
-    .grid-head.human_help { color: var(--st-human-help, #b45309); }
-    .grid-head.in_progress { color: var(--st-in-progress, #2563eb); }
-    .grid-head.testing { color: var(--st-testing, #0f766e); }
+    .grid-head.draft { color: var(--st-todo, #64748b); }
+    .grid-head.infra { color: var(--st-ready, #0891b2); }
+    .grid-head.test_cases { color: var(--st-test, #0d9488); }
+    .grid-head.development { color: var(--st-in-progress, #2563eb); }
     .grid-head.done { color: var(--st-done, #15803d); }
 
     .epic-bugs {
@@ -295,23 +291,17 @@
         }
 
         // Разбивка задач по статусам — цвет копирует колонки доски.
-        &.new {
+        &.draft {
           color: var(--st-todo, #64748b);
         }
-        &.analysis {
-          color: var(--st-analysis, #7c3aed);
-        }
-        &.ready {
+        &.infra {
           color: var(--st-ready, #0891b2);
         }
-        &.human_help {
-          color: var(--st-human-help, #b45309);
+        &.test_cases {
+          color: var(--st-test, #0d9488);
         }
-        &.in_progress {
+        &.development {
           color: var(--st-in-progress, #2563eb);
-        }
-        &.testing {
-          color: var(--st-testing, #0f766e);
         }
         &.done {
           color: var(--st-done, #15803d);

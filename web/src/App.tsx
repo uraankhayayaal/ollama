@@ -553,13 +553,9 @@ export function App() {
     await epicLLMResolve(BASE, project.project_name, e.task_id);
   };
 
-  // Перевод эпика в новый статус (кнопки «Пауза»/«Продолжить»/«Отменить»,
-  // Ф-6): эпики изолированы в своих git-ветках, поэтому пауза/отмена НЕ
-  // откатывают код — ветка остаётся, работа просто приостанавливается.
-  // Кнопка «Пауза» переводит эпик в human_help («помощь человека»): сервер
-  // каскадом уводит туда же не взятые в работу задачи, возобновление вернёт
-  // их на прежнее место цепочки. Зеркалим каскад локально, WS-событие board
-  // сверит окончательно.
+  // Перевод эпика в новый статус (кнопка «Отменить»):
+  // эпики изолированы в своих git-ветках, поэтому отмена НЕ откатывает код —
+  // ветка остаётся, запись помечается отменённой.
   const applyEpicStatus = async (epic: EpicRow, status: Status) => {
     if (!project) {
       return;
@@ -570,32 +566,17 @@ export function App() {
         return prev;
       }
       let tasks = prev.tasks;
-      if (status === "human_help" || status === "cancelled") {
-        // Каскад сервера: pauseEpicTasks уводит в human_help задачи
-        // new/analysis/ready (исходный статус — в resume_status); отмена
-        // забирает каскадом ещё и human_help-задачи и resume_status сбрасывает.
+      if (status === "cancelled") {
+        // Отмена эпика каскадом отменяет незавершённые задачи.
         tasks = tasks.map((t) => {
           if (t.epic_id !== next.task_id) {
             return t;
           }
-          if (status === "human_help") {
-            return t.status === "new" || t.status === "analysis" || t.status === "ready"
-              ? { ...t, status, resume_status: t.status }
-              : t;
+          if (t.status !== "done" && t.status !== "cancelled") {
+            return { ...t, status: "cancelled" };
           }
-          return t.status === "new" || t.status === "analysis" || t.status === "ready" || t.status === "human_help"
-            ? { ...t, status, resume_status: undefined }
-            : t;
+          return t;
         });
-      } else if (status === "ready" || status === "in_progress") {
-        // Возобновление (resumeEpicTasks): возвращаются только
-        // human_help-задачи с resume_status; остальные «помощь человека»
-        // ждут ручного возврата.
-        tasks = tasks.map((t) =>
-          t.epic_id === next.task_id && t.status === "human_help" && t.resume_status
-            ? { ...t, status: t.resume_status, resume_status: undefined }
-            : t,
-        );
       }
       return {
         ...prev,
@@ -603,22 +584,6 @@ export function App() {
         tasks,
       };
     });
-  };
-
-  const onEpicPause = async (epic: EpicRow) => {
-    try {
-      await applyEpicStatus(epic, "human_help");
-    } catch (e) {
-      fail(e);
-    }
-  };
-
-  const onEpicResume = async (epic: EpicRow) => {
-    try {
-      await applyEpicStatus(epic, "ready");
-    } catch (e) {
-      fail(e);
-    }
   };
 
   const onEpicCancel = async (epic: EpicRow) => {
@@ -947,8 +912,6 @@ export function App() {
                 onTaskUpdate={onTaskUpdate}
                 onEpicDelete={onEpicDelete}
                 onEpicRelease={onEpicRelease}
-                onEpicPause={onEpicPause}
-                onEpicResume={onEpicResume}
                 onEpicCancel={onEpicCancel}
                 onEpicBranch={onEpicBranch}
                 onTaskBranch={onTaskBranch}
@@ -971,8 +934,6 @@ export function App() {
                 onTaskUpdate={onTaskUpdate}
                 onEpicDelete={onEpicDelete}
                 onEpicRelease={onEpicRelease}
-                onEpicPause={onEpicPause}
-                onEpicResume={onEpicResume}
                 onEpicCancel={onEpicCancel}
                 onEpicBranch={onEpicBranch}
                 onTaskBranch={onTaskBranch}

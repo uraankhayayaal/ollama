@@ -3,12 +3,12 @@ import { BoardView, GateEvent } from "@/Types";
 import "./styles.scss";
 
 const STATUS_LABEL: Record<string, string> = {
-  new: "Новые",
-  analysis: "В анализе",
-  ready: "Готовы к работе",
-  human_help: "Помощь человека",
-  in_progress: "В работе",
-  testing: "На тестировании",
+  draft: "Черновик",
+  business_review: "Бизнес-ревью",
+  system_analysis: "Системный анализ",
+  infra: "Инфраструктура",
+  test_cases: "Тесты",
+  development: "Разработка",
   done: "Готово",
   cancelled: "Отменены",
 };

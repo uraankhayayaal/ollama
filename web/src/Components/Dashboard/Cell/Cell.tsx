@@ -3,7 +3,7 @@
 // эпика — epic_id у задачи неизменен. В свёрнутом режиме вместо карточек
 // показывает интерактивный счётчик задач статуса.
 import type { Status, TaskRow } from "@/Types";
-import { MOVES } from "../board";
+import { TASK_MOVES } from "../board";
 import { clearDragID, getDragID } from "../dnd";
 import { TaskCard } from "../TaskCard";
 import "./styles.scss";
@@ -37,7 +37,7 @@ export function Cell({
     if (!t || t.epic_id !== epicId || t.status === status) {
       return;
     }
-    const m = MOVES[t.status];
+    const m = TASK_MOVES[t.status];
     if (!m.prev.includes(status) && !m.next.includes(status)) {
       return;
     }

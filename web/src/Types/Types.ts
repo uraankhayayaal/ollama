@@ -1,17 +1,16 @@
 // Типы контракта REST/SSE Web UI. Зеркалят server/session.go и board/entity.go.
 
-// Статусы зеркалят board/entity.go: единая цепочка для эпиков и задач
-// (new -> analysis -> human_help -> ready -> in_progress -> testing -> done;
-// human_help — боковая «помощь человека», cancelled — терминальный).
-// Важно: сервер валидирует переходы (ValidateTransition), поэтому в UI
-// переводы между колонками ограничены соседними статусами.
+// Статусы зеркалят domain/status.go.
+// Эпики: draft -> business_review -> system_analysis -> done
+// Задачи: draft -> infra -> test_cases -> development -> done
+// Общие терминалы: done, cancelled
 export type Status =
-  | "new"
-  | "analysis"
-  | "ready"
-  | "human_help"
-  | "in_progress"
-  | "testing"
+  | "draft"
+  | "business_review"
+  | "system_analysis"
+  | "infra"
+  | "test_cases"
+  | "development"
   | "done"
   | "cancelled";
 
@@ -96,8 +95,7 @@ export interface TaskRow {
   checkpoint?: TaskCheckpoint;
   attempts?: number;
   last_error?: string;
-  // Причина остановки, указанная специалистом (BoardSetTaskStatus → human_help:
-  // задача невыполнима, нужен человек). Очищается при выходе из human_help.
+  // Причина отмены задачи (BoardSetTaskStatus → cancelled).
   pause_reason?: string;
   heartbeat_at?: string;
   // Комментарии к задаче (замечания QA, пользовательские, системные).
@@ -203,7 +201,7 @@ export interface BoardView {
   meta?: ProjectMeta;
   epics: EpicRow[];
   tasks: TaskRow[];
-  bugs: BugRow[];
+  bugs?: BugRow[];
   // Полные счётчики (Ф-3): заполняются при пагинации (limit/offset) или всегда.
   total?: { epics: number; tasks: number; bugs: number };
   // git-статус проекта (ветки/MR эпиков и задач, Ф-5): заполняется только для

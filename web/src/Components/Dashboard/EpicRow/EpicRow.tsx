@@ -4,7 +4,7 @@
 // счётчиков даёт пересчёт из пропсов при каждом апдейте доски.
 import { useState } from "react";
 import type { EpicRow as Epic, BugRow, TaskRow } from "@/Types";
-import { STATUS_LABEL, STATUS_ORDER } from "../board";
+import { STATUS_LABEL, TASK_STATUS_ORDER } from "../board";
 import { tokenLabel, tokenTitle } from "../tokens";
 import { Cell } from "../Cell";
 import { EpicActionBar } from "../EpicActionBar";
@@ -25,8 +25,6 @@ export function EpicRow({
   onEpicOpen,
   onEpicDelete,
   onEpicRelease,
-  onEpicPause,
-  onEpicResume,
   onEpicCancel,
   onEpicReorder,
   onEpicShift,
@@ -46,15 +44,13 @@ export function EpicRow({
   onEpicOpen: (e: Epic) => void;
   onEpicDelete: (e: Epic) => void;
   onEpicRelease: (e: Epic) => Promise<void>;
-  // Ф-6: пауза/возобновление/отмена эпика (код в ветке остаётся).
-  onEpicPause?: (e: Epic) => Promise<void>;
-  onEpicResume?: (e: Epic) => Promise<void>;
+  // Отмена эпика (код в ветке остаётся).
   onEpicCancel?: (e: Epic) => Promise<void>;
   // Пересортировка эпиков: перетащить thisId на место targetId (after=true —
   // после, false — перед). Игнорируется для строк без эпика и межфазовых
   // переносов (фаза — первичный ключ очереди).
   onEpicReorder?: (thisId: string, targetId: string, after: boolean) => void;
-  // Показать стрелки поднять/опустить только внутри фазы (dir=±1 относительно
+  // Показать стрелки поднять/опустить эпик (dir=±1 относительно
   // эффективного порядка доски).
   onEpicShift?: (e: Epic, dir: -1 | 1) => void;
   onToggle: () => void;
@@ -170,14 +166,12 @@ export function EpicRow({
               hasBranch={hasBranch}
               onDelete={() => onEpicDelete(epic)}
               onRelease={() => onEpicRelease(epic)}
-              onPause={onEpicPause ? () => onEpicPause(epic) : undefined}
-              onResume={onEpicResume ? () => onEpicResume(epic) : undefined}
               onCancel={onEpicCancel ? () => onEpicCancel(epic) : undefined}
             />
           </>
         )}
       </div>
-      {STATUS_ORDER.map((s) => (
+      {TASK_STATUS_ORDER.map((s) => (
         <Cell
           key={s}
           status={s}

@@ -32,12 +32,12 @@
     }
   }
 
-  &.new { border-top-color: var(--st-todo, #64748b); }
-  &.analysis { border-top-color: var(--st-analysis, #7c3aed); }
-  &.ready { border-top-color: var(--st-ready, #0891b2); }
-  &.human_help { border-top-color: var(--st-human-help, #b45309); }
-  &.in_progress { border-top-color: var(--st-in-progress, #2563eb); }
-  &.testing { border-top-color: var(--st-testing, #0f766e); }
+  &.draft { border-top-color: var(--st-todo, #64748b); }
+  &.business_review { border-top-color: var(--st-analysis, #7c3aed); }
+  &.system_analysis { border-top-color: var(--st-analysis2, #a855f7); }
+  &.infra { border-top-color: var(--st-ready, #0891b2); }
+  &.test_cases { border-top-color: var(--st-test, #0d9488); }
+  &.development { border-top-color: var(--st-in-progress, #2563eb); }
   &.done { border-top-color: var(--st-done, #15803d); }
   &.cancelled { border-top-color: var(--muted, #8a94a6); }
 
