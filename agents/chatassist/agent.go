@@ -32,7 +32,7 @@ var assistantToolNames = []string{
 	tools.BoardListEpics, tools.BoardGetEpic,
 	tools.BoardListTasks, tools.BoardGetTask,
 	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
-	tools.BoardSetTaskStatus,
+	tools.BoardSetTaskStatus, tools.BoardDeleteTask,
 }
 
 // assistantSystemPrompt — системный промпт ассистента-исполнителя (Ф-1): по

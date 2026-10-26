@@ -361,6 +361,18 @@ export async function updateTask(
   );
 }
 
+// Удаление задачи с доски. Допустимо в статусах draft, infra, done.
+export async function deleteTask(
+  base: string,
+  project: string,
+  taskID: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "DELETE",
+    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}`,
+  );
+}
+
 export async function listBugs(
   base: string,
   project: string,

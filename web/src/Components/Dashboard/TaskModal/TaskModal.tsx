@@ -32,6 +32,7 @@ export function TaskModal({
   onTaskUpdate,
   onRollback,
   onReopen,
+  onDelete,
   onClose,
 }: {
   task: TaskRow;
@@ -43,6 +44,7 @@ export function TaskModal({
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onRollback?: (t: TaskRow, to: string) => Promise<void>;
   onReopen?: (t: TaskRow, body: string) => Promise<void>;
+  onDelete?: (t: TaskRow) => void;
   onClose: () => void;
 }) {
   const m = TASK_MOVES[task.status] ?? { prev: [], next: [] };
@@ -388,6 +390,11 @@ export function TaskModal({
             {STATUS_LABEL[s]} →
           </button>
         ))}
+        {onDelete && (task.status === "draft" || task.status === "infra" || task.status === "done") && (
+          <button className="task-delete-btn" onClick={() => onDelete(task)}>
+            Удалить задачу
+          </button>
+        )}
       </div>
 
       <div className="meta">

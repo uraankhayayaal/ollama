@@ -11,12 +11,16 @@ export function TaskCard({
   task,
   onTaskUpdate,
   onOpen,
+  onDelete,
 }: {
   task: TaskRow;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onOpen: () => void;
+  onDelete?: (t: TaskRow) => void;
 }) {
   const m = TASK_MOVES[task.status] ?? { prev: [], next: [] };
+  // Удаление: draft, infra — ещё не взяты в работу; done — завершённую можно убрать.
+  const canDelete = onDelete && (task.status === "draft" || task.status === "infra" || task.status === "done");
   // На узкой карточке кнопки-стрелки без подписей — цель подсказкой (title).
   const moveBtn = (s: Status, arrow: string) => (
     <button
@@ -48,6 +52,18 @@ export function TaskCard({
       <div className="controls">
         {m.prev.map((s) => moveBtn(s, "←"))}
         {m.next.map((s) => moveBtn(s, "→"))}
+        {canDelete && (
+          <button
+            className="task-delete"
+            title="Удалить задачу"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete!(task);
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
     </li>
   );

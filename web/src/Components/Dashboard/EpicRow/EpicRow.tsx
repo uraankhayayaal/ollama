@@ -28,6 +28,7 @@ export function EpicRow({
   onEpicCancel,
   onEpicReorder,
   onEpicShift,
+  onTaskDelete,
   onToggle,
 }: {
   epic: Epic | null;
@@ -53,6 +54,7 @@ export function EpicRow({
   // Показать стрелки поднять/опустить эпик (dir=±1 относительно
   // эффективного порядка доски).
   onEpicShift?: (e: Epic, dir: -1 | 1) => void;
+  onTaskDelete?: (t: TaskRow) => void;
   onToggle: () => void;
 }) {
   const plain = epic ? "" : " plain";
@@ -180,6 +182,7 @@ export function EpicRow({
           collapsed={collapsed}
           onTaskUpdate={onTaskUpdate}
           onTaskOpen={onTaskOpen}
+          onTaskDelete={onTaskDelete}
         />
       ))}
 

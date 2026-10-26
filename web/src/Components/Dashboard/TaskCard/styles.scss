@@ -61,7 +61,16 @@
         color: var(--ink, #1b2330);
       }
 
-      &:active { transform: scale(.94); }
+        &:active { transform: scale(.94); }
+
+        &.task-delete {
+          color: #d16868;
+
+          &:hover {
+            background: #fef0f0;
+            color: #b93a3a;
+          }
+        }
     }
   }
 }

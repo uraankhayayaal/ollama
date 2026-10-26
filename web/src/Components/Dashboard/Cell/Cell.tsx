@@ -15,6 +15,7 @@ export function Cell({
   collapsed = false,
   onTaskUpdate,
   onTaskOpen,
+  onTaskDelete,
 }: {
   status: Status;
   epicId: string;
@@ -22,6 +23,7 @@ export function Cell({
   collapsed?: boolean;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
   onTaskOpen: (t: TaskRow) => void;
+  onTaskDelete?: (t: TaskRow) => void;
 }) {
   const items = tasks
     .filter((t) => t.status === status)
@@ -62,6 +64,7 @@ export function Cell({
               task={t}
               onTaskUpdate={onTaskUpdate}
               onOpen={() => onTaskOpen(t)}
+              onDelete={onTaskDelete}
             />
           ))}
         </ul>

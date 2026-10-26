@@ -3,7 +3,7 @@
 // Ф-3: аутентификация (AI_WEB_PASSWORD) — экран входа, защита 401-ответами.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, reopenTask, reorderEpics, rollbackTask, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
+import { analyzeProjectLogs, authStatus, answerAsk, boardOf, chatHistory, clearChat, continueProject, createEpicBranch, createEpicMR, createTaskBranch, createTaskMR, deleteEpic, deleteTask, epicLLMResolve, gateDecide, indexProject, listProjects, logout, openProject, postChat, projectTokens, releaseEpic, reopenTask, reorderEpics, rollbackTask, sessionStop, setEpicStatus, taskLLMResolve, updateTask } from "./Api";
 import { connectLive, type LiveClient } from "./live";
 import type { AppLogLine, AskAnswerBody, AskAnswerResult, BoardView, BranchDiffContext, ChatMsg, EpicRow, TaskRow, ProjectMeta, LogMessage, LogStream, ProjectTokens, Status } from "@/Types";
 import { Dashboard } from "./Components/Dashboard";
@@ -531,6 +531,28 @@ export function App() {
     }
   };
 
+  const onTaskDelete = async (task: TaskRow) => {
+    if (!project) {
+      return;
+    }
+    if (!window.confirm(`Удалить задачу «${task.title}»?`)) {
+      return;
+    }
+    try {
+      await deleteTask(BASE, project.project_name, task.task_id);
+      setBoard((prev) =>
+        prev
+          ? {
+              ...prev,
+              tasks: prev.tasks.filter((t) => t.task_id !== task.task_id),
+            }
+          : prev,
+      );
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const onEpicRelease = async (epic: EpicRow) => {
     if (!project) {
       return;
@@ -910,6 +932,7 @@ export function App() {
               <Dashboard
                 board={board}
                 onTaskUpdate={onTaskUpdate}
+                onTaskDelete={onTaskDelete}
                 onEpicDelete={onEpicDelete}
                 onEpicRelease={onEpicRelease}
                 onEpicCancel={onEpicCancel}
@@ -932,6 +955,7 @@ export function App() {
               <Dashboard
                 board={board}
                 onTaskUpdate={onTaskUpdate}
+                onTaskDelete={onTaskDelete}
                 onEpicDelete={onEpicDelete}
                 onEpicRelease={onEpicRelease}
                 onEpicCancel={onEpicCancel}

@@ -180,6 +180,17 @@
     &:hover {
       background: var(--btn-hover, #e2e8f0);
     }
+
+    &.task-delete-btn {
+      color: #b93a3a;
+      background: #fef0f0;
+      border-color: #fecaca;
+
+      &:hover {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+    }
   }
 }
 

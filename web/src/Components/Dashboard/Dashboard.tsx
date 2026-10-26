@@ -19,6 +19,7 @@ type Row = { epic: EpicRow | null; epicId: string; tasks: TaskRow[]; bugs: BugRo
 export function Dashboard({
   board,
   onTaskUpdate,
+  onTaskDelete,
   onEpicDelete,
   onEpicRelease,
   onEpicCancel,
@@ -37,6 +38,7 @@ export function Dashboard({
 }: {
   board: BoardView | null;
   onTaskUpdate: (t: TaskRow, patch: Partial<TaskRow>) => void;
+  onTaskDelete?: (t: TaskRow) => void;
   onEpicDelete: (e: EpicRow) => void;
   onEpicRelease: (e: EpicRow) => Promise<void>;
   // Пересортировка эпиков (перетаскивание строк/стрелки): новый полный порядок
@@ -331,6 +333,7 @@ export function Dashboard({
             onEpicCancel={onEpicCancel}
             onEpicReorder={moveEpic}
             onEpicShift={shiftEpic}
+            onTaskDelete={onTaskDelete}
             onToggle={() => toggleCollapse(r.epicId, r.tasks)}
           />
         ))}
@@ -360,6 +363,7 @@ export function Dashboard({
           onTaskUpdate={onTaskUpdate}
           onRollback={onTaskRollback}
           onReopen={onTaskReopen}
+          onDelete={onTaskDelete}
           onClose={() => setTaskId(null)}
         />
       )}
