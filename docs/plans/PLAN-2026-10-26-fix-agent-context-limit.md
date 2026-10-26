@@ -69,10 +69,11 @@ func (k *KanbanRunner) generate(ctx context.Context, scope tokens.Scope, agent s
 
 ### Шаг 1: Проверить существующие лимиты
 
-- [ ] 1.1 Найти `RoundLimit` / `MaxRounds` в `agents/` — какое текущее значение
-- [ ] 1.2 Проверить `resp.Truncated` — как именно срабатывает и обрабатывается
-- [ ] 1.3 Проверить `infrastructure/llm/OpenAIProvider.go` — как обрабатывается error `context length exceeded`
-- [ ] **Гейт:** анализ кода, без изменений
+- [x] 1.1 `MaxRounds = 12` — ограничивает цикл агента в `application/usecases/run.go`
+- [x] 1.2 `resp.Truncated = true` на `finish_reason=length` — обрабатывается корректно (graceful)
+- [x] 1.3 `compressHistoryForRound` (runner/compression.go) — сжимает историю, если `lastInputTokens > providerInputCap`; но на первом раунде `lastInputTokens = 0` → сжатие не срабатывает
+- [x] 1.4 `KanbanRunner.generate` — обёртка `provider.Generate`, без предпроверок
+- [x] **Гейт:** анализ кода завершён
 
 ### Шаг 2: Graceful handling превышения контекста
 
