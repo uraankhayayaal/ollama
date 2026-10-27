@@ -34,31 +34,12 @@ func ragCtx(ops *FileOps) rag.Context {
 type Set struct {
 	byName map[string]Tool
 	order  []string
-	// boardConnected — был ли board.Store подключён при построении набора
-	// (deps.Board != nil). Позволяет различить в Execute два случая вызова
-	// board-инструмента, отсутствующего в наборе: доска не подключена
-	// (standalone/plan — мягкая ошибка «доска не подключена») и доска
-	// подключена, но инструмент сознательно не выдан (read-only участник —
-	// жёсткая ошибка not in tool set).
-	boardConnected bool
 }
 
 // Select собирает набор инструментов по именам из общего реестра.
-// Каждый агент указывает только те имена, с которыми собирается работать;
-// сам каталог инструментов живёт в этом пакете и переиспользуется агентами.
-//
-// deps передаёт агенту-контекст: инструменты генератора кода получают
-// *FileOps, инструменты ревью — *ReviewSession (разделяемое состояние цикла).
-// Инструменты Kanban-доски (Board*) включаются только при подключённом
-// board.Store: без доски их вызов заведомо завершится «доска не подключена»,
-// а модель бесполезно будет жечь раунды, пробуя доступные, но мёртвые
-// инструменты (например, лид в standalone-режиме plan).
 func Select(names []string, deps Deps) *Set {
-	s := &Set{byName: make(map[string]Tool, len(names)), boardConnected: deps.Board != nil}
+	s := &Set{byName: make(map[string]Tool, len(names))}
 	for _, n := range names {
-		if IsBoardTool(n) && deps.Board == nil {
-			continue
-		}
 		s.byName[n] = newTool(n, deps)
 		s.order = append(s.order, n)
 	}
@@ -97,9 +78,7 @@ func (s *Set) Has(name string) bool {
 	return ok
 }
 
-// Remove исключает инструмент из набора по имени. Используется для
-// контекстной модификации: например, архитектор при декомпозиции
-// эпика создаёт только задачи (BoardCreateTask), а не эпики.
+// Remove исключает инструмент из набора по имени.
 func (s *Set) Remove(name string) {
 	if s.byName == nil {
 		return
@@ -117,15 +96,6 @@ func (s *Set) Remove(name string) {
 func (s *Set) Execute(name string, args map[string]any) ([]byte, error) {
 	t, ok := s.byName[name]
 	if !ok {
-		// Известный инструмент доски, но доска не подключена (standalone/plan):
-		// Select его не включил, а модель позвала (промпт лидов упоминает Board*).
-		// Возвращаем мягкую ошибку «доска не подключена» — по промпту лид в этом
-		// случае переходит к JSON-декомпозиции. При подключённой доске вызов
-		// инструмента, сознательно не выданного агенту (read-only участник),
-		// — по-прежнему жёсткая ошибка not in tool set.
-		if IsBoardTool(name) && !s.boardConnected {
-			return boardErr(name, fmt.Errorf("доска не подключена"))
-		}
 		return nil, fmt.Errorf("function %s not in tool set", name)
 	}
 	return t.Execute(args)
@@ -196,33 +166,6 @@ func newTool(name string, deps Deps) Tool {
 		return &approveMrTool{ses: deps.Session}
 	case "NextChunk":
 		return &nextChunkTool{ses: deps.Session}
-	case BoardListEpics:
-		return &boardListEpicsTool{b: deps.Board}
-	case BoardGetEpic:
-		return &boardGetEpicTool{b: deps.Board}
-	case BoardListTasks:
-		return &boardListTasksTool{b: deps.Board}
-	case BoardGetTask:
-		return &boardGetTaskTool{b: deps.Board}
-	case BoardCreateEpic:
-		return &boardCreateEpicTool{b: deps.Board}
-	case BoardUpdateEpic:
-		return &boardUpdateEpicTool{b: deps.Board}
-	case BoardDeleteEpic:
-		return &boardDeleteEpicTool{b: deps.Board}
-	case BoardSetEpicStatus:
-		return &boardSetEpicStatusTool{b: deps.Board}
-	case BoardCreateTask:
-		return &boardCreateTaskTool{b: deps.Board}
-	case BoardUpdateTask:
-		return &boardUpdateTaskTool{b: deps.Board}
-	case BoardDeleteTask:
-		return &boardDeleteTaskTool{b: deps.Board}
-	case BoardSetTaskStatus:
-		return &boardSetTaskStatusTool{b: deps.Board, ops: deps.FileOps}
-	case BoardAddComment:
-		return &boardAddCommentTool{b: deps.Board}
 	}
-	// Неизвестное имя — ошибка на этапе конструирования агента (fail-fast).
 	panic(fmt.Sprintf("tools: инструмент %q не зарегистрирован в реестре", name))
 }

@@ -200,7 +200,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/providers/select", s.handleSelectProvider)
 
 	// REST — доска/чат/сессия проекта
-	mux.HandleFunc("GET /api/projects/{id}", s.handleGetBoard)
+	mux.HandleFunc("GET /api/projects/{id}", s.handleGetProjectMeta)
 	mux.HandleFunc("POST /api/projects/{id}/chat", s.handlePostChat)
 	mux.HandleFunc("GET /api/projects/{id}/chat", s.handleChatHistory)
 	mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleClearChat)
@@ -219,58 +219,11 @@ func (s *Server) routes() http.Handler {
 	// REST — структурированный вопрос ассистента (AskUser, Ф-1 «спроси
 	// пользователя»): ответ на один шаг пачки.
 	mux.HandleFunc("POST /api/projects/{id}/ask/{askID}/answer", s.handleAskAnswer)
-	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}", s.handleUpdateTask)
-	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}", s.handleDeleteTask)
-	// Переоткрытие выполненной задачи на доработку (done -> ready прежнему
-	// исполнителю) с обязательным комментарием-обоснованием.
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/reopen", s.handleReopenTask)
-	mux.HandleFunc("DELETE /api/projects/{id}/epics/{eid}", s.handleDeleteEpic)
-	// Git-workflow (Ф-6): кнопки «Пауза»/«Продолжить»/«Отменить» эпика — перевод
-	// статуса (каскад задач + git-хуки, ветка/код остаются на месте).
-	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/status", s.handleSetEpicStatus)
-	// Ручная пересортировка эпиков (Web UI): первый ID в списке получает
-	// наибольший приоритет; если оркестрация идёт, она рестартуется.
-	mux.HandleFunc("POST /api/projects/{id}/epics/reorder", s.handleReorderEpics)
-	// Инъекции (Ф-8): управление сессионными промпт-инъекциями — add, remove, list.
-	mux.HandleFunc("POST /api/projects/{id}/injections", s.handleAddInjection)
-	mux.HandleFunc("DELETE /api/projects/{id}/injections/{injID}", s.handleRemoveInjection)
-	mux.HandleFunc("GET /api/projects/{id}/injections", s.handleListInjections)
-	// Инъекции задачи: привязаны к конкретной задаче доски и применяются к её
-	// исполнителю со следующего обращения к модели. Полную замену списка делает
-	// PUT /tasks/{tid} (поле injections), эти два эндпоинта — точечные правки.
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/injections", s.handleAddTaskInjection)
-	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}/injections/{injID}", s.handleRemoveTaskInjection)
-
-	// Комментарии задачи: привязаны к задаче доски (замечания QA, пользовательские, системные).
-	mux.HandleFunc("GET /api/projects/{id}/tasks/{tid}/comments", s.handleListTaskComments)
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/comments", s.handleAddTaskComment)
-	mux.HandleFunc("PUT /api/projects/{id}/tasks/{tid}/comments/{cmID}", s.handleUpdateTaskComment)
-	mux.HandleFunc("DELETE /api/projects/{id}/tasks/{tid}/comments/{cmID}", s.handleRemoveTaskComment)
 
 	// Git (Ф-2-3): дифф, приёмка «Принять → MR», отклонение ветки.
 	mux.HandleFunc("GET /api/projects/{id}/diff", s.handleGetDiff)
 	mux.HandleFunc("POST /api/projects/{id}/accept", s.handleAccept)
 	mux.HandleFunc("POST /api/projects/{id}/reject-branch", s.handleRejectBranch)
-
-	// Git-workflow (Ф-1): ветки эпиков и задач.
-	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/branch", s.handleCreateEpicBranch)
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/branch", s.handleCreateTaskBranch)
-	// Git-workflow (Ф-2): мёрдж фича-ветки задачи в релизную ветку эпика.
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/merge", s.handleMergeTask)
-	// Ф-6 (этап 3): ручной откат кода задачи к опорной точке git-истории.
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/rollback", s.handleRollbackTask)
-	// Git-workflow (Ф-3): кнопка «Залить в main» — релизная ветка эпика → main.
-	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/release", s.handleReleaseEpic)
-	// Git-workflow (Ф-4): авто-резолв конфликтов «main ↔ релизная ветка».
-	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/rebase", s.handleEpicRebase)
-	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/resolve", s.handleEpicResolve)
-	mux.HandleFunc("GET /api/projects/{id}/epics/{eid}/resolve", s.handleResolveStatus)
-	// Git-workflow (Ф-9): авторезолвинг конфликтов через LLM.
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/resolve", s.handleTaskLLMResolve)
-	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/auto-resolve", s.handleEpicLLMResolve)
-	// Git-workflow (Ф-5): «Создать MR» — push ветки эпика/задачи в remote и MR.
-	mux.HandleFunc("POST /api/projects/{id}/epics/{eid}/mr", s.handleCreateEpicMR)
-	mux.HandleFunc("POST /api/projects/{id}/tasks/{tid}/mr", s.handleCreateTaskMR)
 
 	// Логи проекта (панель «Логи», см. logs.go).
 	mux.HandleFunc("GET /api/projects/{id}/logs", s.handleGetLogs)
@@ -289,6 +242,18 @@ func (s *Server) routes() http.Handler {
 		loginLim: s.loginLim,
 		chatLim:  s.chatLim,
 	}
+}
+
+// --- Stub handlers (replaced board endpoints) ---
+
+func (s *Server) handleGetProjectMeta(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	inf, err := s.reg.Get(project)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, inf)
 }
 
 // --- SessionRegistry (single-flight) ---

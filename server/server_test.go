@@ -3,26 +3,19 @@ package server
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 
-	"ai/infrastructure/board"
-	"ai/infrastructure/chat"
-	"ai/web"
+	"ai/infrastructure/workspace"
 )
 
 // --- WsConn: кадры ---
@@ -243,514 +236,6 @@ func TestSessionSnapshotDeliversStateRightAfterSubscribe(t *testing.T) {
 	sess.running = false
 	sess.mu.Unlock()
 }
-
-// TestSessionSnapshotReplaysActiveGate — Ф-5: событие gate одноразовое, поэтому
-// клиент, перезагрузивший страницу при живом затворе, баннер не получал и видел
-// пустую доску. broadcastSnapshot переигрывает payload активного затвора, а после
-// решения payload забывается (снапшот не воскрешает старый баннер).
-func TestSessionSnapshotReplaysActiveGate(t *testing.T) {
-	srv, _, _ := newTestServer(t)
-	sess, _, err := srv.getOrCreate("gate-replay-proj")
-	if err != nil {
-		t.Fatalf("getOrCreate: %v", err)
-	}
-	sess.mu.Lock()
-	sess.running = true
-	sess.mu.Unlock()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gateDone := make(chan struct{})
-	go func() {
-		defer close(gateDone)
-		// Затвор блокирует до решения — вызываем в горутине.
-		if _, gerr := sess.Epics(ctx, []*board.Epic{{TaskSpec: board.TaskSpec{TaskID: "EP-1", Title: "эпик"}}}); gerr != nil {
-			t.Errorf("Epics: %v", gerr)
-		}
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		gating, _, _ := sess.gateOf().State()
-		if gating {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("затвор не встал")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	srvConn, cliConn := net.Pipe()
-	defer cliConn.Close()
-	ws := &WsConn{conn: srvConn, br: bufio.NewReader(srvConn), closed: make(chan struct{})}
-	t.Cleanup(func() { _ = ws.Close() })
-	srv.hub.Subscribe("gate-replay-proj", ws)
-
-	sess.broadcastSnapshot()
-
-	// При живом затворе снапшот: status + gate + board + tokens.
-	var gate *gateEvent
-	for i := 0; i < 4; i++ {
-		var ev struct {
-			Type    string          `json:"type"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		if err := json.Unmarshal(readFramePayload(t, cliConn), &ev); err != nil {
-			t.Fatalf("кадр %d: %v", i, err)
-		}
-		if ev.Type != "gate" {
-			continue
-		}
-		var g gateEvent
-		if err := json.Unmarshal(ev.Payload, &g); err != nil {
-			t.Fatalf("gate payload: %v", err)
-		}
-		gate = &g
-	}
-	if gate == nil {
-		t.Fatal("снапшот не переиграл активный затвор (событие gate отсутствует)")
-	}
-	if gate.Gate != "epics" || len(gate.IDs) != 1 || gate.IDs[0] != "EP-1" {
-		t.Fatalf("gate = %+v, want epics/[EP-1]", gate)
-	}
-	if gate.Summary == "" {
-		t.Fatal("gate без summary — баннер нечего показать")
-	}
-
-	// Решение человека снимает затвор и забывает payload.
-	if err := sess.approve("epics", true, ""); err != nil {
-		t.Fatalf("approve: %v", err)
-	}
-	select {
-	case <-gateDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("затвор не завершился после approve")
-	}
-	_, _, stored := sess.gateOf().State()
-	if stored != nil {
-		t.Fatalf("после решения payload затвора должен быть забыт, got %+v", stored)
-	}
-
-	sess.mu.Lock()
-	sess.running = false
-	sess.mu.Unlock()
-}
-
-// --- Server REST ---
-
-func newTestServer(t *testing.T) (*Server, http.Handler, *miniredis.Miniredis) {
-	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(mr.Close)
-	t.Setenv("BOARD_REDIS_ADDR", mr.Addr())
-
-	wsPath := filepath.Join(t.TempDir(), "workspaces.json")
-	srv, err := NewServer(Config{WorkspacesPath: wsPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return srv, srv.routes(), mr
-}
-
-func TestOpenProjectDirAndList(t *testing.T) {
-	_, handler, _ := newTestServer(t)
-
-	dir := t.TempDir()
-	proj := filepath.Join(dir, "myapp")
-	if err := os.MkdirAll(proj, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// POST /api/projects с путём к каталогу.
-	body := `{"path_or_git":"` + proj + `"}`
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(body))
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("POST /api/projects: %d, body: %s", rec.Code, rec.Body.String())
-	}
-	var meta map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
-		t.Fatal(err)
-	}
-	if meta["project_name"] != "myapp" {
-		t.Fatalf("project_name = %v, want myapp", meta["project_name"])
-	}
-
-	// GET /api/projects возвращает зарегистрированный проект.
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest("GET", "/api/projects", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /api/projects: %d", rec.Code)
-	}
-	var list []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, p := range list {
-		if p["project_name"] == "myapp" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("GET /api/projects не содержит myapp: %+v", list)
-	}
-}
-
-func TestGetBoardReturnsSnapshot(t *testing.T) {
-	srv, handler, _ := newTestServer(t)
-	_ = srv
-
-	// Сессия создаётся на лету в getOrCreate? Нет: для GET board используем
-	// открытие store на лету.
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/projects/some-project", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET board: %d, body: %s", rec.Code, rec.Body.String())
-	}
-	var snap boardSnapshot
-	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
-		t.Fatal(err)
-	}
-	if snap.Epics == nil || snap.Tasks == nil {
-		t.Fatalf("доска должна отдавать пустые массивы: %+v", snap)
-	}
-}
-
-func TestDeleteEpic(t *testing.T) {
-	_, handler, mr := newTestServer(t)
-	ctx := context.Background()
-
-	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-del"})
-	defer store.Close()
-	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "Удаляемый"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CreateEpic(ctx, &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-2", Title: "С начатой задачей"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CreateTask(ctx, &board.Task{
-		TaskSpec: board.TaskSpec{TaskID: "task-2", Title: "в работе"},
-		EpicID:   "epic-2",
-		Status:   board.StatusDevelopment,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Удаление эпика без начатых задач — 200, эпика с доски больше нет.
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("DELETE", "/api/projects/proj-del/epics/epic-1", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("DELETE эпик без задач: %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if _, err := store.GetEpic(ctx, "epic-1"); err == nil {
-		t.Fatal("эпик epic-1 должен быть удалён")
-	}
-
-	// Эпик, у которого задача уже в работе, удалять нельзя — 400.
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest("DELETE", "/api/projects/proj-del/epics/epic-2", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("DELETE эпик с задачей в работе: %d, want 400 (body: %s)", rec.Code, rec.Body.String())
-	}
-	epics, err := store.ListEpics(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(epics) != 1 || epics[0].TaskID != "epic-2" {
-		t.Fatalf("эпики после попытки удаления: %+v, want [epic-2]", epics)
-	}
-
-	// Несуществующий эпик — 404.
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest("DELETE", "/api/projects/proj-del/epics/nope", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("DELETE несуществующего эпика: %d, want 404 (body: %s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestPostChatWithoutProviderFails(t *testing.T) {
-	_, handler, _ := newTestServer(t)
-
-	// Вопрос/запрос статуса требует LLM-провайдера — без него 503.
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/projects/proj-1/chat",
-		bytes.NewBufferString(`{"message":"что делает проект?"}`))
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("POST chat вопрос без LLM: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestPostChatTaskMessageRequiresProvider(t *testing.T) {
-	srv, handler, _ := newTestServer(t)
-
-	// Ф-1: «создай задачу …» — как и любой вопрос, обрабатывает ассистент
-	// (решение ПО СМЫСЛУ инструментами доски), а не регэкспеп. Без LLM-
-	// провайдера — 503, доска при этом не трогается (эпиков не появляется).
-	ctx := context.Background()
-	for i, msg := range []string{"создай задачу: оптимизируй загрузку страницы", "добавь эпик на добавление тестов"} {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest("POST", "/api/projects/proj-1/chat",
-			bytes.NewBufferString(`{"message":`+strconv.Quote(msg)+`}`))
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("POST chat задача #%d: %d, want 503 (body: %s)", i, rec.Code, rec.Body.String())
-		}
-	}
-
-	sess := srv.session("proj-1")
-	if sess == nil {
-		t.Fatal("сессия проекта не создана")
-	}
-	epics, err := sess.board.ListEpics(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(epics) != 0 {
-		t.Fatalf("запрос задачи без LLM не должен создавать эпики, на доске: %d", len(epics))
-	}
-}
-
-func TestPostChatDialogueDoesNotCreateEpic(t *testing.T) {
-	srv, handler, _ := newTestServer(t)
-
-	// «Подскажи погоду» и прочий свободный диалог — это НЕ создание задачи:
-	// маршрут уходит в Q&A-ассистента, а без LLM-провайдера отвечает 503,
-	// доску при этом не трогая (эпиков не появляется).
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/projects/proj-chat/chat",
-		bytes.NewBufferString(`{"message":"Подскажи погоду в Москве"}`))
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("POST chat диалог без LLM: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
-	}
-
-	sess, _, err := srv.getOrCreate("proj-chat")
-	if err != nil {
-		t.Fatal(err)
-	}
-	epics, err := sess.board.ListEpics(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(epics) != 0 {
-		t.Fatalf("диалог не должен создавать эпики, на доске: %d", len(epics))
-	}
-}
-
-func TestContinueEmptyBoardStartsInStandby(t *testing.T) {
-	srv, _, mr := newTestServer(t)
-
-	// Stub-провайдер: на пустой доске генерации не будет (оркестрация сразу
-	// уходит в режим ожидания работы), но handleContinue его резолвит.
-	srv.prov = stubProviderResolve(harnessStubProvider{})
-
-	sess, _, err := srv.getOrCreate("proj-empty")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = mr
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/projects/proj-empty/continue", nil)
-	srv.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("continue пустой доски: %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-	}
-
-	// Оркестрация запущена и ушла в режим ожидания: running до конца и
-	// standby (нет записей, которые можно взять в работу).
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		sess.mu.Lock()
-		running := sess.running
-		standby := sess.standby
-		sess.mu.Unlock()
-		if running && standby {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("оркестрация не ушла в standby: running=%v standby=%v", running, standby)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// Стартовый статус в чат не пишется (запуск по кнопке — без сообщений чата).
-	hist, err := sess.chat.History(context.Background(), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range hist {
-		if m.Role == chat.RoleStatus {
-			t.Fatalf("запуск по кнопке не должен писать статус в чат, найдено: %+v", m)
-		}
-	}
-
-	sess.stop()
-}
-
-func TestContinueOnBoardRequiresProvider(t *testing.T) {
-	_, handler, mr := newTestServer(t)
-
-	// Задача на доске уже есть (эпик добавлен, напр., из чата) — Continue
-	// доходит до резолва LLM-провайдера; в hermetic-тесте его нет → 503.
-	store := board.NewStoreNoCheck(board.StoreConfig{Addr: mr.Addr(), Project: "proj-cont"})
-	defer store.Close()
-	if err := store.CreateEpic(context.Background(), &board.Epic{
-		TaskSpec: board.TaskSpec{TaskID: "epic-1", Title: "задача с чата"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/projects/proj-cont/continue", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("continue с доской без LLM: %d, want 503 (body: %s)", rec.Code, rec.Body.String())
-	}
-	// Ошибка про провайдера, а не про «нет задач» на доске.
-	if !strings.Contains(rec.Body.String(), "провайдер") {
-		t.Fatalf("ожидалась ошибка про провайдера, got: %s", rec.Body.String())
-	}
-}
-
-func TestChatHistoryEmpty(t *testing.T) {
-	_, handler, _ := newTestServer(t)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/projects/proj-2/chat?limit=10", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET chat: %d, body: %s", rec.Code, rec.Body.String())
-	}
-	var msgs []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &msgs); err != nil {
-		t.Fatal(err)
-	}
-	if len(msgs) != 0 {
-		t.Fatalf("история должна быть пустой, got %d", len(msgs))
-	}
-}
-
-func TestClearChatEndpoint(t *testing.T) {
-	srv, handler, _ := newTestServer(t)
-	ctx := context.Background()
-
-	sess, _, err := srv.getOrCreate("proj-clr")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sess.chat.Append(ctx, chat.Message{Role: chat.RoleUser, Content: "старый вопрос"}); err != nil {
-		t.Fatal(err)
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("DELETE", "/api/projects/proj-clr/chat", nil)
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("DELETE chat: %d, body: %s", rec.Code, rec.Body.String())
-	}
-
-	hist, err := sess.chat.History(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Старое сообщение стёрто; в свежем стриме — только системная пометка
-	// «кофе-брейк», которую модель игнорирует (см. chatDialogueHistory).
-	if len(hist) != 1 || hist[0].Role != chat.RoleSystem {
-		t.Fatalf("после очистки в стриме: %+v, want одна system-пометка", hist)
-	}
-
-	// Повторный клик — идемпотентен (404/500 нет).
-	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest("DELETE", "/api/projects/proj-clr/chat", nil)
-	handler.ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("повторный DELETE chat: %d, body: %s", rec2.Code, rec2.Body.String())
-	}
-}
-
-func TestGateDecideWithoutSession(t *testing.T) {
-	_, handler, _ := newTestServer(t)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/projects/proj-3/epics/decide",
-		bytes.NewBufferString(`{"approved":true}`))
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("decide без сессии: %d, want 404", rec.Code)
-	}
-}
-
-func TestStopSessionIdempotent(t *testing.T) {
-	_, handler, _ := newTestServer(t)
-
-	// Stop при отсутствии сессии — 404.
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/projects/proj-4/session/stop",
-		bytes.NewBufferString(`{}`))
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("stop без сессии: %d, want 404", rec.Code)
-	}
-}
-
-// --- статика (embed web/dist) ---
-
-func TestStaticServesIndexAndBundles(t *testing.T) {
-	handler := staticHandler()
-
-	// Корень отдаёт index.html. /index.html редиректится на красивый путь.
-	paths := []struct {
-		p    string
-		code int
-	}{
-		{"/", http.StatusOK},
-		{"/index.html", http.StatusMovedPermanently},
-	}
-	for _, tt := range paths {
-		rec := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", tt.p, nil)
-		handler.ServeHTTP(rec, r)
-		if rec.Code != tt.code {
-			t.Fatalf("GET %s: %d, want %d", tt.p, rec.Code, tt.code)
-		}
-		if tt.code == http.StatusOK && rec.Body.Len() == 0 {
-			t.Fatalf("GET %s: пустое тело", tt.p)
-		}
-	}
-
-	// Встраиваемые ассеты из web.DistFS доступны по HTTP.
-	entries, err := fs.ReadDir(web.DistFS(), "assets")
-	if err != nil {
-		t.Fatalf("dist/assets: %v", err)
-	}
-	for _, e := range entries {
-		rec := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", "/assets/"+e.Name(), nil)
-		handler.ServeHTTP(rec, r)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /assets/%s: %d, want 200", e.Name(), rec.Code)
-		}
-	}
-}
-
-// --- race-проверка hub publish с несколькими клиентами ---
-
 func TestHubConcurrentPublish(t *testing.T) {
 	h := NewHub()
 
@@ -845,70 +330,6 @@ func TestHubEmitListeners(t *testing.T) {
 	}
 }
 
-// TestSessionBoardRevAndWakeListener — событийная связь «доска ↔ чат» (Ф-2):
-// emit(board_changed) инкрементит ревизию доски (видна ассистенту в промпте),
-// а во время standby будит runner'а на перепроверку hasWork.
-func TestSessionBoardRevAndWakeListener(t *testing.T) {
-	srv, _, _ := newTestServer(t)
-	registerTestDir(t, srv, "proj-ev-listen")
-	sess, _, err := srv.getOrCreate("proj-ev-listen")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got := sess.boardRev.Load(); got != 0 {
-		t.Fatalf("boardRev на старте = %d, want 0", got)
-	}
-
-	// board_changed → ревизия растёт; chat_updated ревизию не трогает.
-	sess.emit(ProjectEvent{Type: EventChatUpdated})
-	sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: "тест"})
-	sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: "тест 2"})
-	if got := sess.boardRev.Load(); got != 2 {
-		t.Fatalf("boardRev = %d, want 2 (только board_changed считается)", got)
-	}
-
-	// Стендбай-затвор: runner подписан через standby-wake, но вне оркестрации
-	// runner == nil — Wake не трогаем, ошибок нет.
-	sess.emit(ProjectEvent{Type: EventBoardChanged, Detail: "idle"})
-	if got := sess.boardRev.Load(); got != 3 {
-		t.Fatalf("boardRev после idle-события = %d, want 3", got)
-	}
-}
-
-// TestSessionStandbyStatusDetail — режим ожидания публикует WS status с единой
-// причиной (Ф-3): setStandby(true) → status=standby + detail=standbyReason.
-// Это то, на что опирается кнопка «Стоп/Продолжить» и список проектов,
-// объясняя пользователю, почему сессия активна, но не исполняет работу.
-func TestSessionStandbyStatusDetail(t *testing.T) {
-	srv, _, _ := newTestServer(t)
-	registerTestDir(t, srv, "proj-standby-detail")
-	sess, _, err := srv.getOrCreate("proj-standby-detail")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sess.mu.Lock()
-	sess.running = true
-	sess.mu.Unlock()
-
-	srvConn, cliConn := net.Pipe()
-	defer cliConn.Close()
-	ws := &WsConn{conn: srvConn, br: bufio.NewReader(srvConn), closed: make(chan struct{})}
-	t.Cleanup(func() { _ = ws.Close() })
-	srv.hub.Subscribe("proj-standby-detail", ws)
-
-	// Вход в standby — публикуется status с деталью причины.
-	sess.setStandby(true)
-
-	st := readWSStatus(t, cliConn)
-	if st == nil || st.Status != "standby" {
-		t.Fatal("status=standby не пришёл по WS")
-	}
-	if st.Detail != standbyReason {
-		t.Fatalf("standby detail = %q, want %q", st.Detail, standbyReason)
-	}
-}
-
 // readWSEvent читает один WS-кадр и возвращает тип события и сырой payload.
 func readWSEvent(t *testing.T, conn net.Conn, timeout time.Duration) (string, json.RawMessage, bool) {
 	t.Helper()
@@ -969,4 +390,33 @@ func readWSStatus(t *testing.T, conn net.Conn) *statusEvent {
 		return &st
 	}
 	return nil
+}
+
+// newTestServer создаёт тестовый сервер с miniredis и чистым registry.
+func newTestServer(t *testing.T) (*Server, http.Handler, *miniredis.Miniredis) {
+	t.Helper()
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mr.Close)
+	wsPath := filepath.Join(t.TempDir(), "workspaces.json")
+	srv, err := NewServer(Config{WorkspacesPath: wsPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, srv.routes(), mr
+}
+
+// registerTestDir регистрирует обычный (non-git) проект.
+func registerTestDir(t *testing.T, srv *Server, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.reg.Add(workspace.AddParams{Name: name, Kind: workspace.KindDir, Root: dir, Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

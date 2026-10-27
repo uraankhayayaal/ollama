@@ -2,11 +2,8 @@ package agents_test
 
 import (
 	"ai/agents"
-	"ai/agents/architect"
 	"ai/agents/chatassist"
 	"ai/agents/developer"
-	"ai/agents/devops"
-	"ai/agents/qaengineer"
 	"ai/shared/projects"
 	"ai/tools"
 	"os"
@@ -38,26 +35,15 @@ type withRunAgent struct {
 
 func runAgents(t *testing.T) []withRunAgent {
 	t.Helper()
-	dir := t.TempDir()
 
 	backend := developer.NewBackendDeveloper("tokeneconomy-dev-test", "задание")
 	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-dev-test"))
-	qa, err := qaengineer.NewQAEngineerInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("QA-инженер: %v", err)
-	}
-	dev, err := devops.NewDevopsInDir("задание", dir)
-	if err != nil {
-		t.Fatalf("DevOps-инженер: %v", err)
-	}
-	arch := architect.NewArchitectWithStore("tokeneconomy-arch-test", "задание", nil)
-	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-arch-test"))
+
+	frontend := developer.NewFrontendDeveloper("tokeneconomy-dev-test", "задание")
 
 	return []withRunAgent{
 		{"backend-разработчик", backend.GetSystemMessages(nil)[0].Message, setOf(backend.GetTools()), true},
-		{"QA-инженер", qa.GetSystemMessages(nil)[0].Message, setOf(qa.GetTools()), false},
-		{"DevOps-инженер", dev.GetSystemMessages(nil)[0].Message, setOf(dev.GetTools()), false},
-		{"Системный архитектор", arch.GetSystemMessages(nil)[0].Message, setOf(arch.GetTools()), true},
+		{"frontend-разработчик", frontend.GetSystemMessages(nil)[0].Message, setOf(frontend.GetTools()), true},
 	}
 }
 

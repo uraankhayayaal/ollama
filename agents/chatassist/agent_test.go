@@ -2,7 +2,6 @@ package chatassist
 
 import (
 	"ai/agents"
-	"ai/infrastructure/board"
 	"ai/infrastructure/rag"
 	"ai/tools"
 	"context"
@@ -10,24 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // newTestAssistant создаёт ассистента во временной директории без доски и RAG.
 func newTestAssistant(t *testing.T, prompt string) *Assistant {
 	t.Helper()
-	return newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, nil, nil)
-}
-
-// newTestAssistantBoard создаёт ассистента с подключённой in-memory доской.
-// Доску возвращаем для контроля состояния.
-func newTestAssistantBoard(t *testing.T, prompt string) (*Assistant, *board.Store) {
-	t.Helper()
-	srv := miniredis.RunT(t)
-	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
-	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, board.NewDomainStore(store), nil)
-	return a, store
+	return newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, nil)
 }
 
 // fakeAssistantSearcher — управляемая реализация поисковика для тестов без сети.
@@ -78,12 +65,11 @@ func TestAssistantInterface(t *testing.T) {
 	}
 }
 
-// TestAssistantToolsIncludeBoardWritesAndCodeSearch — набор ассистента содержит
-// чтение файлов, семантический поиск по коду (CodeSearch) и write-инструменты
-// доски (создание эпиков/багов), чтобы ассистент мог действовать по смыслу
-// сообщения. Пишущих файловых инструментов быть не должно (Ф-1).
+// TestAssistantToolsIncludeReadAndSearch — набор ассистента содержит
+// чтение файлов, семантический поиск по коду (CodeSearch) и веб-поиск,
+// но не включает пишущие инструменты (Ф-1).
 func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
-	a, _ := newTestAssistantBoard(t, "создай эпик порт на Rust")
+	a := newTestAssistant(t, "создай эпик порт на Rust")
 	names := map[string]bool{}
 	for _, td := range a.GetTools() {
 		names[td.Name] = true
@@ -92,9 +78,6 @@ func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
 		"List", "ReadFiles", "ReadMap",
 		tools.CodeSearch,
 		tools.WebSearch,
-		tools.BoardListEpics, tools.BoardGetEpic, tools.BoardListTasks, tools.BoardGetTask,
-		tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
-		tools.BoardSetTaskStatus,
 	} {
 		if !names[w] {
 			t.Errorf("ассистент не включает инструмент %q", w)
@@ -237,36 +220,13 @@ func TestAssistantWritesIntoOutputDir(t *testing.T) {
 	}
 }
 
-// TestAssistantCreatesEpicOnBoardDirectly — ассистент сам выполняет действие на
-// доске через свой набор: BoardCreateEpic доступен и реально создаёт эпик.
-func TestAssistantCreatesEpicOnBoardDirectly(t *testing.T) {
-	a, store := newTestAssistantBoard(t, "создай эпик")
-	out, err := a.CallFunction(tools.BoardCreateEpic, map[string]any{
-		"task_id": "CHAT-01", "title": "Порт на Rust", "description": "перенести сервер",
-		"assigned_role": "Backend Lead",
-	})
-	if err != nil {
-		t.Fatalf("BoardCreateEpic: %v", err)
-	}
-	if !strings.Contains(string(out), "success") {
-		t.Fatalf("ожидался success, got %s", out)
-	}
-	e, err := store.GetEpic(context.Background(), "CHAT-01")
-	if err != nil {
-		t.Fatalf("эпик не на доске: %v", err)
-	}
-	if e.Title != "Порт на Rust" {
-		t.Fatalf("title = %q", e.Title)
-	}
-}
-
 // TestAssistantSystemMessagesIncludeRAGBlock — при доступном RAG в системный
 // промпт попадает блок «Релевантный код по вопросу» (поиск — по проекту).
 func TestAssistantSystemMessagesIncludeRAGBlock(t *testing.T) {
 	fake := &fakeAssistantSearcher{results: []rag.SearchResult{
 		{File: "server/token.go", StartLine: 1, EndLine: 3, Score: 0.91, Snippet: "package server"},
 	}}
-	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "proj-x", "где валидация токена?", nil, fake)
+	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "proj-x", "где валидация токена?", fake)
 	msgs := a.GetSystemMessages(nil)
 	if len(msgs) != 1 {
 		t.Fatalf("ожидался 1 системный промпт, got %d", len(msgs))
@@ -282,7 +242,7 @@ func TestAssistantSystemMessagesIncludeRAGBlock(t *testing.T) {
 // TestAssistantSystemMessagesWithoutRAG — nil-клиент RAG (или пустой проект) не
 // ломает ассистента: промпт строится без блока «релевантный код».
 func TestAssistantSystemMessagesWithoutRAG(t *testing.T) {
-	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "proj-x", "где валидация?", nil, nil)
+	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "proj-x", "где валидация?", nil)
 	msgs := a.GetSystemMessages(nil)
 	if strings.Contains(msgs[0].Message, "Релевантный код по вопросу") {
 		t.Fatalf("без RAG промпт не должен содержать блок:\n%s", msgs[0].Message)

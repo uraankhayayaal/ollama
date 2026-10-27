@@ -204,8 +204,7 @@ func (s *Server) sessionFlags(project string) (running, gating, standby bool) {
 	sess.mu.Lock()
 	running, standby = sess.running, sess.standby
 	sess.mu.Unlock()
-	gating, _, _ = sess.gateOf().State()
-	return running, gating, standby
+	return running, false, standby
 }
 
 // anySessionRunning сообщает, идёт ли где-нибудь оркестрация. Порядок

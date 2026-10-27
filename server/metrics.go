@@ -17,9 +17,9 @@ package server
 import (
 	"math"
 	"net/http"
+	"os"
 	"sort"
 
-	"ai/infrastructure/board"
 	"ai/infrastructure/runmetrics"
 	"ai/shared/tokens"
 )
@@ -106,11 +106,14 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 // поднимать доску/чат только ради чтения одного счётчика. Недоступный Redis —
 // не ошибка: показаны метрики текущего запуска без накопленных итогов.
 func totalTokens(r *http.Request, project string) (in, out int64) {
-	cfg := board.LoadConfig()
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:56379"
+	}
 	store, err := tokens.NewStore(r.Context(), tokens.StoreConfig{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
+		Addr:     addr,
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       0,
 		Project:  project,
 	})
 	if err != nil {

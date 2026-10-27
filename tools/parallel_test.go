@@ -9,8 +9,6 @@ func TestIsParallelSafeReadOnly(t *testing.T) {
 		"List",
 		"ReadFiles",
 		"ReadMap",
-		BoardListEpics, BoardGetEpic,
-		BoardListTasks, BoardGetTask,
 	}
 	for _, name := range safe {
 		if !IsParallelSafe(name) {
@@ -33,8 +31,6 @@ func TestIsParallelSafeMutating(t *testing.T) {
 		"ReviewMr",
 		"ApproveMr",
 		"NextChunk",
-		BoardCreateEpic, BoardUpdateEpic, BoardDeleteEpic, BoardSetEpicStatus,
-		BoardCreateTask, BoardUpdateTask, BoardDeleteTask, BoardSetTaskStatus,
 		"SomeUnknownTool",
 	}
 	for _, name := range unsafe {

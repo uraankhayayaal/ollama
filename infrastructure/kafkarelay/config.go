@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"ai/infrastructure/board"
 	"ai/shared/logging"
 )
 
@@ -83,10 +82,16 @@ func ConfigFromEnv() (Config, bool) {
 		HarnessName:   envOr("HARNESS_NAME", "ollama-harness"),
 		AgentVersion:  envOr("AGENT_VERSION", "dev"),
 	}
-	redis := board.LoadConfig()
-	cfg.RedisAddr = redis.RedisAddr
-	cfg.RedisPassword = redis.RedisPassword
-	cfg.RedisDB = redis.RedisDB
+	cfg.RedisAddr = os.Getenv("REDIS_ADDR")
+	if cfg.RedisAddr == "" {
+		cfg.RedisAddr = "localhost:56379"
+	}
+	cfg.RedisPassword = os.Getenv("REDIS_PASSWORD")
+	if v := os.Getenv("REDIS_DB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.RedisDB = n
+		}
+	}
 	return cfg, true
 }
 

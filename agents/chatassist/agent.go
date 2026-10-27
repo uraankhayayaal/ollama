@@ -11,7 +11,6 @@ package chatassist
 import (
 	"ai/agents"
 	"ai/domain"
-	"ai/domain/services"
 	"ai/shared/projects"
 	"ai/tools"
 	"encoding/json"
@@ -20,19 +19,13 @@ import (
 	"strings"
 )
 
-// assistantToolNames — инструменты ассистента: чтение файлов (List/ReadFiles/
-// ReadMap), LSP-навигация по символам, семантический поиск по коду (CodeSearch,
-// RAG) и Kanban-доска — чтение (Board* read: эпики/задачи) и запись
-// (Board* write: создание эпиков и смена статусов).
+// assistantToolNames — инструменты ассистента: чтение файлов, LSP-навигация,
+// семантический поиск по коду (CodeSearch, RAG).
 var assistantToolNames = []string{
 	"List", "ReadFiles", "ReadMap",
 	tools.LspDefinition, tools.LspReferences, tools.LspHover,
 	tools.CodeSearch,
 	tools.WebSearch,
-	tools.BoardListEpics, tools.BoardGetEpic,
-	tools.BoardListTasks, tools.BoardGetTask,
-	tools.BoardCreateEpic, tools.BoardUpdateEpic, tools.BoardDeleteEpic, tools.BoardSetEpicStatus,
-	tools.BoardSetTaskStatus, tools.BoardDeleteTask,
 }
 
 // assistantSystemPrompt — системный промпт ассистента-исполнителя (Ф-1): по
@@ -103,8 +96,8 @@ const assistantSystemPrompt = `Ты — бизнес-аналитик проек
 - КОНФЛИКТ ЗАДАЧИ (ветка задачи ↔ релизная ветка эпика) — автоматического резолва нет: сообщи пользователю конфликтующие файлы и предложи путь (пересоздать ветку задачи, ручной rebase), при неоднозначности спроси через AskUser.
 Пользователю объясни суть конфликта простыми словами: какая версия верная и почему. Файлы проекта ассистент не правит (кроме конфликтных файлов резолва — только через мост ResolveGitConflicts) — за разработку отвечают агенты через доску.`
 
-// Assistant — ассистент проекта: отвечает текстом и выполняет действия на
-// Kanban-доске по смыслу сообщения (создание эпиков/задач/багов и статусы).
+// Assistant — ассистент проекта: отвечает текстом и выполняет действия по
+// чтению файлов, LSP, RAG.
 type Assistant struct {
 	// *tools.FileOps — доступ к файлам проекта (OutputDir ограничивает
 	// инструменты директорией проекта), поля и методы промотируются.
@@ -125,12 +118,10 @@ type Assistant struct {
 	RAG tools.RAGSearcher
 	// Tools — выбранные инструменты из общего реестра.
 	Tools *tools.Set
-	// Store — общая Kanban-доска проекта (Redis); nil — доска недоступна.
-	Store services.BoardStore
 	// Injections — промпт-инъекции уровня Assistant: применяются к работающей
 	// модели в рамках всех задач/сессий этого ассистента. Нужны, например,
 	// для деактивации ChatRAG (напрямую добавляя инструкцию в системное
-	// сообщение ассистента), ограничения무리ов или других прикладных нужд.
+	// сообщение ассистента), ограничений или других прикладных нужд.
 	// При пустом списке не влияют на работу (fast-path в ApplyInjections).
 	Injections []domain.Injection
 	// Correction — разовая корректирующая инструкция в конец системного
@@ -149,12 +140,11 @@ type Assistant struct {
 }
 
 // NewAssistantWithStore создаёт ассистента в рабочей директории проекта
-// temp/<projectName> с подключённой Kanban-доской. projectName — имя проекта,
-// prompt — сообщение пользователя, ragClient — векторная память (nil — RAG
-// отключён, деградация).
-func NewAssistantWithStore(projectName, prompt string, store services.BoardStore, ragClient tools.RAGSearcher) *Assistant {
+// temp/<projectName>. projectName — имя проекта, prompt — сообщение пользователя,
+// ragClient — векторная память (nil — RAG отключён, деградация).
+func NewAssistantWithStore(projectName, prompt string, _ any, ragClient tools.RAGSearcher) *Assistant {
 	dir := projects.ProjectDir(projectName)
-	return newAssistant(dir, projectName, prompt, store, ragClient)
+	return newAssistant(dir, projectName, prompt, ragClient)
 }
 
 // NewAssistantInDir создаёт ассистента в заданной директории (вместо новой
@@ -162,14 +152,14 @@ func NewAssistantWithStore(projectName, prompt string, store services.BoardStore
 // (KindDir/KindGit/KindTemp) и у него есть рабочий каталог Root — тогда имя
 // проекта передаётся явно (sess.project), чтобы RAG-поиск шёл по индексу
 // именно этого проекта.
-func NewAssistantInDir(dir, projectName, prompt string, store services.BoardStore, ragClient tools.RAGSearcher) *Assistant {
-	return newAssistant(dir, projectName, prompt, store, ragClient)
+func NewAssistantInDir(dir, projectName, prompt string, _ any, ragClient tools.RAGSearcher) *Assistant {
+	return newAssistant(dir, projectName, prompt, ragClient)
 }
 
 // newAssistant создаёт ассистента в заданной директории: собирает *tools.FileOps
-// и выбирает из реестра инструменты (чтение + доска-запись + CodeSearch).
+// и выбирает из реестра инструменты (чтение + CodeSearch).
 // Используется конструкторами.
-func newAssistant(dir, projectName, prompt string, store services.BoardStore, ragClient tools.RAGSearcher) *Assistant {
+func newAssistant(dir, projectName, prompt string, ragClient tools.RAGSearcher) *Assistant {
 	os.MkdirAll(dir, 0755)
 	ops := &tools.FileOps{OutputDir: dir, Project: projectName}
 	return &Assistant{
@@ -177,8 +167,7 @@ func newAssistant(dir, projectName, prompt string, store services.BoardStore, ra
 		Prompt:      prompt,
 		ProjectName: projectName,
 		RAG:         ragClient,
-		Tools:       tools.Select(assistantToolNames, tools.Deps{FileOps: ops, Board: store, RAG: ragClient}),
-		Store:       store,
+		Tools:       tools.Select(assistantToolNames, tools.Deps{FileOps: ops, RAG: ragClient}),
 		seenCalls:   make(map[string]int),
 	}
 }

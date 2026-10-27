@@ -26,13 +26,13 @@ func TestEpicTaskBranchesRoundtrip(t *testing.T) {
 	}
 
 	// Создание веток эпика и задачи.
-	epicRef := BranchRef{Branch: "ai/epic/epic-1", Base: "main"}
+	epicRef := BranchRef{Name: "ai/epic/epic-1", Base: "main"}
 	if err := r.SetEpicBranch("mygit", "epic-1", epicRef); err != nil {
-		t.Fatalf("SetEpicBranch: %v", err)
+		t.Fatalf("SetEpicName: %v", err)
 	}
-	taskRef := BranchRef{Branch: "ai/task/t1", Base: "ai/epic/epic-1"}
+	taskRef := BranchRef{Name: "ai/task/t1", Base: "ai/epic/epic-1"}
 	if err := r.SetTaskBranch("mygit", "t1", taskRef); err != nil {
-		t.Fatalf("SetTaskBranch: %v", err)
+		t.Fatalf("SetTaskName: %v", err)
 	}
 
 	got, err := r.EpicBranch("mygit", "epic-1")
@@ -60,10 +60,10 @@ func TestEpicTaskBranchesRoundtrip(t *testing.T) {
 
 	// Удаление.
 	if err := r.DeleteEpicBranch("mygit", "epic-1"); err != nil {
-		t.Fatalf("DeleteEpicBranch: %v", err)
+		t.Fatalf("DeleteEpicName: %v", err)
 	}
 	if err := r.DeleteTaskBranch("mygit", "t1"); err != nil {
-		t.Fatalf("DeleteTaskBranch: %v", err)
+		t.Fatalf("DeleteTaskName: %v", err)
 	}
 	if _, err := r.EpicBranch("mygit", "epic-1"); err == nil {
 		t.Fatal("эпик-ветка не удалена из реестра")
@@ -75,7 +75,7 @@ func TestEpicTaskBranchesRoundtrip(t *testing.T) {
 
 func TestBranchesUnknownProjectRejected(t *testing.T) {
 	r, _ := Open(filepath.Join(t.TempDir(), "ws.json"))
-	if err := r.SetEpicBranch("nope", "e1", BranchRef{Branch: "x"}); err == nil {
+	if err := r.SetEpicBranch("nope", "e1", BranchRef{Name: "x"}); err == nil {
 		t.Fatal("несуществующий проект — ожидали ошибку")
 	}
 	if _, err := r.EpicBranch("nope", "e1"); err == nil {
@@ -89,10 +89,10 @@ func TestBranchesEmptyIDsRejected(t *testing.T) {
 	if _, err := r.Add(AddParams{Name: "g", Kind: KindGit, Root: dir, GitRemote: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.SetEpicBranch("g", "", BranchRef{Branch: "b"}); err == nil {
+	if err := r.SetEpicBranch("g", "", BranchRef{Name: "b"}); err == nil {
 		t.Fatal("пустой ID эпика — ожидали ошибку")
 	}
-	if err := r.SetTaskBranch("g", "", BranchRef{Branch: "b"}); err == nil {
+	if err := r.SetTaskBranch("g", "", BranchRef{Name: "b"}); err == nil {
 		t.Fatal("пустой ID задачи — ожидали ошибку")
 	}
 }
@@ -103,15 +103,15 @@ func TestTwoEpicsIndependentBranches(t *testing.T) {
 	if _, err := r.Add(AddParams{Name: "g", Kind: KindGit, Root: dir, GitRemote: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.SetEpicBranch("g", "e1", BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+	if err := r.SetEpicBranch("g", "e1", BranchRef{Name: "ai/epic/e1", Base: "main"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.SetEpicBranch("g", "e2", BranchRef{Branch: "ai/epic/e2", Base: "main"}); err != nil {
+	if err := r.SetEpicBranch("g", "e2", BranchRef{Name: "ai/epic/e2", Base: "main"}); err != nil {
 		t.Fatal(err)
 	}
 	e1, _ := r.EpicBranch("g", "e1")
 	e2, _ := r.EpicBranch("g", "e2")
-	if e1.Branch == e2.Branch || e1.Branch != "ai/epic/e1" || e2.Branch != "ai/epic/e2" {
+	if e1.Name == e2.Name || e1.Name != "ai/epic/e1" || e2.Name != "ai/epic/e2" {
 		t.Fatalf("ветки эпиков должны быть независимы: %+v / %+v", e1, e2)
 	}
 }

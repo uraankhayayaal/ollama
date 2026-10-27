@@ -3,7 +3,6 @@ package chatassist
 import (
 	"strings"
 
-	appboard "ai/application/board"
 	"ai/domain"
 )
 
@@ -12,13 +11,16 @@ const (
 	DialogueMaxTurns = 12
 	// DialogueMsgLen — лимит символов на одну реплику.
 	DialogueMsgLen = 400
-	// DialogueHistoryN — столько читаем из Redis (запас на фильтрацию).
+	// DialogueHistoryN — сколько читаем из хранилища (запас на фильтрацию).
 	DialogueHistoryN = 40
 )
 
 // OneLine сводит многострочный текст в одну строку (лимит символов).
 func OneLine(s string, n int) string {
-	return strings.ReplaceAll(appboard.TruncateText(s, n), "\n", " ")
+	if len(s) > n {
+		s = s[:n]
+	}
+	return strings.ReplaceAll(s, "\n", " ")
 }
 
 // DialogueHistory форматирует последние реплики диалога в строки промпта.

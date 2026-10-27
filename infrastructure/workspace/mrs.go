@@ -14,17 +14,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
-
-	"ai/domain"
 )
-
-// MRRef — привязка Merge/Pull Request: ссылка, ветка-источник и ветка-цель
-// (алиас domain.MRRef).
-type MRRef = domain.MRRef
-
-// MergeRequestMap — реестр MR эпиков и задач git-проекта
-// (алиас domain.MergeRequestMap).
-type MergeRequestMap = domain.MergeRequestMap
 
 // SetProjectMR records the project-level MR created by accept.
 func (r *Registry) SetProjectMR(name string, ref MRRef) error {

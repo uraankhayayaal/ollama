@@ -2,18 +2,11 @@ package main
 
 import (
 	"ai/agents"
-	"ai/agents/acceptor"
 	"ai/agents/codereviewer"
 	"ai/agents/developer"
-	"ai/agents/devops"
-	"ai/agents/factory"
-	"ai/agents/qaengineer"
-	"ai/application/planner"
-	apprag "ai/application/rag"
 	"ai/application/usecases"
 
-	"ai/infrastructure/board"
-	"ai/infrastructure/checkpoint"
+	apprag "ai/application/rag"
 
 	// Blank-import регистрирует все встроенные провайдеры систем ревью
 	// (init() в forges/github и forges/gitlab) в фабрике forges.New.
@@ -22,18 +15,13 @@ import (
 	"ai/infrastructure/llm"
 	"ai/infrastructure/mrlistener"
 	"ai/infrastructure/rag"
-	"ai/infrastructure/runmetrics"
 	"ai/internal/runctx"
 	"ai/server"
 	"ai/shared/logging"
 	"ai/shared/projects"
-	"ai/shared/tokens"
-	"ai/tools"
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -51,14 +39,7 @@ func main() {
 		logging.Warnf("Предупреждение: .env не загружен (%v)", err)
 	}
 
-	planner.SetPlannerToolBuilder(tools.PlannerToolSet)
-	planner.SetLSPDiagnoser(tools.LSPDiagnoserAdapter{})
-	planner.SetSnapshotFactory(tools.SnapshotAdapterFactory{})
-	planner.SetPublicAPIAuditor(tools.PublicAPIAuditorAdapter{})
-	planner.SetAgentFactory(factory.New())
-	// RAG-инъекции application-слою: планировщику — фабрика семантического
-	// поиска, фоновому индексатору — обходчик рабочей копии (Этап 8, срез H3b).
-	planner.SetPlannerRAGSearcher(func() planner.RAGSearcher { return rag.NewClientSafe(rag.Config{}) })
+	// RAG-инъекции application-слою: фоновому индексатору — обходчик рабочей копии.
 	apprag.SetProjectWalker(rag.WalkProject)
 
 	// Сервис мониторинга новых MR — не требует провайдера модели.
@@ -69,18 +50,7 @@ func main() {
 		return
 	}
 
-	// Приёмка собранного приложения: сборка, запуск, проверка логов.
-	// Полностью детерминирована (без LLM) — провайдер модели не нужен.
-	// go run . accept <имя_проекта>
-	if len(os.Args) > 1 && os.Args[1] == "accept" {
-		if len(os.Args) < 3 || os.Args[2] == "" {
-			logging.Fatalf("Использование: go run . accept <имя_проекта>\nПример: go run . accept storageService")
-		}
-		runAcceptCommand(os.Args[2])
-		os.Exit(0)
-	}
-
-	// Индексация кодовой базы проекта в Qdrant (RAG, см. PLAN-2026-09-19-done-qdrant.md, Ф-2).
+	// Индексация кодовой базы проекта в Qdrant (RAG).
 	// Не требует провайдера модели — только эмбеддинги Ollama и Qdrant.
 	// go run . index <имя_проекта>
 	if len(os.Args) > 1 && os.Args[1] == "index" {
@@ -148,11 +118,6 @@ func main() {
 	agentName, agentArgs := agentCommand(os.Args)
 
 	var agent agents.Agent
-	var planMode bool
-	var planProject string
-	var planPrompt string
-	// projName — имя проекта standalone-агента (для расширенного сжатия Ф-6..Ф-11);
-	// заполняется в кейсах с каталогом temp/<проект>, у ревьювера остаётся пустым.
 	var projName string
 	switch agentName {
 	case "generate", "backend":
@@ -176,63 +141,13 @@ func main() {
 		prompt := defaultPrompt(agentArgs[1:])
 		agent = developer.NewFrontendDeveloper(projectName, prompt)
 	case "plan":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . plan <имя_проекта> <промпт> [--resume]\n" +
-				"Пример: go run . plan storageService \"Создай микросервис хранения файлов и ревью кода\"\n" +
-				"Пример: go run . plan storageService --resume")
-		}
-		planMode = true
-		planProject = agentArgs[0]
-		planPrompt = strings.Join(agentArgs[1:], " ")
+		logging.Fatalf("Команда plan удалена — планирование теперь через чат-ассистент")
 	case "devops":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . devops <имя_проекта> <промпт>\n" +
-				"Пример: go run . devops billingService \"Подними Docker Compose с моками для QA и подготовь манифесты Kubernetes\"")
-		}
-		projectName := agentArgs[0]
-		projName = projectName
-		prompt := strings.Join(agentArgs[1:], " ")
-		agent = devops.NewDevops(projectName, prompt)
+		logging.Fatalf("Команда devops удалена — функции перенесены в Developer-агента")
 	case "qa":
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . qa <имя_проекта> <промпт>\n" +
-				"Пример: go run . qa billingService \"Проверь соответствие Backend и Frontend API-контрактам и напиши автотесты\"")
-		}
-		projectName := agentArgs[0]
-		projName = projectName
-		prompt := strings.Join(agentArgs[1:], " ")
-		// Объединённый агент QA-приёмки: сборка → автотесты → приёмка.
-		agent = qaengineer.NewQAEngineer(projectName, prompt)
+		logging.Fatalf("Команда qa удалена — функции перенесены в Developer-агента")
 	case "kanban":
-		// Kanban-оркестрация: архитектор публикует эпики на Redis-доску,
-		// лиды декомпозируют их на JSON-задачи, специалисты выполняют —
-		// до полного решения задачи пользователя.
-		// go run . kanban <имя_проекта> <промпт>
-		if len(agentArgs) < 2 {
-			logging.Fatalf("Использование: go run . kanban <имя_проекта> <промпт>\n" +
-				"Пример: go run . kanban billingService \"Спроектируй и собери сервис: архитектура, контракты, DevOps, тесты\"")
-		}
-		kanbanProject := agentArgs[0]
-		kanbanPrompt := strings.Join(agentArgs[1:], " ")
-		store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(kanbanProject))
-		if err != nil {
-			logging.Fatalf("Ошибка доски проекта %s: %v", kanbanProject, err)
-		}
-		// Расширенное сжатие агентских циклов фаз (Ф-6..Ф-11) — как у плана:
-		// контекст инжектируется в ctx, которой пользуются все call к Generate.
-		ragClient := rag.NewClientSafe(rag.Config{})
-		kctx := runctx.WithCompression(ctx, kanbanProject, projects.ProjectDir(kanbanProject), ragClient)
-		runner := planner.NewKanbanRunner(provider, board.NewDomainStore(store))
-		// Р-6: архитектор получает RAG (CodeSearch + блок «релевантный код»).
-		// Консоль без серверных мостов — extras (AskUser) не передаются:
-		// архитектор работает автономно (degrade).
-		runner.SetRAG(ragClient)
-		if err := runner.Run(kctx, kanbanProject, kanbanPrompt); err != nil {
-			_ = store.Close()
-			logging.Fatalf("Kanban: %v", err)
-		}
-		_ = store.Close()
-		os.Exit(0)
+		logging.Fatalf("Команда kanban удалена — оркестрация через чат-ассистент")
 	case "review":
 		agent = codereviewer.NewCodereviewer(agentArgs)
 		if noChunk {
@@ -241,22 +156,7 @@ func main() {
 			}
 		}
 	default:
-		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . devops <имя> <промпт>', 'go run . qa <имя> <промпт>', 'go run . plan <имя> <промпт>', 'go run . kanban <имя> <промпт>', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
-	}
-
-	// Режим планировщика обрабатывается отдельно и до общего прогона:
-	// при resume план восстанавливается из чекпоинта без повторного вызова
-	// планировщика (экономим токены), иначе планировщик строит план,
-	// а затем исполнитель выполняет шаги по волнам параллельности.
-	if planMode {
-		// План выполняется долго — каждый шаг это отдельный агентский цикл,
-		// и всё это вписывается в REVIEW_TIMEOUT нельзя: после истечения общего
-		// дедлайна все Chat-вызовы падают с "context deadline exceeded" (на
-		// практике — примерно на 15-й минуте). Зависания и так защищены
-		// чекпоинтами на каждый шаг и таймаутами отдельных запросов провайдера,
-		// поэтому лимит на весь план не накладываем (context без дедлайна).
-		runPlanMode(context.Background(), provider, planProject, planPrompt)
-		os.Exit(0)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
 	}
 
 	// Расширенное сжатие истории агентского цикла (Ф-6..Ф-11) для
@@ -273,13 +173,6 @@ func main() {
 
 	if resp.Truncated {
 		logging.Warnf("Внимание: цикл агента остановлен по лимиту раундов, результат может быть неполным")
-	}
-
-	// Standalone-запуск агента: модель вернула
-	// JSON-декомпозицию. Печатаем в консоль список спроектированных задач.
-	switch agent.(type) {
-	case *qaengineer.QAEngineer:
-		printLeadDecomposition(resp.Content)
 	}
 
 	// 6b. Запасной путь: если модель вернула ревью текстом, а не вызовами
@@ -326,22 +219,6 @@ type finalizer interface {
 	Finalize()
 }
 
-// printLeadDecomposition выводит в консоль список задач из JSON-декомпозиции
-// лида направления (standalone-режим без Kanban-доски). Формат tolerant:
-// board.UnmarshalTasks извлекает массив tasks из любого корневого ключа лида.
-func printLeadDecomposition(content string) {
-	tasks, err := board.UnmarshalTasks(content)
-	if err != nil || len(tasks) == 0 {
-		logging.Warnf("Лид не вернул JSON-декомпозицию задач (задач: %d, ошибка: %v)", len(tasks), err)
-		return
-	}
-	logging.Infof("[Список задач лида] %d задач:", len(tasks))
-	for _, t := range tasks {
-		logging.Infof("  - %s [%s] | %s (порядок %d, параллельно: %v)",
-			t.TaskID, t.AssignedRole, clipText(t.Title, 60), t.SequenceOrder.Int(), t.CanRunParallel.Bool())
-	}
-}
-
 // clipText обрезает длинный текст до n символов для читаемых логов.
 func clipText(s string, n int) string {
 	if n <= 0 || len(s) <= n {
@@ -369,7 +246,7 @@ func projectFromArgs(args []string) string {
 		return "unnamed"
 	}
 	switch args[1] {
-	case "generate", "backend", "frontend", "devops", "qa", "plan", "kanban", "accept", "index":
+	case "generate", "backend", "frontend", "index":
 		if len(args) >= 3 && args[2] != "" {
 			return args[2]
 		}
@@ -467,268 +344,3 @@ func orDash(s string) string {
 	return s
 }
 
-// runAcceptCommand выполняет приёмку собранного приложения в temp/<projectName>:
-// определяет тип проекта, собирает, запускает на короткое время и проверяет
-// логи на ошибки. Печатает отчёт и завершается с кодом 0 при успехе, 1 — при
-// обнаруженных ошибках.
-func runAcceptCommand(projectName string) {
-	dir := projects.ProjectDir(projectName)
-	rep := acceptor.Accept(dir, acceptor.LoadConfig())
-	logging.Infof("%s", acceptReportText(rep))
-	if rep.Verdict == acceptor.VerdictReject {
-		os.Exit(1)
-	}
-}
-
-// acceptReportText собирает человекочитаемый отчёт приёмки.
-func acceptReportText(rep *acceptor.Report) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Приёмка проекта %q (тип: %s)\n", rep.Project, rep.Tool)
-	fmt.Fprintf(&b, "Вердикт: %s\n", rep.Verdict)
-	fmt.Fprintf(&b, "Сводка: %s\n\n", rep.Summary)
-
-	// Монорепозиторий (frontend+backend): каждый подпроект принимался отдельно
-	// — печатаем его отчёт целиком, чтобы было видно, где что упало.
-	if len(rep.Projects) > 0 {
-		for i, pr := range rep.Projects {
-			if i > 0 {
-				b.WriteString("\n")
-			}
-			b.WriteString("=== Подпроект: ")
-			b.WriteString(pr.Project)
-			b.WriteString(" (")
-			b.WriteString(pr.Tool)
-			b.WriteString(") ===\n")
-			b.WriteString(acceptReportText(pr))
-			b.WriteString("\n")
-		}
-		return strings.TrimRight(b.String(), "\n")
-	}
-
-	if rep.Install != nil {
-		fmt.Fprintf(&b, "Установка зависимостей: %s\n", installStatusWord(rep.Install))
-		fmt.Fprintf(&b, "  команда: %s\n", rep.Install.Command)
-		if rep.Install.Output != "" {
-			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Install.Output)
-		}
-	}
-	if !rep.Build.Skipped {
-		fmt.Fprintf(&b, "Сборка: %v\n", rep.Build.OK)
-		fmt.Fprintf(&b, "  команда: %s\n", rep.Build.Command)
-		if rep.Build.Output != "" {
-			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Build.Output)
-		}
-	}
-	if rep.Run != nil {
-		fmt.Fprintf(&b, "Запуск: %v (код выхода: %d, серверный режим: %v)\n",
-			rep.Run.OK, rep.Run.ExitCode, rep.Run.ServerMode)
-		fmt.Fprintf(&b, "  команда: %s\n", rep.Run.Command)
-		if rep.Run.Output != "" {
-			fmt.Fprintf(&b, "  вывод последней проверки:\n%s\n", rep.Run.Output)
-		}
-	}
-	if rep.Format != nil {
-		fmt.Fprintf(&b, "Стилизатор: %s\n", formatStatusWord(rep.Format))
-		fmt.Fprintf(&b, "  команда: %s\n", rep.Format.Command)
-		if rep.Format.Output != "" {
-			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Format.Output)
-		}
-	}
-	if rep.Analyze != nil {
-		fmt.Fprintf(&b, "Анализатор: %s\n", formatStatusWord(rep.Analyze))
-		fmt.Fprintf(&b, "  команда: %s\n", rep.Analyze.Command)
-		if rep.Analyze.Output != "" {
-			fmt.Fprintf(&b, "  вывод:\n%s\n", rep.Analyze.Output)
-		}
-	}
-	if text := rep.IssuesText(); text != "замечаний не обнаружено" {
-		fmt.Fprintf(&b, "\nЗамечания:\n%s\n", text)
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func formatStatusWord(res *acceptor.CheckResult) string {
-	switch {
-	case res == nil:
-		return "<нет>"
-	case res.Skipped:
-		return "пропущен (инструмент не найден)"
-	case res.OK:
-		return "OK"
-	default:
-		return "ЕСТЬ ЗАМЕЧАНИЯ"
-	}
-}
-
-func installStatusWord(res *acceptor.InstallResult) string {
-	switch {
-	case res == nil:
-		return "<нет>"
-	case res.Skipped:
-		return "не требовалась"
-	case res.OK:
-		return "OK"
-	default:
-		return "ОШИБКА"
-	}
-}
-
-// runPlanMode выполняет план с чекпоинтами. Если запрошен resume и в Redis
-// есть чекпоинт — план и состояние восстанавливаются без повторного вызова
-// планировщика. Иначе планировщик строит план (с повторной попыткой при
-// некорректном JSON), и каждый шаг выполняется отдельным агентом с чистым
-// контекстом (экономия токенов).
-func runPlanMode(ctx context.Context, provider usecases.FullCycle, projectName, originalPrompt string) {
-	store, resume := plannerStore(ctx, projectName)
-	if store != nil {
-		defer store.Close()
-	}
-
-	var plan *planner.Plan
-
-	// Resume: пытаемся восстановить план и состояние из чекпоинта.
-	if resume && store != nil {
-		snap, err := store.Load(ctx)
-		if err == nil {
-			if p, perr := planner.ParsePlan(string(snap.PlanJSON)); perr == nil && p != nil {
-				plan = p
-				logging.Infof("Resume: план восстановлен из чекпоинта, завершено шагов: %d", len(snap.Completed))
-			} else if perr != nil {
-				logging.Warnf("Чекпоинт существует, но план в нём повреждён (%v), перепланирую", perr)
-			}
-		} else if err != checkpoint.ErrNotFound {
-			logging.Warnf("Не удалось прочитать чекпоинт: %v", err)
-		}
-	}
-
-	// Нет чекпоинта / resume не запрошен — строим план планировщиком.
-	if plan == nil {
-		plannerAgent := planner.NewPlanner(projectName, originalPrompt)
-		resp, err := provider.Generate(ctx, plannerAgent)
-		if err != nil {
-			logging.Fatalf("Получение плана: %v", err)
-		}
-		plan, err = planner.ParsePlan(resp.Content)
-		if err != nil {
-			logging.Warnf("Не удалось разобрать план из ответа планировщика: %v", err)
-			logging.Detailf("Ответ планировщика:\n%s", resp.Content)
-			peer := planner.NewPlanner(projectName, originalPrompt+"\n\nВерни план строго в формате JSON, без markdown-обёрток и лишнего текста.")
-			planResp, perr := provider.Generate(ctx, peer)
-			if perr != nil {
-				logging.Fatalf("Получение плана (повтор): %v", perr)
-			}
-			plan, err = planner.ParsePlan(planResp.Content)
-			if err != nil {
-				logging.Fatalf("Повторный ответ планировщика не содержит корректного JSON-плана: %v", err)
-			}
-		}
-	}
-
-	logging.Infof("План получен: %q (%d шагов)", plan.Summary, len(plan.Steps))
-	for i, s := range plan.Steps {
-		logging.Infof("  %d. [%s] %s", i+1, s.Agent, s.Description)
-	}
-
-	exec := planner.NewExecutor(provider, plan)
-	exec.SetAcceptor(acceptor.PlannerAdapter{})
-	exec.SetCheckpoint(store, resume)
-	// Ф-1: именованные метрики шагов — в единый реестр телеметрии, откуда их
-	// видно в /metrics. Реестр в памяти процесса: без внешних сервисов, поэтому
-	// подключается всегда и не может завалить запуск.
-	exec.SetMetrics(runmetrics.New(plan.ProjectName, tokens.PricingFromEnv()))
-	// Контекст RAG по шагам (Ф-4): промпты кодирующих шагов обогащаются
-	// релевантным кодом из векторной памяти с фильтром по scope шага.
-	// Клиент ленивый: при недоступном Qdrant/эмбеддингах — nil/деградация
-	// (блок просто не добавляется, шаги работают как раньше).
-	ragClient := rag.NewClientSafe(rag.Config{})
-	exec.SetRAG(ragClient)
-	// Расширенное сжатие агентских циклов шагов (Ф-6..Ф-11) — тем же клиентом.
-	execCtx := runctx.WithCompression(ctx, plan.ProjectName, projects.ProjectDir(projectName), ragClient)
-	if err := exec.Run(execCtx); err != nil {
-		logging.Fatalf("Ошибка выполнения плана: %v", err)
-	}
-
-	logging.Infof("План выполнен успешно. Проект: %q", plan.ProjectName)
-}
-
-// plannerStore создаёт чекпоинт-хранилище для плана проекта. Контрольные
-// точки включаются автоматически, если в настройках задан REDIS_ADDR, либо
-// явно при PLAN_CHECKPOINT=1 или запросе resume (--resume / PLAN_RESUME=1).
-// Адрес Redis берётся из REDIS_ADDR (по умолчанию localhost:56379). Если Redis
-// недоступен, а resume не запрошен — работаем без чекпоинтов (предупреждение),
-// при resume — завершаемся с ошибкой.
-func plannerStore(ctx context.Context, projectName string) (*checkpoint.Store, bool) {
-	resume := envBool("PLAN_RESUME") || containsArg("--resume")
-
-	// REDIS_ADDR явно задан → включаем чекпоинты автоматически.
-	explicitRedis := strings.TrimSpace(os.Getenv("REDIS_ADDR")) != ""
-	enabled := envBool("PLAN_CHECKPOINT") || explicitRedis || resume
-	if !enabled {
-		return nil, resume
-	}
-
-	addr := os.Getenv("REDIS_ADDR")
-	if addr == "" {
-		addr = "localhost:56379"
-	}
-
-	cfg := checkpoint.StoreConfig{
-		Addr:     addr,
-		Password: os.Getenv("REDIS_PASSWORD"),
-		DB:       envInt("REDIS_DB", 0),
-		Key:      "checkpoint:" + projectName,
-		TTL:      envDuration("PLAN_CHECKPOINT_TTL", 0),
-	}
-	store, err := checkpoint.NewStore(ctx, cfg)
-	if err != nil {
-		if resume {
-			logging.Fatalf("Resume невозможен: Redis недоступен (%v)", err)
-		}
-		logging.Warnf("Внимание: Redis недоступен (%v), работаю без чекпоинтов", err)
-		return nil, resume
-	}
-	logging.Infof("Контрольные точки включены: %s (чекпоинт: %s)", addr, store.Key())
-	return store, resume
-}
-
-// envBool возвращает true, если переменная окружения установлена в 1/true/yes.
-func envBool(name string) bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
-	return v == "1" || v == "true" || v == "yes"
-}
-
-// containsArg проверяет наличие флага среди аргументов командной строки.
-func containsArg(flag string) bool {
-	for _, a := range os.Args {
-		if a == flag {
-			return true
-		}
-	}
-	return false
-}
-
-// envInt парсит целочисленную переменную окружения с запасным значением.
-func envInt(name string, def int) int {
-	v := strings.TrimSpace(os.Getenv(name))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return def
-	}
-	return n
-}
-
-// envDuration парсит длительность (например "24h") с запасным значением.
-func envDuration(name string, def time.Duration) time.Duration {
-	v := strings.TrimSpace(os.Getenv(name))
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return def
-	}
-	return d
-}

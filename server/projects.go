@@ -1,33 +1,23 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"os"
 	"strings"
 
-	"ai/infrastructure/board"
 	"ai/infrastructure/workspace"
 )
 
 // handleListProjects возвращает список зарегистрированных проектов.
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	var out []map[string]any
 
 	for _, inf := range s.reg.List() {
-		// Пытаемся прочитать мета доски (если Redis доступен).
-		meta, _ := func() (*board.Meta, error) {
-			store, err := board.NewStore(ctx, board.LoadConfig().StoreConfig(inf.Name))
-			if err != nil {
-				return nil, err
-			}
-			defer store.Close()
-			return store.GetMeta(ctx)
-		}()
-
-		running, gating, standby := s.sessionFlags(inf.Name)
-		out = append(out, projectMeta(inf, meta, running, gating, standby))
+		running := false
+		if sess := s.session(inf.Name); sess != nil {
+			running = sess.Running()
+		}
+		out = append(out, projectMeta(inf, running))
 	}
 	if out == nil {
 		out = []map[string]any{}
@@ -123,21 +113,11 @@ func (s *Server) writeProjectMeta(w http.ResponseWriter, r *http.Request, name s
 
 // writeProjectMetaFromInfo возвращает ProjectMeta из Info.
 func (s *Server) writeProjectMetaFromInfo(w http.ResponseWriter, inf workspace.Info) {
-	// Пытаемся прочитать meta доски.
-	meta, _ := func() (*board.Meta, error) {
-		store, err := board.NewStore(context.Background(), board.LoadConfig().StoreConfig(inf.Name))
-		if err != nil {
-			return nil, err
-		}
-		defer store.Close()
-		return store.GetMeta(context.Background())
-	}()
-	sess := s.session(inf.Name)
-	running, gating, standby := false, false, false
-	if sess != nil {
-		running, gating, standby = s.sessionFlags(inf.Name)
+	running := false
+	if sess := s.session(inf.Name); sess != nil {
+		running = sess.Running()
 	}
-	writeJSON(w, http.StatusOK, projectMeta(inf, meta, running, gating, standby))
+	writeJSON(w, http.StatusOK, projectMeta(inf, running))
 }
 
 // isGitURL определяет, что ввод — git-ссылка, а не путь к локальной папке:
@@ -161,5 +141,3 @@ func dirBase(path string) string {
 	}
 	return path
 }
-
-// --- REST: доска ---

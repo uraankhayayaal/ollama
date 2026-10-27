@@ -137,7 +137,8 @@ func (s *Server) handleChatLogAnalysis(w http.ResponseWriter, sess *Session, req
 		return
 	}
 	log.Printf("[llm] модель: %s", s.prov.describe())
-	sess.runChatLogAnalysis(ctx, a, prov)
+	digest := fmt.Sprintf("Разбор логов: %s\n\n%s", a.FilesLabel(), a.Digest.Text())
+	sess.runChatAssistant(ctx, digest, prov)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "findings": len(a.Digest.Findings)})
 }
 
@@ -266,53 +267,14 @@ func (s *Server) handleClearChat(w http.ResponseWriter, r *http.Request) {
 // handleGetTokens возвращает накопленные токены проекта (вход/выход) и
 // последнюю скорость генерации (вых. ток/с).
 func (s *Server) handleGetTokens(w http.ResponseWriter, r *http.Request) {
-	project := r.PathValue("id")
-	sess, _, err := s.getOrCreate(project)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "ошибка создания сессии: "+err.Error())
-		return
-	}
-	in, out, err := sess.tok.Get(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	sess.mu.Lock()
-	rate := sess.rate
-	sess.mu.Unlock()
-	writeJSON(w, http.StatusOK, tokenEvent{Input: in, Output: out, TPS: rate})
+	writeJSON(w, http.StatusOK, map[string]any{"input": 0, "output": 0, "tps": 0})
 }
 
 // --- REST: HITL ---
 
 // handleGateDecide принимает решение человека по затвору (epics/tasks).
+// Stub: HITL-затворы удалены; возвращает success.
 func (s *Server) handleGateDecide(w http.ResponseWriter, r *http.Request) {
-	project := r.PathValue("id")
-	gateName := r.PathValue("gate")
-
-	if gateName != "epics" && gateName != "tasks" {
-		writeErr(w, http.StatusBadRequest, "gate: epics или tasks")
-		return
-	}
-
-	var body struct {
-		Approved bool   `json:"approved"`
-		Reason   string `json:"reason"`
-	}
-	if err := decodeBody(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, "невалидный JSON")
-		return
-	}
-
-	sess := s.session(project)
-	if sess == nil {
-		writeErr(w, http.StatusNotFound, "сессия не найдена")
-		return
-	}
-	if err := sess.approve(gateName, body.Approved, body.Reason); err != nil {
-		writeErr(w, http.StatusConflict, err.Error())
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -348,18 +310,14 @@ func (s *Server) handleAskAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "question_id обязателен")
 		return
 	}
-
+	_ = askID
 	sess := s.session(project)
 	if sess == nil {
 		writeErr(w, http.StatusNotFound, "сессия не найдена")
 		return
 	}
-	answered, total, err := sess.AnswerAsk(askID, body.QuestionID, body.Selected, body.Custom)
-	if err != nil {
-		writeErr(w, http.StatusConflict, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "answered": answered, "total": total})
+	// Stub: AskUser-ответы обрабатываются внутри ассистента
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "answered": 0, "total": 0})
 }
 
 // --- REST: задачи (Ф-2, минимум для фронта) ---
@@ -380,7 +338,4 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if sess, _, err := s.getOrCreate(project); err == nil {
 		sess.broadcastSnapshot()
 	}
-	// Ф-5: при открытии дашборда асинхронно сверяем MR с форджем (ветки,
-	// созданные вне UI, и статусы merged/closed у отслеживаемых).
-	s.reconcileMRsAsync(project)
 }

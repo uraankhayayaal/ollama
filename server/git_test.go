@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -371,8 +372,8 @@ func TestGitProjectNameFromURLs(t *testing.T) {
 		"":                                       "",
 	}
 	for in, want := range cases {
-		if got := gitProjectName(in); got != want {
-			t.Fatalf("gitProjectName(%q) = %q, want %q", in, got, want)
+		if got := GitProjectName(in); got != want {
+			t.Fatalf("GitProjectName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -464,7 +465,7 @@ func TestGetDiffRegisteredTaskBranch(t *testing.T) {
 	}}
 	srv, handler, _ := newTestServerGit(t, git, nil)
 	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
-	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Name: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
@@ -506,7 +507,7 @@ func TestGetDiffTaskWorktreeIncludesDirtyChanges(t *testing.T) {
 	srv, handler, _ := newTestServerGit(t, git, nil)
 	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
 	worktree := filepath.Join(t.TempDir(), "task-worktree")
-	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1", Worktree: worktree}); err != nil {
+	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Name: "ai/task/t1", Base: "ai/epic/e1", Workdir: worktree}); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
@@ -529,10 +530,10 @@ func TestGetDiffEpicAndTaskUseSeparateCacheEntries(t *testing.T) {
 	}}
 	srv, handler, _ := newTestServerGit(t, git, nil)
 	registerGit(t, srv, "myrepo", "git@gitlab.com:g/myrepo.git", "ai/myrepo", "main")
-	if err := srv.reg.SetEpicBranch("myrepo", "e1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+	if err := srv.reg.SetEpicBranch("myrepo", "e1", workspace.BranchRef{Name: "ai/epic/e1", Base: "main"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
+	if err := srv.reg.SetTaskBranch("myrepo", "t1", workspace.BranchRef{Name: "ai/task/t1", Base: "ai/epic/e1"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ ref, want string }{
@@ -585,10 +586,10 @@ func TestGetDiffTaskWorktreeRealGit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.reg.SetEpicBranch("local-diff", "e1", workspace.BranchRef{Branch: "ai/epic/e1", Base: "main"}); err != nil {
+	if err := srv.reg.SetEpicBranch("local-diff", "e1", workspace.BranchRef{Name: "ai/epic/e1", Base: "main"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.reg.SetTaskBranch("local-diff", "t1", workspace.BranchRef{Branch: "ai/task/t1", Base: "ai/epic/e1", Worktree: worktree}); err != nil {
+	if err := srv.reg.SetTaskBranch("local-diff", "t1", workspace.BranchRef{Name: "ai/task/t1", Base: "ai/epic/e1", Workdir: worktree}); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
@@ -834,4 +835,22 @@ func TestSnapDiffBaselineAtOpen(t *testing.T) {
 	if len(out.Removed) != 0 {
 		t.Fatalf("removed = %v, want none", out.Removed)
 	}
+}
+
+// gitFixtureRun — выполняет git-команду в директории root.
+func gitFixtureRun(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "HOME="+t.TempDir())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+// setGitUserReal — настраивает git user.name/user.email для репозитория.
+func setGitUserReal(t *testing.T, root string) {
+	t.Helper()
+	gitFixtureRun(t, root, "config", "user.email", "test@example.com")
+	gitFixtureRun(t, root, "config", "user.name", "Test")
 }

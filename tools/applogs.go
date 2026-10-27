@@ -772,6 +772,18 @@ func (ops *FileOps) TakeAppLogTail() (source string, lines []string) {
 
 // --- мелкие помощники ---
 
+// strArg — строковый аргумент из map.
+func strArg(args map[string]any, key string) string {
+	switch v := args[key].(type) {
+	case string:
+		return v
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // intArg — целочисленный аргумент из map (JSON-числа приходят float64).
 func intArg(args map[string]any, key string) int {
 	switch v := args[key].(type) {

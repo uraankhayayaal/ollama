@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/infrastructure/board"
+	"ai/domain"
 )
 
 // Раньше подстановка {{env.*}} отдавала ЛЮБУЮ переменную окружения: проверено
@@ -196,11 +196,11 @@ func TestDescribeAppliedAndSkippedNoContent(t *testing.T) {
 }
 
 // identityInjs — конструктор списка инъекций в тестах (без обёрток).
-func identityInjs(injs []board.Injection) []board.Injection { return injs }
+func identityInjs(injs []domain.Injection) []domain.Injection { return injs }
 
 // Порядок scope: global → assistant → session → runtime.
 func TestScopeOrderIsAscending(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "runtime", Scope: "runtime"},
 		{Name: "global", Scope: "global"},
 		{Name: "session", Scope: "session"},
@@ -222,7 +222,7 @@ func TestScopeOrderIsAscending(t *testing.T) {
 // Внутри scope сортировка по priority (убывание), при равенстве — порядок
 // объявления.
 func TestSortInjectionsByPriorityDescending(t *testing.T) {
-	injs := identityInjs([]board.Injection{
+	injs := identityInjs([]domain.Injection{
 		{Name: "low", Scope: "runtime", Priority: 1},
 		{Name: "high", Scope: "runtime", Priority: 9},
 		{Name: "mid", Scope: "runtime", Priority: 5},
@@ -237,7 +237,7 @@ func TestSortInjectionsByPriorityDescending(t *testing.T) {
 // реальным приоритетом сортировки.
 func TestScopeOrderMatchesSorting(t *testing.T) {
 	order := ScopeOrder()
-	injs := identityInjs([]board.Injection{
+	injs := identityInjs([]domain.Injection{
 		{Name: "d", Scope: order[3]},
 		{Name: "c", Scope: order[2]},
 		{Name: "b", Scope: order[1]},
@@ -265,7 +265,7 @@ func TestTruncateContent(t *testing.T) {
 }
 
 func TestDeduplicateByIDLastWins(t *testing.T) {
-	injs := identityInjs([]board.Injection{
+	injs := identityInjs([]domain.Injection{
 		{ID: "a", Name: "старая", Content: "OLD"},
 		{ID: "b", Name: "другая", Content: "KEEP"},
 		{ID: "a", Name: "новая", Content: "NEW"},

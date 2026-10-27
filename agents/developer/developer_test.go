@@ -2,15 +2,11 @@ package developer
 
 import (
 	"ai/agents/promptcheck"
-	"ai/infrastructure/board"
 	"ai/shared/projects"
-	"ai/tools"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // Разработчик обязан первым делом вызвать WriteFiles: если модель ответила
@@ -96,33 +92,6 @@ func TestNewDeveloperUsesProjectDir(t *testing.T) {
 		if !dirExists(dir) {
 			t.Errorf("%s: директория проекта не создана: %s", tc.name, dir)
 		}
-	}
-}
-
-func TestSetBoardStoreAddsBoardTools(t *testing.T) {
-	srv := miniredis.RunT(t)
-	store := board.NewStoreNoCheck(board.StoreConfig{Addr: srv.Addr(), Project: "testproj"})
-
-	d := newBackendDeveloperInDir("задание", t.TempDir())
-	ds := board.NewDomainStore(store)
-	d.SetBoardStore(ds)
-	if d.Store != ds {
-		t.Fatal("Store не подключен")
-	}
-	if _, ok := d.Tools.Get(tools.BoardSetTaskStatus); !ok {
-		t.Error("BoardSetTaskStatus должен появиться после подключения доски")
-	}
-	if _, ok := d.Tools.Get(tools.BoardGetTask); !ok {
-		t.Error("BoardGetTask должен появиться после подключения доски")
-	}
-
-	before := len(d.GetTools())
-	d.SetBoardStore(nil)
-	if d.Store != ds {
-		t.Fatal("SetBoardStore(nil) не должен менять подключённую доску")
-	}
-	if len(d.GetTools()) != before {
-		t.Error("SetBoardStore(nil) не должен менять набор инструментов")
 	}
 }
 
@@ -225,9 +194,6 @@ func TestGetToolsAndCall(t *testing.T) {
 		if !names[want] {
 			t.Errorf("инструмент %q отсутствует в GetTools", want)
 		}
-	}
-	if names[tools.BoardSetTaskStatus] {
-		t.Errorf("BoardSetTaskStatus не должен быть без доски")
 	}
 
 	got, err := d.CallFunction("List", map[string]any{})

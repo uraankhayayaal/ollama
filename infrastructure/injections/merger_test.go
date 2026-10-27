@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai/infrastructure/board"
+	"ai/domain"
 )
 
 func testRenderFn(content string, _ MergeContext) string { return content }
@@ -25,7 +25,7 @@ func TestApplyInjections_Empty(t *testing.T) {
 }
 
 func TestApplyInjections_SystemPrepend(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "prepend", Content: "INJECTED"},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -41,7 +41,7 @@ func TestApplyInjections_SystemPrepend(t *testing.T) {
 }
 
 func TestApplyInjections_SystemAppend(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED"},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -57,7 +57,7 @@ func TestApplyInjections_SystemAppend(t *testing.T) {
 }
 
 func TestApplyInjections_SystemReplace(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "replace", Content: "REPLACED"},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -70,7 +70,7 @@ func TestApplyInjections_SystemReplace(t *testing.T) {
 }
 
 func TestApplyInjections_ScopeOrder(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "runtime", Scope: "runtime", Target: "system", Position: "append", Content: "R"},
 		{Name: "session", Scope: "session", Target: "system", Position: "append", Content: "S"},
 		{Name: "assistant", Scope: "assistant", Target: "system", Position: "append", Content: "A"},
@@ -93,7 +93,7 @@ func TestApplyInjections_ScopeOrder(t *testing.T) {
 }
 
 func TestApplyInjections_PriorityOrder(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "low", Scope: "global", Target: "system", Position: "append", Content: "LOW", Priority: 1},
 		{Name: "high", Scope: "global", Target: "system", Position: "append", Content: "HIGH", Priority: 10},
 		{Name: "mid", Scope: "global", Target: "system", Position: "append", Content: "MID", Priority: 5},
@@ -114,7 +114,7 @@ func TestApplyInjections_PriorityOrder(t *testing.T) {
 }
 
 func TestApplyInjections_MessagesPrepend(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "messages", Position: "prepend", Content: "INJECTED"},
 	}
 	baseMsgs := []Message{{Role: "user", Content: "hello"}}
@@ -134,7 +134,7 @@ func TestApplyInjections_MessagesPrepend(t *testing.T) {
 }
 
 func TestApplyInjections_MessagesAppend(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "messages", Position: "append", Content: "INJECTED"},
 	}
 	baseMsgs := []Message{{Role: "user", Content: "hello"}}
@@ -151,7 +151,7 @@ func TestApplyInjections_MessagesAppend(t *testing.T) {
 }
 
 func TestApplyInjections_MessagesReplace(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "messages", Position: "replace", Content: "REPLACED"},
 	}
 	baseMsgs := []Message{{Role: "user", Content: "hello"}}
@@ -168,7 +168,7 @@ func TestApplyInjections_MessagesReplace(t *testing.T) {
 }
 
 func TestApplyInjections_MessagesInjectAtIndex(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "messages", Position: "inject_at_index", Index: 1, Content: "INJECTED"},
 	}
 	baseMsgs := []Message{
@@ -188,7 +188,7 @@ func TestApplyInjections_MessagesInjectAtIndex(t *testing.T) {
 }
 
 func TestApplyInjections_UserLastPrepend(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "user_last", Position: "prepend", Content: "HINT"},
 	}
 	baseMsgs := []Message{
@@ -214,7 +214,7 @@ func TestApplyInjections_UserLastPrepend(t *testing.T) {
 }
 
 func TestApplyInjections_UserLastAppend(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "user_last", Position: "append", Content: "HINT"},
 	}
 	baseMsgs := []Message{
@@ -230,7 +230,7 @@ func TestApplyInjections_UserLastAppend(t *testing.T) {
 }
 
 func TestApplyInjections_AssistantLastPrepend(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "assistant_last", Position: "prepend", Content: "HINT"},
 	}
 	baseMsgs := []Message{
@@ -248,7 +248,7 @@ func TestApplyInjections_AssistantLastPrepend(t *testing.T) {
 
 func TestApplyInjections_DisabledSkipped(t *testing.T) {
 	off := false
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED", Enabled: &off},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -269,7 +269,7 @@ func TestApplyInjections_DisabledSkipped(t *testing.T) {
 // Запись без поля enabled активна: обратная совместимость (старые записи
 // доски, где фла не было вовсе).
 func TestApplyInjections_EnabledDefaultsTrue(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED"},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -284,7 +284,7 @@ func TestApplyInjections_EnabledDefaultsTrue(t *testing.T) {
 // Некорректная запись (её могли принести правкой доски вручную) не должна
 // попасть в промпт молча: она уезжает в Skipped с причиной.
 func TestApplyInjections_InvalidSkipped(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "bad-target", Scope: "global", Target: "before_tools", Position: "append", Content: "X"},
 		{Name: "no-content", Scope: "global", Target: "system", Position: "append"},
 		{Name: "bad-scope", Scope: "мистика", Target: "system", Position: "append", Content: "Y"},
@@ -315,10 +315,10 @@ func TestApplyInjections_InvalidSkipped(t *testing.T) {
 func TestApplyInjections_DedupAcrossSources(t *testing.T) {
 	off := false
 	injs := CollectInjections(
-		[]board.Injection{{ID: "x", Name: "из global", Scope: "global", Target: "system", Position: "append", Content: "OLD", Enabled: &off}},
+		[]domain.Injection{{ID: "x", Name: "из global", Scope: "global", Target: "system", Position: "append", Content: "OLD", Enabled: &off}},
 		nil,
 		nil,
-		[]board.Injection{{ID: "x", Name: "из runtime", Scope: "runtime", Target: "system", Position: "append", Content: "NEW"}},
+		[]domain.Injection{{ID: "x", Name: "из runtime", Scope: "runtime", Target: "system", Position: "append", Content: "NEW"}},
 	)
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
 	if err != nil {
@@ -335,7 +335,7 @@ func TestApplyInjections_DedupAcrossSources(t *testing.T) {
 // Сообщения, добавленные инъекцией в середину истории, должны иметь роль
 // user: системный блок на середине диалога ломает некоторые провайдеры.
 func TestApplyInjections_MessagesUseUserRole(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "m1", Scope: "runtime", Target: "messages", Position: "append", Content: "ХОД"},
 	}
 	base := []Message{{Role: "user", Content: "задача"}}
@@ -353,7 +353,7 @@ func TestApplyInjections_MessagesUseUserRole(t *testing.T) {
 // строк, чтобы не начинать сообщение с пустых строк.
 func TestApplyInjections_EmptySystemNoSeparators(t *testing.T) {
 	for _, pos := range []string{"prepend", "append"} {
-		injs := []board.Injection{
+		injs := []domain.Injection{
 			{Name: "s", Scope: "runtime", Target: "system", Position: pos, Content: "INJECTED"},
 		}
 		result, err := ApplyInjections("", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -367,7 +367,7 @@ func TestApplyInjections_EmptySystemNoSeparators(t *testing.T) {
 }
 
 func TestApplyInjections_WhenCondition(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED", When: "true"},
 	}
 	ctx := MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn}
@@ -381,7 +381,7 @@ func TestApplyInjections_WhenCondition(t *testing.T) {
 }
 
 func TestApplyInjections_WhenConditionFalse(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "INJECTED", When: "false"},
 	}
 	ctx := MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn}
@@ -395,7 +395,7 @@ func TestApplyInjections_WhenConditionFalse(t *testing.T) {
 }
 
 func TestApplyInjections_TemplateVars(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "Hello {{vars.name}}!"},
 	}
 	renderFn := func(content string, ctx MergeContext) string {
@@ -417,7 +417,7 @@ func TestApplyInjections_TemplateVars(t *testing.T) {
 // Обрезка на применении: запись прошла валидацию, но ШАБЛОН раздул её за
 // лимит (например, {{env.X}} вставил мегабайт). Такое тоже режется.
 func TestApplyInjections_ContentTruncationAfterRender(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: "начало"},
 	}
 	// Рендерер раздувает контент за лимит одной инъекции.
@@ -434,7 +434,7 @@ func TestApplyInjections_ContentTruncationAfterRender(t *testing.T) {
 // Запись БОЛЬШЕ лимита отсекается валидацией (на записи её бы отвергли) —
 // в промпт мусор не попадает.
 func TestApplyInjections_OversizedRejected(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{Name: "inj1", Scope: "global", Target: "system", Position: "append", Content: strings.Repeat("x", MaxContentSize+100)},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -453,9 +453,9 @@ func TestApplyInjections_TotalSizeLimit(t *testing.T) {
 	// Каждая запись в пределах лимита, но вместе превышают MaxTotalSize:
 	// лимит суммы проверяется на применении, а не валидацией записи.
 	chunk := strings.Repeat("a", MaxContentSize)
-	var injs []board.Injection
+	var injs []domain.Injection
 	for i := 0; i < 6; i++ { // 6 × 10240 = 61440 > 51200
-		injs = append(injs, board.Injection{
+		injs = append(injs, domain.Injection{
 			Name: fmt.Sprintf("inj%d", i), Scope: "global", Target: "system",
 			Position: "append", Content: chunk,
 		})
@@ -474,7 +474,7 @@ func TestApplyInjections_TotalSizeLimit(t *testing.T) {
 }
 
 func TestApplyInjections_AppliedMetadata(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{ID: "inj-1", Name: "Test", Scope: "global", Target: "system", Position: "append", Content: "X"},
 	}
 	result, err := ApplyInjections("base", nil, injs, MergeContext{RenderFn: testRenderFn, EvalFn: testEvalFn})
@@ -493,10 +493,10 @@ func TestApplyInjections_AppliedMetadata(t *testing.T) {
 }
 
 func TestCollectInjections_Order(t *testing.T) {
-	global := []board.Injection{{Name: "g"}}
-	assistant := []board.Injection{{Name: "a"}}
-	session := []board.Injection{{Name: "s"}}
-	runtime := []board.Injection{{Name: "r"}}
+	global := []domain.Injection{{Name: "g"}}
+	assistant := []domain.Injection{{Name: "a"}}
+	session := []domain.Injection{{Name: "s"}}
+	runtime := []domain.Injection{{Name: "r"}}
 
 	result := CollectInjections(global, assistant, session, runtime)
 	if len(result) != 4 {
@@ -508,7 +508,7 @@ func TestCollectInjections_Order(t *testing.T) {
 }
 
 func TestDeduplicateByID(t *testing.T) {
-	injs := []board.Injection{
+	injs := []domain.Injection{
 		{ID: "1", Name: "first", Content: "A"},
 		{ID: "2", Name: "second", Content: "B"},
 		{ID: "1", Name: "third", Content: "C"},

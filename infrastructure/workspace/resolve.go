@@ -11,13 +11,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
-
-	"ai/domain"
 )
-
-// EpicResolve — активный процесс решения конфликтов релизной ветки эпика
-// (алиас domain.EpicResolve).
-type EpicResolve = domain.EpicResolve
 
 // ErrNoResolve — активного процесса решения конфликтов нет.
 var ErrNoResolve = errors.New("нет активного процесса решения конфликтов")

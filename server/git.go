@@ -16,38 +16,55 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai/application/gitflow"
 	"ai/shared/logging"
 )
 
 // --- открытие git-проектов (Ф-2-3) ---
 
-// projectOpener собирает use-case открытия git-проекта поверх git-исполнителя и
-// реестра сервера (правила — в application/gitflow/open.go).
-func (s *Server) projectOpener() *gitflow.ProjectOpener {
-	return &gitflow.ProjectOpener{
-		Host:       serverGitOpener{s.gitExec},
-		Registry:   s.reg,
-		ProjectDir: projects.ProjectDir,
-	}
+var (
+	ErrGitURLName     = errors.New("имя проекта из URL")
+	ErrDirNotEmpty    = errors.New("каталог не пуст")
+	ErrCloneFailed    = errors.New("клонирование не удалось")
+	ErrRegisterFailed = errors.New("регистрация не удалась")
+)
+
+type clonedRepo struct {
+	Root       string
+	Remote     string
+	Branch     string
+	Base       string
+	Submodules []clonedSubmodule
 }
 
-// serverGitOpener — адаптер gitflow.GitOpener поверх git-исполнителя
-// (срез H3c): application-слой не импортирует infrastructure/git.
+type clonedSubmodule struct {
+	Path          string
+	Root          string
+	Remote        string
+	Branch        string
+	Base          string
+	DefaultBranch string
+}
+
+type gitOpener interface {
+	Exec(ctx context.Context, dir string, argv ...string) (string, error)
+	Clone(ctx context.Context, gitURL, branch, dest string) (clonedRepo, error)
+	HasCommit(ctx context.Context, dir, ref string) bool
+}
+
 type serverGitOpener struct{ ex git.Executor }
 
 func (o serverGitOpener) Exec(ctx context.Context, dir string, argv ...string) (string, error) {
 	return o.ex.Exec(ctx, dir, argv...)
 }
 
-func (o serverGitOpener) Clone(ctx context.Context, url, branch, dest string) (gitflow.ClonedRepo, error) {
-	repo, err := git.Clone(ctx, o.ex, url, branch, dest)
+func (o serverGitOpener) Clone(ctx context.Context, gitURL, branch, dest string) (clonedRepo, error) {
+	repo, err := git.Clone(ctx, o.ex, gitURL, branch, dest)
 	if err != nil {
-		return gitflow.ClonedRepo{}, err
+		return clonedRepo{}, err
 	}
-	out := gitflow.ClonedRepo{Root: repo.Root, Remote: repo.Remote, Branch: repo.Branch, Base: repo.Base}
+	out := clonedRepo{Root: repo.Root, Remote: repo.Remote, Branch: repo.Branch, Base: repo.Base}
 	for _, sub := range repo.Submodules {
-		out.Submodules = append(out.Submodules, gitflow.ClonedSubmodule{
+		out.Submodules = append(out.Submodules, clonedSubmodule{
 			Path: sub.Path, Root: sub.Root, Remote: sub.Remote,
 			Branch: sub.Branch, Base: sub.Base, DefaultBranch: sub.DefaultBranch,
 		})
@@ -60,37 +77,66 @@ func (o serverGitOpener) HasCommit(ctx context.Context, dir, ref string) bool {
 }
 
 // handleOpenGitProject клонирует git-репозиторий в temp/<имя> и регистрирует
-// проект (и сабмодули) вида KindGit. Открытие идемпотентно; правила клона,
-// распознавание полу-клона и порядок регистрации — в
-// application/gitflow.ProjectOpener.Open. Здесь только маршрутизация кодов и
-// запись meta.
+// проект (и сабмодули) вида KindGit.
 func (s *Server) handleOpenGitProject(w http.ResponseWriter, r *http.Request, gitURL string) {
-	opened, err := s.projectOpener().Open(r.Context(), gitURL)
-	if err != nil {
-		switch {
-		case errors.Is(err, gitflow.ErrGitURLName):
-			writeErr(w, http.StatusBadRequest, err.Error())
-		case errors.Is(err, gitflow.ErrDirNotEmpty):
-			writeErr(w, http.StatusConflict, err.Error())
-		case errors.Is(err, gitflow.ErrCloneFailed):
-			writeErr(w, http.StatusBadGateway, err.Error())
-		case errors.Is(err, gitflow.ErrRegisterFailed):
-			writeErr(w, http.StatusBadRequest, err.Error())
-		default:
-			writeErr(w, http.StatusInternalServerError, err.Error())
+	name := GitProjectName(gitURL)
+	dest := projects.ProjectDir(name)
+	if _, err := os.Stat(dest); err == nil {
+		entries, _ := os.ReadDir(dest)
+		if len(entries) > 0 {
+			writeErr(w, http.StatusConflict, ErrDirNotEmpty.Error())
+			return
 		}
+	}
+	repo, err := serverGitOpener{s.gitExec}.Clone(r.Context(), gitURL, "", dest)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, ErrCloneFailed.Error())
 		return
 	}
-	s.writeProjectMetaFromInfo(w, opened.Info)
+	info := workspace.AddParams{
+		Name:      name,
+		Kind:      workspace.KindGit,
+		Root:      repo.Root,
+		GitRemote: repo.Remote,
+		GitBranch: repo.Branch,
+		GitBase:   repo.Base,
+	}
+	opened, err := s.reg.Add(info)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, ErrRegisterFailed.Error())
+		return
+	}
+	for _, sub := range repo.Submodules {
+		subName := SubmoduleProjectName(name, sub.Path)
+		_, err := s.reg.Add(workspace.AddParams{
+			Name:      subName,
+			Kind:      workspace.KindGit,
+			Root:      sub.Root,
+			GitRemote: sub.Remote,
+			GitBranch: sub.Branch,
+			GitBase:   sub.Base,
+			Parent:    name,
+		})
+		if err != nil {
+			logging.Warnf("git: регистрация сабмодуля %s: %v", subName, err)
+		}
+	}
+	s.writeProjectMetaFromInfo(w, opened)
 }
 
-// gitProjectName — тонкая обёртка над правилом application/gitflow (оставлена
-// для совместимости с тестами и другими файлами server).
-func gitProjectName(url string) string { return gitflow.GitProjectName(url) }
+// GitProjectName извлекает имя проекта из git-URL.
+func GitProjectName(gitURL string) string {
+	parsed, err := url.Parse(gitURL)
+	if err != nil {
+		return strings.TrimSuffix(dirBase(gitURL), ".git")
+	}
+	return strings.TrimSuffix(dirBase(parsed.Path), ".git")
+}
 
-// submoduleProjectName — тонкая обёртка над application/gitflow.
-func submoduleProjectName(parent, path string) string {
-	return gitflow.SubmoduleProjectName(parent, path)
+// SubmoduleProjectName формирует имя проекта сабмодуля из имени родителя и пути.
+func SubmoduleProjectName(parent, path string) string {
+	base := dirBase(filepath.ToSlash(path))
+	return parent + "_" + base
 }
 
 func (s *Server) repositoriesForProject(project string) []string {
@@ -125,7 +171,7 @@ func (s *Server) repoOf(ctx context.Context, project string) (*git.Repo, error) 
 		}
 		for i := range subs {
 			subs[i].Root = filepath.Join(inf.Root, subs[i].Path)
-			child, err := s.reg.Get(submoduleProjectName(inf.Name, subs[i].Path))
+			child, err := s.reg.Get(SubmoduleProjectName(inf.Name, subs[i].Path))
 			if err != nil || child.Parent != inf.Name {
 				continue
 			}
@@ -285,12 +331,12 @@ func (s *Server) registeredDiffRef(inf workspace.Info, ref string) bool {
 		return false
 	}
 	for _, branch := range inf.GitBranches.Epics {
-		if branch.Branch == ref {
+		if branch.Name == ref {
 			return true
 		}
 	}
 	for _, branch := range inf.GitBranches.Tasks {
-		if branch.Branch == ref {
+		if branch.Name == ref {
 			return true
 		}
 	}
@@ -405,7 +451,7 @@ func (s *Server) handleAccept(w http.ResponseWriter, r *http.Request) {
 	// до публикации gitlink родителя.
 	repositories := map[string]map[string]string{}
 	for _, sub := range repo.Submodules {
-		childName := submoduleProjectName(project, sub.Path)
+		childName := SubmoduleProjectName(project, sub.Path)
 		child, err := s.reg.Get(childName)
 		if err != nil {
 			continue
@@ -498,7 +544,7 @@ func (s *Server) handleRejectBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, sub := range repo.Submodules {
-		childName := submoduleProjectName(project, sub.Path)
+		childName := SubmoduleProjectName(project, sub.Path)
 		child, err := s.reg.Get(childName)
 		if err != nil {
 			continue

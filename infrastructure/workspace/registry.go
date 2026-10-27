@@ -20,26 +20,80 @@ import (
 	"sync"
 	"time"
 
-	"ai/domain"
 	"ai/shared/projects"
 )
 
-// Kind — тип рабочего проекта (алиас domain.Kind; данные записей реестра
-// вынесены в домен, Этап 8, H5e).
-type Kind = domain.Kind
+// Kind — тип рабочего проекта.
+type Kind string
 
 const (
-	KindTemp = domain.KindTemp // temp/<имя> в корне модуля (агентская генерация)
-	KindDir  = domain.KindDir  // произвольная локальная папка
-	KindGit  = domain.KindGit  // git-проект (клон/worktree)
+	KindTemp Kind = "temp" // temp/<имя> в корне модуля (агентская генерация)
+	KindDir  Kind = "dir"  // произвольная локальная папка
+	KindGit  Kind = "git"  // git-проект (клон/worktree)
 )
 
-// Info — запись реестра: имя проекта → абсолютный путь Root
-// (алиас domain.Info).
-type Info = domain.Info
+// Info — запись реестра: имя проекта → абсолютный путь Root.
+type Info struct {
+	Name             string            `json:"name"`
+	Kind             Kind              `json:"kind"`
+	Root             string            `json:"root"`
+	GitRemote        string            `json:"git_remote,omitempty"`
+	GitBranch        string            `json:"git_branch,omitempty"`
+	GitBase          string            `json:"git_base,omitempty"`
+	GitTarget        string            `json:"git_target,omitempty"`
+	Parent           string            `json:"parent,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	GitBranches      *GitBranchMap     `json:"git_branches,omitempty"`
+	GitMergeRequests *MergeRequestMap  `json:"git_merge_requests,omitempty"`
+	GitResolving     *EpicResolve      `json:"git_resolving,omitempty"`
+}
 
-// AddParams — параметры регистрации нового проекта (алиас domain.AddParams).
-type AddParams = domain.AddParams
+// AddParams — параметры регистрации нового проекта.
+type AddParams struct {
+	Name      string
+	Kind      Kind
+	Root      string
+	GitRemote string
+	GitBranch string
+	GitBase   string
+	GitTarget string
+	Parent    string
+	Confirm   bool
+}
+
+// BranchRef — привязка git-ветки: имя ветки и точка отхода (база).
+type BranchRef struct {
+	Name    string `json:"name"`
+	Base    string `json:"base"`
+	Workdir string `json:"workdir,omitempty"`
+}
+
+// GitBranchMap — реестр веток эпиков и задач git-проекта.
+type GitBranchMap struct {
+	Epics map[string]BranchRef `json:"epics,omitempty"`
+	Tasks map[string]BranchRef `json:"tasks,omitempty"`
+}
+
+// MRRef — привязка Merge/Pull Request: ссылка, ветка-источник и ветка-цель.
+type MRRef struct {
+	URL    string `json:"url,omitempty"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	State  string `json:"state"`
+}
+
+// MergeRequestMap — реестр MR эпиков и задач git-проекта.
+type MergeRequestMap struct {
+	Project *MRRef            `json:"project,omitempty"`
+	Epics   map[string]MRRef  `json:"epics,omitempty"`
+	Tasks   map[string]MRRef  `json:"tasks,omitempty"`
+}
+
+// EpicResolve — активный процесс решения конфликтов релизной ветки эпика.
+type EpicResolve struct {
+	EpicID   string `json:"epic_id"`
+	Worktree string `json:"worktree"`
+}
 
 var (
 	ErrEmptyName   = errors.New("имя проекта не может быть пустым")

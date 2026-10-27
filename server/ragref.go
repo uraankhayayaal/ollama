@@ -176,9 +176,6 @@ func (s *Server) syncAgentBranchAsync(project string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		lock := s.mergeLock(project)
-		lock.Lock()
-		defer lock.Unlock()
 		repo, err := s.repoOf(ctx, project)
 		if err != nil {
 			logging.For(project).Detailf("rag: синхрон рабочей копии с main: %v", err)

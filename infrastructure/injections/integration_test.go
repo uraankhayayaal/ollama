@@ -4,22 +4,22 @@ import (
 	"strings"
 	"testing"
 
-	"ai/infrastructure/board"
+	"ai/domain"
 )
 
 // TestApplyInjections_Integration проверяет полный пайплайн:
 // collect → filter → sort → apply с инъекциями из всех источников.
 func TestApplyInjections_Integration(t *testing.T) {
-	globalInjs := []board.Injection{
+	globalInjs := []domain.Injection{
 		{Name: "g-1", Scope: "global", Target: "system", Position: "append", Content: "global-inj"},
 	}
-	assistantInjs := []board.Injection{
+	assistantInjs := []domain.Injection{
 		{Name: "a-1", Scope: "assistant", Target: "system", Position: "append", Content: "assistant-inj"},
 	}
-	sessionInjs := []board.Injection{
+	sessionInjs := []domain.Injection{
 		{Name: "s-1", Scope: "session", Target: "system", Position: "append", Content: "session-inj"},
 	}
-	runtimeInjs := []board.Injection{
+	runtimeInjs := []domain.Injection{
 		{Name: "r-1", Scope: "runtime", Target: "system", Position: "append", Content: "runtime-inj"},
 	}
 
@@ -65,10 +65,10 @@ func TestApplyInjections_EmptyFastPath(t *testing.T) {
 }
 
 func TestCollectInjections_MixesSources(t *testing.T) {
-	global := []board.Injection{{ID: "g1", Name: "G", Scope: "global"}}
-	assistant := []board.Injection{{ID: "a1", Name: "A", Scope: "assistant"}}
-	session := []board.Injection{{ID: "s1", Name: "S", Scope: "session"}}
-	runtime := []board.Injection{{ID: "r1", Name: "R", Scope: "runtime"}}
+	global := []domain.Injection{{ID: "g1", Name: "G", Scope: "global"}}
+	assistant := []domain.Injection{{ID: "a1", Name: "A", Scope: "assistant"}}
+	session := []domain.Injection{{ID: "s1", Name: "S", Scope: "session"}}
+	runtime := []domain.Injection{{ID: "r1", Name: "R", Scope: "runtime"}}
 
 	all := CollectInjections(global, assistant, session, runtime)
 	if len(all) != 4 {

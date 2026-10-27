@@ -7,17 +7,12 @@ package developer
 
 import (
 	"ai/agents"
-	"ai/domain"
-	"ai/domain/services"
-	"ai/runner/adapters"
-	"ai/shared/logging"
+	"ai/infrastructure/rag"
 	"ai/shared/projects"
 	"ai/tools"
 	"context"
 	"fmt"
 	"os"
-	"strings"
-	"time"
 )
 
 // devToolNames — инструменты разработчика, выбираемые из общего реестра tools.
@@ -35,13 +30,6 @@ var devToolNames = []string{
 	tools.LspDefinition, tools.LspReferences, tools.LspHover, tools.CodeSearch,
 }
 
-// devBoardToolNames — инструменты общей Kanban-доски, добавляемые разработчику,
-// когда оркестратор Kanban подключает доску (SetBoardStore): чтение своей задачи
-// и смена её статуса.
-var devBoardToolNames = []string{
-	tools.BoardGetTask, tools.BoardSetTaskStatus,
-}
-
 // base — общая часть агентов-разработчиков (backend/frontend): разделяемый
 // файловый контекст, конфиг, выбранные инструменты и подключение к Kanban-доске.
 // Встраивается в BackendDeveloper и FrontendDeveloper; различие между
@@ -56,13 +44,10 @@ type base struct {
 	// Tools — выбранные агентом инструменты из общего реестра
 	// (единый источник для GetTools и диспетчеризации вызовов).
 	Tools *tools.Set
-	// Store — общая Kanban-доска проекта (Redis). Подключается оркестратором
-	// Kanban через SetBoardStore; в standalone-режиме (CLI) — nil.
-	Store services.BoardStore
 	// RAG — клиент векторной памяти (Qdrant) для инструмента CodeSearch.
-	// Создаётся через adapters.NewRAGClient: при недоступном Qdrant/degrade
-	// клиент nil, а инструмент возвращает skipped.
-	RAG adapters.RAGClient
+	// Создаётся через NewRAGClient: при недоступном Qdrant/degrade клиент
+	// nil, а инструмент возвращает skipped.
+	RAG RAGClient
 	// label — префикс логов агента ("backend-разработчик"/"frontend-разработчик").
 	label string
 	// roleDesc — инструкция роли для системного промпта (область работы, стек,
@@ -72,13 +57,6 @@ type base struct {
 	// ("Ты — опытный разработчик на ... и архитектор"). Пусто — используется
 	// Config.Language (глобальный CODEGEN_LANG).
 	langDesc string
-	// wip — состояние промежуточных коммитов раунда (Ф-6): кэш сабмодулей и
-	// git-логика вынесены в adapters.WipRepo, чтобы агент не зависел от
-	// инфраструктурного пакета git.
-	wip adapters.WipRepo
-	// taskID — id задачи, ради которой построен агент (SetTaskID). Нужен для
-	// State Tracking: в какую запись доски писать состояние раунда.
-	taskID string
 }
 
 // BackendDeveloper — агент «Backend разработчик». Выполняет задачи разработки
@@ -161,7 +139,7 @@ func newFrontendDeveloperInDir(prompt, dir string) *FrontendDeveloper {
 // инструмент отдаст skipped).
 func newBase(prompt, dir string, cfg projects.Config, label, roleDesc string) *base {
 	ops := &tools.FileOps{OutputDir: dir, MaxFiles: cfg.MaxFiles, NoOverwrite: cfg.NoOverwrite}
-	ragClient := adapters.NewRAGClient()
+	ragClient := NewRAGClient()
 	return &base{
 		FileOps:  ops,
 		Prompt:   prompt,
@@ -185,49 +163,31 @@ func (b *base) withLangDesc(desc string) *base {
 // память ВЕТКИ агента (branch/commit_sha определяются по рабочему каталогу
 // worktree через rag.DetectIndexOptions, см.
 // PLAN-2026-09-27-done-branch-aware-rag.md, Р-7): прежние версии чанков помечаются
-// устаревшими, удалённые файлы — тоже. Реализует adapters.Reindexer; вызывается
-// раннером в пост-раундовом хуке при RAG_AUTO_REINDEX=1. Без подключённого
+// устаревшими, удалённые файлы — тоже. Реализует Reindexer; вызывается
+// post-раундовым хуком при RAG_AUTO_REINDEX=1. Без подключённого
 // RAG — тихий ноль (degrade), ошибки доступа к Qdrant возвращаются: раннер
 // логирует, генерация не падает.
 func (d *base) ReindexTouched(touched []string) (int, error) {
 	if d.RAG == nil || len(touched) == 0 {
 		return 0, nil
 	}
-	// Имя проекта — явное FileOps.Project: OutputDir специалиста это worktree
-	// задачи (temp/.wt-task-<проект>-<id>), и basename каталога указал бы на
-	// несуществующий проект — точки ушли бы в отдельный индекс.
+	ragc, ok := any(d.RAG).(*rag.Client)
+	if !ok || ragc == nil {
+		return 0, nil
+	}
 	project := d.FileOps.ProjectName()
 	if project == "" {
 		return 0, nil
 	}
-	return adapters.ReindexTouched(context.Background(), d.RAG, d.OutputDir, project, touched)
+	return ReindexTouched(context.Background(), ragc, d.OutputDir, project, touched)
 }
 
 // CommitRoundTouched фиксирует правки раунда промежуточным коммитом (Ф-6,
-// реализует adapters.WIPCommitter). Вызывается раннером в пост-раундовом хуке
-// из единой очереди затронутых файлов. Гард области (коммит только в ветке
-// задачи ai/task/<id>, кэш сабмодулей, средства git) — в
-// adapters.WipRepo.CommitWipRound; здесь только делегирование, чтобы агент не
-// зависел от инфраструктурного пакета git.
+// реализует WIPCommitter). Стуб: WipRepo подключался оркестратором Kanban;
+// теперь вызывается из чат-ассистента при необходимости.
 func (d *base) CommitRoundTouched(touched []string, round int) (string, bool, error) {
-	return d.wip.CommitWipRound(context.Background(), d.OutputDir, touched, round)
+	return "", false, nil
 }
-
-// SetBoardStore подключает разработчика к общей Kanban-доске проекта: добавляет
-// инструменты статуса задачи (BoardGetTask/BoardSetTaskStatus), передаёт
-// Board-контекст в реестр. Вызывается оркестратором Kanban при построении
-// агента специалиста.
-func (d *base) SetBoardStore(s services.BoardStore) {
-	if s == nil {
-		return
-	}
-	d.Store = s
-	names := append(append([]string{}, devToolNames...), devBoardToolNames...)
-	d.Tools = tools.Select(names, tools.Deps{FileOps: d.FileOps, Board: s, RAG: d.RAG})
-}
-
-// GetBoard возвращает подключённую доску (nil — standalone-режим).
-func (d *base) GetBoard() services.BoardStore { return d.Store }
 
 // Label возвращает человекочитаемое имя агента для чата.
 func (b *base) Label() string {
@@ -235,61 +195,6 @@ func (b *base) Label() string {
 		return b.label
 	}
 	return "разработчик"
-}
-
-// SetTaskID записывает id задачи, ради которой построен агент (Ф-6, этап 2).
-// Нужен для State Tracking: без него агент не знает, в какую запись доски
-// писать состояние раунда, и откатываться будет не к чему. Вызывается
-// оркестратором рядом с SetBoardStore/SetOutputDir.
-func (d *base) SetTaskID(id string) { d.taskID = strings.TrimSpace(id) }
-
-// ReportRoundState записывает состояние раунда на доску задачи (Ф-6, этап 2,
-// реализует adapters.RoundStateReporter). Раннер вызывает его раз за раунд в
-// том же хуке, где делает промежуточный коммит.
-//
-// Что важно и почему:
-//   - last_good_sha двигается только на раунде с ПРОШЕДШЕЙ проверкой и
-//     фиксируется коммитом того же раунда: это и есть «последняя рабочая
-//     точка», к которой возвращает ручной откат;
-//   - при падении проверки сохраняется нормализованный усечённый вывод —
-//     диалог с человеком начинается с него, а не с «что-то сломалось»;
-//   - heartbeat_at обновляется каждый раунд: по нему watchdog понимает, что
-//     задача жива, и возвращает в работу зависшую после рестарта сервера.
-//
-// Промахи записи не поднимаются: состояние — вспомогательная телеметрия, её
-// потеря не должна ронять генерацию.
-func (d *base) ReportRoundState(rs adapters.RoundState) {
-	if d.Store == nil || d.taskID == "" {
-		return
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	rs.Agent = d.label
-	errText := adapters.RoundStateErrorText(rs)
-	err := d.Store.PatchTask(context.Background(), d.taskID, func(t *domain.Task) error {
-		t.AgentState = rs.State
-		t.ActiveAgent = d.label
-		t.HeartbeatAt = now
-		if errText != "" {
-			t.LastError = errText
-		} else if rs.VerifyRan && !rs.VerifyFailed {
-			t.LastError = ""
-		}
-		if rs.Committed && rs.CommitSHA != "" {
-			if t.Checkpoint == nil {
-				t.Checkpoint = &domain.TaskCheckpoint{}
-			}
-			t.Checkpoint.LastSHA = rs.CommitSHA
-			// Проверка прошла в этом же раунде: коммит раунда — точка,
-			// после которой состояние рабочее.
-			if rs.VerifyRan && !rs.VerifyFailed {
-				t.Checkpoint.LastGoodSHA = rs.CommitSHA
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		logging.For(d.ProjectName()).Detailf("разработчик: состояние раунда %d задачи %s не записано: %v", rs.Round, d.taskID, err)
-	}
 }
 
 func (d *base) GetUserMessages() []agents.Message {
@@ -329,15 +234,6 @@ func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {
 		overwriteRule = "Включена защита от перезаписи: инструменты вернут ошибку, если ты попытаешься перезаписать уже существующий файл. Перезаписывай файлы только при необходимости."
 	}
 
-	// Инструкция про Kanban-доску добавляется только когда доска подключена
-	// (SetBoardStore). В standalone-режиме (plan/qa CLI) инструментов доски
-	// в наборе разработчика нет, и упоминание их в промпте заставляет модель
-	// вызывать отсутствующие функции (BoardSetTaskStatus not in tool set → фатал).
-	kanbanStep := ""
-	if d.Store != nil {
-		kanbanStep = "6. При работе с Kanban-доской: ОБЯЗАТЕЛЬНО изучи описание задачи и её комментарии (Comments) — они содержат уточнения, замечания и требования, которые необходимо учесть. Когда задача полностью выполнена и проверки зелёные — переведи её в статус done инструментом BoardSetTaskStatus. Если же выполнить задачу невозможно (нужного кода или зависимостей в проекте нет, есть внешний блокер) — переведи её в статус human_help с обязательной причиной (reason): это остановит задачу и передаст её человеку вместо повторов без результата.\n"
-	}
-
 	return []agents.Message{
 		{
 			Type: agents.MessageTypeSystem,
@@ -357,7 +253,7 @@ func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {
 
 6. «Тесты зелёные» НЕ означает «приложение работает». Если задача про поведение (endpoint отдаёт 200, страница открывается, миграция проходит, внешний сервис отвечает), проверь это в рантайме инструментом ReadAppLogs: он сам запустит приложение (цель run/dev/start/serve из Makefile, npm-скрипт или типовой запуск по стеку), соберёт его stdout+stderr и остановит. Читай возвращённые строки внимательно: «address already in use», «connection refused», «panic», «cannot find module», «no such table» — это причины, которые нужно исправить в коде, а не повод объявить задачу выполненной. Способ запуска можно задать явно: ReadAppLogs {"command": "npm run dev"} (или {"wait_ms": 8000}, если приложение долго стартует). Логи приложения также приходят в панель «Рантайм» и в цикл самокоррекции, поэтому после чтения логов сразу правь причину, а не перезапускай то же самое ради тех же строк.
 7. Если сборка или проверки упали — вызови LspCheck (можно с параметром files по правленым файлам), чтобы получить ТОЧНЫЕ строки ошибок: файл:строка:колонка:описание. Исправляй код по этим строкам и запускай проверки снова, пока всё не станет зелёным. Если LspCheck вернул status skipped (чекер не установлен) — сверяйся с выводом Run (go build/vet, npm run build), а место ошибки ищи точечным grep через Run с флагами -w и --exclude-dir (см. «КОМПАКТНЫЙ ВЫВОД КОМАНД», п.6).
-%s8. В конце приведи или обнови файл readme.md: инструкцию запуска и использования, а в разделе «План работ» отметь свою задачу как выполненную.
+8. В конце приведи или обнови файл readme.md: инструкцию запуска и использования, а в разделе «План работ» отметь свою задачу как выполненную.
 
 Правила:
 - Нельзя отвечать текстом-рассуждением вместо действий. Используй инструменты.
@@ -382,7 +278,7 @@ func (d *base) GetSystemMessages(_ []agents.Message) []agents.Message {
 1. В блоке SEARCH инструмента SearchReplace указывай ТОЛЬКО точный фрагмент, который реально правишь, — дословно, с теми же отступами, что в файле (сначала прочитай файл через ReadFiles и скопируй фрагмент оттуда). REPLACE — этот же фрагмент с изменениями. Инструмент применяет замену к СТРОГО первому совпадению; если фрагмента в файле нет — вернётся ошибка и файл не изменится. Это твоя защита от случайного переписывания: если код поменял другой агент, подстройся под новую версию, а не переписывай файл целиком.
 2. Если меняешь целиком одну функцию/метод, используй PatchFunction: верни в body полный исходник функции (с сигнатурой-близнецом), укажи target_file и function_name (+ receiver для методов). Язык определяется расширением target_file: для Go инструмент заменит ТОЛЬКО узел функции через go/ast и отформатирует файл; для TS/JS/Python — заменит ровно границы функции, сохранив соседний код побайтно. Другие функции и импорты не пострадают. Если новому телу нужны неимпортированные пакеты (только Go) — перечисли их пути в imports (они добавятся, существующие импорты не удаляются).
 3. Только после таких точечных правок, если инструменты вернули ошибку «SEARCH не найден» или «функция не найдена», перечитай файл (ReadFiles), сверься с актуальным кодом и повтори. Не обходи защиту перезаписью файла целиком через WriteFiles.
-%s%s`, lang, moduleInstruction, d.roleDesc, overwriteRule, kanbanStep, agents.RunTokenEconomy, agents.LSPGrepFallback),
+%s%s`, lang, moduleInstruction, d.roleDesc, overwriteRule, agents.RunTokenEconomy, agents.LSPGrepFallback),
 		},
 	}
 }

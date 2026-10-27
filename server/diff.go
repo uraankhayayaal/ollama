@@ -36,21 +36,21 @@ type cachedDiff struct {
 // branchDiff строит diff зарегистрированной ветки относительно base. Ветки
 // резолвятся до вызова по side-реестру, поэтому сюда не попадают пути клиента.
 func (s *Server) branchDiff(ctx context.Context, inf workspace.Info, ref workspace.BranchRef, base string) (*cachedDiff, error) {
-	if strings.TrimSpace(ref.Branch) == "" {
+	if strings.TrimSpace(ref.Name) == "" {
 		return nil, fmt.Errorf("ветка не создана")
 	}
 	root := inf.Root
-	worktree := strings.TrimSpace(ref.Worktree)
+	worktree := strings.TrimSpace(ref.Workdir)
 	if worktree != "" {
 		root = worktree
 		// Worktree может быть уже снят после завершения задачи, пока запись
 		// реестра ещё не обновилась. Не маскируем это как пустой diff.
 		if _, err := s.gitExec.Exec(ctx, root, "git", "rev-parse", "--git-dir"); err != nil {
-			return nil, fmt.Errorf("worktree ветки %s недоступен: %w", ref.Branch, err)
+			return nil, fmt.Errorf("worktree ветки %s недоступен: %w", ref.Name, err)
 		}
-		mergeBase, err := s.gitExec.Exec(ctx, inf.Root, "git", "merge-base", base, ref.Branch)
+		mergeBase, err := s.gitExec.Exec(ctx, inf.Root, "git", "merge-base", base, ref.Name)
 		if err != nil {
-			return nil, fmt.Errorf("не удалось найти общую базу %s и %s: %w", base, ref.Branch, err)
+			return nil, fmt.Errorf("не удалось найти общую базу %s и %s: %w", base, ref.Name, err)
 		}
 		// -N включает новые файлы, сохраняя их содержимое в worktree.
 		if _, err := s.gitExec.Exec(ctx, root, "git", "add", "-N", "-A"); err != nil {
@@ -66,13 +66,13 @@ func (s *Server) branchDiff(ctx context.Context, inf workspace.Info, ref workspa
 		// найденный merge-base как обычную точку сравнения.
 		raw, err = s.gitExec.Exec(ctx, root, "git", "-c", "diff.submodule=log", "diff", base)
 	} else {
-		raw, err = s.gitExec.Exec(ctx, root, "git", "-c", "diff.submodule=log", "diff", base+"..."+ref.Branch)
+		raw, err = s.gitExec.Exec(ctx, root, "git", "-c", "diff.submodule=log", "diff", base+"..."+ref.Name)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("git diff ветки %s: %w", ref.Branch, err)
+		return nil, fmt.Errorf("git diff ветки %s: %w", ref.Name, err)
 	}
 	c := parseUnifiedDiff(raw)
-	c.Branch, c.Base, c.Remote = ref.Branch, inf.GitBase, inf.GitRemote
+	c.Branch, c.Base, c.Remote = ref.Name, inf.GitBase, inf.GitRemote
 	return c, nil
 }
 
@@ -104,25 +104,25 @@ func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info, ref, ba
 			return c, nil
 		}
 	}
-	if ref != "" {
-		var branch workspace.BranchRef
-		found := false
-		if inf.GitBranches != nil {
-			for _, candidate := range inf.GitBranches.Epics {
-				if candidate.Branch == ref {
-					branch, found = candidate, true
-					break
-				}
-			}
-			if !found {
-				for _, candidate := range inf.GitBranches.Tasks {
-					if candidate.Branch == ref {
+		if ref != "" {
+			var branch workspace.BranchRef
+			found := false
+			if inf.GitBranches != nil {
+				for _, candidate := range inf.GitBranches.Epics {
+					if candidate.Name == ref {
 						branch, found = candidate, true
 						break
 					}
 				}
+				if !found {
+					for _, candidate := range inf.GitBranches.Tasks {
+						if candidate.Name == ref {
+							branch, found = candidate, true
+							break
+						}
+					}
+				}
 			}
-		}
 		if !found {
 			return nil, fmt.Errorf("ветка %q не зарегистрирована в проекте", ref)
 		}
@@ -147,7 +147,7 @@ func (s *Server) gitProjectDiff(ctx context.Context, inf workspace.Info, ref, ba
 	}
 	c := parseUnifiedDiff(raw)
 	for _, sub := range repo.Submodules {
-		child, err := s.reg.Get(submoduleProjectName(inf.Name, sub.Path))
+		child, err := s.reg.Get(SubmoduleProjectName(inf.Name, sub.Path))
 		if err != nil {
 			continue
 		}
