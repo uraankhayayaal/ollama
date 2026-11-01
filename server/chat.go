@@ -267,7 +267,7 @@ func (s *Server) handleClearChat(w http.ResponseWriter, r *http.Request) {
 // handleGetTokens возвращает накопленные токены проекта (вход/выход) и
 // последнюю скорость генерации (вых. ток/с).
 func (s *Server) handleGetTokens(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"input": 0, "output": 0, "tps": 0})
+	writeJSON(w, http.StatusOK, map[string]any{"in": 0, "out": 0, "tps": 0})
 }
 
 // --- REST: HITL ---
