@@ -253,7 +253,13 @@ func (s *Server) handleGetProjectMeta(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, inf)
+	// Фронтенд ожидает BoardView с epics/tasks — без доски возвращаем пустые массивы.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"meta":  inf,
+		"epics": []any{},
+		"tasks": []any{},
+		"total": map[string]int{"epics": 0, "tasks": 0, "bugs": 0},
+	})
 }
 
 // --- SessionRegistry (single-flight) ---
