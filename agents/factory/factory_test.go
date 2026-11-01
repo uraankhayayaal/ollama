@@ -25,10 +25,10 @@ func TestRoleFactoryMapsRoles(t *testing.T) {
 		role string
 		want string
 	}{
-		{"React Developer", "*developer.FrontendDeveloper"},
-		{"Frontend Engineer", "*developer.FrontendDeveloper"},
-		{"Senior Go Developer", "*developer.BackendDeveloper"},
-		{"Backend Lead", "*developer.BackendDeveloper"},
+		{"React Developer", "developer.FrontendDeveloper"},
+		{"Frontend Engineer", "developer.FrontendDeveloper"},
+		{"Senior Go Developer", "developer.BackendDeveloper"},
+		{"Backend Lead", "developer.BackendDeveloper"},
 	}
 	for _, c := range specialistCases {
 		agent := f.Specialist("p", c.role, "промпт")
@@ -52,8 +52,8 @@ func TestRoleFactoryStep(t *testing.T) {
 	}
 
 	cases := map[string]string{
-		"backend": "*developer.BackendDeveloper",
-		"frontend": "*developer.FrontendDeveloper",
+		"backend": "developer.BackendDeveloper",
+		"frontend": "developer.FrontendDeveloper",
 	}
 	for at, want := range cases {
 		got := typeName(f.Step(at, "proj", "p"))
