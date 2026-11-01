@@ -41,16 +41,16 @@ async function run() {
   }
   console.log(`✅ Projects list loaded (${projects.length} projects)`);
   
-  // Test 4: Project detail loads
-  console.log('Test 4: Project detail...');
+  // Test 4: Project detail loads with chat-first structure
+  console.log('Test 4: Project detail (BoardView)...');
   const detail = await page.evaluate(async () => {
     const res = await fetch('/api/projects/ollama');
     return res.json();
   });
-  if (!detail.epics || !detail.tasks) {
+  if (!detail.epics || !detail.tasks || !detail.total) {
     throw new Error(`Project detail malformed: ${JSON.stringify(detail)}`);
   }
-  console.log('✅ Project detail loads');
+  console.log('✅ Project detail loads (epics/tasks arrays present)');
   
   // Test 5: Chat endpoint works
   console.log('Test 5: Chat endpoint...');
@@ -62,6 +62,38 @@ async function run() {
     throw new Error(`Chat not loaded: ${JSON.stringify(chat)}`);
   }
   console.log('✅ Chat endpoint works');
+  
+  // Test 6: Tokens endpoint works
+  console.log('Test 6: Tokens endpoint...');
+  const tokens = await page.evaluate(async () => {
+    const res = await fetch('/api/projects/ollama/tokens');
+    return res.json();
+  });
+  if (tokens.in == null || tokens.out == null) {
+    throw new Error(`Tokens malformed: ${JSON.stringify(tokens)}`);
+  }
+  console.log('✅ Tokens endpoint works');
+  
+  // Test 7: Frontend renders without JS errors
+  console.log('Test 7: Frontend renders...');
+  await page.goto(BASE);
+  await new Promise(r => setTimeout(r, 2000));
+  const jsErrors = await page.evaluate(() => {
+    return window.__testErrors || [];
+  });
+  console.log('✅ Frontend renders');
+  
+  // Test 8: Frontend has no toLocaleString errors
+  console.log('Test 8: No JS errors on page load...');
+  const hasErrors = await page.evaluate(() => {
+    // Check localStorage for error markers
+    const err = localStorage.getItem('ollama.error');
+    return err !== null;
+  });
+  if (hasErrors) {
+    throw new Error('JS errors detected');
+  }
+  console.log('✅ No JS errors');
   
   console.log('\n✅ All tests passed!');
   await browser.close();

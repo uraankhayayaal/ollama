@@ -184,6 +184,16 @@ body {
   }
 }
 
+// Чат на всю ширину (без доски)
+.chat-only {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  overflow: hidden;
+}
+
 // Основная область: чат и доска видны одновременно, пропорцию меняет
 // разделительная ширма (.splitter); при схлопывании остаётся тонкая полоска
 // слева (.chat-strip) или справа (.dash-strip). Состояния взаимоисключающие.
@@ -192,7 +202,6 @@ body {
   min-height: 0;
   display: flex;
 
-  // Во время перетаскивания ширмы запрещаем выделение текста.
   &.dragging {
     cursor: col-resize;
     user-select: none;
