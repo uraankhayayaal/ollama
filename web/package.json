@@ -8,16 +8,20 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "e2e": "npx tsx e2e/app.test.ts"
   },
   "dependencies": {
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.5.2",
+    "playwright": "^1.64.1",
+    "puppeteer": "^25.16.0",
     "sass-embedded": "^1.104.1",
     "typescript": "^5.8.3",
     "vite": "^6.3.5"
