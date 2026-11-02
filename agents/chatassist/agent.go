@@ -16,13 +16,15 @@ import (
 )
 
 // assistantToolNames — полный набор инструментов: чтение, навигация,
-// правка, выполнение команд, поиск, анализ проекта.
+// правка, выполнение команд, поиск, анализ проекта, работа с git.
 var assistantToolNames = []string{
 	// Чтение и навигация
 	"List", "ReadFiles", "ReadMap",
 	tools.LspDefinition, tools.LspReferences, tools.LspHover,
 	tools.CodeSearch,
 	tools.WebSearch,
+	// Поиск и анализ структуры
+	tools.Grep, tools.Glob, tools.Structure,
 	// Правка файлов
 	"WriteFiles", "AppendFile", "DeleteFiles",
 	"SearchReplace", "PatchFunction", "PatchGoFunction",
@@ -30,6 +32,8 @@ var assistantToolNames = []string{
 	"Run", tools.LspCheck, tools.ReadAppLogs,
 	// Анализ проекта
 	tools.DetectStack, tools.RagIndexStatus, tools.ResolveGitConflicts,
+	// Git-инструменты
+	tools.Git, tools.GitCommit, tools.Diff,
 }
 
 // assistantSystemPrompt — системный промпт агента.
@@ -41,6 +45,9 @@ const assistantSystemPrompt = `Ты — технический ассистен�
 - LspDefinition, LspReferences, LspHover — навигация по коду (определения, ссылки, документация)
 - CodeSearch — семантический поиск по коду проекта (RAG)
 - WebSearch — поиск информации в интернете (актуальные данные, документация)
+- Grep — поиск по паттерну/регулярке в файлах проекта
+- Glob — поиск файлов по glob-паттерну (*.go, **/*.ts)
+- Structure — рекурсивное дерево директории проекта
 
 Правка файлов:
 - WriteFiles — создание/перезапись файлов
@@ -53,11 +60,16 @@ const assistantSystemPrompt = `Ты — технический ассистен�
 - Run — выполнение команд (сборка, тесты, lint)
 - LspCheck — анализ кода на ошибки
 - ReadAppLogs — запуск приложения и сбор логов
+- Diff — показать diff файла (сравнение с git HEAD или с другой версией)
 
 Анализ проекта:
 - DetectStack — определение стека технологий (язык, фреймворк, инструменты)
 - RagIndexStatus — статус RAG-индекса проекта (количество чанков, размер)
 - ResolveGitConflicts — автоматическое разрешение git-конфликтов
+
+Git:
+- Git — выполнение git-команд (status, log, branch и т.д.)
+- GitCommit — создание коммита с изменениями
 
 === ЧТО ТЫ ДЕЛАЕШЬ ===
 - отвечаешь на вопросы о коде, структуре проекта, архитектуре
@@ -70,12 +82,12 @@ const assistantSystemPrompt = `Ты — технический ассистен�
 
 === ПРАВИЛА РАБОТЫ ===
 1. На первом шаге вызывай DetectStack — узнай стек технологий, чтобы подобрать правильные команды (сборка, тесты, линтинг).
-2. Изучай текущее состояние проекта: List → ReadMap → точечное чтение (ReadFiles с lines).
+2. Изучай текущее состояние проекта: Structure → ReadMap → точечное чтение (ReadFiles с lines).
 3. Вноси ТОЧЕЧНЫЕ изменения: используй SearchReplace для правок в существующих файлах, WriteFiles для новых.
 4. После каждого набора изменений проверяй сборку и тесты через Run.
 5. Если сборка упала — LspCheck для точных ошибок → исправь → повтори.
 6. Сохраняй существующую архитектуру и стиль кода.
-6. ЗАВЕРШАЙ задачу в одном цикле: правки → проверки → тесты → итог. Не останавливайся после первого шага.
+7. ЗАВЕРШАЙ задачу в одном цикле: правки → проверки → тесты → итог. Не останавливайся после первого шага.
 
 НЕ ПОВТОРЯЙ ОДИН И ТОТ ЖЕ ВЫЗОВ ИНСТРУМЕНТА. Если инструмент уже вернул status=skipped — прекрати повторять вызов и ответь пользователю по тем данным, которые уже есть.`
 

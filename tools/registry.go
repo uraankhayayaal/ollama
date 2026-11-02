@@ -18,6 +18,17 @@ const (
 	RagIndexStatus = rag.IndexStatus
 )
 
+// Grep, Glob, Structure, Git, GitCommit, Diff — канонические имена
+// инструментов поиска, навигации и работы с git.
+const (
+	GrepTool      = Grep
+	GlobTool      = Glob
+	StructureTool = Structure
+	GitTool       = Git
+	GitCommitTool = GitCommit
+	DiffTool      = Diff
+)
+
 // ragCtx приводит файловый контекст к rag.Context (nil-безопасно: nil FileOps →
 // nil интерфейс, а не «typed nil», чтобы инструменты корректно деградировали).
 func ragCtx(ops *FileOps) rag.Context {
@@ -160,6 +171,18 @@ func newTool(name string, deps Deps) Tool {
 		return &stackTool{ops: deps.FileOps}
 	case WebSearch:
 		return &webSearchTool{client: nil, endpoint: ""}
+	case Grep:
+		return &grepTool{ops: deps.FileOps}
+	case Glob:
+		return &globTool{ops: deps.FileOps}
+	case Structure:
+		return &structureTool{ops: deps.FileOps}
+	case Git:
+		return &gitTool{ops: deps.FileOps}
+	case GitCommit:
+		return &commitTool{ops: deps.FileOps}
+	case Diff:
+		return &diffTool{ops: deps.FileOps}
 	}
 	panic(fmt.Sprintf("tools: инструмент %q не зарегистрирован в реестре", name))
 }
