@@ -287,3 +287,14 @@ func (s *Server) session(project string) *Session {
 	defer s.mu.Unlock()
 	return s.sessions[project]
 }
+
+// Close останавливает все сессии и закрывает сервер: отменяет контексты сессий
+// (что закрывает фоновые горутины applog, индексации и др.) и хаба WS-клиентов.
+func (s *Server) Close() {
+	s.mu.Lock()
+	for _, sess := range s.sessions {
+		sess.stop()
+	}
+	s.mu.Unlock()
+	s.hub.CloseAll()
+}

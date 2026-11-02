@@ -19,6 +19,7 @@ func newTestServerAuth(t *testing.T, password string) (*Server, http.Handler) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(srv.Close)
 	return srv, srv.routes()
 }
 

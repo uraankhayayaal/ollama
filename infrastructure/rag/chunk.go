@@ -28,11 +28,22 @@ type Chunk struct {
 	// нарезка, обычный текст). Используется для стабильного chunk_id чанка
 	// между коммитами (см. ChunkID и PLAN-2026-09-27-done-branch-aware-rag.md, Р-2).
 	Symbol string
+	// ContextBefore — строки до чанка (для обогащения эмбеддинга контекстом).
+	// Не включаются в Content и не влияют на hash/ID чанка.
+	ContextBefore string
+	// ContextAfter — строки после чанка (для обогащения эмбеддинга контекстом).
+	// Не включаются в Content и не влияют на hash/ID чанка.
+	ContextAfter string
 }
 
 // maxChunkLines — предельное число строк в одном чанке. Длинные функции/
 // методы режутся на части по строкам (границы без разрыва середины строки).
 const maxChunkLines = 100
+
+// contextOverlap — число строк контекста до/после чанка для обогащения
+// эмбеддинга: пограничный код между определениями и комментарии над
+// соседними блоками усиливают семантическую точность поиска.
+const contextOverlap = 10
 
 // ChunkFile нарезает содержимое файла на структурные куски по расширению:
 //   - Go — через go/ast (функции/методы/структуры/интерфейсы с doc-комментариями);
@@ -55,7 +66,7 @@ func ChunkFile(filename, content string) []Chunk {
 // chunkGoFile нарезает Go-файл по объявлениям: функции/методы (FuncDecl),
 // типы (type — структуры/интерфейсы/алиасы) и верхнеуровневые var/const.
 // Import-блоки не индексируются (шум без кода). Каждый чанк включает
-// сопутствующие doc-комментарии.
+// сопутствующие doc-комментарии и контекстные строки до/после.
 func chunkGoFile(filename, content string) []Chunk {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filename, content, parser.ParseComments)
@@ -81,7 +92,8 @@ func chunkGoFile(filename, content string) []Chunk {
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		chunks = append(chunks, splitChunk(text, startL, symbol)...)
+		cbs, cas := extractContextLines(lines, startL-1, endL-1)
+		chunks = append(chunks, splitChunkWithCtx(text, startL, symbol, cbs, cas)...)
 	}
 
 	for _, decl := range f.Decls {
@@ -191,7 +203,8 @@ func chunkBracedFile(content string) []Chunk {
 // границы расширяются вверх по комментариям/декораторам (comment), между
 // границами идёт линейная нарезка с лимитом maxChunkLines. Блок до первой
 // границы (шапка файла, импорты) становится отдельным чанком. Символ чанка
-// берётся из строки-границы (symbol по индексу строки).
+// берётся из строки-границы (symbol по индексу строки). Чанки получают
+// контекст: contextOverlap строк до/после (см. extractContextLines).
 func segmentChunks(lines []string, starts []int, comment func(string) bool, symbol func(int) string) []Chunk {
 	bounds := append([]int{0}, starts...)
 	bounds = append(bounds, len(lines))
@@ -214,9 +227,28 @@ func segmentChunks(lines []string, starts []int, comment func(string) bool, symb
 		if symbol != nil {
 			sym = symbol(bounds[k])
 		}
-		chunks = append(chunks, splitChunk(text, s+1, sym)...)
+		cbs, cas := extractContextLines(lines, s, e)
+		chunks = append(chunks, splitChunkWithCtx(text, s+1, sym, cbs, cas)...)
 	}
 	return chunks
+}
+
+// extractContextLines возвращает строки контекста до и после чанка
+// (contextOverlap строк, без пересечения с содержимым чанка).
+func extractContextLines(lines []string, start, end int) (before, after string) {
+	if start > contextOverlap {
+		begin := start - contextOverlap
+		before = strings.Join(lines[begin:start], "\n")
+	} else if start > 0 {
+		before = strings.Join(lines[:start], "\n")
+	}
+	rem := len(lines) - end
+	if rem <= contextOverlap {
+		after = strings.Join(lines[end:], "\n")
+	} else {
+		after = strings.Join(lines[end:end+contextOverlap], "\n")
+	}
+	return before, after
 }
 
 // extendUp тянет границу вверх: поглощает подряд идущие строки-комментарии
@@ -259,6 +291,7 @@ func chunkPythonFile(content string) []Chunk {
 }
 
 // chunkLines нарезает произвольный текст на строки не длиннее maxChunkLines.
+// Чанки получают контекст до/после (для обогащения эмбеддинга).
 func chunkLines(content string) []Chunk {
 	if strings.TrimSpace(content) == "" {
 		return nil
@@ -273,7 +306,14 @@ func chunkLines(content string) []Chunk {
 		if e > len(lines) {
 			e = len(lines)
 		}
-		out = append(out, Chunk{Content: strings.Join(lines[s:e], "\n"), StartLine: s + 1, EndLine: e})
+		cbs, cas := extractContextLines(lines, s, e)
+		out = append(out, Chunk{
+			Content:       strings.Join(lines[s:e], "\n"),
+			StartLine:     s + 1,
+			EndLine:       e,
+			ContextBefore: cbs,
+			ContextAfter:  cas,
+		})
 	}
 	return out
 }
@@ -282,10 +322,17 @@ func chunkLines(content string) []Chunk {
 // Короткий текст возвращается одним чанком. Если чанк длиннее лимита, символ
 // получают только части, кроме первой (у части есть собственный порядковый
 // номер) — иначе части одного определения получили бы одинаковый chunk_id.
+// Контекст до/после передаётся через splitChunkWithCtx.
 func splitChunk(text string, startL int, symbol string) []Chunk {
+	return splitChunkWithCtx(text, startL, symbol, "", "")
+}
+
+// splitChunkWithCtx — аналог splitChunk с контекстом до/после чанка.
+func splitChunkWithCtx(text string, startL int, symbol, ctxBefore, ctxAfter string) []Chunk {
 	lines := strings.Split(text, "\n")
 	if len(lines) <= maxChunkLines {
-		return []Chunk{{Content: text, StartLine: startL, EndLine: startL + len(lines) - 1, Symbol: symbol}}
+		return []Chunk{{Content: text, StartLine: startL, EndLine: startL + len(lines) - 1, Symbol: symbol,
+			ContextBefore: ctxBefore, ContextAfter: ctxAfter}}
 	}
 	var out []Chunk
 	for s := 0; s < len(lines); s += maxChunkLines {
@@ -294,14 +341,23 @@ func splitChunk(text string, startL int, symbol string) []Chunk {
 			e = len(lines)
 		}
 		sym := symbol
+		cbs, cas := "", ""
 		if n := s / maxChunkLines; n > 0 {
 			sym = symbol + "@" + strconv.Itoa(n)
+			// Контекст передаётся только первому/последнему фрагменту.
+		} else {
+			cbs = ctxBefore
+		}
+		if s+e >= 2*maxChunkLines-1 || e >= len(lines) {
+			cas = ctxAfter
 		}
 		out = append(out, Chunk{
-			Content:   strings.Join(lines[s:e], "\n"),
-			StartLine: startL + s,
-			EndLine:   startL + e - 1,
-			Symbol:    sym,
+			Content:       strings.Join(lines[s:e], "\n"),
+			StartLine:     startL + s,
+			EndLine:       startL + e - 1,
+			Symbol:        sym,
+			ContextBefore: cbs,
+			ContextAfter:  cas,
 		})
 	}
 	return out

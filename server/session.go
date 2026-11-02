@@ -29,9 +29,10 @@ type Session struct {
 	srv     *Server
 	project string
 
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	running bool
+	mu         sync.Mutex
+	cancel     context.CancelFunc  // отмена сессионного контекста (newSession)
+	runnerCancel context.CancelFunc  // отмена runner'а (start)
+	running    bool
 	// standby — режим ожидания: оркестрация запущена по доске, но брать в
 	// работу нечего (нет эпиков/задач, которые можно исполнить). Сессия жива и
 	// ждёт появления работы; статус в шину — «standby».
@@ -99,12 +100,15 @@ func (s *Server) newSession(project string) (*Session, error) {
 		return nil, err
 	}
 	logging.Attach(project)
+	sessCtx, sessCancel := context.WithCancel(context.Background())
 	sess := &Session{
 		srv:     s,
 		project: project,
 		chat:    chatStore,
 		events:  make(chan ProjectEvent, 64),
 		log:     logging.For(project),
+		ctx:     sessCtx,
+		cancel:  sessCancel,
 	}
 	// Kafka-рлей наблюдаемости (агент-харнес): шаги агентного цикла идут в
 	// топик agent-harness-metrics.
@@ -125,7 +129,7 @@ func (s *Server) newSession(project string) (*Session, error) {
 	// Буфер логов рантайма и подписка на них инструмента ReadAppLogs: строки
 	// идут и в кольцевой буфер (UI/REST), и в шину (живая трансляция).
 	sess.appLog = &appLogBuffer{}
-	sess.registerAppLogSink(context.Background())
+	sess.registerAppLogSink(sessCtx)
 	// Ф-1 «спроси пользователя»: состояние активного структурированного
 	// вопроса.
 	sess.pending = appask.NewPending(nil)
@@ -184,10 +188,11 @@ func (sess *Session) start(ctx context.Context, taskText string, provider usecas
 	sess.running = true
 	sess.stopped = false
 	sess.log.Infof("[llm] модель запуска: %s", sess.srv.prov.describe())
-	cctx, cancel := context.WithCancel(ctx)
+	// Runner-контекст — потомок сессионного: отмена сессии (stop)
+	// автоматически отменит runner. Отдельный cancel — для явного стопа.
+	cctx, cancel := context.WithCancel(sess.ctx)
 	cctx = runevents.WithReporter(cctx, sess.router)
-	sess.ctx = cctx
-	sess.cancel = func() { cancel() }
+	sess.runnerCancel = cancel
 	sess.mu.Unlock()
 
 	go func() {
@@ -207,10 +212,16 @@ func (sess *Session) start(ctx context.Context, taskText string, provider usecas
 // stop отменяет текущую оркестрацию.
 func (sess *Session) stop() {
 	sess.mu.Lock()
+	runnerCancel := sess.runnerCancel
 	cancel := sess.cancel
 	running := sess.running
 	sess.mu.Unlock()
-	if cancel != nil && running {
+	if runnerCancel != nil && running {
+		runnerCancel()
+	}
+	// Отмена сессионного контекста: закрывает фоновые горутины сессии
+	// (applog sink и др.), независимо от статуса runner'а.
+	if cancel != nil {
 		cancel()
 	}
 }
@@ -231,13 +242,13 @@ func (sess *Session) isRunning() bool {
 func (sess *Session) Restart(ctx context.Context, provider usecases.FullCycle) error {
 	sess.mu.Lock()
 	running := sess.running
-	cancel := sess.cancel
+	runnerCancel := sess.runnerCancel
 	sess.mu.Unlock()
 	if !running {
 		return nil
 	}
-	if cancel != nil {
-		cancel()
+	if runnerCancel != nil {
+		runnerCancel()
 	}
 	// Ждём полной остановки прежнего запуска.
 	time.Sleep(50 * time.Millisecond)

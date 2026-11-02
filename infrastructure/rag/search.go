@@ -20,7 +20,6 @@ package rag
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/qdrant/go-client/qdrant"
@@ -39,17 +38,17 @@ const (
 // Search семантически ищет чанки проекта: эмбеддит запрос через Embedder,
 // опрашивает Qdrant Query с фильтром по project (+scope) и возвращает топ-N
 // чанков со сниппетами, отсортированных по убыванию релевантности.
+//
+// Оптимизации (включены автоматически):
+//   - Query expansion: длинные запросы (>30 символов) раскладываются на
+//     2–4 альтернативные формулировки; результаты объединяются RRF.
+//   - Re-ranking: выдача до-ранжируется по ключевому совпадению (BM25-like).
 func (c *Client) Search(ctx context.Context, p SearchParams) ([]SearchResult, error) {
 	if strings.TrimSpace(p.Project) == "" {
 		return nil, fmt.Errorf("rag: не задан проект для поиска")
 	}
 	if strings.TrimSpace(p.Query) == "" {
 		return nil, fmt.Errorf("rag: пустой запрос поиска")
-	}
-
-	vec, err := c.embed.Embed(ctx, p.Query)
-	if err != nil {
-		return nil, fmt.Errorf("rag: эмбеддинг запроса: %w", err)
 	}
 
 	limit := p.Limit
@@ -59,6 +58,75 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]SearchResult, er
 	branch := MainBranch
 	if b := strings.TrimSpace(p.Branch); b != "" {
 		branch = b
+	}
+
+	// Query expansion: генерируем альтернативные формулировки.
+	queries := ExpandedQueries(p.Query)
+	var allResults [][]SearchResult
+	var lastErr error
+	for _, q := range queries {
+		res, serr := c.searchRaw(ctx, p.Project, q, strings.TrimSpace(p.Scope), branch, limit)
+		if serr != nil {
+			lastErr = serr
+			// UnavailableError (Qdrant down) — немедленно, не продолжаем.
+			if IsUnavailable(serr) {
+				return nil, serr
+			}
+			// Один запрос провалился (эмбеддинг) — пропускаем, остальные работают.
+			continue
+		}
+		allResults = append(allResults, res)
+	}
+	if len(allResults) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("rag: все запросы expansion вернули ошибку эмбеддинга")
+	}
+
+	// Merge: один запрос — обычный результат, несколько — RRF.
+	var merged []SearchResult
+	if len(allResults) == 1 {
+		merged = allResults[0]
+	} else {
+		merged = ReciprocalRankFusion(allResults, 60)
+	}
+
+	maxTotal := p.MaxTotal
+	if maxTotal <= 0 {
+		maxTotal = DefaultSearchMaxTotal
+	}
+
+	// Ограничиваем лимитом.
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+
+	// Re-ranking: комбинация косинусной меры и ключевого совпадения.
+	RerankResults(p.Query, merged)
+
+	// Суммарный лимит текста: превышен — хвост списка отбрасываем.
+	if total := 0; true {
+		kept := merged[:0]
+		for _, r := range merged {
+			if len(kept) > 0 && total+len(r.Snippet) > maxTotal {
+				break
+			}
+			kept = append(kept, r)
+			total += len(r.Snippet)
+		}
+		merged = kept
+	}
+
+	return merged, nil
+}
+
+// searchRaw — один.raw запрос к Qdrant: эмбеддит query, фильтрует по проекту/ветке,
+// возвращает распарсенные результаты (с branch-filtering, без лимитов).
+func (c *Client) searchRaw(ctx context.Context, project, query, scope, branch string, limit int) ([]SearchResult, error) {
+	vec, err := c.embed.Embed(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("rag: эмбеддинг запроса: %w", err)
 	}
 
 	// Запрос к Qdrant шире итоговой выдачи: перекрытые версии main отсеются
@@ -71,7 +139,7 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]SearchResult, er
 		}
 	}
 
-	filter := c.searchFilter(p.Project, strings.TrimSpace(p.Scope), branch)
+	filter := c.searchFilter(project, scope, branch)
 	res, err := c.store.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: c.collection,
 		Query:          qdrant.NewQueryDense(vec),
@@ -83,13 +151,6 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]SearchResult, er
 		return nil, &UnavailableError{Err: err}
 	}
 
-	maxTotal := p.MaxTotal
-	if maxTotal <= 0 {
-		maxTotal = DefaultSearchMaxTotal
-	}
-
-	// Сначала отсекаем перекрытые версии main (Р-4), и только потом режем
-	// выдачу лимитами: иначе лимит потратится на дубли одного и того же кода.
 	out := make([]SearchResult, 0, len(res))
 	for _, sp := range res {
 		payload := sp.GetPayload()
@@ -110,7 +171,7 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]SearchResult, er
 	}
 
 	if branch != MainBranch {
-		out, err = c.dropOverriddenByBranch(ctx, p.Project, branch, out)
+		out, err = c.dropOverriddenByBranch(ctx, project, branch, out)
 		if err != nil {
 			return nil, err
 		}
@@ -118,24 +179,6 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]SearchResult, er
 	if len(out) > limit {
 		out = out[:limit]
 	}
-
-	// Суммарный лимит текста: превышен — хвост списка (уже отсортированного
-	// по релевантности) отбрасываем, оставляя набранное.
-	if total := 0; true {
-		kept := out[:0]
-		for _, r := range out {
-			if len(kept) > 0 && total+len(r.Snippet) > maxTotal {
-				break
-			}
-			kept = append(kept, r)
-			total += len(r.Snippet)
-		}
-		out = kept
-	}
-
-	// Qdrant уже вернул точки по убыванию score; сортировка — страховка для
-	// согласованного формата выдачи при любом поведении хранилища.
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out, nil
 }
 

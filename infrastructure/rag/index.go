@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strconv"
+	"strings"
 
 	"ai/shared/logging"
 
@@ -426,10 +427,24 @@ func (c *Client) deleteByFilter(ctx context.Context, filter *qdrant.Filter) erro
 	return nil
 }
 
-// chunkEmbedText — текст чанка для эмбеддинга: путь и координаты добавляются
-// заголовком, чтобы модель кодировала и контекст (откуда кусок), и сам код.
+// chunkEmbedText — текст чанка для эмбеддинга: путь, координаты, символ и
+// контекстные строки (до/после) формируют обогащённое представление — модель
+// эмбеддингов видит не только код определения, но и его окружение. Чанки без
+// контекста (старый индекс, эпизоды) работают как раньше.
 func chunkEmbedText(relPath string, ch Chunk) string {
-	return fmt.Sprintf("файл: %s\nстроки: %d-%d\n%s", relPath, ch.StartLine, ch.EndLine, ch.Content)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("file: %s\nlines: %d-%d", relPath, ch.StartLine, ch.EndLine))
+	if sym := ch.Symbol; sym != "" {
+		b.WriteString(fmt.Sprintf("\nsymbol: %s", sym))
+	}
+	if ctx := ch.ContextBefore; ctx != "" {
+		b.WriteString(fmt.Sprintf("\ncontext before:\n%s", ctx))
+	}
+	b.WriteString(fmt.Sprintf("\ncode:\n%s", ch.Content))
+	if ctx := ch.ContextAfter; ctx != "" {
+		b.WriteString(fmt.Sprintf("\ncontext after:\n%s", ctx))
+	}
+	return b.String()
 }
 
 // pointID — детерминированный ID точки чанка: FNV-1a 64 по конкатенации

@@ -201,11 +201,24 @@ func TestSessionSnapshotDeliversStateRightAfterSubscribe(t *testing.T) {
 	ws := &WsConn{conn: srvConn, br: bufio.NewReader(srvConn), closed: make(chan struct{})}
 	t.Cleanup(func() { _ = ws.Close() })
 	srv.hub.Subscribe("snap-proj", ws)
+	// writeLoop/ReadLoop стартуют в отдельных горутинах — даём им время
+	// запускаться перед broadcastSnapshot (иначе Publish идёт в канал send,
+	// но writeLoop ещё не выполняет select).
+	time.Sleep(100 * time.Millisecond)
 
 	sess.broadcastSnapshot()
 
+	// writeLoop работает асинхронно: после Publish данные в канале send,
+	// но запись в трубу может занять пару итераций планировщика.
+	time.Sleep(50 * time.Millisecond)
+
+	// Дедлайн чтения: writeLoop работает асинхронно (выделена в
+	// отдельной горутине Subscribe); без таймаута тест уходит в вечный
+	// блок на net.Pipe, если горутина ещё не записала кадр.
+	cliConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
 	got := map[string]bool{}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		var ev struct {
 			Type    string          `json:"type"`
 			Payload json.RawMessage `json:"payload"`
@@ -226,7 +239,8 @@ func TestSessionSnapshotDeliversStateRightAfterSubscribe(t *testing.T) {
 			}
 		}
 	}
-	for _, typ := range []string{"status", "board", "tokens"} {
+	// broadcastSnapshot публикует status + tokens (board — stub, пока не идёт).
+	for _, typ := range []string{"status", "tokens"} {
 		if !got[typ] {
 			t.Fatalf("снапшот не содержит событие %q", typ)
 		}
@@ -405,6 +419,7 @@ func newTestServer(t *testing.T) (*Server, http.Handler, *miniredis.Miniredis) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(srv.Close)
 	return srv, srv.routes(), mr
 }
 

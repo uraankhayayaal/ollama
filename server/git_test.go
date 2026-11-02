@@ -98,6 +98,7 @@ func newTestServerGit(t *testing.T, git git.Executor, forge func(remote, token s
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(srv.Close)
 	return srv, srv.routes(), mr
 }
 
