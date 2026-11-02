@@ -2,8 +2,7 @@ package main
 
 import (
 	"ai/agents"
-	"ai/agents/codereviewer"
-	"ai/agents/developer"
+	"ai/agents/chatassist"
 	"ai/application/usecases"
 
 	apprag "ai/application/rag"
@@ -19,6 +18,7 @@ import (
 	"ai/server"
 	"ai/shared/logging"
 	"ai/shared/projects"
+	"ai/tools"
 	"context"
 	"os"
 	"path/filepath"
@@ -86,6 +86,7 @@ func main() {
 		if os.Getenv("AI_WEB_PASSWORD") != "" {
 			logging.Infof("server: включена аутентификация Web UI (AI_WEB_PASSWORD)")
 		}
+		usecases.SetAgentRunner(usecases.NewBasicRunner(0, nil, tools.IsParallelSafe, tools.ParseArguments))
 		if err := srv.Run(context.Background()); err != nil {
 			logging.Fatalf("server: %v", err)
 		}
@@ -103,26 +104,22 @@ func main() {
 	// логику выбора модели по окружению; подробности в llm.ResolveProvider).
 	// Полный агентский цикл с эскалацией собирает application-слой из слоёв,
 	// которые вернула инфраструктура.
-	res, providerType, err := llm.ResolveProvider()
+	res, _, err := llm.ResolveProvider()
 	if err != nil {
 		logging.Fatalf("Failed to init provider: %v", err)
 	}
 	provider := usecases.NewEscalating(res.Small, res.Large)
 
-	// Провайдеры с одним раундом (например, trim) не умеют цикл NextChunk
-	// у ревьювера — дифф передаём целиком без разбиения на части.
-	noChunk := providerType == "trim"
-
 	// Выбор агента по первому аргументу:
-	// go run . generate <имя> [промпт] | backend <имя> [промпт] | frontend <имя> [промпт] | review <URL> | listen
+	// go run . generate <имя> [промпт] | backend <имя> [промпт] | frontend <имя> [промпт]
 	agentName, agentArgs := agentCommand(os.Args)
 
 	var agent agents.Agent
 	var projName string
 	switch agentName {
-	case "generate", "backend":
-		// "generate" оставлен как алиас для обратной совместимости: новое
-		// имя — backend (агент «Backend разработчик»).
+	case "generate", "backend", "frontend":
+		// "generate" и "backend" оставлены как алиасы. Единый агент
+		// (chatassist) — чтение, анализ и правка кода.
 		if len(agentArgs) < 1 {
 			logging.Fatalf("Использование: go run . backend <имя_проекта> [промпт]\n" +
 				"Пример: go run . backend storageService \"Напиши микросервис для хранения файлов\"")
@@ -130,41 +127,25 @@ func main() {
 		projectName := agentArgs[0]
 		projName = projectName
 		prompt := defaultPrompt(agentArgs[1:])
-		agent = developer.NewBackendDeveloper(projectName, prompt)
-	case "frontend":
-		if len(agentArgs) < 1 {
-			logging.Fatalf("Использование: go run . frontend <имя_проекта> [промпт]\n" +
-				"Пример: go run . frontend storageService \"Напиши веб-интерфейс для просмотра файлов\"")
-		}
-		projectName := agentArgs[0]
-		projName = projectName
-		prompt := defaultPrompt(agentArgs[1:])
-		agent = developer.NewFrontendDeveloper(projectName, prompt)
+		agent = chatassist.NewAssistantWithStore(projectName, prompt, nil, rag.NewClientSafe(rag.Config{}))
 	case "plan":
-		logging.Fatalf("Команда plan удалена — планирование теперь через чат-ассистент")
-	case "devops":
-		logging.Fatalf("Команда devops удалена — функции перенесены в Developer-агента")
-	case "qa":
-		logging.Fatalf("Команда qa удалена — функции перенесены в Developer-агента")
+		logging.Fatalf("Команда plan удалена — планирование через чат-ассистент")
+	case "devops", "qa":
+		logging.Fatalf("Команды devops/qa удалены — функции в едином агенте")
 	case "kanban":
 		logging.Fatalf("Команда kanban удалена — оркестрация через чат-ассистент")
-	case "review":
-		agent = codereviewer.NewCodereviewer(agentArgs)
-		if noChunk {
-			if cw, ok := agent.(*codereviewer.Codereviewer); ok {
-				cw.NoChunk = true
-			}
-		}
 	default:
-		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . generate <имя> [промпт]', 'go run . backend <имя> [промпт]', 'go run . frontend <имя> [промпт]', 'go run . review <URL>', 'go run . accept <имя>' или 'go run . listen'", agentName)
+		logging.Fatalf("Неизвестный агент %q. Используйте 'go run . backend <имя> [промпт]' или 'go run . listen'", agentName)
 	}
 
 	// Расширенное сжатие истории агентского цикла (Ф-6..Ф-11) для
 	// standalone-агентов с проектным каталогом (RAG-вытеснение/ранжирование и
-	// LSP-оглавления). У ревьювера проекта нет — контекст не трогаем.
+	// LSP-оглавления).
 	if projName != "" {
 		ctx = runctx.WithCompression(ctx, projName, projects.ProjectDir(projName), rag.NewClientSafe(rag.Config{}))
 	}
+
+	usecases.SetAgentRunner(usecases.NewBasicRunner(0, nil, tools.IsParallelSafe, tools.ParseArguments))
 
 	resp, err := provider.Generate(ctx, agent)
 	if err != nil {

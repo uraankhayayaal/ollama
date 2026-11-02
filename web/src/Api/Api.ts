@@ -8,17 +8,13 @@ import type {
   AppLogView,
   AskAnswerBody,
   AskAnswerResult,
-  BoardView,
-  BugRow,
   ChatMsg,
   DiffFileView,
   DiffView,
-  EpicRow,
   LogsView,
   ProjectMeta,
   ProjectMetrics,
   ProjectTokens,
-  TaskRow,
 } from "@/Types";
 
 export class APIError extends Error {
@@ -193,13 +189,6 @@ export async function openProject(
   return req<ProjectMeta>("POST", `${base}/api/projects`, spec);
 }
 
-export async function boardOf(
-  base: string,
-  project: string,
-): Promise<BoardView> {
-  return req<BoardView>("GET", `${base}/api/projects/${enc(project)}`);
-}
-
 // --- чат / HITL ---
 
 export async function postChat(
@@ -343,221 +332,6 @@ export async function sessionStop(
     "POST",
     `${base}/api/projects/${enc(project)}/session/stop`,
     {},
-  );
-}
-
-// --- редактирование (Ф-2) ---
-
-export async function updateTask(
-  base: string,
-  project: string,
-  taskID: string,
-  patch: Partial<TaskRow>,
-): Promise<TaskRow> {
-  return req<TaskRow>(
-    "PUT",
-    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}`,
-    patch,
-  );
-}
-
-// Удаление задачи с доски. Допустимо в статусах draft, infra, done.
-export async function deleteTask(
-  base: string,
-  project: string,
-  taskID: string,
-): Promise<{ ok: boolean }> {
-  return req<{ ok: boolean }>(
-    "DELETE",
-    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}`,
-  );
-}
-
-export async function listBugs(
-  base: string,
-  project: string,
-): Promise<BugRow[]> {
-  return req<BugRow[]>("GET", `${base}/api/projects/${enc(project)}/bugs`);
-}
-
-// Удаление эпика вместе с его задачами. Допустимо, пока ни одна задача эпика
-// не взята в работу специалистом (иначе сервер вернёт 400).
-export async function deleteEpic(
-  base: string,
-  project: string,
-  epicID: string,
-): Promise<{ ok: boolean }> {
-  return req<{ ok: boolean }>(
-    "DELETE",
-    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}`,
-  );
-}
-
-// Перевод эпика в новый статус (кнопки «Пауза»/«Продолжить»/«Отменить»):
-// пауза/возобновление/отмена не трогают git-ветку эпика — работа просто
-// приостанавливается или запись помечается, код остаётся изолированным.
-export async function setEpicStatus(
-  base: string,
-  project: string,
-  epicID: string,
-  status: EpicRow["status"],
-): Promise<EpicRow> {
-  return req<EpicRow>(
-    "POST",
-    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/status`,
-    { status },
-  );
-}
-
-// Пересортировка эпиков на доске (перетаскивание строк / стрелки): первый ID
-// в списке получает наибольший приоритет. Если оркестрация идёт — сервер
-// рестартует её, чтобы новая очередь применилась немедленно. restarting=true
-// значит, что перезапуск запущен в фоне.
-export async function reorderEpics(
-  base: string,
-  project: string,
-  order: string[],
-): Promise<{ ok: boolean; updated: number; restarting?: boolean }> {
-  return req<{ ok: boolean; updated: number; restarting?: boolean }>(
-    "POST",
-    `${base}/api/projects/${enc(project)}/epics/reorder`,
-    { order },
-  );
-}
-
-// «Залить в main» (Ф-3): вливает релизную ветку эпика в базовую ветку проекта
-// (git_base) без конфликтов — merge-коммит + push. Только для done-эпиков;
-// при конфликтах сервер вернёт 409 (вход инструмента авто-резолва Ф-4).
-export async function releaseEpic(
-  base: string,
-  project: string,
-  epicID: string,
-): Promise<{
-  status: string;
-  branch: string;
-  source: string;
-  already_merged: boolean;
-}> {
-  return req(
-    "POST",
-    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/release`,
-    {},
-  );
-}
-
-// Авторезолвинг конфликта задачи через LLM (Ф-9): сервер собирает контекст
-// эпика + задач, передаёт конфликтующие файлы LLM, прогоняет приёмку.
-export async function taskLLMResolve(
-  base: string,
-  project: string,
-  taskID: string,
-): Promise<{ status: string; resolved: boolean }> {
-  return req(
-    "POST",
-    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/resolve`,
-    {},
-  );
-}
-
-// Авторезолвинг конфликта эпика через LLM (Ф-9): worktree + merge main +
-// TrivialResolve + LLM + приёмка. Кнопка «Авто-резолв» в модалке эпика.
-export async function epicLLMResolve(
-  base: string,
-  project: string,
-  epicID: string,
-): Promise<{ status: string; resolved: boolean }> {
-  return req(
-    "POST",
-    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/auto-resolve`,
-    {},
-  );
-}
-
-// Создание релизной ветки эпика ai/epic/<id> от базовой ветки проекта
-// (git-workflow, Ф-5). Идемпотентно. Кнопка «Создать ветку эпика» в модалке.
-export async function createEpicBranch(
-  base: string,
-  project: string,
-  epicID: string,
-): Promise<{ epic_id: string; branch: string; base: string }> {
-  return req(
-    "POST",
-    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/branch`,
-    {},
-  );
-}
-
-// Создание фича-ветки задачи ai/task/<id> от ветки её эпика. Требует, чтобы
-// ветка эпика уже была создана. Идемпотентно. Кнопка «Создать ветку задачи».
-export async function createTaskBranch(
-  base: string,
-  project: string,
-  taskID: string,
-): Promise<{ task_id: string; branch: string; base: string }> {
-  return req(
-    "POST",
-    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/branch`,
-    {},
-  );
-}
-
-// «Создать MR» эпика (Ф-5): пушит релизную ветку ai/epic/<id> в remote и
-// открывает MR → main через фордж. Идемпотентно: повторный вызов возвращает
-// существующую ссылку. Блок «ветка/MR» в модалке эпика.
-export async function createEpicMR(
-  base: string,
-  project: string,
-  epicID: string,
-): Promise<{ epic_id: string; mr_url: string; source: string; target: string }> {
-  return req(
-    "POST",
-    `${base}/api/projects/${enc(project)}/epics/${enc(epicID)}/mr`,
-    {},
-  );
-}
-
-// «Создать MR» задачи (Ф-5): пушит фича-ветку ai/task/<id> и открывает MR →
-// ветку эпика. Идемпотентно (см. createEpicMR). Блок «ветка/MR» в модалке задачи.
-export async function createTaskMR(
-  base: string,
-  project: string,
-  taskID: string,
-): Promise<{ task_id: string; mr_url: string; source: string; target: string }> {
-  return req(
-    "POST",
-    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/mr`,
-    {},
-  );
-}
-
-// Ручной откат кода задачи (Ф-6): `to` — "last_good" (последний раунд,
-// прошедший проверку), "base" (состояние на момент старта задачи) или SHA
-// коммита. Откатывает worktree задачи вместе с сабмодулями и возвращает задачу
-// в очередь. Действие необратимо в рабочем дереве — вызывающий обязан
-// подтвердить его у человека.
-export async function rollbackTask(
-  base: string,
-  project: string,
-  taskID: string,
-  to: string,
-): Promise<{ ok: boolean; task_id: string; sha: string; submodules?: string[]; status: string }> {
-  return req("POST", `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/rollback`, { to });
-}
-
-// Переоткрытие выполненной задачи на доработку: done -> development
-// исполнителю. Обоснование обязательно — `body` (новый комментарий) либо уже
-// добавленные к задаче необработанные комментарии. Использованные комментарии
-// помечаются учтёнными, повторно тем же поводом задачу не переоткрыть.
-export async function reopenTask(
-  base: string,
-  project: string,
-  taskID: string,
-  body?: string,
-): Promise<TaskRow> {
-  return req<TaskRow>(
-    "POST",
-    `${base}/api/projects/${enc(project)}/tasks/${enc(taskID)}/reopen`,
-    { body: body ?? "", author: "user", type: "user" },
   );
 }
 

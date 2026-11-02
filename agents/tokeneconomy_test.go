@@ -3,7 +3,6 @@ package agents_test
 import (
 	"ai/agents"
 	"ai/agents/chatassist"
-	"ai/agents/developer"
 	"ai/shared/projects"
 	"ai/tools"
 	"os"
@@ -11,9 +10,8 @@ import (
 	"testing"
 )
 
-// Ф-2 PLAN-2026-09-19-todo-bash.md: общий фрагмент промпта о компактном выводе
-// команд (agents.RunTokenEconomy) попадает только в промпты агентов, у которых
-// есть инструмент Run, и не упоминает инструментов, которых у агента нет.
+// Ф-2: агент с инструментом Run получает фрагмент про компактный вывод команд
+// (agents.RunTokenEconomy) в системном промпте. Агент без Run — не получает.
 
 const runFragmentMarker = "КОМПАКТНЫЙ ВЫВОД КОМАНД"
 
@@ -21,8 +19,8 @@ const runFragmentMarker = "КОМПАКТНЫЙ ВЫВОД КОМАНД"
 // упоминающий инструмент, проверяется против реального набора агента.
 var knownTools = []string{
 	"Run", "ReadFiles", "ReadMap", "List", "WriteFiles", "AppendFile", "DeleteFiles",
-	"SearchReplace", "PatchGoFunction", "LspCheck",
-	"LspDefinition", "LspReferences", "LspHover", "CodeSearch",
+	"SearchReplace", "PatchGoFunction", "LspCheck", "ReadAppLogs",
+	"LspDefinition", "LspReferences", "LspHover", "CodeSearch", "WebSearch",
 }
 
 // withRunAgent — агент, у которого есть инструмент Run.
@@ -33,20 +31,6 @@ type withRunAgent struct {
 	hasLSP bool
 }
 
-func runAgents(t *testing.T) []withRunAgent {
-	t.Helper()
-
-	backend := developer.NewBackendDeveloper("tokeneconomy-dev-test", "задание")
-	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-dev-test"))
-
-	frontend := developer.NewFrontendDeveloper("tokeneconomy-dev-test", "задание")
-
-	return []withRunAgent{
-		{"backend-разработчик", backend.GetSystemMessages(nil)[0].Message, setOf(backend.GetTools()), true},
-		{"frontend-разработчик", frontend.GetSystemMessages(nil)[0].Message, setOf(frontend.GetTools()), true},
-	}
-}
-
 func setOf(defs []tools.ToolDefinition) map[string]bool {
 	m := map[string]bool{}
 	for _, d := range defs {
@@ -55,34 +39,47 @@ func setOf(defs []tools.ToolDefinition) map[string]bool {
 	return m
 }
 
-func TestRunTokenEconomyFragmentInRunAgents(t *testing.T) {
-	for _, a := range runAgents(t) {
-		if !a.tools["Run"] {
-			t.Fatalf("%s: в наборе нет Run — тест невалиден", a.name)
+func unifiedAgent() *withRunAgent {
+	dir := os.TempDir()
+	agent := chatassist.NewAssistantInDir(dir, "tokeneconomy-test", "задание", nil, nil)
+	return &withRunAgent{
+		name:   "единый-агент",
+		system: agent.GetSystemMessages(nil)[0].Message,
+		tools:  setOf(agent.GetTools()),
+		hasLSP: true,
+	}
+}
+
+func TestRunTokenEconomyFragmentInUnifiedAgent(t *testing.T) {
+	a := unifiedAgent()
+	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-test"))
+
+	if !a.tools["Run"] {
+		t.Fatalf("в наборе нет Run — тест невалиден")
+	}
+	for _, want := range []string{
+		runFragmentMarker,
+		"pytest -q",
+		"npm test -- --silent",
+		"git log -n 3 --oneline",
+		"git blame -L 10,20",
+		"БЕЗ -v",
+	} {
+		if !strings.Contains(a.system, want) {
+			t.Errorf("промпт не содержит %q", want)
 		}
-		for _, want := range []string{
-			runFragmentMarker,
-			"pytest -q",
-			"npm test -- --silent",
-			"git log -n 3 --oneline",
-			"git blame -L 10,20",
-			"БЕЗ -v",
-		} {
-			if !strings.Contains(a.system, want) {
-				t.Errorf("%s: промпт не содержит %q", a.name, want)
-			}
-		}
-		if !strings.Contains(a.system, agents.RunTokenEconomy) {
-			t.Errorf("%s: в промпт не вставлен общий фрагмент agents.RunTokenEconomy", a.name)
-		}
+	}
+	if !strings.Contains(a.system, agents.RunTokenEconomy) {
+		t.Errorf("в промпт не вставлен общий фрагмент agents.RunTokenEconomy")
 	}
 }
 
 // TestTokenEconomyFragmentMentionsOnlyAvailableTools — фрагмент не должен
-// обещать агенту инструменты, которых у него нет: общий Run-фрагмент не
-// называет LSP/CodeSearch/ReadMap, а LSP-фолбэк добавляется только тем, у кого
-// эти инструменты есть.
+// обещать агенту инструменты, которых у него нет.
 func TestTokenEconomyFragmentMentionsOnlyAvailableTools(t *testing.T) {
+	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-test"))
+	a := unifiedAgent()
+
 	shared := []string{"LspDefinition", "LspReferences", "LspHover", "LspCheck", "CodeSearch", "ReadMap"}
 	for _, name := range shared {
 		if strings.Contains(agents.RunTokenEconomy, name) {
@@ -93,53 +90,18 @@ func TestTokenEconomyFragmentMentionsOnlyAvailableTools(t *testing.T) {
 		t.Errorf("LSP-фолбэк должен содержать точечный grep с --exclude-dir:\n%s", agents.LSPGrepFallback)
 	}
 
-	for _, a := range runAgents(t) {
-		fragments := map[string]string{"RunTokenEconomy": agents.RunTokenEconomy}
-		if a.hasLSP {
-			fragments["LSPGrepFallback"] = agents.LSPGrepFallback
-			if !strings.Contains(a.system, agents.LSPGrepFallback) {
-				t.Errorf("%s: LSP-фолбэк не вставлен в промпт", a.name)
-			}
-		} else if strings.Contains(a.system, agents.LSPGrepFallback) {
-			t.Errorf("%s: LSP-фолбэк вставлен агенту без LSP-инструментов", a.name)
-		}
-		for fname, frag := range fragments {
-			for _, name := range knownTools {
-				if strings.Contains(frag, name) && !a.tools[name] {
-					t.Errorf("%s: фрагмент %s упоминает инструмент %q, которого нет в наборе", a.name, fname, name)
-				}
-			}
+	fragments := map[string]string{"RunTokenEconomy": agents.RunTokenEconomy}
+	if a.hasLSP {
+		fragments["LSPGrepFallback"] = agents.LSPGrepFallback
+		if !strings.Contains(a.system, agents.LSPGrepFallback) {
+			t.Errorf("LSP-фолбэк не вставлен в промпт")
 		}
 	}
-}
-
-// TestRunFragmentAbsentWithoutRunTool — агент без инструмента Run
-// (чат-ассистент) не получает фрагмент про команды: упоминать Run в его промпте
-// бессмысленно и провоцирует вызов несуществующего инструмента. Агенты с Run
-// (архитектор после Этапа 4: git в ветке эпика; лиды после Этапа 5: проверка
-// и пуш скелетона; QA-инженер) из этой проверки выходят — фрагмент им уместен.
-func TestRunFragmentAbsentWithoutRunTool(t *testing.T) {
-	dir := t.TempDir()
-
-	assistant := chatassist.NewAssistantInDir(dir, "tokeneconomy-chat-test", "задание", nil, nil)
-	defer os.RemoveAll(projects.ProjectDir("tokeneconomy-chat-test"))
-
-	cases := []struct {
-		name   string
-		system string
-		tools  map[string]bool
-	}{
-		{"Чат-ассистент", assistant.GetSystemMessages(nil)[0].Message, setOf(assistant.GetTools())},
-	}
-	for _, c := range cases {
-		if c.tools["Run"] {
-			// Этап 4 дал архитектору инструмент Run (команды git в ветке
-			// эпика): он больше не из этой выборки. Здесь проверяется только
-			// инвариант «нет Run в наборе — нет и фрагмента про Run».
-			continue
-		}
-		if strings.Contains(c.system, runFragmentMarker) || strings.Contains(c.system, agents.RunTokenEconomy) {
-			t.Errorf("%s: фрагмент про Run попал в промпт агента без инструмента Run", c.name)
+	for fname, frag := range fragments {
+		for _, name := range knownTools {
+			if strings.Contains(frag, name) && !a.tools[name] {
+				t.Errorf("фрагмент %s упоминает инструмент %q, которого нет в наборе", fname, name)
+			}
 		}
 	}
 }

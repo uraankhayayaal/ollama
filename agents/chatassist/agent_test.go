@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// newTestAssistant создаёт ассистента во временной директории без доски и RAG.
+// newTestAssistant создаёт агента во временной директории без доски и RAG.
 func newTestAssistant(t *testing.T, prompt string) *Assistant {
 	t.Helper()
 	return newAssistant(filepath.Join(t.TempDir(), "proj"), "testproj", prompt, nil)
@@ -38,8 +38,8 @@ func (f *fakeAssistantSearcher) ProjectInfo(_ context.Context, _ string) (rag.Pr
 var _ agents.Agent = (*Assistant)(nil)
 
 // TestAssistantCorrectionAppendedToSystemPrompt — Correction (разовая
-// корректирующая инструкция сервера на повторный ход после фантомного
-// заявления) попадает в конец системного промпта.
+// корректирующая инструкция сервера на повторный ход) попадает в конец
+// системного промпта.
 func TestAssistantCorrectionAppendedToSystemPrompt(t *testing.T) {
 	a := newTestAssistant(t, "заведи эпик")
 	if strings.Contains(a.GetSystemMessages(nil)[0].Message, "ИСПРАВЛЕНИЕ-TEST") {
@@ -61,15 +61,14 @@ func TestAssistantInterface(t *testing.T) {
 		t.Fatalf("ожидается один human-промпт с вопросом, получено %+v", um)
 	}
 	if msg, must := a.RequiredToolFirstRound(); must {
-		t.Fatalf("ассистент не обязан вызывать инструмент, got %q", msg)
+		t.Fatalf("агент не обязан вызывать инструмент, got %q", msg)
 	}
 }
 
-// TestAssistantToolsIncludeReadAndSearch — набор ассистента содержит
-// чтение файлов, семантический поиск по коду (CodeSearch) и веб-поиск,
-// но не включает пишущие инструменты (Ф-1).
-func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
-	a := newTestAssistant(t, "создай эпик порт на Rust")
+// TestAssistantToolsIncludeAllTools — набор агента содержит чтение,
+// правку, навигацию и проверки (Ф-1).
+func TestAssistantToolsIncludeAllTools(t *testing.T) {
+	a := newTestAssistant(t, "создай сервис")
 	names := map[string]bool{}
 	for _, td := range a.GetTools() {
 		names[td.Name] = true
@@ -78,22 +77,18 @@ func TestAssistantToolsIncludeBoardWritesAndCodeSearch(t *testing.T) {
 		"List", "ReadFiles", "ReadMap",
 		tools.CodeSearch,
 		tools.WebSearch,
+		"WriteFiles", "AppendFile", "DeleteFiles",
+		"SearchReplace",
+		"Run",
 	} {
 		if !names[w] {
-			t.Errorf("ассистент не включает инструмент %q", w)
+			t.Errorf("агент не включает инструмент %q", w)
 		}
 	}
-	// Файлы проекта ассистент не пишет — за разработку отвечают агенты.
-	for _, w := range []string{"WriteFiles", "AppendFile", "DeleteFiles", "Run", "SearchReplace"} {
-		if names[w] {
-			t.Errorf("ассистент не должен включать инструмент %q", w)
-		}
-	}
-	// Задачи внутри эпика ассистент не создаёт/не правит (Ф-8): их заводят лиды
-	// направлений, а все чат-эпики проходят обязательную ревизию архитектора.
+	// Board-инструменты не регистрируются без store.
 	for _, w := range []string{"BoardCreateTask", "BoardUpdateTask", "BoardDeleteTask"} {
 		if names[w] {
-			t.Errorf("ассистент не должен включать task-write инструмент %q", w)
+			t.Errorf("агент без доски не должен включать Board-инструмент %q", w)
 		}
 	}
 }
@@ -108,38 +103,28 @@ func TestAssistantWithoutBoardSkipsBoardTools(t *testing.T) {
 	}
 	for _, w := range []string{"BoardListEpics", "BoardCreateEpic", "BoardSetTaskStatus"} {
 		if names[w] {
-			t.Errorf("ассистент без доски не должен включать Board-инструмент %q", w)
+			t.Errorf("агент без доски не должен включать Board-инструмент %q", w)
 		}
 	}
 }
 
-// TestAssistantCallFunctionRejectsWrite — попытка позвать инструмент правки
-// файлов отбивается явным status=skipped с маршрутом «завести эпик», а не
-// безликой ошибкой «not in tool set». Модель всё равно пыталась звать
-// WriteFiles, объявляя «правлю всё», и без явного маршрута зацикливалась.
-func TestAssistantCallFunctionRejectsWrite(t *testing.T) {
-	a := newTestAssistant(t, "удали упоминания rust и пофикси инфра файлы")
-	for _, tool := range []string{"WriteFiles", "AppendFile", "DeleteFiles", "SearchReplace", "Run"} {
-		out, err := a.CallFunction(tool, map[string]any{"files": []any{}})
-		if err != nil {
-			t.Fatalf("%s: не должно быть ошибки, got %v", tool, err)
-		}
-		body := string(out)
-		if !strings.Contains(body, `"status":"skipped"`) {
-			t.Errorf("%s: ожидался status=skipped, got %s", tool, body)
-		}
-		// Отказ обязан содержать рабочий маршрут, иначе модель не знает, что делать.
-		if !strings.Contains(body, "BoardCreateEpic") {
-			t.Errorf("%s: в отказе нет маршрута BoardCreateEpic:\n%s", tool, body)
-		}
+// TestAssistantUnknownToolReturnsSkipped — вызов неизвестного инструмента
+// возвращает status=skipped (не ошибку).
+func TestAssistantUnknownToolReturnsSkipped(t *testing.T) {
+	a := newTestAssistant(t, "вопрос")
+	out, err := a.CallFunction("NonExistentTool", map[string]any{})
+	if err != nil {
+		t.Fatalf("не должно быть ошибки, got %v", err)
+	}
+	body := string(out)
+	if !strings.Contains(body, `"status":"skipped"`) {
+		t.Errorf("ожидался status=skipped, got %s", body)
 	}
 }
 
 // TestAssistantRepeatsIdenticalCallBlocked — тот же вызов того же инструмента с
 // теми же аргументами допускается limitedToolRepeats раз, дальше не
-// выполняется (status=skipped). Это антизацикливание: на просьбу «удали rust»
-// ассистент перечитывал один и тот же ci.yml 6 раз подряд, пока сессия не
-// умерла по таймауту.
+// выполняется (status=skipped).
 func TestAssistantRepeatsIdenticalCallBlocked(t *testing.T) {
 	a := newTestAssistant(t, "удали упоминания rust")
 	args := map[string]any{"filenames": []string{".github/workflows/ci.yml"}}
@@ -164,8 +149,7 @@ func TestAssistantRepeatsIdenticalCallBlocked(t *testing.T) {
 	if !strings.Contains(body, "уже вызван") {
 		t.Errorf("в ответе должно быть объяснение о повторе:\n%s", body)
 	}
-	// Разные аргументы — законный сценарий (дорез другого диапазона строк) и
-	// блокироваться не должен.
+	// Разные аргументы — законный сценарий и блокироваться не должен.
 	out, err = a.CallFunction("ReadFiles", map[string]any{"filenames": []string{"README.md"}})
 	if err != nil {
 		t.Fatalf("другой файл: %v", err)
@@ -187,17 +171,16 @@ func TestAssistantToolCallSignatureIgnoresKeyOrder(t *testing.T) {
 	}
 }
 
-// TestAssistantPromptForbidsFileEditsAndLoops — промпт запрещает и правку
-// файлов, и циклическое перечитывание, и требует маршрут через доску.
-func TestAssistantPromptForbidsFileEditsAndLoops(t *testing.T) {
-	a := newTestAssistant(t, "удали упоминания rust и пофикси инфра файлы")
+// TestAssistantPromptHasWorkRules — промпт содержит правила работы с кодом:
+// изучай → ТОЧЕЧНЫЕ изменения → проверки → итог.
+func TestAssistantPromptHasWorkRules(t *testing.T) {
+	a := newTestAssistant(t, "пофикси баг")
 	p := a.GetSystemMessages(nil)[0].Message
 	for _, want := range []string{
-		"НЕ ПРАВЬ ФАЙЛЫ ПРОЕКТА",
-		"правлю всё",
+		"Изучай текущее состояние проекта перед правками",
+		"ТОЧЕЧНЫЕ изменения",
+		"ЗАВЕРШАЙ задачу в одном цикле",
 		"НЕ ПОВТОРЯЙ ОДИН И ТОТ ЖЕ ВЫЗОВ",
-		"BoardCreateEpic",
-		"KanbanStart",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("промпт не содержит %q", want)
@@ -206,7 +189,6 @@ func TestAssistantPromptForbidsFileEditsAndLoops(t *testing.T) {
 }
 
 func TestAssistantWritesIntoOutputDir(t *testing.T) {
-	// sanity: ассистент остаётся FileOps-агентом, способным читать проект.
 	a := newTestAssistant(t, "покажи структуру")
 	if err := os.WriteFile(filepath.Join(a.OutputDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -240,7 +222,7 @@ func TestAssistantSystemMessagesIncludeRAGBlock(t *testing.T) {
 }
 
 // TestAssistantSystemMessagesWithoutRAG — nil-клиент RAG (или пустой проект) не
-// ломает ассистента: промпт строится без блока «релевантный код».
+// ломает агента: промпт строится без блока «релевантный код».
 func TestAssistantSystemMessagesWithoutRAG(t *testing.T) {
 	a := newAssistant(filepath.Join(t.TempDir(), "proj"), "proj-x", "где валидация?", nil)
 	msgs := a.GetSystemMessages(nil)
@@ -248,63 +230,26 @@ func TestAssistantSystemMessagesWithoutRAG(t *testing.T) {
 		t.Fatalf("без RAG промпт не должен содержать блок:\n%s", msgs[0].Message)
 	}
 	if !strings.Contains(msgs[0].Message, "ассистент") {
-		t.Fatalf("системный промпт ассистента должен сохраниться:\n%s", msgs[0].Message)
+		t.Fatalf("системный промпт агента должен сохраниться:\n%s", msgs[0].Message)
 	}
 }
 
-// TestAssistantPromptHasWebSearchRule — системный промпт содержит правило
-// живой информации: свежие данные (новости/факты/справка/погода) — через
-// WebSearch, degraded — честно ответить из знаний с пометкой «не живые».
+// TestAssistantPromptHasWebSearchRule — системный промпт упоминает WebSearch
+// как источник актуальной информации.
 func TestAssistantPromptHasWebSearchRule(t *testing.T) {
 	a := newTestAssistant(t, "какая погода в Москве?")
 	msgs := a.GetSystemMessages(nil)
 	p := msgs[0].Message
-	for _, want := range []string{"WebSearch", "degraded", "не живые", "новости", "погода"} {
+	for _, want := range []string{"WebSearch"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("промпт не содержит %q:\n%s", want, p)
-		}
-	}
-}
-
-// TestAssistantPromptActsWithoutConfirmGate — создание эпика/бага НЕ
-// деструктивно, поэтому промпт требует создавать запись сразу, как только
-// собраны обязательные поля, и запрещает лестницу переподтверждений
-// («подтвердите? → да → создать? → да → запустить?»). Заодно проверяется, что
-// задачи напрямую не заводятся, чат-эпик — черновик для Системного
-// архитектора (Ф-8), а отсутствие файловых инструментов не считается отказом.
-func TestAssistantPromptActsWithoutConfirmGate(t *testing.T) {
-	a := newTestAssistant(t, "создай эпик на рефакторинг бэкенда")
-	p := a.GetSystemMessages(nil)[0].Message
-	for _, want := range []string{
-		"ДЕЙСТВУЙ, А НЕ ПЕРЕСПРАШИВАЙ",
-		"СОЗДАНИЕ ЭПИКА/БАГА — БЕЗ ПОДТВЕРЖДЕНИЯ",
-		"ВЫЗЫВАЙ BoardCreateEpic в том же ходе",
-		"НЕТ СВОИХ ИНСТРУМЕНТОВ ≠ ТУПИК",
-		"НЕ ПОВТОРЯЙ ВОПРОС, КОТОРЫЙ УЖЕ ЗАДАН",
-		"черновик для Системного архитектора",
-	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("промпт не содержит %q:\n%s", want, p)
-		}
-	}
-	// Старая схема «сводка → подтвердите создание?» — источник зацикливания,
-	// её больше быть не должно.
-	for _, forbid := range []string{
-		"Пример сводки",
-		"только после подтверждения создавай запись",
-		"СВОДКА ДЛЯ ЗАДАЧИ",
-		"BoardCreateTask",
-		"ревью архитектора: не требуется",
-	} {
-		if strings.Contains(p, forbid) {
-			t.Errorf("промпт не должен содержать %q:\n%s", forbid, p)
 		}
 	}
 }
 
 // TestAssistantHistoryBlockDemandsMemory — блок истории обязывает модель
-// сверяться с уже заданными вопросами: без этого ассистент переспрашивает
-// подтверждение по кругу (жалоба «много переспрашивает и ничего не делает»).
+// сверяться с уже заданными вопросами: без этого агент переспрашивает
+// подтверждение по кругу.
 func TestAssistantHistoryBlockDemandsMemory(t *testing.T) {
 	blk := historyPromptBlock("[пользователь] да\n[ассистент] Подтвердите?")
 	if !strings.Contains(blk, "не задавай вопрос, который ты уже задавал") {
@@ -315,94 +260,64 @@ func TestAssistantHistoryBlockDemandsMemory(t *testing.T) {
 	}
 }
 
-// TestAssistantPromptHasConflictResolveFlow — промпт ассистента описывает
-// Ф-4b: полный автономный цикл резолва конфликта эпика через мосты
-// ResolveGitConflicts (status → start → apply) и EpicResolve (деструктивный),
-// отдельно — что для конфликта задачи автоматики нет; ассистент не обещает
-// инструмент резолва задачи и не обещает фиктивный BoardCreateTask.
-func TestAssistantPromptHasConflictResolveFlow(t *testing.T) {
+// TestAssistantPromptHasNoDestructiveBoard — промпт агента не содержит
+// ссылок на удалённые Board-концепции.
+func TestAssistantPromptHasNoDestructiveBoard(t *testing.T) {
 	a := newTestAssistant(t, "залей в main")
 	p := a.GetSystemMessages(nil)[0].Message
-	for _, want := range []string{
-		"ResolveGitConflicts", "action=status", "action=start", "action=apply",
-		"EpicResolve", "edits: file + old", "КОНФЛИКТ ЗАДАЧИ",
-		"автоматического резолва нет",
+	for _, forbid := range []string{
+		"action=status", "action=start", "action=apply",
 	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("промпт не содержит %q:\n%s", want, p)
+		if strings.Contains(p, forbid) {
+			t.Errorf("промпт не должен содержать %q:\n%s", forbid, p)
 		}
-	}
-	// Ассистент не должен обещать резолв конфликта задачи мостом эпика.
-	if strings.Contains(p, "TaskMerge вернул ошибку конфликта") {
-		t.Errorf("промпт не должен содержать устаревшее правило про TaskMerge:\n%s", p)
 	}
 }
 
-// TestAssistantPromptHasBusinessAnalystRole — ассистент заявлен бизнес-аналитиком
-// и знает методологию BABOK: пять фаз, выявление требований, AS-IS/TO-BE и
-// GAP-анализ. Без явной роли модель отвечает как обычный чат-бот.
-func TestAssistantPromptHasBusinessAnalystRole(t *testing.T) {
-	a := newTestAssistant(t, "хочу канбан на рефакторинг")
+// TestAssistantPromptHasAllToolCategories — промпт агента содержит все категории
+// инструментов: чтение, правку, проверки.
+func TestAssistantPromptHasAllToolCategories(t *testing.T) {
+	a := newTestAssistant(t, "хочу рефакторинг")
 	p := a.GetSystemMessages(nil)[0].Message
 	for _, want := range []string{
-		"бизнес-аналитик",
-		"BABOK",
-		"Планирование (Planning)",
-		"Выявление (Elicitation)",
-		"Жизненный цикл (Lifecycle)",
-		"Анализ (Analysis)",
-		"Проектирование (Design)",
-		"AS-IS",
-		"TO-BE",
-		"GAP",
-		"СКРЫТЫЕ требования",
+		"List", "ReadFiles", "ReadMap",
+		"LspDefinition", "LspReferences", "LspHover",
+		"CodeSearch", "WebSearch",
+		"WriteFiles", "SearchReplace",
+		"Run",
 	} {
 		if !strings.Contains(p, want) {
-			t.Errorf("промпт не содержит %q", want)
+			t.Errorf("промпт не содержит инструмент %q", want)
 		}
 	}
 }
 
-// TestAssistantPromptHasBATemplate — описание эпика из чата собирается по
-// шаблону BA-артефакта: бизнес-цель, проблема, желаемое состояние, разрыв,
-// стейкхолдеры, критерии приёмки, риски. Догадка помечается как допущение, а не
-// выдаётся за факт.
-func TestAssistantPromptHasBATemplate(t *testing.T) {
+// TestAssistantPromptNoBoardMentions — промпт агента не содержит
+// упоминаний BA-ролей, BA-шаблонов и других удалённых концепций.
+func TestAssistantPromptNoBoardMentions(t *testing.T) {
 	a := newTestAssistant(t, "заведи эпик")
 	p := a.GetSystemMessages(nil)[0].Message
-	for _, want := range []string{
-		"ШАБЛОН BA-АРТЕФАКТА",
-		"Бизнес-цель",
-		"Проблема (AS-IS)",
-		"Желаемое состояние (TO-BE)",
-		"Разрыв (GAP)",
-		"Стейкхолдеры",
-		"Критерии приёмки",
-		"Ограничения и риски",
-		"допущение",
+	for _, forbid := range []string{
+		"ШАБЛОН BA-АРТЕФАКТА", "BABOK", "AS-IS", "TO-BE", "GAP",
+		"бизнес-аналитик",
 	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("промпт не содержит %q", want)
+		if strings.Contains(p, forbid) {
+			t.Errorf("промпт не должен содержать %q", forbid)
 		}
 	}
 }
 
-// TestAssistantPromptElicitsButNotLoops — баланс выявления и антизацикливания:
-// расплывчатый запрос — одна пачка AskUser, но не лестница переспросов; после
-// ответа — действие. Роль BA не должна превращаться в бесконечное уточнение.
-func TestAssistantPromptElicitsButNotLoops(t *testing.T) {
+// TestAssistantPromptNoAskUserMentions — промпт агента не содержит
+// упоминаний AskUser (удалённый инструмент).
+func TestAssistantPromptNoAskUserMentions(t *testing.T) {
 	a := newTestAssistant(t, "хочу что-то улучшить")
 	p := a.GetSystemMessages(nil)[0].Message
-	for _, want := range []string{
-		"УТОЧНЕНИЕ И ОБОГАЩЕНИЕ",
-		"ОДНУ пачку структурированных вопросов через AskUser",
-		"не второй раз подряд",
-		"ОГРАНИЧЕНИЯ РОЛИ",
-		"Финальное решение и ответственность — на человеке",
-		"галлюцинации",
+	for _, forbid := range []string{
+		"AskUser", "УТОЧНЕНИЕ И ОБОГАЩЕНИЕ", "ОГРАНИЧЕНИЯ РОЛИ",
+		"ОДНУ пачку структурированных вопросов",
 	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("промпт не содержит %q", want)
+		if strings.Contains(p, forbid) {
+			t.Errorf("промпт не должен содержать %q", forbid)
 		}
 	}
 }
@@ -419,7 +334,7 @@ func TestAssistantRAGBlockSearchParams(t *testing.T) {
 		t.Fatalf("scope должен быть пустым (весь проект), got %q", fake.last.Scope)
 	}
 
-	// Ошибка поиска (Qdrant недоступен) → блок пуст (degrade, как планировщик).
+	// Ошибка поиска (Qdrant недоступен) → блок пуст (degrade).
 	fail := &fakeAssistantSearcher{err: &rag.UnavailableError{Err: context.Canceled}}
 	if got := assistantRAGBlock("proj-x", "где токен?", fail); got != "" {
 		t.Fatalf("ошибка поиска должна деградировать в пустой блок, got %q", got)

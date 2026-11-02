@@ -1,147 +1,5 @@
 // Типы контракта REST/SSE Web UI. Зеркалят server/session.go и board/entity.go.
 
-// Статусы зеркалят domain/status.go.
-// Эпики: draft -> business_review -> system_analysis -> done
-// Задачи: draft -> infra -> test_cases -> development -> done
-// Общие терминалы: done, cancelled
-export type Status =
-  | "draft"
-  | "business_review"
-  | "system_analysis"
-  | "infra"
-  | "test_cases"
-  | "development"
-  | "done"
-  | "cancelled";
-
-// Совместимые алиасы (ретро): некоторые файлы импортируют Epic/Task/
-// BoardSnapshot вместо EpicRow/TaskRow/BoardView — это одно и то же.
-export type Epic = EpicRow;
-export type Task = TaskRow;
-export type BoardSnapshot = BoardView;
-export interface GateDecisionBody {
-  approved: boolean;
-  reason?: string;
-}
-
-export interface EpicRow {
-  task_id: string;
-  project_name: string;
-  repositories?: string[];
-  title: string;
-  description: string;
-  status: Status;
-  dependencies: string[];
-  sequence_order: number;
-  assigned_role: string;
-  architecture_summary: string;
-  created_at: string;
-  updated_at: string;
-  // Приоритет эпика (пересортировка строк доски): чем больше — тем раньше эпик
-  // в очереди лидов. Действует внутри фазы (инфра→приложение→QA); 0/отсутствует —
-  // приоритет по умолчанию.
-  priority?: number;
-  // Релизная ветка эпика (git-workflow Ф-1, префикс ai/epic/<id>). Пусто, пока
-  // ветка не создана.
-  git_branch?: string;
-  // Конфликтующие файлы мёрджа релизной ветки ↔ main (Ф-4/Ф-5). Непусто —
-  // ветка не влилась, нужен резолв (ResolveGitConflicts / ручной rebase).
-  merge_conflict_files?: string[];
-  // Релизная ветка эпика влита в main (успешный релиз или резолв). Показывается
-  // в карточке/модалке эпика как статус «Слит в main».
-  merged_into_main?: boolean;
-  // Учёт расхода LLM-токенов (Ф-1
-  // PLAN-2026-09-19-done-epic-task-token.md): факт (вход/выход/всего)
-  // и прогноз token_estimate. Нулевые поля сервер не отдаёт.
-  tokens_in?: number;
-  tokens_out?: number;
-  tokens_total?: number;
-  token_estimate?: number;
-}
-
-export interface TaskRow {
-  task_id: string;
-  project_name: string;
-  repositories?: string[];
-  epic_id: string;
-  title: string;
-  description: string;
-  status: Status;
-  dependencies: string[];
-  sequence_order: number;
-  assignee: string;
-  created_at: string;
-  updated_at: string;
-  // Фича-ветка задачи (git-workflow Ф-1, префикс ai/task/<id>).
-  git_branch?: string;
-  // Конфликтующие файлы мёрджа ветки задачи ↔ релиз эпика (Ф-4/Ф-5). Непусто —
-  // ветка не влилась, нужен резолв (ResolveGitConflicts / ручной rebase).
-  merge_conflict_files?: string[];
-  // Статус, из которого задача ушла в «помощь человека» при паузе эпика:
-  // возобновление возвращает её на прежнее место цепочки.
-  resume_status?: Status;
-  // Учёт расхода LLM-токенов (Ф-1
-  // PLAN-2026-09-19-done-epic-task-token.md): факт (вход/выход/всего)
-  // и прогноз token_estimate. Нулевые поля сервер не отдаёт.
-  tokens_in?: number;
-  tokens_out?: number;
-  tokens_total?: number;
-  token_estimate?: number;
-  // Ф-6 State Tracking: живое состояние задачи по ходу раундов агента —
-  // чем занят прогон, где последняя рабочая точка для отката и чем
-  // закончилась последняя упавшая проверка. Пустые поля сервер не отдаёт.
-  agent_state?: AgentState;
-  active_agent?: string;
-  checkpoint?: TaskCheckpoint;
-  attempts?: number;
-  last_error?: string;
-  // Причина отмены задачи (BoardSetTaskStatus → cancelled).
-  pause_reason?: string;
-  heartbeat_at?: string;
-  // Комментарии к задаче (замечания QA, пользовательские, системные).
-  comments?: Comment[];
-}
-
-// Комментарий к задаче.
-export interface Comment {
-  id: string;
-  task_id?: string;
-  author: string;
-  type: "qa" | "user" | "system";
-  body: string;
-  created_at: string;
-  // Учтён: по этому комментарию задача уже переоткрывалась на доработку —
-  // повторно открыть задачу тем же поводом нельзя.
-  accounted?: boolean;
-}
-
-// Состояния агента на доске (зеркалят board/entity.go).
-export type AgentState = "writing_code" | "running_tests" | "fixing_errors" | "idle";
-
-// Опорные точки ветки задачи для ручного отката (Ф-6): base — код на старте
-// задачи, last — последний промежуточный коммит, last_good — тот, после
-// которого проверка была зелёной.
-export interface TaskCheckpoint {
-  base_sha: string;
-  last_sha?: string;
-  last_good_sha?: string;
-}
-
-export interface BugRow {
-  bug_id: string;
-  project_name: string;
-  title: string;
-  description: string;
-  reporter_role: string;
-  task_id: string;
-  epic_id: string;
-  status: string;
-  verdict?: string;
-  fix_epic_id?: string;
-  created_at: string;
-  updated_at: string;
-}
-
 // Хранение проекта: где и как работает оркестрация.
 export type ProjectKind = "dir" | "git";
 
@@ -151,17 +9,13 @@ export interface ProjectMeta {
   status: string;
   created_at: string;
   updated_at: string;
-  // Ф-2-3: для git-проектов (открытых по git-URL) сервер клонирует репозиторий
-  // и ведёт приёмку через MR. Поля дублируют workspace.Info.
   kind?: ProjectKind;
   git_remote?: string;
   git_branch?: string;
   git_base?: string;
 }
 
-// Дифф-вью (GET /api/projects/:id/diff). Для git-проектов — unified-дифф
-// рабочего каталога от точки отхода (git diff <base>); для остальных —
-// списки файлов относительно baseline-снимка.
+// Дифф-вью (GET /api/projects/:id/diff).
 export interface DiffView {
   kind: "git" | "snap";
   branch?: string;
@@ -171,15 +25,10 @@ export interface DiffView {
   added?: string[];
   modified?: string[];
   removed?: string[];
-  // Ф-3 (ленивая загрузка): для git-проектов вместо полного diff — список файлов;
-  // патч конкретного файла отдаётся GET /api/projects/:id/diff?file=<path>.
   files?: DiffFile[];
-  // snap: per-file unified-патчи (path → unified diff patch).
   patches?: Record<string, string>;
 }
 
-// Один файл в диффе git-проекта (метаданные для ленивой загрузки, Ф-3).
-// patch — unified-патч файла (для lazy-loading git и snap-проектов).
 export interface DiffFile {
   path: string;
   status: "added" | "modified" | "removed" | "renamed" | "submodule";
@@ -188,7 +37,6 @@ export interface DiffFile {
   patch?: string;
 }
 
-// Патч конкретного файла git-диффа (GET /api/projects/:id/diff?file=<path>).
 export interface DiffFileView {
   kind: "git";
   path: string;
@@ -196,45 +44,6 @@ export interface DiffFileView {
   patch: string;
 }
 
-// Снимок доски из GET /api/projects/:id и события board (type=board).
-export interface BoardView {
-  meta?: ProjectMeta;
-  epics: EpicRow[];
-  tasks: TaskRow[];
-  bugs?: BugRow[];
-  // Полные счётчики (Ф-3): заполняются при пагинации (limit/offset) или всегда.
-  total?: { epics: number; tasks: number; bugs: number };
-  // git-статус проекта (ветки/MR эпиков и задач, Ф-5): заполняется только для
-  // git-проектов с созданными ветками, иначе undefined.
-  git?: GitView;
-}
-
-// Один эпик/задача в git-статусе (Ф-5): ветка + опциональный MR.
-export interface GitLinkView {
-  branch?: string; // имя ветки (ai/epic/… или ai/task/…)
-  branch_url?: string; // web-ссылка на ветку на хостинге
-  target?: string; // ветка, в которую вливается MR (main/ветка эпика)
-  mr_url?: string; // ссылка на MR/PR (если создан)
-  mr_state?: string; // open|merged|closed|"" (неизвестно)
-  // has_commits — в ветке есть свои коммиты (Ф-2). Не вычислено/ошибка git —
-  // undefined; false — коммитов ещё нет, кнопку «Создать MR» скрываем.
-  has_commits?: boolean;
-  // worktree — рабочая копия задачи есть на диске (Ф-6). Только тогда возможен
-  // откат кода: после выполнения задачи worktree удалён.
-  worktree?: boolean;
-  // submodules — вложенные сабмодули внутри worktree: откат вернёт и их.
-  submodules?: string[];
-}
-
-// git-статус всего проекта в снимке доски (Ф-5).
-export interface GitView {
-  base?: string; // базовая ветка (main)
-  base_url?: string; // web-ссылка на базовую ветку
-  epics?: Record<string, GitLinkView>; // epic_id → ветка/MR
-  tasks?: Record<string, GitLinkView>; // task_id → ветка/MR
-}
-
-// Контекст для просмотра диффа отдельной ветки эпика/задачи.
 export interface BranchDiffContext {
   ref: string;
   vs: string;

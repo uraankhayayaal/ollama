@@ -184,7 +184,7 @@ func (s *Server) repoOf(ctx context.Context, project string) (*git.Repo, error) 
 }
 
 // gitToken выбирает токен API форджа по remote: GitHub → GITHUB_TOKEN,
-// GitLab → GITLAB_TOKEN (как в agents/codereviewer.pickToken).
+// GitLab → GITLAB_TOKEN.
 func gitToken(remote string) string {
 	switch forges.DetectType(remote) {
 	case forges.KindGitHub:
