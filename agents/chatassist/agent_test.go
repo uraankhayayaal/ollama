@@ -177,7 +177,7 @@ func TestAssistantPromptHasWorkRules(t *testing.T) {
 	a := newTestAssistant(t, "пофикси баг")
 	p := a.GetSystemMessages(nil)[0].Message
 	for _, want := range []string{
-		"Изучай текущее состояние проекта перед правками",
+		"DetectStack",
 		"ТОЧЕЧНЫЕ изменения",
 		"ЗАВЕРШАЙ задачу в одном цикле",
 		"НЕ ПОВТОРЯЙ ОДИН И ТОТ ЖЕ ВЫЗОВ",
