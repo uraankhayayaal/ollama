@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"os"
@@ -85,7 +86,8 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("id")
 	reg := s.metricsFor(project)
 	snap := reg.Snapshot()
-	in, out := totalTokens(r, project)
+	store := s.tokenStoreFor(project)
+	in, out := totalTokens(r.Context(), store)
 	price := tokens.PricingFromEnv()
 	view := metricsView{
 		Snapshot:        snap,
@@ -101,29 +103,41 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
-// totalTokens читает накопленный счётчик проекта. Сессия проекта намеренно не
-// создаётся: метрики — наблюдательный интерфейс, и его запрос не должен
-// поднимать доску/чат только ради чтения одного счётчика. Недоступный Redis —
+// totalTokens читает накопленный счётчик проекта. Недоступный Redis —
 // не ошибка: показаны метрики текущего запуска без накопленных итогов.
-func totalTokens(r *http.Request, project string) (in, out int64) {
-	addr := os.Getenv("REDIS_ADDR")
-	if addr == "" {
-		addr = "localhost:56379"
-	}
-	store, err := tokens.NewStore(r.Context(), tokens.StoreConfig{
-		Addr:     addr,
-		Password: os.Getenv("REDIS_PASSWORD"),
-		DB:       0,
-		Project:  project,
-	})
+func totalTokens(ctx context.Context, store *tokens.Store) (in, out int64) {
+	var err error
+	in, out, err = store.Get(ctx)
 	if err != nil {
 		return 0, 0
 	}
-	defer store.Close()
-	if in, out, err = store.Get(r.Context()); err != nil {
-		return 0, 0
-	}
 	return in, out
+}
+
+// tokenStoreFor возвращает Redis-счётчик токенов проекта, создавая его при
+// первом обращении. Магазины переживают сессию: расход токенов не обнуляется
+// при переподключении WebSocket.
+func (s *Server) tokenStoreFor(project string) *tokens.Store {
+	s.tokenStoreMu.Lock()
+	defer s.tokenStoreMu.Unlock()
+	if s.tokenStores == nil {
+		s.tokenStores = map[string]*tokens.Store{}
+	}
+	st, ok := s.tokenStores[project]
+	if !ok {
+		addr := os.Getenv("REDIS_ADDR")
+		if addr == "" {
+			addr = "localhost:56379"
+		}
+		st = tokens.NewStoreNoCheck(tokens.StoreConfig{
+			Addr:     addr,
+			Password: os.Getenv("REDIS_PASSWORD"),
+			DB:       0,
+			Project:  project,
+		})
+		s.tokenStores[project] = st
+	}
+	return st
 }
 
 // handleGetPrometheus отдаёт метрики всех проектов в текстовом формате

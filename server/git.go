@@ -88,9 +88,10 @@ func (s *Server) handleOpenGitProject(w http.ResponseWriter, r *http.Request, gi
 			return
 		}
 	}
-	repo, err := serverGitOpener{s.gitExec}.Clone(r.Context(), gitURL, "", dest)
+	branch := "ai/" + name
+	repo, err := serverGitOpener{s.gitExec}.Clone(r.Context(), gitURL, branch, dest)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, ErrCloneFailed.Error())
+		writeErr(w, http.StatusBadGateway, ErrCloneFailed.Error()+": "+err.Error())
 		return
 	}
 	info := workspace.AddParams{

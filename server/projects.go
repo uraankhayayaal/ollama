@@ -45,6 +45,12 @@ func (s *Server) handleOpenProject(w http.ResponseWriter, r *http.Request) {
 
 	// git-URL → клон в temp/<имя> с фича-веткой (Ф-2-3).
 	if isGitURL(path) {
+		name := GitProjectName(path)
+		if inf, err := s.reg.Get(name); err == nil {
+			// Проект уже зарегистрирован — идемпотентное повторное открытие.
+			s.writeProjectMetaFromInfo(w, inf)
+			return
+		}
 		s.handleOpenGitProject(w, r, path)
 		return
 	}

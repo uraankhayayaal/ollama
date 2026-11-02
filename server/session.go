@@ -29,10 +29,10 @@ type Session struct {
 	srv     *Server
 	project string
 
-	mu         sync.Mutex
-	cancel     context.CancelFunc  // отмена сессионного контекста (newSession)
-	runnerCancel context.CancelFunc  // отмена runner'а (start)
-	running    bool
+	mu           sync.Mutex
+	cancel       context.CancelFunc // отмена сессионного контекста (newSession)
+	runnerCancel context.CancelFunc // отмена runner'а (start)
+	running      bool
 	// standby — режим ожидания: оркестрация запущена по доске, но брать в
 	// работу нечего (нет эпиков/задач, которые можно исполнить). Сессия жива и
 	// ждёт появления работы; статус в шину — «standby».
@@ -351,6 +351,8 @@ func (sess *Session) addTokens(in, out int64, tps float64, scope string) {
 	rate := sess.rate
 	sess.mu.Unlock()
 	sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: in, Output: out, TPS: rate})
+	store := sess.srv.tokenStoreFor(sess.project)
+	_, _, _ = store.Add(context.Background(), in, out)
 }
 
 // tokenEvent — текущие накопленные токены проекта (вход/выход) и последняя

@@ -17,6 +17,7 @@ import (
 	"ai/infrastructure/runmetrics"
 	"ai/infrastructure/workspace"
 	"ai/shared/logging"
+	"ai/shared/tokens"
 	"ai/tools"
 )
 
@@ -77,6 +78,12 @@ type Server struct {
 	// берёт реестр — общий мьютекс дал бы взаимоблокировку.
 	metricsMu sync.Mutex
 	metrics   map[string]*runmetrics.Registry
+
+	// tokenStores — Redis-счётчики токенов по проектам. Лениво создаются,
+	// переживают сессию (как metrics): расход токенов не обнуляется при
+	// переподключении WebSocket.
+	tokenStoreMu sync.Mutex
+	tokenStores  map[string]*tokens.Store
 
 	// diffMu защищает базы «точек отхода»: baseline-снимки не-git проектов
 	// (baselines) и кэш разобраных диффов git-проектов (diffs, Ф-3).

@@ -32,7 +32,8 @@ func toolRound(sess *Session, tool, scope string, dur time.Duration, ok bool, in
 // инструментам и единицам работы, расход токенов и честный отказ считать
 // стоимость, когда цены не заданы.
 func TestRESTProjectMetrics(t *testing.T) {
-	srv, handler, _ := newTestServer(t)
+	srv, handler, mr := newTestServer(t)
+	t.Setenv("REDIS_ADDR", mr.Addr())
 	t.Setenv("LLM_PRICE_IN", "")
 	t.Setenv("LLM_PRICE_OUT", "")
 
@@ -85,7 +86,8 @@ func TestRESTProjectMetrics(t *testing.T) {
 // TestRESTProjectMetricsCostWithPricing: с заданными ценами снимок отдаёт и
 // стоимость запуска, и стоимость по проекту.
 func TestRESTProjectMetricsCostWithPricing(t *testing.T) {
-	srv, handler, _ := newTestServer(t)
+	srv, handler, mr := newTestServer(t)
+	t.Setenv("REDIS_ADDR", mr.Addr())
 	t.Setenv("LLM_PRICE_IN", "3")
 	t.Setenv("LLM_PRICE_OUT", "15")
 	t.Setenv("LLM_CURRENCY", "₽")
