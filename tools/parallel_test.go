@@ -28,9 +28,6 @@ func TestIsParallelSafeMutating(t *testing.T) {
 		"Run",
 		"PatchGoFunction",
 		"SearchReplace",
-		"ReviewMr",
-		"ApproveMr",
-		"NextChunk",
 		"SomeUnknownTool",
 	}
 	for _, name := range unsafe {

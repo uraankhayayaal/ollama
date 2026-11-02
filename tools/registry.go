@@ -160,12 +160,6 @@ func newTool(name string, deps Deps) Tool {
 		return &stackTool{ops: deps.FileOps}
 	case WebSearch:
 		return &webSearchTool{client: nil, endpoint: ""}
-	case "ReviewMr":
-		return &reviewMrTool{ses: deps.Session}
-	case "ApproveMr":
-		return &approveMrTool{ses: deps.Session}
-	case "NextChunk":
-		return &nextChunkTool{ses: deps.Session}
 	}
 	panic(fmt.Sprintf("tools: инструмент %q не зарегистрирован в реестре", name))
 }
