@@ -55,6 +55,7 @@ export interface ChatMsg {
   id: string;
   role: string; // user | assistant | tool | status | system | ask
   content: string;
+  thinking?: string; // рассуждение модели (thinking-блок)
   agent?: string;
   tool?: string;
   ok?: boolean;

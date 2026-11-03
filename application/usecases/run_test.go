@@ -59,6 +59,7 @@ func (r *fakeReporter) OnMessage(role, content string, _ bool) {
 	r.messages = append(r.messages, role+":"+content)
 }
 func (r *fakeReporter) OnMessageDelta(string, string) {}
+func (r *fakeReporter) OnThinking(string, string)     {}
 func (r *fakeReporter) OnToolStart(tool, _ string)    { r.tools = append(r.tools, "start:"+tool) }
 func (r *fakeReporter) OnToolResult(tool, _ string, _ bool) {
 	r.tools = append(r.tools, "result:"+tool)

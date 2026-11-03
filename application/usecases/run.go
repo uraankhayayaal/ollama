@@ -223,6 +223,9 @@ func RunTask(ctx context.Context, p RunPorts) (*domain.AgentResponse, error) {
 				if rep != nil && ch.Partial != "" {
 					rep.OnMessageDelta(streamID, ch.Partial)
 				}
+				if rep != nil && ch.Thinking != "" {
+					rep.OnThinking(streamID, ch.Thinking)
+				}
 			})
 		} else {
 			reply, err = p.Provider.ChatOnce(ctx, chatReq)

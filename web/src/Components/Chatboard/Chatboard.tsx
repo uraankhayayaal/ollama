@@ -30,6 +30,7 @@ const EXPORT_SNIPPET_MAX = 400;
 export function Chatboard({
   chat,
   live,
+  liveThinking,
   onSend,
   endRef,
   busy,
@@ -43,6 +44,8 @@ export function Chatboard({
   // live — «плавающее» потоковое сообщение модели (стриминг, Ф-3); рендерится
   // с маркером «…» до прихода финального протокола chat с ролью assistant.
   live: { id: string; agent: string; content: string } | null;
+  // liveThinking — «плавающее» потоковое рассуждение модели (thinking-блок).
+  liveThinking: { id: string; agent: string; content: string } | null;
   onSend: (text: string) => void;
   endRef: React.RefObject<HTMLDivElement | null>;
   busy?: boolean;
@@ -66,7 +69,7 @@ export function Chatboard({
     if (!collapsed) {
       endRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [chat, live, endRef, collapsed]);
+  }, [chat, live, liveThinking, endRef, collapsed]);
 
   // Экспорт чата: компактный дайджест для передачи ИИ-модели на разбор
   // (роли короткими префиксами, без времени; tool-вызовы — имя+статус).
@@ -177,6 +180,18 @@ export function Chatboard({
         }).map((m) => (
           <Msg key={m.id} m={m} onAskAnswer={onAskAnswer} />
         ))}
+        {liveThinking && (
+          <li key={`${liveThinking.id}-thinking`} className="msg assistant streaming thinking-stream">
+            <div className="thinking-head">
+              <span className="who">{liveThinking.agent}</span>
+              <span className="thinking-label">Рассуждение</span>
+            </div>
+            <pre className="content">
+              {liveThinking.content}
+              <span className="cursor">…</span>
+            </pre>
+          </li>
+        )}
         {live && (
           <li key={live.id} className="msg assistant streaming">
             <span className="who">{live.agent}</span>
@@ -186,7 +201,7 @@ export function Chatboard({
             </p>
           </li>
         )}
-        {thinking && !live && (
+        {thinking && !live && !liveThinking && (
           <li className="msg assistant thinking" aria-label="Модель думает">
             <p className="content typing">
               <span className="activity-mark" aria-hidden="true"><i /><i /><i /></span>
@@ -234,6 +249,7 @@ function Msg({
   const empty = text.trim().length === 0;
   const isTool = role === "tool";
   const isAsk = role === "ask";
+  const hasThinking = (m.thinking ?? "").trim().length > 0;
   // «Тяжёлое» сообщение: слишком много символов или строк — скрываем по умолчанию.
   // Пустые сообщения не сворачиваются (разворачивать нечего).
   const long = text.length > MAX_COLLAPSED_CHARS || text.split("\n").length > MAX_COLLAPSED_LINES;
@@ -278,8 +294,16 @@ function Msg({
         <Chevron open={open} show={foldable} />
         <span className="who">{who}</span>
         {isTool && <ToolBadge name={m.tool} ok={m.ok} />}
+        {hasThinking && <span className="thinking-badge">💭</span>}
         <time className="when">{fmtTime(m.time)}</time>
       </div>
+
+      {hasThinking && (
+        <details className="thinking-block">
+          <summary><span className="thinking-label">Рассуждение</span></summary>
+          <pre className="content">{m.thinking}</pre>
+        </details>
+      )}
 
       {isAsk && m.ask ? (
         <AskCard ask={m.ask} onAskAnswer={onAskAnswer ?? defaultAnswerAsk} />

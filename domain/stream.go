@@ -1,8 +1,9 @@
 package domain
 
 type StreamChunk struct {
-	Partial string
-	Done    bool
+	Partial  string
+	Thinking string // накопленное рассуждение (thinking-блок модели)
+	Done     bool
 }
 
 type ModelLimits struct {

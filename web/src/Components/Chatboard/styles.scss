@@ -7,6 +7,8 @@
   gap: 10px;
   height: 100%;
   min-height: 0;
+  width: 100%;
+  max-width: 900px;
   gap: 12px;
 
   button {
@@ -185,10 +187,17 @@
         max-width: 86%;
         padding: 9px 13px;
         border-radius: 16px 16px 4px 16px;
-        background: #f1f2f4;
+        background: #e0e7ef;
         transform-origin: bottom right;
       }
-      &.assistant, &.agent, &.ask { align-self: flex-start; }
+      &.assistant, &.agent, &.ask {
+        align-self: flex-start;
+        width: fit-content;
+        max-width: 86%;
+        padding: 9px 13px;
+        border-radius: 16px 16px 16px 4px;
+        background: #f0f4fa;
+      }
       &.tool { align-self: flex-start; background: #f8fafc; }
 
       // Шапка строки сообщения: кто/инструмент/время в одну линию.
@@ -216,6 +225,14 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      &.user .who {
+        color: #4a6282;
+      }
+
+      &.assistant .who, &.agent .who, &.ask .who {
+        color: #3d5a99;
       }
 
       .content {
@@ -393,11 +410,108 @@
 
             &:nth-child(2) { animation-delay: 140ms; }
             &:nth-child(3) { animation-delay: 280ms; }
-          }
         }
       }
     }
+
+    // Рассуждение модели (thinking-блок): сворачиваемый блок с контентом,
+    // анимированный поток рассуждений (стриминг) + статичный свёрнутый блок.
+    &.thinking-stream {
+      border-left: 3px solid #c4cfe0;
+      background: #f4f6f9;
+      padding: 10px 13px;
+      border-radius: 0 16px 16px 4px;
+      animation: none;
+
+      .thinking-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 4px;
+      }
+
+      .thinking-label {
+        font-size: 10px;
+        font-weight: 600;
+        color: #6b7fa3;
+        background: #e8edf4;
+        padding: 1px 8px;
+        border-radius: 999px;
+      }
+
+      .content {
+        margin: 4px 0 0;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #5f6e85;
+        font-family: var(--mono, ui-monospace, Menlo, monospace);
+        white-space: pre-wrap;
+      }
+    }
+
+    // Свёрнутый thinking-блок в сообщении (details/summary).
+    .thinking-block {
+      margin: 0 0 6px;
+      padding: 6px 0 0;
+      border-top: 1px solid #e8edf4;
+
+      summary {
+        cursor: pointer;
+        font-size: 11px;
+        color: #6b7fa3;
+        list-style: none;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 0;
+
+        &::-webkit-details-marker { display: none; }
+
+        &::before {
+          content: "▶";
+          display: inline-block;
+          font-size: 8px;
+          transition: transform 0.15s ease;
+          color: #8a9ab5;
+        }
+
+        &:hover { color: #4a6282; }
+      }
+
+      &[open] summary::before {
+        transform: rotate(90deg);
+      }
+
+      .thinking-label {
+        font-size: 10px;
+        font-weight: 600;
+        color: #6b7fa3;
+        background: #e8edf4;
+        padding: 1px 8px;
+        border-radius: 999px;
+      }
+
+      .content {
+        margin: 4px 0 0;
+        padding: 4px 8px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #5f6e85;
+        font-family: var(--mono, ui-monospace, Menlo, monospace);
+        white-space: pre-wrap;
+        border-left: 2px solid #dfe5ef;
+        background: #f9fafc;
+        border-radius: 0 6px 6px 0;
+      }
+    }
+
+    .thinking-badge {
+      font-size: 12px;
+      margin: 0 2px;
+    }
   }
+}
 
 @keyframes dotpulse {
   0%,

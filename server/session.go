@@ -289,6 +289,9 @@ func (sess *Session) chatEvent(ev runevents.Event) {
 		// Потоковый фрагмент — только live-трансляция (type=chat_delta),
 		// в историю чата не пишется: финал проходит обычным TypeMessage.
 		sess.srv.hub.publish(sess.project, "chat_delta", ev)
+	case runevents.TypeThinkingDelta:
+		// Фрагмент рассуждения модели — live-трансляция (type=thinking_delta).
+		sess.srv.hub.publish(sess.project, "thinking_delta", ev)
 	case runevents.TypeToolStart:
 		sess.srv.hub.publish(sess.project, "tool", ev)
 	case runevents.TypeToolResult:

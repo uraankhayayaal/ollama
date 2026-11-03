@@ -21,6 +21,8 @@ type Reporter interface {
 	OnMessage(role, content string, truncated bool)
 	// OnMessageDelta — потоковый фрагмент ответа модели (стриминг).
 	OnMessageDelta(streamID, content string)
+	// OnThinking — потоковый фрагмент рассуждения модели (thinking-блок).
+	OnThinking(streamID, content string)
 	OnToolStart(tool, args string)
 	OnToolResult(tool, result string, ok bool)
 	// OnTokens — потребление токенов одного раунда модели (вход/выход).

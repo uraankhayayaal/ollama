@@ -30,6 +30,7 @@ type (
 type Reporter interface {
 	OnMessage(role, content string, truncated bool)
 	OnMessageDelta(streamID, content string)
+	OnThinking(streamID, content string)
 	OnToolStart(tool, args string)
 	OnToolResult(tool, result string, ok bool)
 	OnTokens(in, out int64, tps float64)

@@ -13,6 +13,7 @@ type NopReporter struct{}
 
 func (NopReporter) OnMessage(_, _ string, _ bool)            {}
 func (NopReporter) OnMessageDelta(_, _ string)                {}
+func (NopReporter) OnThinking(_, _ string)                    {}
 func (NopReporter) OnToolStart(_, _ string)                   {}
 func (NopReporter) OnToolResult(_, _ string, _ bool)          {}
 func (NopReporter) OnTokens(_, _ int64, _ float64)            {}

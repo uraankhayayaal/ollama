@@ -51,6 +51,7 @@ export function App() {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [tokens, setTokens] = useState<ProjectTokens>({ in: 0, out: 0 });
   const [live, setLive] = useState<{ id: string; agent: string; content: string } | null>(null);
+  const [liveThinking, setLiveThinking] = useState<{ id: string; agent: string; content: string } | null>(null);
   const [status, setStatus] = useState<string>("idle");
   const [detail, setDetail] = useState<string>("");
   const [diffContext, setDiffContext] = useState<BranchDiffContext | null>(null);
@@ -157,6 +158,7 @@ export function App() {
     liveClient.current?.close();
     setChat([]);
     setLive(null);
+    setLiveThinking(null);
     setThinking(false);
     setTokens({ in: 0, out: 0 });
     setLogLines(new Map());
@@ -180,10 +182,28 @@ export function App() {
       try {
         const m = ev.payload as ChatMsg;
         if (m.role === "assistant" || m.role === "status") {
-          setLive(null);
           setThinking(false);
+          // Сохраняем рассуждение к сообщению ассистента при завершении стрима.
+          setLiveThinking((prev) => {
+            if (prev && m.role === "assistant" && (prev.content ?? "").trim()) {
+              setChat((h) => [...h, { ...m, thinking: prev.content }]);
+            }
+            return null;
+          });
+          setLive((prev) => {
+            if (prev && m.role === "assistant" && !(m.content ?? "").trim()) {
+              const think = liveThinking?.content;
+              setChat((h) => [...h, { id: prev.id, role: "assistant", content: prev.content, agent: prev.agent, time: new Date().toISOString(), thinking: think ?? undefined }]);
+            }
+            return null;
+          });
         }
-        setChat((prev) => [...prev, m]);
+        setChat((prev) => {
+          const filtered = m.role && (m.role === "assistant" || m.role === "status")
+            ? prev.filter((x) => x.id !== m.id)
+            : prev;
+          return [...filtered, m];
+        });
       } catch {}
     });
     l.on("chat_delta", (ev) => {
@@ -191,6 +211,13 @@ export function App() {
         const p = ev.payload as { content?: string; agent?: string; stream_id?: string };
         setThinking(false);
         setLive({ id: p.stream_id ?? "live", agent: p.agent ?? "assistant", content: p.content ?? "" });
+      } catch {}
+    });
+    l.on("thinking_delta", (ev) => {
+      try {
+        const p = ev.payload as { thinking?: string; agent?: string; stream_id?: string };
+        setThinking(false);
+        setLiveThinking({ id: p.stream_id ?? "live-thinking", agent: p.agent ?? "assistant", content: p.thinking ?? "" });
       } catch {}
     });
     l.on("status", (ev) => {
@@ -218,6 +245,7 @@ export function App() {
     l.on("chat_clear", () => {
       setChat([]);
       setLive(null);
+      setLiveThinking(null);
       setThinking(false);
     });
 
@@ -259,6 +287,7 @@ export function App() {
     if (!window.confirm("Очистить диалог и начать с чистого листа?")) return;
     setChat([]);
     setLive(null);
+    setLiveThinking(null);
     setThinking(false);
     try {
       await clearChat(BASE, project.project_name);
@@ -335,6 +364,7 @@ export function App() {
           <Chatboard
             chat={chat}
             live={live}
+            liveThinking={liveThinking}
             onSend={onSend}
             endRef={chatEnd}
             thinking={thinking}

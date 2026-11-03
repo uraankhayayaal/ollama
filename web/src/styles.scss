@@ -184,12 +184,12 @@ body {
   }
 }
 
-// Чат на всю ширину (без доски)
+// Чат по центру экрана (без доски)
 .chat-only {
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  justify-content: center;
   padding: 14px;
   overflow: hidden;
 }

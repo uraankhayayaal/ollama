@@ -243,6 +243,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 	}
 
 	var content strings.Builder
+	var thinking strings.Builder
 	var toolCalls []domain.ToolCall
 	var doneReason string
 	var usage *domain.Usage
@@ -257,6 +258,9 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 	streamFn := func(resp api.ChatResponse) error {
 		if resp.Message.Content != "" {
 			content.WriteString(resp.Message.Content)
+		}
+		if resp.Message.Thinking != "" {
+			thinking.WriteString(resp.Message.Thinking)
 		}
 		if resp.DoneReason != "" {
 			doneReason = resp.DoneReason
@@ -305,7 +309,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 		// Потоковый фрагмент: накопленный текст, чтобы клиент просто
 		// перезаписывал предпоследнее сообщение. Стрим идёт синхронно.
 		if onChunk != nil {
-			onChunk(domain.StreamChunk{Partial: content.String(), Done: resp.Done})
+			onChunk(domain.StreamChunk{Partial: content.String(), Thinking: thinking.String(), Done: resp.Done})
 		}
 
 		return nil
@@ -379,6 +383,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 			attempt+1, toolCallRetries(), err, o.model)
 		// Сбрасываем накопители частичного ответа неудачной попытки.
 		content.Reset()
+		thinking.Reset()
 		toolCalls = nil
 		doneReason = ""
 		usage = nil

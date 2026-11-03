@@ -29,14 +29,13 @@ export interface LiveEvent {
 export type EventTypeName =
   | "chat"
   | "chat_delta"
+  | "thinking_delta"
   | "board"
   | "gate"
   | "tool"
   | "status"
   | "diff"
   | "log"
-  // applog — строка лога рантайма приложения (Ф-2). Отдельное от "log":
-  // там журнал работы агентов из файлов logs/, здесь вывод самого приложения.
   | "applog"
   | "tokens"
   | "chat_clear";

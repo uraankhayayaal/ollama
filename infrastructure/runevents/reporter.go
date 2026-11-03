@@ -31,6 +31,10 @@ const (
 	// Сервер транслирует его в WS как type=chat_delta; итоговое сообщение
 	// приходит обычным TypeMessage, поэтому дельты в историю чата не пишутся.
 	TypeMessageDelta EventType = "message_delta"
+	// TypeThinkingDelta — фрагмент цепочки рассуждения модели (thinking-блок).
+	// Сервер транслирует его в WS как type=thinking_delta; итоговое рассуждение
+	// сохраняется в ChatMessage.Thinking, дельты в историю не пишутся.
+	TypeThinkingDelta EventType = "thinking_delta"
 	// TypeToolStart — начало выполнения инструмента.
 	TypeToolStart EventType = "tool_start"
 	// TypeToolResult — результат выполнения инструмента.
@@ -54,6 +58,7 @@ type Event struct {
 	Agent     string    `json:"agent,omitempty"`     // имя агента (через WithAgent)
 	Role      string    `json:"role,omitempty"`      // assistant
 	Content   string    `json:"content,omitempty"`   // текст ответа модели / потоковый фрагмент
+	Thinking  string    `json:"thinking,omitempty"`  // рассуждение (thinking-блок модели)
 	StreamID  string    `json:"stream_id,omitempty"` // идентификатор потока (для message_delta)
 	Tool      string    `json:"tool,omitempty"`      // имя инструмента
 	Arguments string    `json:"arguments,omitempty"` // аргументы вызова (обрезаны)
@@ -81,6 +86,9 @@ type Reporter interface {
 	// streamID помечает поток, чтобы фронтенд связывал фрагменты с одним
 	// «плавающим» сообщением до прихода финального OnMessage.
 	OnMessageDelta(streamID, content string)
+	// OnThinking — потоковый фрагмент рассуждения модели (thinking-блок).
+	// streamID связывает рассуждение с потоком сообщения.
+	OnThinking(streamID, content string)
 	OnToolStart(tool, args string)
 	OnToolResult(tool, result string, ok bool)
 	// OnTokens — потребление токенов одного раунда модели (вход/выход).
@@ -145,6 +153,11 @@ func (r *Router) OnMessage(role, content string, truncated bool) {
 // OnMessageDelta сообщает потоковый фрагмент ответа модели (стриминг).
 func (r *Router) OnMessageDelta(streamID, content string) {
 	r.emit(Event{Type: TypeMessageDelta, StreamID: streamID, Content: content})
+}
+
+// OnThinking сообщает потоковый фрагмент рассуждения модели (thinking-блок).
+func (r *Router) OnThinking(streamID, content string) {
+	r.emit(Event{Type: TypeThinkingDelta, StreamID: streamID, Thinking: content})
 }
 
 // OnToolStart сообщает начало вызова инструмента.
