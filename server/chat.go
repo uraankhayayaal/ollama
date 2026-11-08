@@ -81,14 +81,14 @@ func (s *Server) handlePostChat(w http.ResponseWriter, r *http.Request) {
 	// Единый ассистент: решает по смыслу (создание эпика/задачи/бага — через
 	// его board-инструменты, а не по регэкспепу).
 	sess.log.Infof("[чат] маршрут: единый ассистент (действия по смыслу, без сплита)")
-	sess.runChatAssistant(context.Background(), body.Message, prov)
+	sess.runChatAssistant(sess.chatCtx, body.Message, prov)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // handleChatLogAnalysis обслуживает кнопку «Разобрать» в панели логов. Ответ
 // уходит в чат (и в шину), в REST — короткий статус.
 func (s *Server) handleChatLogAnalysis(w http.ResponseWriter, sess *Session, req logAnalysisReq) {
-	ctx := context.Background()
+	ctx := sess.chatCtx
 	a, err := sess.buildLogAnalysis(req)
 	if err != nil {
 		sess.append(chat.RoleStatus, "Разбор логов не удался: "+err.Error(), "", "", nil)
@@ -267,7 +267,25 @@ func (s *Server) handleClearChat(w http.ResponseWriter, r *http.Request) {
 // handleGetTokens возвращает накопленные токены проекта (вход/выход) и
 // последнюю скорость генерации (вых. ток/с).
 func (s *Server) handleGetTokens(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"in": 0, "out": 0, "tps": 0})
+	project := r.PathValue("id")
+	sess := s.session(project)
+	var in, out int64
+	var rate float64
+	if sess != nil {
+		sess.mu.Lock()
+		in = sess.tokensIn
+		out = sess.tokensOut
+		rate = sess.rate
+		sess.mu.Unlock()
+	}
+	// Redis — персистентность; если жив — приоритет (переживает рестарт).
+	if in == 0 && out == 0 {
+		store := s.tokenStoreFor(project)
+		if ri, ro := totalTokens(r.Context(), store); ri > 0 || ro > 0 {
+			in, out = ri, ro
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"in": in, "out": out, "tps": rate})
 }
 
 // --- REST: HITL ---
@@ -287,6 +305,19 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.stop()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleStopChat останавливает текущую генерацию чат-ассистента (кнопка «Стоп»).
+// Не влияет на оркестрацию — останавливает только модель.
+func (s *Server) handleStopChat(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("id")
+	sess := s.session(project)
+	if sess == nil {
+		writeErr(w, http.StatusNotFound, "сессия не найдена")
+		return
+	}
+	sess.stopChat()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"ai/domain"
+	"ai/domain/services"
 )
 
 // requiredRetries — сколько раз переспрашиваем модель, если она не вызвала
@@ -77,7 +78,12 @@ type RunPorts struct {
 // запрошенные инструменты, возвращает результат модели обратно в историю
 // и повторяет до завершения, лимита раундов или обнаружения зацикливания.
 func RunTask(ctx context.Context, p RunPorts) (*domain.AgentResponse, error) {
+	// Репортёр из контекста (с сервера) имеет приоритет над NopReporter из
+	// BasicRunner: без этого события стриминга и токенов уходили в пустоту.
 	rep := p.Reporter
+	if ctxRep := services.ReporterFromContext(ctx); ctxRep != nil {
+		rep = ctxRep
+	}
 	agent := p.Agent
 	resume := p.Resume
 

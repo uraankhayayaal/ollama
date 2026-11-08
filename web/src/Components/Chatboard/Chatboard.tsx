@@ -15,7 +15,9 @@ import type { AskAnswerBody, AskAnswerResult, ChatMsg } from "@/Types";
 // import { APIError } from "@/Api";
 import { downloadText, safeName, stampedName } from "@/download";
 import { AskCard } from "./AskCard";
+import { AssistantResponse } from "@/Components/AssistantResponse";
 import "./styles.scss";
+import "@/Components/AssistantResponse/styles.scss";
 
 // Пороги «тяжёлого» сообщения: после них контент сворачивается по умолчанию.
 const MAX_COLLAPSED_CHARS = 600;
@@ -32,6 +34,7 @@ export function Chatboard({
   live,
   liveThinking,
   onSend,
+  onStop,
   endRef,
   busy,
   collapsed = false,
@@ -47,6 +50,9 @@ export function Chatboard({
   // liveThinking — «плавающее» потоковое рассуждение модели (thinking-блок).
   liveThinking: { id: string; agent: string; content: string } | null;
   onSend: (text: string) => void;
+  // onStop — отмена текущей генерации (кнопка «Стоп»). Вызывается при клике
+  // во время активного стрима или фазы «думаю».
+  onStop?: () => void;
   endRef: React.RefObject<HTMLDivElement | null>;
   busy?: boolean;
   // Свёрнутый режим: тонкая вертикальная полоска слева с кнопкой разворота
@@ -138,6 +144,8 @@ export function Chatboard({
     onSend(text);
   };
 
+  const generating = thinking || !!live || !!liveThinking;
+
   return (
     <div className="chatboard">
       <div className="headbar">
@@ -194,11 +202,17 @@ export function Chatboard({
         )}
         {live && (
           <li key={live.id} className="msg assistant streaming">
-            <span className="who">{live.agent}</span>
-            <p className="content">
-              {live.content}
-              <span className="cursor">…</span>
-            </p>
+            <AssistantResponse
+              msg={{
+                id: live.id,
+                role: "assistant",
+                content: live.content,
+                agent: live.agent,
+                time: new Date().toISOString(),
+              }}
+              isStreaming
+            />
+            <span className="cursor">…</span>
           </li>
         )}
         {thinking && !live && !liveThinking && (
@@ -216,12 +230,18 @@ export function Chatboard({
         <input
           type="text"
           placeholder="Что сделать дальше?"
-          disabled={busy}
+          disabled={busy || generating}
           autoComplete="off"
         />
-        <button className="btn primary" disabled={busy}>
-          Отправить
-        </button>
+        {generating && onStop ? (
+          <button type="button" className="btn stop" onClick={onStop}>
+            Стоп
+          </button>
+        ) : (
+          <button className="btn primary" disabled={busy}>
+            Отправить
+          </button>
+        )}
       </form>
     </div>
   );
@@ -287,6 +307,20 @@ function Msg({
         onKeyDown: onKey,
       }
     : {};
+
+  // Use AssistantResponse wrapper for assistant/agent/ask messages
+  const isAssistant = role === "assistant" || role === "agent" || isAsk;
+
+  if (isAssistant) {
+    return (
+      <li className={cls} {...liProps}>
+        <AssistantResponse
+          msg={m}
+          onAskAnswer={isAsk && m.ask ? onAskAnswer ?? defaultAnswerAsk : undefined}
+        />
+      </li>
+    );
+  }
 
   return (
     <li className={cls} {...liProps}>

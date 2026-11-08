@@ -59,9 +59,16 @@ func (r *BasicRunner) Generate(ctx context.Context, provider ChatProvider, agent
 		Agent:    agent,
 		Reporter: r.rep,
 		Config:   r.config,
+		Compressor: HistoryCompressorFunc(func(ctx context.Context, _ ChatProvider, msgs []domain.Message, _ int) ([]domain.Message, *CompressionReport) {
+			return ChatCompress(ctx, msgs, ChatCompressBudget)
+		}),
 	}
 	return RunTask(ctx, ports)
 }
+
+// ChatCompressBudget — символьный бюджет истории для чат-ассистента.
+// ~80% от 98304 токенов × 3.5 символов/токен ≈ 275K, с запасом → 250K.
+const ChatCompressBudget = 250_000
 
 func defaultMaxRounds() int {
 	v := os.Getenv("REVIEW_MAX_ROUNDS")

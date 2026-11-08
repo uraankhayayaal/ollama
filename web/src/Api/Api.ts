@@ -335,6 +335,18 @@ export async function sessionStop(
   );
 }
 
+// Остановка генерации чат-ассистента (кнопка «Стоп»).
+export async function chatStop(
+  base: string,
+  project: string,
+): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(
+    "POST",
+    `${base}/api/projects/${enc(project)}/chat/stop`,
+    {},
+  );
+}
+
 // --- приёмка (Ф-2-3) ---
 
 // Дифф предложенных изменений: для git-проектов — список файлов (метаданные,

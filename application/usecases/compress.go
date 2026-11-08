@@ -31,6 +31,7 @@ package usecases
 // (RAG/LSP/компакция) не меняют чередования ролей сообщений.
 
 import (
+	"ai/application/chatassist/progress"
 	"ai/domain"
 	"context"
 	"regexp"
@@ -498,4 +499,112 @@ func attachNotice(msgs []domain.Message, head int, notice string) []domain.Messa
 		}
 	}
 	return append([]domain.Message{{Role: "system", Content: strings.TrimPrefix(notice, "\n\n")}}, msgs...)
+}
+
+// ChatCompress — сжатие истории для чат-ассистента с прогресс-отслеживанием.
+// В отличие от базовой CompressContext:
+//   - всегда включает «памятку» (Notice), чтобы модель знала о сжатии;
+//   - из убранной середины извлекает подзадачи со статусами через progress.Summary;
+//   - резюме прогресса добавляется к памятке — модель знает, что выполнено,
+//     что в работе и что упало.
+//
+// Budget — символьный бюджет (рекомендуется ~250K для моделей с контекстом 96K+
+// токенов, т.к. ~3.5 символов на токен).
+func ChatCompress(ctx context.Context, msgs []domain.Message, budget int) ([]domain.Message, *CompressionReport) {
+	return CompressContext(ctx, msgs, CompressOptions{
+		Budget: budget,
+		Notice: true,
+		Compact: true,
+		CompactFn: func(ctx context.Context, text string) (string, error) {
+			// Текст — склеенные сообщения убранной середины.
+			// Парсим на предмет подзадач и формируем резюме прогресса.
+			return compactWithProgress(ctx, text, msgs)
+		},
+	})
+}
+
+// compactWithProgress парсит убранную середину на предмет подзадач,
+// генерирует резюме и возвращает его как компакцию.
+func compactWithProgress(_ context.Context, middleText string, originalMsgs []domain.Message) (string, error) {
+	// Парсим сообщения из middle-текста для извлечения прогресса.
+	// middleText — это склейка EvictionItem'ов (уже подготовлена CompressContext).
+	// Разбиваем обратно по ролям для прогресс-парсера.
+	msgs := parseMiddleToMessages(middleText)
+	summary := progress.ExtractFromMessages(msgs)
+	if text := summary.Text(); text != "" {
+		return text, nil
+	}
+	// Фолбэк: если прогресс не распознан — короткий дайджест.
+	return quickDigest(middleText), nil
+}
+
+// quickDigest — компактный дайджест убранного текста (если прогресс не распознан).
+func quickDigest(text string) string {
+	if len(text) <= 500 {
+		return text
+	}
+	// Берём первые и последние строки — обычно там суть.
+	lines := strings.Split(text, "\n")
+	if len(lines) <= 6 {
+		return strings.Join(lines[:3], "\n")
+	}
+	head := lines[:3]
+	tail := lines[len(lines)-2:]
+	return strings.Join(append(head, tail...), "\n")
+}
+
+// parseMiddleToMessages — эвристика: разбивает склеенный текст EvictionItem'ов
+// обратно в список MessageData (роль + контент + имя инструмента).
+func parseMiddleToMessages(text string) []progress.MessageData {
+	var msgs []progress.MessageData
+	// Формат EvictionItem в тексте: "tool TOOLNAME: content" или "role: content".
+	lines := strings.Split(text, "\n")
+	var buf strings.Builder
+	var currentRole, currentTool string
+
+	flush := func() {
+		if buf.Len() > 0 {
+			msgs = append(msgs, progress.MessageData{
+				Role:     currentRole,
+				Content:  buf.String(),
+				ToolName: currentTool,
+			})
+			buf.Reset()
+		}
+	}
+
+	for _, line := range lines {
+		// Новая запись — начинается с "tool " или "role:".
+		if strings.HasPrefix(line, "tool ") {
+			flush()
+			parts := strings.SplitN(line, ": ", 2)
+			if len(parts) > 1 {
+				currentRole = "tool"
+				currentTool = strings.TrimSpace(parts[0][5:]) // "tool " → name
+				buf.WriteString(parts[1])
+			} else {
+				currentRole = "tool"
+				currentTool = strings.TrimSpace(strings.TrimPrefix(line, "tool "))
+			}
+		} else if strings.HasPrefix(line, "assistant: ") || strings.HasPrefix(line, "user: ") || strings.HasPrefix(line, "system: ") {
+			flush()
+			parts := strings.SplitN(line, ": ", 2)
+			if len(parts) > 1 {
+				currentRole = parts[0]
+				buf.WriteString(parts[1])
+			}
+		} else if strings.HasPrefix(line, "tool: ") {
+			flush()
+			currentRole = "tool"
+			buf.WriteString(strings.TrimPrefix(line, "tool: "))
+		} else {
+			// Продолжение текущей записи.
+			if buf.Len() > 0 {
+				buf.WriteByte('\n')
+			}
+			buf.WriteString(line)
+		}
+	}
+	flush()
+	return msgs
 }

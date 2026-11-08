@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"ai/agents/chatassist"
 	appask "ai/application/ask"
 	applogs "ai/application/logs"
 	apprag "ai/application/rag"
@@ -13,10 +14,12 @@ import (
 	"ai/domain"
 	"ai/infrastructure/chat"
 	"ai/infrastructure/kafkarelay"
+	"ai/infrastructure/rag"
 	"ai/infrastructure/runevents"
 	"ai/infrastructure/runmetrics"
 	"ai/infrastructure/workspace"
 	"ai/shared/logging"
+	"ai/shared/projects"
 )
 
 // Session — живая оркестрация одного проекта: один KanbanRunner на проект,
@@ -89,6 +92,17 @@ type Session struct {
 	// assistantSink — то же для чат-ассистента: его отдельный параллельный
 	// стабильный run_id (от сессии к сессии), а не ран эпика оркестрации.
 	assistantSink runevents.Sink
+
+	// chatCtx — контекст текущего запроса чат-ассистента (для отмены генерации).
+	// Отдельный от сессионного: stop чата не ломает остальные фоновые горутины.
+	chatCtx     context.Context
+	chatCancel  context.CancelFunc
+
+	// tokensIn / tokensOut — накопленные токены проекта за текущую сессию.
+	// Локальный fallback: Redis может быть недоступен, но счётчик должен
+	// работать. Инициализируется из Redis при создании сессии (если Redis жив).
+	tokensIn  int64
+	tokensOut int64
 }
 
 // newSession создаёт сессию проекта (без запуска runner'а).
@@ -101,14 +115,26 @@ func (s *Server) newSession(project string) (*Session, error) {
 	}
 	logging.Attach(project)
 	sessCtx, sessCancel := context.WithCancel(context.Background())
+	chatCtx, chatCancel := context.WithCancel(context.Background())
 	sess := &Session{
-		srv:     s,
-		project: project,
-		chat:    chatStore,
-		events:  make(chan ProjectEvent, 64),
-		log:     logging.For(project),
-		ctx:     sessCtx,
-		cancel:  sessCancel,
+		srv:        s,
+		project:    project,
+		chat:       chatStore,
+		events:     make(chan ProjectEvent, 64),
+		log:        logging.For(project),
+		ctx:        sessCtx,
+		cancel:     sessCancel,
+		chatCtx:    chatCtx,
+		chatCancel: chatCancel,
+	}
+	// Инициализируем локальный счётчик из Redis (персистентность); если
+	// Redis мёртв — стартуем с нуля.
+	{
+		store := s.tokenStoreFor(project)
+		if ti, to := totalTokens(context.Background(), store); ti > 0 || to > 0 {
+			sess.tokensIn = ti
+			sess.tokensOut = to
+		}
 	}
 	// Kafka-рлей наблюдаемости (агент-харнес): шаги агентного цикла идут в
 	// топик agent-harness-metrics.
@@ -205,8 +231,38 @@ func (sess *Session) start(ctx context.Context, taskText string, provider usecas
 			sess.mu.Unlock()
 			sess.broadcastStatus("idle", "")
 		}()
+
+		dir := projects.ProjectDir(sess.project)
+		if inf, err := sess.srv.reg.Get(sess.project); err == nil {
+			dir = inf.Root
+		}
+		ragClient := rag.NewClientSafe(rag.Config{})
+		asst := chatassist.NewAssistantInDir(dir, sess.project, taskText, nil, ragClient)
+		rep, err := provider.Generate(cctx, asst)
+		if err != nil {
+			sess.append(chat.RoleStatus, "Ошибка: "+err.Error(), "", "", nil)
+			return
+		}
+		if rep == nil || rep.Content == "" {
+			return
+		}
+		sess.append(chat.RoleAssistant, rep.Content, "assistant", "", nil)
 	}()
 	return nil
+}
+
+// stopChat отменяет текущий запрос чат-ассистента и создаёт свежий контекст
+// для следующего запроса. Не влияет на оркестрацию и фоновые горутины сессии.
+func (sess *Session) stopChat() {
+	sess.mu.Lock()
+	oldCancel := sess.chatCancel
+	sess.mu.Unlock()
+	if oldCancel != nil {
+		oldCancel()
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.chatCtx, sess.chatCancel = context.WithCancel(context.Background())
 }
 
 // stop отменяет текущую оркестрацию.
@@ -351,11 +407,16 @@ func (sess *Session) addTokens(in, out int64, tps float64, scope string) {
 	if tps > 0 {
 		sess.rate = tps
 	}
+	sess.tokensIn += in
+	sess.tokensOut += out
+	totalIn := sess.tokensIn
+	totalOut := sess.tokensOut
 	rate := sess.rate
 	sess.mu.Unlock()
-	sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: in, Output: out, TPS: rate})
+	// Redis — персистентность; падение не блокирует локальный счётчик.
 	store := sess.srv.tokenStoreFor(sess.project)
 	_, _, _ = store.Add(context.Background(), in, out)
+	sess.srv.hub.publish(sess.project, "tokens", tokenEvent{Input: totalIn, Output: totalOut, TPS: rate})
 }
 
 // tokenEvent — текущие накопленные токены проекта (вход/выход) и последняя

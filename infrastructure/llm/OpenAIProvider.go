@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -86,6 +87,7 @@ func (p *OpenAIProvider) ModelLimits() domain.ModelLimits {
 }
 
 func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (*domain.ModelReply, error) {
+	start := time.Now()
 	msgs := req.Messages
 	oaTools := make([]openai.ChatCompletionToolParam, 0, len(req.Tools))
 	for _, t := range req.Tools {
@@ -209,9 +211,17 @@ func (p *OpenAIProvider) ChatOnce(ctx context.Context, req domain.ChatRequest) (
 
 	var usage *domain.Usage
 	if response.Usage.JSON.PromptTokens.Valid() && response.Usage.JSON.CompletionTokens.Valid() {
+		out := int(response.Usage.CompletionTokens)
 		usage = &domain.Usage{
 			InputTokens:  int(response.Usage.PromptTokens),
-			OutputTokens: int(response.Usage.CompletionTokens),
+			OutputTokens: out,
+		}
+		// OpenAI API не возвращает длительность генерации — считаем из wall-clock.
+		if out > 0 {
+			dur := time.Since(start).Seconds()
+			if dur > 0 {
+				usage.OutputTPS = float64(out) / dur
+			}
 		}
 	}
 

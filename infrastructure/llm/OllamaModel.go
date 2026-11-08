@@ -247,6 +247,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 	var toolCalls []domain.ToolCall
 	var doneReason string
 	var usage *domain.Usage
+	streamStart := time.Now()
 
 	// Авто-ретрай «обрубленных» tool-call: llama-server иногда не дочитывает
 	// JSON-аргументы вызова инструмента (модель оборвала вывод на полуслове,
@@ -269,6 +270,8 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 		// Финальный фрагмент стрима несёт фактический подсчёт токенов
 		// (prompt_eval_count — весь вход, eval_count — выход модели), а
 		// eval_count/eval_duration дают реальную скорость генерации.
+		// Если Ollama не вернул eval_duration (или он == 0), используем
+		// реальное время стрима как fallback.
 		if resp.Done && (resp.PromptEvalCount > 0 || resp.EvalCount > 0) {
 			usage = &domain.Usage{
 				InputTokens:  resp.PromptEvalCount,
@@ -276,6 +279,11 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 			}
 			if resp.EvalCount > 0 && resp.EvalDuration > 0 {
 				usage.OutputTPS = float64(resp.EvalCount) / resp.EvalDuration.Seconds()
+			} else if resp.EvalCount > 0 {
+				streamDur := time.Since(streamStart).Seconds()
+				if streamDur > 0 {
+					usage.OutputTPS = float64(resp.EvalCount) / streamDur
+				}
 			}
 		}
 
@@ -387,6 +395,7 @@ func (o *OllamaProvider) ChatStream(ctx context.Context, req domain.ChatRequest,
 		toolCalls = nil
 		doneReason = ""
 		usage = nil
+		streamStart = time.Now()
 		if d := toolCallRetryDelay(); d > 0 {
 			timer := time.NewTimer(d)
 			select {

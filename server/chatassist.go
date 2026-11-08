@@ -10,6 +10,7 @@ import (
 	"ai/application/usecases"
 	"ai/infrastructure/chat"
 	"ai/infrastructure/rag"
+	"ai/infrastructure/runevents"
 	"ai/shared/projects"
 )
 
@@ -35,6 +36,10 @@ func (sess *Session) runChatAsk(ctx context.Context, ask chatAsk, provider useca
 		ragClient := rag.NewClientSafe(rag.Config{})
 		asst := chatassist.NewAssistantInDir(dir, sess.project, prompt, nil, ragClient)
 		asst.History = sess.chatDialogueHistory(ctx)
+
+		// Reporter — обязательный: без него провайдер не может отправить
+		// события токенов и стриминга в шину (см. Session.start()).
+		ctx = runevents.WithReporter(ctx, sess.router)
 
 		rep, err := provider.Generate(ctx, asst)
 		if err != nil {

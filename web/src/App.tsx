@@ -4,6 +4,7 @@ import {
   authStatus,
   answerAsk,
   chatHistory,
+  chatStop,
   clearChat,
   listProjects,
   logout,
@@ -263,6 +264,18 @@ export function App() {
     }
   };
 
+  const onStop = async () => {
+    if (!project) return;
+    setThinking(false);
+    setLive(null);
+    setLiveThinking(null);
+    try {
+      await chatStop(BASE, project.project_name);
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const onAnalyzeLogs = async (args: { file?: string; level?: string; query?: string }) => {
     if (!project) return;
     setThinking(true);
@@ -366,6 +379,7 @@ export function App() {
             live={live}
             liveThinking={liveThinking}
             onSend={onSend}
+            onStop={onStop}
             endRef={chatEnd}
             thinking={thinking}
             onAskAnswer={onAskAnswer}

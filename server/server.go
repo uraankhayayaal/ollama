@@ -209,6 +209,7 @@ func (s *Server) routes() http.Handler {
 	// REST — доска/чат/сессия проекта
 	mux.HandleFunc("GET /api/projects/{id}", s.handleGetProjectMeta)
 	mux.HandleFunc("POST /api/projects/{id}/chat", s.handlePostChat)
+	mux.HandleFunc("POST /api/projects/{id}/chat/stop", s.handleStopChat)
 	mux.HandleFunc("GET /api/projects/{id}/chat", s.handleChatHistory)
 	mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleClearChat)
 	mux.HandleFunc("POST /api/projects/{id}/continue", s.handleContinue)

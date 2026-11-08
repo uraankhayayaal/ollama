@@ -573,6 +573,21 @@
       &:active:not(:disabled) { transform: scale(0.96); }
       &:disabled { opacity: 0.55; cursor: default; }
     }
+
+    .btn.stop {
+      padding: 8px 13px;
+      border: 0;
+      border-radius: 10px;
+      background: #dc2626;
+      color: white;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 150ms ease, transform 150ms ease;
+
+      &:hover { background: #ef4444; }
+      &:active { transform: scale(0.96); }
+    }
   }
 }
 

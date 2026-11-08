@@ -1,0 +1,191 @@
+.msg-wrapped.assistant {
+  position: relative;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+
+  &.working {
+    .wrapper-ring {
+      opacity: 1;
+      animation: ring-pulse 2s ease-in-out infinite;
+    }
+
+    .wrapper-inner {
+      border-color: #a0c2f0;
+    }
+  }
+
+  // Animated ring behind the message while working
+  .wrapper-ring {
+    position: absolute;
+    inset: -3px;
+    border-radius: 18px;
+    opacity: 0;
+    background: linear-gradient(135deg, #2563eb33, #7c3aed33, #2563eb33);
+    background-size: 200% 200%;
+    animation: gradient-shift 3s ease-in-out infinite;
+    z-index: 0;
+    transition: opacity 300ms ease;
+  }
+
+  .wrapper-inner {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: fit-content;
+    max-width: 86%;
+    padding: 10px 14px;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    background: #f0f4fa;
+    transition: border-color 300ms ease;
+  }
+
+  .head-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .who {
+      font-size: 10px;
+      font-weight: 600;
+      color: #3d5a99;
+    }
+
+    .when {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-left: auto;
+    }
+  }
+
+  // Streaming indicator
+  .streaming-indicator {
+    font-size: 11px;
+    color: #6b7fa3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+
+    &::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #2563eb;
+      animation: dot-bounce 1s ease-in-out infinite;
+    }
+  }
+
+  // Collapsible thinking block
+  .thinking-block {
+    margin: 4px 0 0;
+    padding: 4px 0 0;
+    border-top: 1px solid #e8edf4;
+
+    summary {
+      cursor: pointer;
+      font-size: 11px;
+      color: #6b7fa3;
+      list-style: none;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 0;
+
+      &::-webkit-details-marker { display: none; }
+
+      &:hover { color: #4a6282; }
+
+      .chev {
+        display: inline-block;
+        font-size: 8px;
+        color: #8a9ab5;
+        transition: transform 0.15s ease;
+        margin-right: 2px;
+      }
+
+      .thinking-label {
+        font-size: 10px;
+        font-weight: 600;
+        color: #6b7fa3;
+        background: #e8edf4;
+        padding: 1px 8px;
+        border-radius: 999px;
+      }
+
+      .thinking-preview {
+        font-size: 11px;
+        color: #8a94a6;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 200px;
+      }
+    }
+
+    &.open summary .chev {
+      transform: rotate(90deg);
+    }
+
+    .thinking-content {
+      margin: 6px 0 0;
+      padding: 6px 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #5f6e85;
+      font-family: var(--mono, ui-monospace, Menlo, monospace);
+      white-space: pre-wrap;
+      border-left: 2px solid #dfe5ef;
+      background: #f9fafc;
+      border-radius: 0 6px 6px 0;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+  }
+
+  .content {
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-top: 4px;
+  }
+}
+
+@keyframes ring-pulse {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.01);
+  }
+}
+
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes dot-bounce {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}

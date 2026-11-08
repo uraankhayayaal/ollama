@@ -285,3 +285,44 @@ func TestChatStreamIdleWatchdogHealthyStream(t *testing.T) {
 		t.Fatalf("ожидали usage с eval_count=3, got %+v", rep.Usage)
 	}
 }
+
+// Проверка fallback-расчёта TPS из wall-clock при отсутствии eval_duration
+// в ответе Ollama (eval_duration может быть 0).
+func TestChatStreamTPSFallbackFromStreamDuration(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		fl, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		// Отправляем без eval_duration — fallback должен посчитать из wall-clock.
+		for _, f := range []string{
+			`{"model":"test","message":{"role":"assistant","content":"hello"}}`,
+			`{"model":"test","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","eval_count":1,"prompt_eval_count":5}`,
+		} {
+			fmt.Fprintln(w, f)
+			fl.Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("url: %v", err)
+	}
+	p := &OllamaProvider{client: api.NewClient(u, http.DefaultClient), model: "test", settings: ModelSettings{InputTokens: 1024}}
+
+	rep, err := p.ChatStream(context.Background(), domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "привет"}}}, nil)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if rep.Usage == nil || rep.Usage.OutputTokens != 1 {
+		t.Fatalf("ожидали usage с eval_count=1, got %+v", rep.Usage)
+	}
+	if rep.Usage.OutputTPS <= 0 {
+		t.Fatalf("ожидали TPS > 0 (fallback из wall-clock), got %.2f", rep.Usage.OutputTPS)
+	}
+}
